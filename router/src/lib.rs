@@ -1,13 +1,5 @@
-mod consumer;
-mod ids;
-mod producer;
-mod router;
-mod session;
-mod transport;
+mod model;
 
-pub use self::consumer::Consumer;
-pub use self::ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId};
-pub use self::producer::Producer;
-pub use self::router::Router;
-pub use self::session::Session;
-pub use self::transport::Transport;
+pub use self::model::Consumer;
+pub use self::model::{ConsumerId, ProducerId, Router, RouterError, RouterId, RouterModel};
+pub use self::model::{Producer, ResourceKind, Session, SessionId, Transport, TransportId};

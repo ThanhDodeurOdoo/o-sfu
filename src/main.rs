@@ -1,4 +1,5 @@
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    o_sfu::runtime::run().await
+use o_sfu::runtime;
+
+fn main() -> anyhow::Result<()> {
+    runtime::run()
 }

@@ -1,4 +1,4 @@
-use o_sfu_router::Router;
+use o_sfu_router::{Router, RouterId};
 
 use crate::{config::Config, signaling::PROTOCOL_VERSION};
 
@@ -14,13 +14,16 @@ impl Runtime {
     pub fn new(config: Config) -> Self {
         Self {
             config,
-            router: Router::new(),
+            router: Router::new(RouterId(0)),
             protocol_version: PROTOCOL_VERSION,
         }
     }
 }
 
-pub async fn run() -> anyhow::Result<()> {
+/// # Errors
+///
+/// Returns an error once runtime bootstrap starts performing fallible I/O.
+pub fn run() -> anyhow::Result<()> {
     let _runtime = Runtime::new(Config::from_env());
     Ok(())
 }

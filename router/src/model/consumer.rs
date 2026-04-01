@@ -1,4 +1,4 @@
-use crate::{ConsumerId, ProducerId, TransportId};
+use super::{ConsumerId, ProducerId, TransportId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Consumer {
@@ -15,5 +15,20 @@ impl Consumer {
             producer_id,
             transport_id,
         }
+    }
+
+    #[must_use]
+    pub fn id(self) -> ConsumerId {
+        self.id
+    }
+
+    #[must_use]
+    pub fn producer_id(self) -> ProducerId {
+        self.producer_id
+    }
+
+    #[must_use]
+    pub fn transport_id(self) -> TransportId {
+        self.transport_id
     }
 }
