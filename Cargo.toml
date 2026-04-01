@@ -87,7 +87,6 @@ version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-o-sfu-router = { path = "router" }
 tokio.workspace = true
 
 [lints]

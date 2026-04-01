@@ -1,14 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Consumer, ConsumerId, Producer, ProducerId, ResourceKind, RouterError, RouterId, Session,
-    SessionId, Transport, TransportId,
+    Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
+    Transport, TransportId,
 };
-
-const MAX_SESSIONS: usize = 8;
-const MAX_TRANSPORTS: usize = 16;
-const MAX_PRODUCERS: usize = 16;
-const MAX_CONSUMERS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Router {
@@ -46,23 +41,20 @@ impl Router {
 
     /// # Errors
     ///
-    /// Returns [`RouterError::DuplicateSession`] when the session already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free session slot.
+    /// Returns [`RouterError::DuplicateSession`] when the session already exists.
     pub fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
         let session_id = session.id();
         if self.sessions.contains_key(&session_id) {
             return Err(RouterError::DuplicateSession(session_id));
         }
-        Self::ensure_capacity(self.sessions.len(), MAX_SESSIONS, ResourceKind::Session)?;
         self.sessions.insert(session_id, session);
         Ok(())
     }
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the owning session does not exist,
-    /// [`RouterError::DuplicateTransport`] when the transport already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free transport slot.
+    /// Returns [`RouterError::MissingSession`] when the owning session does not exist
+    /// or [`RouterError::DuplicateTransport`] when the transport already exists.
     pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
         let transport_id = transport.id();
         let session_id = transport.session_id();
@@ -72,12 +64,6 @@ impl Router {
         if self.transports.contains_key(&transport_id) {
             return Err(RouterError::DuplicateTransport(transport_id));
         }
-        Self::ensure_capacity(
-            self.transports.len(),
-            MAX_TRANSPORTS,
-            ResourceKind::Transport,
-        )?;
-
         self.transports.insert(transport_id, transport);
         self.session_transports
             .entry(session_id)
@@ -88,9 +74,8 @@ impl Router {
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist,
-    /// [`RouterError::DuplicateProducer`] when the producer already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free producer slot.
+    /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist
+    /// or [`RouterError::DuplicateProducer`] when the producer already exists.
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
@@ -100,8 +85,6 @@ impl Router {
         if self.producers.contains_key(&producer_id) {
             return Err(RouterError::DuplicateProducer(producer_id));
         }
-        Self::ensure_capacity(self.producers.len(), MAX_PRODUCERS, ResourceKind::Producer)?;
-
         self.producers.insert(producer_id, producer);
         self.transport_producers
             .entry(transport_id)
@@ -114,8 +97,7 @@ impl Router {
     ///
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
-    /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free consumer slot.
+    /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
     pub fn add_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
         let consumer_id = consumer.id();
         let transport_id = consumer.transport_id();
@@ -129,8 +111,6 @@ impl Router {
         if self.consumers.contains_key(&consumer_id) {
             return Err(RouterError::DuplicateConsumer(consumer_id));
         }
-        Self::ensure_capacity(self.consumers.len(), MAX_CONSUMERS, ResourceKind::Consumer)?;
-
         self.consumers.insert(consumer_id, consumer);
         self.transport_consumers
             .entry(transport_id)
@@ -156,17 +136,6 @@ impl Router {
             self.remove_transport(transport_id);
         }
 
-        Ok(())
-    }
-
-    fn ensure_capacity(
-        current_len: usize,
-        max_len: usize,
-        kind: ResourceKind,
-    ) -> Result<(), RouterError> {
-        if current_len >= max_len {
-            return Err(RouterError::CapacityExceeded(kind));
-        }
         Ok(())
     }
 

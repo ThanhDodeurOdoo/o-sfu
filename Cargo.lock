@@ -30,7 +30,6 @@ name = "o-sfu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "o-sfu-router",
  "tokio",
 ]
 

@@ -1,7 +1,27 @@
 use super::super::{
-    Consumer, ConsumerId, Producer, ProducerId, ResourceKind, RouterError, RouterId, Session,
-    SessionId, Transport, TransportId,
+    Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
+    Transport, TransportId,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResourceKind {
+    Session,
+    Transport,
+    Producer,
+    Consumer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProofRouterError {
+    Router(RouterError),
+    CapacityExceeded(ResourceKind),
+}
+
+impl From<RouterError> for ProofRouterError {
+    fn from(err: RouterError) -> Self {
+        Self::Router(err)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProofRouterModel<
@@ -18,11 +38,11 @@ pub(crate) struct ProofRouterModel<
 }
 
 impl<
-    const MAX_SESSIONS: usize,
-    const MAX_TRANSPORTS: usize,
-    const MAX_PRODUCERS: usize,
-    const MAX_CONSUMERS: usize,
-> ProofRouterModel<MAX_SESSIONS, MAX_TRANSPORTS, MAX_PRODUCERS, MAX_CONSUMERS>
+        const MAX_SESSIONS: usize,
+        const MAX_TRANSPORTS: usize,
+        const MAX_PRODUCERS: usize,
+        const MAX_CONSUMERS: usize,
+    > ProofRouterModel<MAX_SESSIONS, MAX_TRANSPORTS, MAX_PRODUCERS, MAX_CONSUMERS>
 {
     #[must_use]
     pub(crate) fn new(id: RouterId) -> Self {
@@ -38,10 +58,10 @@ impl<
     /// # Errors
     ///
     /// Returns [`RouterError::DuplicateSession`] when the session already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free session slot.
-    pub(crate) fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
+    /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
+    pub(crate) fn join_session(&mut self, session: Session) -> Result<(), ProofRouterError> {
         if self.contains_session(session.id()) {
-            return Err(RouterError::DuplicateSession(session.id()));
+            return Err(RouterError::DuplicateSession(session.id()).into());
         }
         self.insert_session(session)
     }
@@ -50,13 +70,13 @@ impl<
     ///
     /// Returns [`RouterError::MissingSession`] when the owning session does not exist,
     /// [`RouterError::DuplicateTransport`] when the transport already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free transport slot.
-    pub(crate) fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
+    /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
+    pub(crate) fn open_transport(&mut self, transport: Transport) -> Result<(), ProofRouterError> {
         if !self.contains_session(transport.session_id()) {
-            return Err(RouterError::MissingSession(transport.session_id()));
+            return Err(RouterError::MissingSession(transport.session_id()).into());
         }
         if self.contains_transport(transport.id()) {
-            return Err(RouterError::DuplicateTransport(transport.id()));
+            return Err(RouterError::DuplicateTransport(transport.id()).into());
         }
         self.insert_transport(transport)
     }
@@ -65,13 +85,13 @@ impl<
     ///
     /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist,
     /// [`RouterError::DuplicateProducer`] when the producer already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free producer slot.
-    pub(crate) fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
+    /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
+    pub(crate) fn add_producer(&mut self, producer: Producer) -> Result<(), ProofRouterError> {
         if !self.contains_transport(producer.transport_id()) {
-            return Err(RouterError::MissingTransport(producer.transport_id()));
+            return Err(RouterError::MissingTransport(producer.transport_id()).into());
         }
         if self.contains_producer(producer.id()) {
-            return Err(RouterError::DuplicateProducer(producer.id()));
+            return Err(RouterError::DuplicateProducer(producer.id()).into());
         }
         self.insert_producer(producer)
     }
@@ -81,16 +101,16 @@ impl<
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
-    /// or [`RouterError::CapacityExceeded`] when the router has no free consumer slot.
-    pub(crate) fn add_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
+    /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
+    pub(crate) fn add_consumer(&mut self, consumer: Consumer) -> Result<(), ProofRouterError> {
         if !self.contains_transport(consumer.transport_id()) {
-            return Err(RouterError::MissingTransport(consumer.transport_id()));
+            return Err(RouterError::MissingTransport(consumer.transport_id()).into());
         }
         if !self.contains_producer(consumer.producer_id()) {
-            return Err(RouterError::MissingProducer(consumer.producer_id()));
+            return Err(RouterError::MissingProducer(consumer.producer_id()).into());
         }
         if self.contains_consumer(consumer.id()) {
-            return Err(RouterError::DuplicateConsumer(consumer.id()));
+            return Err(RouterError::DuplicateConsumer(consumer.id()).into());
         }
         self.insert_consumer(consumer)
     }
@@ -98,9 +118,9 @@ impl<
     /// # Errors
     ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
-    pub(crate) fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
+    pub(crate) fn remove_session(&mut self, session_id: SessionId) -> Result<(), ProofRouterError> {
         if !self.contains_session(session_id) {
-            return Err(RouterError::MissingSession(session_id));
+            return Err(RouterError::MissingSession(session_id).into());
         }
 
         self.clear_session(session_id);
@@ -111,44 +131,44 @@ impl<
         Ok(())
     }
 
-    fn insert_session(&mut self, session: Session) -> Result<(), RouterError> {
+    fn insert_session(&mut self, session: Session) -> Result<(), ProofRouterError> {
         for slot in &mut self.sessions {
             if slot.is_none() {
                 *slot = Some(session);
                 return Ok(());
             }
         }
-        Err(RouterError::CapacityExceeded(ResourceKind::Session))
+        Err(ProofRouterError::CapacityExceeded(ResourceKind::Session))
     }
 
-    fn insert_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
+    fn insert_transport(&mut self, transport: Transport) -> Result<(), ProofRouterError> {
         for slot in &mut self.transports {
             if slot.is_none() {
                 *slot = Some(transport);
                 return Ok(());
             }
         }
-        Err(RouterError::CapacityExceeded(ResourceKind::Transport))
+        Err(ProofRouterError::CapacityExceeded(ResourceKind::Transport))
     }
 
-    fn insert_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
+    fn insert_producer(&mut self, producer: Producer) -> Result<(), ProofRouterError> {
         for slot in &mut self.producers {
             if slot.is_none() {
                 *slot = Some(producer);
                 return Ok(());
             }
         }
-        Err(RouterError::CapacityExceeded(ResourceKind::Producer))
+        Err(ProofRouterError::CapacityExceeded(ResourceKind::Producer))
     }
 
-    fn insert_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
+    fn insert_consumer(&mut self, consumer: Consumer) -> Result<(), ProofRouterError> {
         for slot in &mut self.consumers {
             if slot.is_none() {
                 *slot = Some(consumer);
                 return Ok(());
             }
         }
-        Err(RouterError::CapacityExceeded(ResourceKind::Consumer))
+        Err(ProofRouterError::CapacityExceeded(ResourceKind::Consumer))
     }
 
     fn clear_session(&mut self, session_id: SessionId) {

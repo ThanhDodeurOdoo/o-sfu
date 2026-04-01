@@ -18,17 +18,17 @@ impl Consumer {
     }
 
     #[must_use]
-    pub fn id(self) -> ConsumerId {
+    pub fn id(&self) -> ConsumerId {
         self.id
     }
 
     #[must_use]
-    pub fn producer_id(self) -> ProducerId {
+    pub fn producer_id(&self) -> ProducerId {
         self.producer_id
     }
 
     #[must_use]
-    pub fn transport_id(self) -> TransportId {
+    pub fn transport_id(&self) -> TransportId {
         self.transport_id
     }
 }

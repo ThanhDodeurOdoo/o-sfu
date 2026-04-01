@@ -13,12 +13,12 @@ impl Transport {
     }
 
     #[must_use]
-    pub fn id(self) -> TransportId {
+    pub fn id(&self) -> TransportId {
         self.id
     }
 
     #[must_use]
-    pub fn session_id(self) -> SessionId {
+    pub fn session_id(&self) -> SessionId {
         self.session_id
     }
 }

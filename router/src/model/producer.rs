@@ -13,12 +13,12 @@ impl Producer {
     }
 
     #[must_use]
-    pub fn id(self) -> ProducerId {
+    pub fn id(&self) -> ProducerId {
         self.id
     }
 
     #[must_use]
-    pub fn transport_id(self) -> TransportId {
+    pub fn transport_id(&self) -> TransportId {
         self.transport_id
     }
 }

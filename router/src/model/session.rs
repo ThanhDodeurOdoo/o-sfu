@@ -12,7 +12,7 @@ impl Session {
     }
 
     #[must_use]
-    pub fn id(self) -> SessionId {
+    pub fn id(&self) -> SessionId {
         self.id
     }
 }
