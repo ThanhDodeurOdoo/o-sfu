@@ -1,0 +1,79 @@
+[package]
+authors = ["ThanhDodeurOdoo"]
+description = "o-sfu"
+edition = "2024"
+name = "o-sfu"
+rust-version = "1.92"
+version = "0.1.0"
+
+[lib]
+name = "o_sfu_lib"
+
+[dependencies]
+anyhow = "1.0"
+crossbeam-channel = "0.5"
+flatbuffers = "25.12"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.50", features = ["rt-multi-thread", "net", "sync", "time"] }
+tokio-tungstenite = "0.29"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_analyzer)"] }
+unsafe_code = "deny"
+
+[lints.clippy] # https://rust-lang.github.io/rust-clippy/
+correctness = { level = "deny", priority = -1 }
+expect_used = { level = "deny", priority = -1 }
+indexing_slicing = { level = "deny", priority = -1 }
+panic = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+unwrap_used = { level = "deny", priority = -1 }
+
+# groups
+complexity = "warn"
+pedantic = "warn"
+perf = "warn"
+style = "warn"
+
+absolute_paths = "warn"
+allow_attributes_without_reason = "warn"
+as_conversions = "warn"
+as_ptr_cast_mut = "warn"
+as_underscore = "warn"
+assigning_clones = "warn"
+clone_on_ref_ptr = "warn"
+cognitive_complexity = "warn"
+dbg_macro = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+exit = "warn"
+map_err_ignore = "warn"
+mem_forget = "warn"
+non_ascii_literal = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+unused_result_ok = "warn"
+wildcard_dependencies = "warn"
+
+# nursery as of rust 1.92 https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html?groups=nursery
+needless_pass_by_ref_mut = "warn"
+nonstandard_macro_braces = "warn"
+option_if_let_else = "warn"
+redundant_clone = "warn"
+significant_drop_tightening = "warn"
+single_option_map = "warn"
+trait_duplication_in_bounds = "warn"
+type_repetition_in_bounds = "warn"
+uninhabited_references = "warn"
+unnecessary_struct_initialization = "warn"
+use_self = "warn"
+useless_let_if_seq = "warn"
+while_float = "warn"
