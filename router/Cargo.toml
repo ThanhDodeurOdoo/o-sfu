@@ -1,0 +1,10 @@
+[package]
+name = "o-sfu-router"
+description = "Router core for o-sfu"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true

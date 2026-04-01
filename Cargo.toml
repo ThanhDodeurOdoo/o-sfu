@@ -1,32 +1,31 @@
-[package]
+[workspace]
+members = ["router"]
+resolver = "3"
+
+[workspace.package]
 authors = ["ThanhDodeurOdoo"]
-description = "o-sfu"
 edition = "2024"
-name = "o-sfu"
 rust-version = "1.92"
 version = "0.1.0"
 
-[lib]
-name = "o_sfu_lib"
-
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0"
 crossbeam-channel = "0.5"
 flatbuffers = "25.12"
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.50", features = ["rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
 tokio-tungstenite = "0.29"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-[lints.rust]
+[workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_analyzer)"] }
 unsafe_code = "deny"
 
-[lints.clippy] # https://rust-lang.github.io/rust-clippy/
+[workspace.lints.clippy] # https://rust-lang.github.io/rust-clippy/
 correctness = { level = "deny", priority = -1 }
 expect_used = { level = "deny", priority = -1 }
 indexing_slicing = { level = "deny", priority = -1 }
@@ -77,3 +76,19 @@ unnecessary_struct_initialization = "warn"
 use_self = "warn"
 useless_let_if_seq = "warn"
 while_float = "warn"
+
+[package]
+name = "o-sfu"
+description = "o-sfu"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+o-sfu-router = { path = "router" }
+tokio.workspace = true
+
+[lints]
+workspace = true
