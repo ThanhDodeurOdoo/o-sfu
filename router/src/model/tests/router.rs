@@ -1,4 +1,4 @@
-use super::helpers::count_present;
+use super::helpers::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerId, Producer, ProducerId, Router, RouterError, RouterId, Session, SessionId,
     Transport, TransportId,
@@ -31,7 +31,7 @@ fn router_accepts_a_basic_publish_and_subscribe_flow() {
         Ok(())
     );
 
-    assert!(router.satisfies_invariants());
+    assert_router_is_consistent(&router);
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn router_rejects_orphan_resources() {
         router.add_producer(Producer::new(ProducerId(300), TransportId(100))),
         Err(RouterError::MissingTransport(TransportId(100)))
     );
-    assert!(router.satisfies_invariants());
+    assert_router_is_consistent(&router);
 }
 
 #[test]
@@ -77,9 +77,9 @@ fn removing_a_session_cleans_dependent_resources() {
     );
 
     assert_eq!(router.remove_session(SessionId(10)), Ok(()));
-    assert_eq!(count_present(&router.sessions), 1);
-    assert_eq!(count_present(&router.transports), 1);
-    assert_eq!(count_present(&router.producers), 0);
-    assert_eq!(count_present(&router.consumers), 0);
-    assert!(router.satisfies_invariants());
+    assert_eq!(router.sessions.len(), 1);
+    assert_eq!(router.transports.len(), 1);
+    assert_eq!(router.producers.len(), 0);
+    assert_eq!(router.consumers.len(), 0);
+    assert_router_is_consistent(&router);
 }

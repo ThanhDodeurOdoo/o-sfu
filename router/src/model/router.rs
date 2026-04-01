@@ -1,39 +1,41 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::{
     Consumer, ConsumerId, Producer, ProducerId, ResourceKind, RouterError, RouterId, Session,
     SessionId, Transport, TransportId,
 };
 
-pub type Router = RouterModel<8, 16, 16, 32>;
+const MAX_SESSIONS: usize = 8;
+const MAX_TRANSPORTS: usize = 16;
+const MAX_PRODUCERS: usize = 16;
+const MAX_CONSUMERS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouterModel<
-    const MAX_SESSIONS: usize,
-    const MAX_TRANSPORTS: usize,
-    const MAX_PRODUCERS: usize,
-    const MAX_CONSUMERS: usize,
-> {
+pub struct Router {
     pub(super) id: RouterId,
-    pub(super) sessions: [Option<Session>; MAX_SESSIONS],
-    pub(super) transports: [Option<Transport>; MAX_TRANSPORTS],
-    pub(super) producers: [Option<Producer>; MAX_PRODUCERS],
-    pub(super) consumers: [Option<Consumer>; MAX_CONSUMERS],
+    pub(super) sessions: BTreeMap<SessionId, Session>,
+    pub(super) transports: BTreeMap<TransportId, Transport>,
+    pub(super) producers: BTreeMap<ProducerId, Producer>,
+    pub(super) consumers: BTreeMap<ConsumerId, Consumer>,
+    pub(super) session_transports: BTreeMap<SessionId, BTreeSet<TransportId>>,
+    pub(super) transport_producers: BTreeMap<TransportId, BTreeSet<ProducerId>>,
+    pub(super) transport_consumers: BTreeMap<TransportId, BTreeSet<ConsumerId>>,
+    pub(super) producer_consumers: BTreeMap<ProducerId, BTreeSet<ConsumerId>>,
 }
 
-impl<
-    const MAX_SESSIONS: usize,
-    const MAX_TRANSPORTS: usize,
-    const MAX_PRODUCERS: usize,
-    const MAX_CONSUMERS: usize,
-> RouterModel<MAX_SESSIONS, MAX_TRANSPORTS, MAX_PRODUCERS, MAX_CONSUMERS>
-{
+impl Router {
     #[must_use]
     pub fn new(id: RouterId) -> Self {
         Self {
             id,
-            sessions: [None; MAX_SESSIONS],
-            transports: [None; MAX_TRANSPORTS],
-            producers: [None; MAX_PRODUCERS],
-            consumers: [None; MAX_CONSUMERS],
+            sessions: BTreeMap::new(),
+            transports: BTreeMap::new(),
+            producers: BTreeMap::new(),
+            consumers: BTreeMap::new(),
+            session_transports: BTreeMap::new(),
+            transport_producers: BTreeMap::new(),
+            transport_consumers: BTreeMap::new(),
+            producer_consumers: BTreeMap::new(),
         }
     }
 
@@ -47,10 +49,13 @@ impl<
     /// Returns [`RouterError::DuplicateSession`] when the session already exists,
     /// or [`RouterError::CapacityExceeded`] when the router has no free session slot.
     pub fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
-        if self.contains_session(session.id()) {
-            return Err(RouterError::DuplicateSession(session.id()));
+        let session_id = session.id();
+        if self.sessions.contains_key(&session_id) {
+            return Err(RouterError::DuplicateSession(session_id));
         }
-        self.insert_session(session)
+        Self::ensure_capacity(self.sessions.len(), MAX_SESSIONS, ResourceKind::Session)?;
+        self.sessions.insert(session_id, session);
+        Ok(())
     }
 
     /// # Errors
@@ -59,13 +64,26 @@ impl<
     /// [`RouterError::DuplicateTransport`] when the transport already exists,
     /// or [`RouterError::CapacityExceeded`] when the router has no free transport slot.
     pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
-        if !self.contains_session(transport.session_id()) {
-            return Err(RouterError::MissingSession(transport.session_id()));
+        let transport_id = transport.id();
+        let session_id = transport.session_id();
+        if !self.sessions.contains_key(&session_id) {
+            return Err(RouterError::MissingSession(session_id));
         }
-        if self.contains_transport(transport.id()) {
-            return Err(RouterError::DuplicateTransport(transport.id()));
+        if self.transports.contains_key(&transport_id) {
+            return Err(RouterError::DuplicateTransport(transport_id));
         }
-        self.insert_transport(transport)
+        Self::ensure_capacity(
+            self.transports.len(),
+            MAX_TRANSPORTS,
+            ResourceKind::Transport,
+        )?;
+
+        self.transports.insert(transport_id, transport);
+        self.session_transports
+            .entry(session_id)
+            .or_default()
+            .insert(transport_id);
+        Ok(())
     }
 
     /// # Errors
@@ -74,13 +92,22 @@ impl<
     /// [`RouterError::DuplicateProducer`] when the producer already exists,
     /// or [`RouterError::CapacityExceeded`] when the router has no free producer slot.
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
-        if !self.contains_transport(producer.transport_id()) {
-            return Err(RouterError::MissingTransport(producer.transport_id()));
+        let producer_id = producer.id();
+        let transport_id = producer.transport_id();
+        if !self.transports.contains_key(&transport_id) {
+            return Err(RouterError::MissingTransport(transport_id));
         }
-        if self.contains_producer(producer.id()) {
-            return Err(RouterError::DuplicateProducer(producer.id()));
+        if self.producers.contains_key(&producer_id) {
+            return Err(RouterError::DuplicateProducer(producer_id));
         }
-        self.insert_producer(producer)
+        Self::ensure_capacity(self.producers.len(), MAX_PRODUCERS, ResourceKind::Producer)?;
+
+        self.producers.insert(producer_id, producer);
+        self.transport_producers
+            .entry(transport_id)
+            .or_default()
+            .insert(producer_id);
+        Ok(())
     }
 
     /// # Errors
@@ -90,182 +117,137 @@ impl<
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
     /// or [`RouterError::CapacityExceeded`] when the router has no free consumer slot.
     pub fn add_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
-        if !self.contains_transport(consumer.transport_id()) {
-            return Err(RouterError::MissingTransport(consumer.transport_id()));
+        let consumer_id = consumer.id();
+        let transport_id = consumer.transport_id();
+        let producer_id = consumer.producer_id();
+        if !self.transports.contains_key(&transport_id) {
+            return Err(RouterError::MissingTransport(transport_id));
         }
-        if !self.contains_producer(consumer.producer_id()) {
-            return Err(RouterError::MissingProducer(consumer.producer_id()));
+        if !self.producers.contains_key(&producer_id) {
+            return Err(RouterError::MissingProducer(producer_id));
         }
-        if self.contains_consumer(consumer.id()) {
-            return Err(RouterError::DuplicateConsumer(consumer.id()));
+        if self.consumers.contains_key(&consumer_id) {
+            return Err(RouterError::DuplicateConsumer(consumer_id));
         }
-        self.insert_consumer(consumer)
+        Self::ensure_capacity(self.consumers.len(), MAX_CONSUMERS, ResourceKind::Consumer)?;
+
+        self.consumers.insert(consumer_id, consumer);
+        self.transport_consumers
+            .entry(transport_id)
+            .or_default()
+            .insert(consumer_id);
+        self.producer_consumers
+            .entry(producer_id)
+            .or_default()
+            .insert(consumer_id);
+        Ok(())
     }
 
     /// # Errors
     ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
     pub fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
-        if !self.contains_session(session_id) {
+        if self.sessions.remove(&session_id).is_none() {
             return Err(RouterError::MissingSession(session_id));
         }
 
-        self.clear_session(session_id);
-        let removed_transport_ids = self.clear_transports_for_session(session_id);
-        let removed_producer_ids = self.clear_producers_for_transports(&removed_transport_ids);
-        self.clear_consumers_for_dependencies(&removed_transport_ids, &removed_producer_ids);
+        let transport_ids = Self::take_ids(&mut self.session_transports, &session_id);
+        for transport_id in transport_ids {
+            self.remove_transport(transport_id);
+        }
 
         Ok(())
     }
 
-    fn insert_session(&mut self, session: Session) -> Result<(), RouterError> {
-        for slot in &mut self.sessions {
-            if slot.is_none() {
-                *slot = Some(session);
-                return Ok(());
-            }
+    fn ensure_capacity(
+        current_len: usize,
+        max_len: usize,
+        kind: ResourceKind,
+    ) -> Result<(), RouterError> {
+        if current_len >= max_len {
+            return Err(RouterError::CapacityExceeded(kind));
         }
-        Err(RouterError::CapacityExceeded(ResourceKind::Session))
+        Ok(())
     }
 
-    fn insert_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
-        for slot in &mut self.transports {
-            if slot.is_none() {
-                *slot = Some(transport);
-                return Ok(());
-            }
-        }
-        Err(RouterError::CapacityExceeded(ResourceKind::Transport))
-    }
+    fn remove_transport(&mut self, transport_id: TransportId) {
+        let Some(transport) = self.transports.remove(&transport_id) else {
+            return;
+        };
 
-    fn insert_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
-        for slot in &mut self.producers {
-            if slot.is_none() {
-                *slot = Some(producer);
-                return Ok(());
-            }
-        }
-        Err(RouterError::CapacityExceeded(ResourceKind::Producer))
-    }
+        Self::remove_index_member(
+            &mut self.session_transports,
+            transport.session_id(),
+            &transport_id,
+        );
 
-    fn insert_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
-        for slot in &mut self.consumers {
-            if slot.is_none() {
-                *slot = Some(consumer);
-                return Ok(());
-            }
+        let consumer_ids = Self::take_ids(&mut self.transport_consumers, &transport_id);
+        for consumer_id in consumer_ids {
+            self.remove_consumer(consumer_id);
         }
-        Err(RouterError::CapacityExceeded(ResourceKind::Consumer))
-    }
 
-    fn clear_session(&mut self, session_id: SessionId) {
-        for slot in &mut self.sessions {
-            if slot.is_some_and(|session| session.id() == session_id) {
-                *slot = None;
-            }
+        let producer_ids = Self::take_ids(&mut self.transport_producers, &transport_id);
+        for producer_id in producer_ids {
+            self.remove_producer(producer_id);
         }
     }
 
-    fn clear_transports_for_session(
-        &mut self,
-        session_id: SessionId,
-    ) -> [Option<TransportId>; MAX_TRANSPORTS] {
-        let mut removed = [None; MAX_TRANSPORTS];
-        for slot in &mut self.transports {
-            if slot.is_some_and(|transport| transport.session_id() == session_id) {
-                if let Some(transport) = *slot {
-                    Self::push_removed_id(&mut removed, transport.id());
-                }
-                *slot = None;
-            }
-        }
-        removed
-    }
+    fn remove_producer(&mut self, producer_id: ProducerId) {
+        let Some(producer) = self.producers.remove(&producer_id) else {
+            return;
+        };
 
-    fn clear_producers_for_transports(
-        &mut self,
-        removed_transport_ids: &[Option<TransportId>; MAX_TRANSPORTS],
-    ) -> [Option<ProducerId>; MAX_PRODUCERS] {
-        let mut removed = [None; MAX_PRODUCERS];
-        for slot in &mut self.producers {
-            if slot.is_some_and(|producer| {
-                Self::removed_id_contains(removed_transport_ids, producer.transport_id())
-            }) {
-                if let Some(producer) = *slot {
-                    Self::push_removed_id(&mut removed, producer.id());
-                }
-                *slot = None;
-            }
-        }
-        removed
-    }
+        Self::remove_index_member(
+            &mut self.transport_producers,
+            producer.transport_id(),
+            &producer_id,
+        );
 
-    fn clear_consumers_for_dependencies(
-        &mut self,
-        removed_transport_ids: &[Option<TransportId>; MAX_TRANSPORTS],
-        removed_producer_ids: &[Option<ProducerId>; MAX_PRODUCERS],
-    ) {
-        for slot in &mut self.consumers {
-            if slot.is_some_and(|consumer| {
-                Self::removed_id_contains(removed_transport_ids, consumer.transport_id())
-                    || Self::removed_id_contains(removed_producer_ids, consumer.producer_id())
-            }) {
-                *slot = None;
-            }
+        let consumer_ids = Self::take_ids(&mut self.producer_consumers, &producer_id);
+        for consumer_id in consumer_ids {
+            self.remove_consumer(consumer_id);
         }
     }
 
-    fn push_removed_id<T: Copy>(removed_ids: &mut [Option<T>], value: T) {
-        for slot in removed_ids {
-            if slot.is_none() {
-                *slot = Some(value);
-                return;
-            }
-        }
+    fn remove_consumer(&mut self, consumer_id: ConsumerId) {
+        let Some(consumer) = self.consumers.remove(&consumer_id) else {
+            return;
+        };
+
+        Self::remove_index_member(
+            &mut self.transport_consumers,
+            consumer.transport_id(),
+            &consumer_id,
+        );
+        Self::remove_index_member(
+            &mut self.producer_consumers,
+            consumer.producer_id(),
+            &consumer_id,
+        );
     }
 
-    fn removed_id_contains<T: Copy + Eq>(removed_ids: &[Option<T>], value: T) -> bool {
-        for current in removed_ids {
-            if current.is_some_and(|current| current == value) {
-                return true;
-            }
-        }
-        false
+    fn take_ids<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: &K) -> Vec<V>
+    where
+        K: Ord,
+        V: Ord,
+    {
+        index
+            .remove(key)
+            .map_or_else(Vec::new, |ids| ids.into_iter().collect())
     }
 
-    pub(super) fn contains_session(&self, session_id: SessionId) -> bool {
-        for session in &self.sessions {
-            if session.is_some_and(|session| session.id() == session_id) {
-                return true;
-            }
-        }
-        false
-    }
+    fn remove_index_member<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: K, value: &V)
+    where
+        K: Copy + Ord,
+        V: Ord,
+    {
+        let should_remove_key = index.get_mut(&key).is_some_and(|values| {
+            values.remove(value);
+            values.is_empty()
+        });
 
-    pub(super) fn contains_transport(&self, transport_id: TransportId) -> bool {
-        for transport in &self.transports {
-            if transport.is_some_and(|transport| transport.id() == transport_id) {
-                return true;
-            }
+        if should_remove_key {
+            index.remove(&key);
         }
-        false
-    }
-
-    pub(super) fn contains_producer(&self, producer_id: ProducerId) -> bool {
-        for producer in &self.producers {
-            if producer.is_some_and(|producer| producer.id() == producer_id) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn contains_consumer(&self, consumer_id: ConsumerId) -> bool {
-        for consumer in &self.consumers {
-            if consumer.is_some_and(|consumer| consumer.id() == consumer_id) {
-                return true;
-            }
-        }
-        false
     }
 }

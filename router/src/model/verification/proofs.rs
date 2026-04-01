@@ -1,9 +1,10 @@
+use super::ProofRouterModel;
 use crate::{
-    Consumer, ConsumerId, Producer, ProducerId, RouterId, RouterModel, Session, SessionId,
-    Transport, TransportId,
+    Consumer, ConsumerId, Producer, ProducerId, RouterId, Session, SessionId, Transport,
+    TransportId,
 };
 
-type ProofRouter = RouterModel<2, 2, 1, 1>;
+type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
 
 #[kani::proof]
 fn join_session_preserves_invariants() {

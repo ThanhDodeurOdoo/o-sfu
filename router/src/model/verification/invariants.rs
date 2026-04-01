@@ -1,11 +1,11 @@
-use super::super::RouterModel;
+use super::ProofRouterModel;
 
 impl<
     const MAX_SESSIONS: usize,
     const MAX_TRANSPORTS: usize,
     const MAX_PRODUCERS: usize,
     const MAX_CONSUMERS: usize,
-> RouterModel<MAX_SESSIONS, MAX_TRANSPORTS, MAX_PRODUCERS, MAX_CONSUMERS>
+> ProofRouterModel<MAX_SESSIONS, MAX_TRANSPORTS, MAX_PRODUCERS, MAX_CONSUMERS>
 {
     #[must_use]
     pub(crate) fn satisfies_invariants(&self) -> bool {
