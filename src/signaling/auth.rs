@@ -1,8 +1,18 @@
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use hmac::{Hmac, KeyInit, Mac};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 use crate::signaling::shared::{SessionId, SessionPermissions};
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Registered JWT claims from RFC 7519 section 4.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +31,43 @@ pub struct RegisteredJwtClaims {
     pub aud: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthenticationError {
+    InvalidJwtFormat,
+    InvalidBase64Encoding,
+    InvalidJsonPayload,
+    UnsupportedAlgorithm(String),
+    InvalidSignature,
+    TokenExpired,
+    TokenNotYetValid,
+    TokenIssuedInFuture,
+}
+
+impl Display for AuthenticationError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::InvalidJwtFormat => formatter.write_str("invalid JWT format"),
+            Self::InvalidBase64Encoding => formatter.write_str("invalid base64 encoding"),
+            Self::InvalidJsonPayload => formatter.write_str("invalid JSON payload"),
+            Self::UnsupportedAlgorithm(algorithm) => {
+                write!(formatter, "unsupported JWT algorithm: {algorithm}")
+            }
+            Self::InvalidSignature => formatter.write_str("invalid JWT signature"),
+            Self::TokenExpired => formatter.write_str("token expired"),
+            Self::TokenNotYetValid => formatter.write_str("token not valid yet"),
+            Self::TokenIssuedInFuture => formatter.write_str("token issued in the future"),
+        }
+    }
+}
+
+impl StdError for AuthenticationError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct JwtHeader {
+    alg: String,
+    typ: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,16 +100,130 @@ pub struct WebSocketConnectClaims {
     pub permissions: Option<SessionPermissions>,
 }
 
+/// # Errors
+///
+/// Returns an error when the key cannot be decoded or the claims cannot be serialized.
+pub fn sign<T>(claims: &T, key_b64: &str) -> Result<String, AuthenticationError>
+where
+    T: Serialize,
+{
+    let key = decode_base64(key_b64)?;
+    let header = JwtHeader {
+        alg: "HS256".to_owned(),
+        typ: "JWT".to_owned(),
+    };
+    let header_json =
+        serde_json::to_vec(&header).map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
+    let claims_json =
+        serde_json::to_vec(claims).map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
+    let header_b64 = STANDARD.encode(header_json);
+    let claims_b64 = STANDARD.encode(claims_json);
+    let signed_data = format!("{header_b64}.{claims_b64}");
+    let signature = sign_hs256(signed_data.as_bytes(), &key)?;
+    let signature_b64 = STANDARD.encode(signature);
+    Ok(format!("{signed_data}.{signature_b64}"))
+}
+
+/// # Errors
+///
+/// Returns an error when the token format, signature, or registered claims are invalid.
+pub fn verify<T>(token: &str, key_b64: &str) -> Result<T, AuthenticationError>
+where
+    T: DeserializeOwned,
+{
+    let key = decode_base64(key_b64)?;
+    let (header_b64, claims_b64, signature_b64) = split_token(token)?;
+    let header_bytes = decode_base64(header_b64)?;
+    let header: JwtHeader = serde_json::from_slice(&header_bytes)
+        .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
+    if header.alg != "HS256" {
+        return Err(AuthenticationError::UnsupportedAlgorithm(header.alg));
+    }
+    let claims_bytes = decode_base64(claims_b64)?;
+    let claims_value: serde_json::Value = serde_json::from_slice(&claims_bytes)
+        .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
+    let registered_claims: RegisteredJwtClaims = serde_json::from_value(claims_value.clone())
+        .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
+    let actual_signature = decode_base64(signature_b64)?;
+    verify_hs256(
+        format!("{header_b64}.{claims_b64}").as_bytes(),
+        &key,
+        &actual_signature,
+    )?;
+    validate_registered_claims(&registered_claims)?;
+    serde_json::from_value(claims_value).map_err(|_error| AuthenticationError::InvalidJsonPayload)
+}
+
+fn validate_registered_claims(claims: &RegisteredJwtClaims) -> Result<(), AuthenticationError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    if claims.exp.is_some_and(|exp| exp < now) {
+        return Err(AuthenticationError::TokenExpired);
+    }
+    if claims.nbf.is_some_and(|nbf| nbf > now) {
+        return Err(AuthenticationError::TokenNotYetValid);
+    }
+    if claims.iat.is_some_and(|iat| iat > now + 60) {
+        return Err(AuthenticationError::TokenIssuedInFuture);
+    }
+    Ok(())
+}
+
+fn sign_hs256(data: &[u8], key: &[u8]) -> Result<Vec<u8>, AuthenticationError> {
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|_error| AuthenticationError::InvalidBase64Encoding)?;
+    mac.update(data);
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn verify_hs256(data: &[u8], key: &[u8], signature: &[u8]) -> Result<(), AuthenticationError> {
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|_error| AuthenticationError::InvalidBase64Encoding)?;
+    mac.update(data);
+    mac.verify_slice(signature)
+        .map_err(|_error| AuthenticationError::InvalidSignature)
+}
+
+fn split_token(token: &str) -> Result<(&str, &str, &str), AuthenticationError> {
+    let mut parts = token.split('.');
+    let (Some(header), Some(claims), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(AuthenticationError::InvalidJwtFormat);
+    };
+    Ok((header, claims, signature))
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, AuthenticationError> {
+    let padded = pad_base64(input);
+    STANDARD
+        .decode(padded.as_bytes())
+        .map_err(|_error| AuthenticationError::InvalidBase64Encoding)
+}
+
+fn pad_base64(input: &str) -> String {
+    let remainder = input.len() % 4;
+    if remainder == 0 {
+        return input.to_owned();
+    }
+    format!("{input}{}", "=".repeat(4 - remainder))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
     use super::{
-        HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
+        sign, verify, AuthenticationError, HttpChannelClaims, HttpDisconnectClaims,
+        RegisteredJwtClaims, WebSocketConnectClaims,
     };
     use crate::signaling::shared::{SessionId, SessionPermissions};
+
+    const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 
     #[test]
     fn jwt_claims_round_trip() -> serde_json::Result<()> {
@@ -143,5 +304,52 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn sign_and_verify_round_trip() {
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims {
+                iss: Some("https://odoo.example.com".to_owned()),
+                ..RegisteredJwtClaims::default()
+            },
+            key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        };
+        let token = sign(&claims, TEST_AUTH_KEY);
+        assert!(token.is_ok());
+        let Some(token) = token.ok() else {
+            return;
+        };
+        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        assert!(verified.is_ok());
+        let Some(verified) = verified.ok() else {
+            return;
+        };
+        assert_eq!(verified, claims);
+    }
+
+    #[test]
+    fn verify_rejects_expired_token() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs());
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims {
+                exp: Some(now.saturating_sub(1)),
+                ..RegisteredJwtClaims::default()
+            },
+            key: None,
+        };
+        let token = sign(&claims, TEST_AUTH_KEY);
+        assert!(token.is_ok());
+        let Some(token) = token.ok() else {
+            return;
+        };
+        let error = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY).err();
+        assert!(error.is_some());
+        let Some(error) = error else {
+            return;
+        };
+        assert_eq!(error, AuthenticationError::TokenExpired);
     }
 }

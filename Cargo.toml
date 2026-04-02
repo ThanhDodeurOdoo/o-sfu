@@ -10,19 +10,33 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
+axum = "0.8"
+base64 = "0.22"
 crossbeam-channel = "0.5"
 flatbuffers = "25.12"
 futures-util = "0.3"
+hmac = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+sha2 = "0.11.0"
+tokio = { version = "1.50", features = [
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 tokio-tungstenite = "0.29"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rust_analyzer)", "cfg(kani)"] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(kani)",
+    "cfg(rust_analyzer)",
+] }
 unsafe_code = "deny"
 
 [workspace.lints.clippy] # https://rust-lang.github.io/rust-clippy/
@@ -78,18 +92,26 @@ useless_let_if_seq = "warn"
 while_float = "warn"
 
 [package]
-name = "o-sfu"
-description = "o-sfu"
 authors.workspace = true
+description = "o-sfu"
 edition.workspace = true
+name = "o-sfu"
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+hmac.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

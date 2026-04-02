@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: u16 = 1;
+pub const NOOP_PATH: &str = "/v1/noop";
+pub const STATS_PATH: &str = "/v1/stats";
+pub const CHANNEL_PATH: &str = "/v1/channel";
+pub const DISCONNECT_PATH: &str = "/v1/disconnect";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoopResponse {
@@ -72,8 +76,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        API_VERSION, ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats,
-        NoopResponse, SessionsStats, StatsResponse,
+        ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats, NoopResponse,
+        SessionsStats, StatsResponse, API_VERSION,
     };
 
     #[test]
