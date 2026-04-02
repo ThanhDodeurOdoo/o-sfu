@@ -12,6 +12,7 @@ use tokio::time::timeout;
 
 use super::{
     RuntimeState,
+    stub_bus::{StubBusOutcome, StubBusSession},
     stub_channels::{StubChannel, StubChannelJoinError},
 };
 use crate::signaling::{
@@ -106,11 +107,30 @@ async fn handle_socket(mut socket: WebSocket, state: RuntimeState) {
         return;
     }
 
+    let mut stub_bus = StubBusSession::new();
+    if stub_bus
+        .send_transport_bootstrap(&mut socket)
+        .await
+        .is_err()
+    {
+        state
+            .stub_channels
+            .leave_session(&channel.uuid, &claims.session_id)
+            .await;
+        return;
+    }
+
     while let Some(message) = socket.recv().await {
         match message {
-            Ok(Message::Close(_)) => break,
+            Ok(message) => match stub_bus.handle_frame(&mut socket, message).await {
+                StubBusOutcome::Continue => {}
+                StubBusOutcome::Break => break,
+                StubBusOutcome::Close(close_code) => {
+                    close_socket(&mut socket, close_code).await;
+                    break;
+                }
+            },
             Err(_error) => break,
-            Ok(_) => {}
         }
     }
 
@@ -218,8 +238,16 @@ mod tests {
         runtime::{http_server::app, stub_channels::StubChannelRegistry},
         signaling::{
             auth::{RegisteredJwtClaims, sign},
+            current_bus::{
+                CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
+            },
+            current_protocol::{
+                CurrentClientRequest, CurrentPublishTrackPayload, CurrentServerRequest,
+                CurrentTransportConnectPayload,
+            },
             http::CreateChannelQuery,
-            shared::SessionId,
+            shared::{SessionId, StreamType},
+            webrtc::{DtlsParameters, MediaKind, RtpParameters},
         },
     };
 
@@ -325,10 +353,72 @@ mod tests {
         Some(websocket)
     }
 
+    async fn authenticate_and_read_startup(
+        server: &TestServer,
+        token: &str,
+    ) -> Option<(TestWebSocket, CurrentStartupPayload)> {
+        let mut websocket = authenticate_with_jwt(server, token).await?;
+        let startup_json = read_text_message(&mut websocket).await?;
+        let startup = serde_json::from_str::<CurrentStartupPayload>(&startup_json).ok()?;
+        Some((websocket, startup))
+    }
+
     async fn read_message(
         websocket: &mut TestWebSocket,
     ) -> Option<tungstenite::Result<tungstenite::Message>> {
         websocket.next().await
+    }
+
+    async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> {
+        let message = read_message(websocket).await?;
+        let message = message.ok()?;
+        match message {
+            tungstenite::Message::Text(payload) => Some(payload.to_string()),
+            _ => None,
+        }
+    }
+
+    async fn read_bus_batch(websocket: &mut TestWebSocket) -> Option<CurrentBusBatch> {
+        let payload = read_text_message(websocket).await?;
+        serde_json::from_str(&payload).ok()
+    }
+
+    async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> Option<()> {
+        let batch = read_bus_batch(websocket).await?;
+        let envelope = batch.first()?;
+        let response = serde_json::to_string(&vec![CurrentBusEnvelope {
+            message: serde_json::json!({
+                "codecs": [],
+                "headerExtensions": []
+            }),
+            need_response: None,
+            response_to: envelope.need_response.clone(),
+        }])
+        .ok()?;
+        websocket
+            .send(tungstenite::Message::Text(response.into()))
+            .await
+            .ok()?;
+        Some(())
+    }
+
+    async fn send_bus_request_and_read_response(
+        websocket: &mut TestWebSocket,
+        request: CurrentClientRequest,
+        request_id: CurrentBusRequestId,
+    ) -> Option<CurrentBusEnvelope> {
+        let payload = serde_json::to_string(&vec![CurrentBusEnvelope {
+            message: serde_json::to_value(request).ok()?,
+            need_response: Some(request_id),
+            response_to: None,
+        }])
+        .ok()?;
+        websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await
+            .ok()?;
+        let response_batch = read_bus_batch(websocket).await?;
+        response_batch.first().cloned()
     }
 
     async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
@@ -488,6 +578,207 @@ mod tests {
             "startup payload should be readable: {message:?}"
         );
         assert!(matches!(message.ok(), Some(tungstenite::Message::Text(_))));
+    }
+
+    #[tokio::test]
+    async fn websocket_sends_stub_transport_bootstrap_after_startup() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(10));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, startup)) = authenticated else {
+            return;
+        };
+        assert!(startup.available_features.rtc);
+
+        let batch = read_bus_batch(&mut websocket).await;
+        assert!(batch.is_some(), "transport bootstrap batch should exist");
+        let Some(batch) = batch else {
+            return;
+        };
+        assert_eq!(batch.len(), 1);
+        let Some(envelope) = batch.first() else {
+            return;
+        };
+        assert_eq!(
+            envelope
+                .need_response
+                .as_ref()
+                .map(CurrentBusRequestId::as_str),
+            Some("s_0_0")
+        );
+        assert_eq!(envelope.response_to, None);
+        let request = serde_json::from_value::<CurrentServerRequest>(envelope.message.clone());
+        assert!(
+            request.is_ok(),
+            "transport bootstrap should deserialize: {request:?}"
+        );
+        let Some(request) = request.ok() else {
+            return;
+        };
+        let CurrentServerRequest::BootstrapTransports(payload) = request else {
+            return;
+        };
+        assert_eq!(payload.download_transport.id, "stc-stub");
+        assert_eq!(payload.upload_transport.id, "cts-stub");
+        assert_eq!(
+            payload.router_capabilities.0,
+            serde_json::json!({
+                "codecs": [],
+                "headerExtensions": []
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_returns_stub_responses_for_client_bus_requests() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(11));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
+        assert!(
+            acknowledged.is_some(),
+            "transport bootstrap should round-trip"
+        );
+
+        let connect_response = send_bus_request_and_read_response(
+            &mut websocket,
+            CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: DtlsParameters(serde_json::json!({
+                    "role": "client"
+                })),
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 0),
+        )
+        .await;
+        assert!(connect_response.is_some());
+        let Some(connect_envelope) = connect_response else {
+            return;
+        };
+        assert_eq!(connect_envelope.message, serde_json::json!({}));
+        assert_eq!(
+            connect_envelope
+                .response_to
+                .as_ref()
+                .map(CurrentBusRequestId::as_str),
+            Some("c_0_0")
+        );
+
+        let publish_response = send_bus_request_and_read_response(
+            &mut websocket,
+            CurrentClientRequest::PublishTrack(CurrentPublishTrackPayload {
+                stream_type: StreamType::Audio,
+                media_kind: MediaKind::Audio,
+                rtp_parameters: RtpParameters(serde_json::json!({
+                    "codecs": [],
+                    "encodings": []
+                })),
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 1),
+        )
+        .await;
+        assert!(publish_response.is_some());
+        let Some(publish_envelope) = publish_response else {
+            return;
+        };
+        assert_eq!(
+            publish_envelope.message,
+            serde_json::json!({
+                "id": "stub-producer-1"
+            })
+        );
+        assert_eq!(
+            publish_envelope
+                .response_to
+                .as_ref()
+                .map(CurrentBusRequestId::as_str),
+            Some("c_0_1")
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_returns_empty_object_for_malformed_bus_requests() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(12));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
+        assert!(
+            acknowledged.is_some(),
+            "transport bootstrap should round-trip"
+        );
+
+        let malformed_request = serde_json::to_string(&vec![CurrentBusEnvelope {
+            message: serde_json::json!({
+                "name": "NOT_A_REAL_REQUEST"
+            }),
+            need_response: Some(CurrentBusRequestId::new(CurrentBusOrigin::Client, 4, 2)),
+            response_to: None,
+        }]);
+        assert!(malformed_request.is_ok());
+        let Some(malformed_request) = malformed_request.ok() else {
+            return;
+        };
+        let send_result = websocket
+            .send(tungstenite::Message::Text(malformed_request.into()))
+            .await;
+        assert!(
+            send_result.is_ok(),
+            "malformed request should still send: {send_result:?}"
+        );
+        let response = read_bus_batch(&mut websocket).await;
+        assert!(response.is_some());
+        let Some(response) = response else {
+            return;
+        };
+        let Some(envelope) = response.first() else {
+            return;
+        };
+        assert_eq!(envelope.message, serde_json::json!({}));
+        assert_eq!(
+            envelope
+                .response_to
+                .as_ref()
+                .map(CurrentBusRequestId::as_str),
+            Some("c_4_2")
+        );
     }
 
     #[tokio::test]

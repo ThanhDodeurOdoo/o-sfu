@@ -6,6 +6,7 @@ use tokio::runtime::Builder;
 use crate::{config::Config, signaling::CURRENT_WIRE_PROTOCOL_VERSION};
 
 mod http_server;
+mod stub_bus;
 mod stub_channels;
 mod websocket_server;
 
