@@ -15,7 +15,7 @@ use tokio::time::timeout;
 
 use super::{
     RuntimeState,
-    channel::{Channel, ChannelJoinError, SessionOutbound},
+    channel::{Channel, ChannelManagerJoinError, SessionOutbound},
     stub_bus::{StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch},
 };
 use crate::signaling::{
@@ -60,8 +60,10 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     };
 
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-    let connection_id = match channel
+    let (channel, connection_id) = match state
+        .channels
         .join_session(
+            channel.uuid(),
             claims.session_id.clone(),
             claims.label.clone(),
             claims.permissions.clone().unwrap_or_default(),
@@ -70,10 +72,13 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         )
         .await
     {
-        Ok(connection_id) => connection_id,
+        Ok(result) => result,
         Err(error) => {
             let code = match error {
-                ChannelJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+                ChannelManagerJoinError::MissingChannel => {
+                    CurrentWebSocketCloseCode::AuthenticationFailed
+                }
+                ChannelManagerJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
             };
             close_writer(&mut ws_writer, code).await;
             return;
@@ -81,8 +86,9 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     };
 
     if send_startup(&channel, &mut ws_writer).await.is_err() {
-        channel
-            .leave_session(&claims.session_id, connection_id)
+        state
+            .channels
+            .leave_session(channel.uuid(), &claims.session_id, connection_id)
             .await;
         return;
     }
@@ -93,15 +99,17 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         .await
         .is_err()
     {
-        channel
-            .leave_session(&claims.session_id, connection_id)
+        state
+            .channels
+            .leave_session(channel.uuid(), &claims.session_id, connection_id)
             .await;
         return;
     }
 
     run_message_loop(&mut ws_writer, &mut ws_reader, outbound_rx, &mut stub_bus).await;
-    channel
-        .leave_session(&claims.session_id, connection_id)
+    state
+        .channels
+        .leave_session(channel.uuid(), &claims.session_id, connection_id)
         .await;
 }
 
@@ -910,7 +918,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn websocket_enforces_channel_capacity_and_releases_slot_on_disconnect() {
+    async fn websocket_recreates_channel_after_last_disconnect_cleanup() {
         let server = spawn_test_server(1_000, 1).await;
         assert!(server.is_some());
         let Some(server) = server else {
@@ -923,14 +931,9 @@ mod tests {
             signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(1));
         let second_token =
             signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(2));
-        let third_token =
-            signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(3));
         assert!(first_token.is_some());
         assert!(second_token.is_some());
-        assert!(third_token.is_some());
-        let (Some(first_token), Some(second_token), Some(third_token)) =
-            (first_token, second_token, third_token)
-        else {
+        let (Some(first_token), Some(second_token)) = (first_token, second_token) else {
             return;
         };
 
@@ -966,6 +969,21 @@ mod tests {
         );
         drop(first_websocket);
         sleep(Duration::from_millis(20)).await;
+
+        assert!(server.channels.get_by_uuid(channel.uuid()).await.is_none());
+
+        let replacement_channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        assert_ne!(replacement_channel.uuid(), channel.uuid());
+        let third_token = signed_connect_claims(
+            TEST_AUTH_KEY,
+            replacement_channel.uuid(),
+            SessionId::Integer(3),
+        );
+        assert!(third_token.is_some());
+        let Some(third_token) = third_token else {
+            return;
+        };
 
         let third_websocket = authenticate_with_jwt(&server, &third_token).await;
         assert!(third_websocket.is_some());

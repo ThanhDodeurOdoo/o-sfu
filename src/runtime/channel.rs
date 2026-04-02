@@ -29,6 +29,12 @@ pub enum ChannelJoinError {
     ChannelFull,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelManagerJoinError {
+    MissingChannel,
+    ChannelFull,
+}
+
 /// A single discussion channel owning sessions, features, and recording state.
 ///
 /// Identity fields (uuid, issuer, key, features) are immutable after creation.
@@ -87,6 +93,11 @@ impl Channel {
     #[must_use]
     pub fn uuid(&self) -> &str {
         &self.uuid
+    }
+
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
     }
 
     #[must_use]
@@ -253,6 +264,10 @@ impl Channel {
     pub async fn session_count(&self) -> usize {
         self.state.read().await.sessions.len()
     }
+
+    async fn is_empty(&self) -> bool {
+        self.state.read().await.sessions.is_empty()
+    }
 }
 
 /// Send a server message to every session in the map.
@@ -344,6 +359,71 @@ impl ChannelManager {
         let state = self.state.read().await;
         state.channels_by_uuid.get(uuid).map(Arc::clone)
     }
+
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "join must stay serialized with manager cleanup so an empty channel cannot be removed while a concurrent join is being committed"
+    )]
+    pub async fn join_session(
+        &self,
+        channel_uuid: &str,
+        session_id: SessionId,
+        label: Option<String>,
+        permissions: SessionPermissions,
+        sender: mpsc::UnboundedSender<SessionOutbound>,
+        max_sessions: usize,
+    ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
+        let state = self.state.write().await;
+        let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
+            return Err(ChannelManagerJoinError::MissingChannel);
+        };
+        let connection_id = channel
+            .join_session(session_id, label, permissions, sender, max_sessions)
+            .await
+            .map_err(|error| match error {
+                ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
+            })?;
+        Ok((channel, connection_id))
+    }
+
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "teardown must keep the manager lock until cleanup decides whether the channel entry should be pruned"
+    )]
+    pub async fn leave_session(
+        &self,
+        channel_uuid: &str,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) {
+        let mut state = self.state.write().await;
+        let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
+            return;
+        };
+        channel.leave_session(session_id, connection_id).await;
+        remove_channel_if_empty(&mut state, &channel).await;
+    }
+
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "bulk disconnect and empty-channel pruning must observe one manager-coordinated critical section"
+    )]
+    pub async fn disconnect_sessions(&self, channel_uuid: &str, session_ids: &[SessionId]) {
+        let mut state = self.state.write().await;
+        let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
+            return;
+        };
+        channel.disconnect_sessions(session_ids).await;
+        remove_channel_if_empty(&mut state, &channel).await;
+    }
+}
+
+async fn remove_channel_if_empty(state: &mut ChannelManagerState, channel: &Channel) {
+    if !channel.is_empty().await {
+        return;
+    }
+    state.channels_by_uuid.remove(channel.uuid());
+    state.uuids_by_issuer.remove(channel.issuer());
 }
 
 #[cfg(test)]
@@ -354,7 +434,7 @@ impl ChannelManager {
 mod tests {
     use tokio::sync::mpsc;
 
-    use super::{ChannelJoinError, ChannelManager, SessionOutbound};
+    use super::{ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound};
     use crate::signaling::{
         current_protocol::{CurrentServerMessage, CurrentWebSocketCloseCode},
         http::CreateChannelQuery,
@@ -394,6 +474,26 @@ mod tests {
             Some(channel.uuid().to_owned())
         );
         assert!(manager.get_by_uuid("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn channel_manager_join_session_reports_missing_channel() {
+        let manager = ChannelManager::new();
+        let (tx, _rx) = test_sender();
+        let result = manager
+            .join_session(
+                "missing-channel",
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx,
+                1,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(ChannelManagerJoinError::MissingChannel)
+        ));
     }
 
     #[tokio::test]
@@ -840,5 +940,70 @@ mod tests {
         ));
         assert!(rx1.try_recv().is_err());
         assert_eq!(channel.session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn manager_leave_session_removes_empty_channel() {
+        let manager = ChannelManager::new();
+        let first_channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let channel_uuid = first_channel.uuid().to_owned();
+        let (tx, _rx) = test_sender();
+        let joined = manager
+            .join_session(
+                &channel_uuid,
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx,
+                1,
+            )
+            .await;
+        assert!(joined.is_ok());
+        let Some((_channel, connection_id)) = joined.ok() else {
+            return;
+        };
+
+        manager
+            .leave_session(&channel_uuid, &SessionId::Integer(1), connection_id)
+            .await;
+
+        assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
+        let replacement = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        assert_ne!(replacement.uuid(), channel_uuid);
+    }
+
+    #[tokio::test]
+    async fn manager_disconnect_sessions_removes_empty_channel() {
+        let manager = ChannelManager::new();
+        let first_channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let channel_uuid = first_channel.uuid().to_owned();
+        let (tx, _rx) = test_sender();
+        let joined = manager
+            .join_session(
+                &channel_uuid,
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx,
+                1,
+            )
+            .await;
+        assert!(joined.is_ok());
+
+        manager
+            .disconnect_sessions(&channel_uuid, &[SessionId::Integer(1)])
+            .await;
+
+        assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
+        let replacement = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        assert_ne!(replacement.uuid(), channel_uuid);
     }
 }

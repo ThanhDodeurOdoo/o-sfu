@@ -87,9 +87,10 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
         return StatusCode::UNPROCESSABLE_ENTITY.into_response();
     };
     for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
-        if let Some(channel) = state.channels.get_by_uuid(channel_uuid).await {
-            channel.disconnect_sessions(session_ids).await;
-        }
+        state
+            .channels
+            .disconnect_sessions(channel_uuid, session_ids)
+            .await;
     }
     StatusCode::OK.into_response()
 }
