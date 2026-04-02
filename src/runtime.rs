@@ -1,9 +1,9 @@
-use crate::{config::Config, signaling::PROTOCOL_VERSION};
+use crate::{config::Config, signaling::CURRENT_WIRE_PROTOCOL_VERSION};
 
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
-    pub protocol_version: u16,
+    pub current_wire_protocol_version: u16,
 }
 
 impl Runtime {
@@ -11,7 +11,7 @@ impl Runtime {
     pub fn new(config: Config) -> Self {
         Self {
             config,
-            protocol_version: PROTOCOL_VERSION,
+            current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
         }
     }
 }

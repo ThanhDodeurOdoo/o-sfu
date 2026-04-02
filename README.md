@@ -2,7 +2,7 @@
 
 - `router/`: isolated router crate for the core routing domain.
 - `src/runtime.rs`: application bootstrap shell around the core crates.
-- `src/signaling.rs`: shared protocol entry point for the future client contract.
+- `src/signaling.rs` + `src/signaling/`: bundle-facing contract types, current wire reference types, auth claims,transport/bootstrap primitives,...
 
 ## Development
 
