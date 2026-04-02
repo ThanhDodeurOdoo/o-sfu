@@ -60,7 +60,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     };
 
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-    if let Err(error) = channel
+    let connection_id = match channel
         .join_session(
             claims.session_id.clone(),
             claims.label.clone(),
@@ -70,15 +70,20 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         )
         .await
     {
-        let code = match error {
-            ChannelJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
-        };
-        close_writer(&mut ws_writer, code).await;
-        return;
-    }
+        Ok(connection_id) => connection_id,
+        Err(error) => {
+            let code = match error {
+                ChannelJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+            };
+            close_writer(&mut ws_writer, code).await;
+            return;
+        }
+    };
 
     if send_startup(&channel, &mut ws_writer).await.is_err() {
-        channel.leave_session(&claims.session_id).await;
+        channel
+            .leave_session(&claims.session_id, connection_id)
+            .await;
         return;
     }
 
@@ -88,12 +93,16 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         .await
         .is_err()
     {
-        channel.leave_session(&claims.session_id).await;
+        channel
+            .leave_session(&claims.session_id, connection_id)
+            .await;
         return;
     }
 
     run_message_loop(&mut ws_writer, &mut ws_reader, outbound_rx, &mut stub_bus).await;
-    channel.leave_session(&claims.session_id).await;
+    channel
+        .leave_session(&claims.session_id, connection_id)
+        .await;
 }
 
 type WsReader = SplitStream<WebSocket>;

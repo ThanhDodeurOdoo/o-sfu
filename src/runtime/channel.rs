@@ -46,6 +46,7 @@ pub struct Channel {
 #[derive(Debug, Default)]
 struct ChannelState {
     sessions: BTreeMap<SessionId, ActiveSession>,
+    next_connection_id: u64,
     recording_state: RecordingState,
 }
 
@@ -59,10 +60,8 @@ struct ActiveSession {
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
     permissions: SessionPermissions,
     info: SessionInfo,
+    connection_id: u64,
     sender: mpsc::UnboundedSender<SessionOutbound>,
-    /// Tracks concurrent WebSocket connections sharing this session ID.
-    /// The slot is freed only when the count reaches zero.
-    connection_count: usize,
 }
 
 impl Channel {
@@ -112,8 +111,11 @@ impl Channel {
     /// Add a session to this channel. Returns an error if the channel is at capacity
     /// and the session ID is not already present (reconnections bypass the limit).
     ///
-    /// When the same session ID joins again, the outbound sender is updated to the
-    /// latest connection so new server messages reach the most recent socket.
+    /// A repeated join for the same session ID replaces the previous live connection,
+    /// (as in the current odoo sfu in node)
+    /// Returns a channel-scoped connection token that must be passed back to
+    /// [`Self::leave_session`] so stale disconnects from replaced sockets do not
+    /// remove the newer session entry.
     pub async fn join_session(
         &self,
         session_id: SessionId,
@@ -121,39 +123,54 @@ impl Channel {
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
         max_sessions: usize,
-    ) -> Result<(), ChannelJoinError> {
+    ) -> Result<u64, ChannelJoinError> {
         let mut state = self.state.write().await;
         let is_new = !state.sessions.contains_key(&session_id);
         if is_new && state.sessions.len() >= max_sessions {
             return Err(ChannelJoinError::ChannelFull);
         }
-        state
-            .sessions
-            .entry(session_id)
-            .and_modify(|session| {
-                session.sender = sender.clone();
-                session.connection_count += 1;
-            })
-            .or_insert(ActiveSession {
-                label,
-                permissions,
-                info: SessionInfo::default(),
-                sender,
-                connection_count: 1,
+        let connection_id = state.next_connection_id;
+        state.next_connection_id += 1;
+        let previous_sender = if let Some(session) = state.sessions.get_mut(&session_id) {
+            let old_sender = session.sender.clone();
+            session.label.clone_from(&label);
+            session.permissions.clone_from(&permissions);
+            session.info = SessionInfo::default();
+            session.connection_id = connection_id;
+            session.sender = sender;
+            Some(old_sender)
+        } else {
+            state.sessions.insert(
+                session_id.clone(),
+                ActiveSession {
+                    label,
+                    permissions,
+                    info: SessionInfo::default(),
+                    connection_id,
+                    sender,
+                },
+            );
+            None
+        };
+        if let Some(old_sender) = previous_sender {
+            let _ = old_sender.send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
+            let departure = CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
+                session_id: session_id.clone(),
             });
+            send_to_all_except(&state.sessions, &departure, Some(&session_id));
+        }
         drop(state);
-        Ok(())
+        Ok(connection_id)
     }
 
     /// Remove a connection for the given session. When the last connection leaves,
     /// the session is fully removed and `SESSION_LEAVE` is sent to remaining peers.
-    pub async fn leave_session(&self, session_id: &SessionId) {
+    pub async fn leave_session(&self, session_id: &SessionId, connection_id: u64) {
         let mut state = self.state.write().await;
         let Some(session) = state.sessions.get_mut(session_id) else {
             return;
         };
-        if session.connection_count > 1 {
-            session.connection_count -= 1;
+        if session.connection_id != connection_id {
             return;
         }
         state.sessions.remove(session_id);
@@ -241,6 +258,19 @@ impl Channel {
 /// Send a server message to every session in the map.
 fn send_to_all(sessions: &BTreeMap<SessionId, ActiveSession>, msg: &CurrentServerMessage) {
     for session in sessions.values() {
+        let _ = session.sender.send(SessionOutbound::Message(msg.clone()));
+    }
+}
+
+fn send_to_all_except(
+    sessions: &BTreeMap<SessionId, ActiveSession>,
+    msg: &CurrentServerMessage,
+    excluded_session_id: Option<&SessionId>,
+) {
+    for (session_id, session) in sessions {
+        if excluded_session_id.is_some_and(|excluded| excluded == session_id) {
+            continue;
+        }
         let _ = session.sender.send(SessionOutbound::Message(msg.clone()));
     }
 }
@@ -398,13 +428,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconnection_bypasses_capacity_and_updates_sender() {
+    async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         let manager = ChannelManager::new();
         let channel = manager
             .create_or_get("issuer-a", None, &CreateChannelQuery::default())
             .await;
-        let (tx1, _rx1) = test_sender();
-        let _ = channel
+        let (tx1, mut rx1) = test_sender();
+        let first_connection = channel
             .join_session(
                 SessionId::Integer(1),
                 None,
@@ -413,10 +443,11 @@ mod tests {
                 1,
             )
             .await;
+        assert!(first_connection.is_ok());
 
         // Same session ID reconnects — should succeed even at capacity
         let (tx2, mut rx2) = test_sender();
-        let result = channel
+        let second_connection = channel
             .join_session(
                 SessionId::Integer(1),
                 None,
@@ -425,14 +456,35 @@ mod tests {
                 1,
             )
             .await;
-        assert!(result.is_ok());
+        assert!(second_connection.is_ok());
+        assert!(matches!(
+            rx1.try_recv().ok(),
+            Some(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked))
+        ));
 
-        // Broadcast should reach the new sender
+        let Some(first_connection) = first_connection.ok() else {
+            return;
+        };
+        let Some(second_connection) = second_connection.ok() else {
+            return;
+        };
+
+        // A stale close from the replaced socket must not remove the new session.
+        channel
+            .leave_session(&SessionId::Integer(1), first_connection)
+            .await;
+        assert_eq!(channel.session_count().await, 1);
+
         channel
             .broadcast(&SessionId::Integer(99), serde_json::json!("hello"))
             .await;
         let msg = rx2.try_recv();
         assert!(msg.is_ok(), "new sender should receive broadcast");
+
+        channel
+            .leave_session(&SessionId::Integer(1), second_connection)
+            .await;
+        assert_eq!(channel.session_count().await, 0);
     }
 
     #[tokio::test]
@@ -443,7 +495,7 @@ mod tests {
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, _rx2) = test_sender();
-        let _ = channel
+        let alice_connection = channel
             .join_session(
                 SessionId::Integer(1),
                 None,
@@ -452,7 +504,7 @@ mod tests {
                 10,
             )
             .await;
-        let _ = channel
+        let bob_connection = channel
             .join_session(
                 SessionId::Integer(2),
                 None,
@@ -461,8 +513,15 @@ mod tests {
                 10,
             )
             .await;
+        assert!(alice_connection.is_ok());
+        assert!(bob_connection.is_ok());
+        let Some(bob_connection) = bob_connection.ok() else {
+            return;
+        };
 
-        channel.leave_session(&SessionId::Integer(2)).await;
+        channel
+            .leave_session(&SessionId::Integer(2), bob_connection)
+            .await;
 
         let msg = rx1.try_recv();
         assert!(msg.is_ok());
@@ -475,14 +534,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn leave_session_with_multiple_connections_does_not_send_departure() {
+    async fn replacing_a_session_notifies_remaining_peers() {
         let manager = ChannelManager::new();
         let channel = manager
             .create_or_get("issuer-a", None, &CreateChannelQuery::default())
             .await;
-        let (tx1, mut rx1) = test_sender();
-        let (tx2, _rx2) = test_sender();
-        let _ = channel
+        let (tx1, mut alice_rx) = test_sender();
+        let (tx2, mut bob_old_rx) = test_sender();
+        let (tx3, _bob_new_rx) = test_sender();
+        let _alice_connection = channel
             .join_session(
                 SessionId::Integer(1),
                 None,
@@ -491,10 +551,9 @@ mod tests {
                 10,
             )
             .await;
-        // Same session connects again
-        let _ = channel
+        let _bob_old_connection = channel
             .join_session(
-                SessionId::Integer(1),
+                SessionId::Integer(2),
                 None,
                 SessionPermissions::default(),
                 tx2,
@@ -502,14 +561,27 @@ mod tests {
             )
             .await;
 
-        // First disconnect — connection_count goes from 2 to 1
-        channel.leave_session(&SessionId::Integer(1)).await;
-        assert_eq!(channel.session_count().await, 1);
-        assert!(rx1.try_recv().is_err(), "no departure should be sent yet");
-
-        // Second disconnect — session fully removed
-        channel.leave_session(&SessionId::Integer(1)).await;
-        assert_eq!(channel.session_count().await, 0);
+        let _bob_new_connection = channel
+            .join_session(
+                SessionId::Integer(2),
+                None,
+                SessionPermissions::default(),
+                tx3,
+                10,
+            )
+            .await;
+        assert!(matches!(
+            bob_old_rx.try_recv().ok(),
+            Some(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked))
+        ));
+        let msg = alice_rx.try_recv();
+        assert!(msg.is_ok());
+        if let Ok(SessionOutbound::Message(CurrentServerMessage::SessionDeparted(payload))) = msg {
+            assert_eq!(payload.session_id, SessionId::Integer(2));
+        } else {
+            panic!("expected SessionDeparted, got {msg:?}");
+        }
+        assert_eq!(channel.session_count().await, 2);
     }
 
     #[tokio::test]
@@ -725,5 +797,48 @@ mod tests {
         assert!(departure2.is_ok());
 
         assert_eq!(channel.session_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn disconnect_sessions_target_only_the_active_replaced_session() {
+        let manager = ChannelManager::new();
+        let channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let (tx1, mut rx1) = test_sender();
+        let (tx2, mut rx2) = test_sender();
+        let first_connection = channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx1,
+                10,
+            )
+            .await;
+        let second_connection = channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx2,
+                10,
+            )
+            .await;
+        assert!(first_connection.is_ok());
+        assert!(second_connection.is_ok());
+        assert!(matches!(
+            rx1.try_recv().ok(),
+            Some(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked))
+        ));
+
+        channel.disconnect_sessions(&[SessionId::Integer(1)]).await;
+
+        assert!(matches!(
+            rx2.try_recv().ok(),
+            Some(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked))
+        ));
+        assert!(rx1.try_recv().is_err());
+        assert_eq!(channel.session_count().await, 0);
     }
 }
