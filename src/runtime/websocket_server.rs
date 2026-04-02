@@ -1,0 +1,594 @@
+use std::time::Duration;
+
+use axum::{
+    extract::{
+        State,
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+    },
+    response::Response,
+};
+use serde::Deserialize;
+use tokio::time::timeout;
+
+use super::{
+    RuntimeState,
+    stub_channels::{StubChannel, StubChannelJoinError},
+};
+use crate::signaling::{
+    auth::{self, WebSocketConnectClaims},
+    current_protocol::{
+        CurrentStartupPayload, CurrentWebSocketCloseCode, CurrentWebSocketCredentials,
+    },
+    shared::{AvailableFeatures, RecordingState},
+};
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AuthenticationPayload {
+    Credentials(CurrentWebSocketCredentials),
+    Jwt(String),
+}
+
+pub(super) async fn upgrade(
+    State(state): State<RuntimeState>,
+    websocket: WebSocketUpgrade,
+) -> Response {
+    websocket.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: RuntimeState) {
+    let credentials = match timeout(
+        Duration::from_millis(state.config.authentication_timeout_ms),
+        socket.recv(),
+    )
+    .await
+    {
+        Err(_) => {
+            close_socket(&mut socket, CurrentWebSocketCloseCode::Timeout).await;
+            return;
+        }
+        Ok(None) => return,
+        Ok(Some(Err(_error))) => {
+            close_socket(&mut socket, CurrentWebSocketCloseCode::Error).await;
+            return;
+        }
+        Ok(Some(Ok(message))) => match parse_credentials(message) {
+            Ok(credentials) => credentials,
+            Err(close_code) => {
+                close_socket(&mut socket, close_code).await;
+                return;
+            }
+        },
+    };
+
+    let (channel, claims) = match authenticate(&state, credentials).await {
+        Ok(result) => result,
+        Err(close_code) => {
+            close_socket(&mut socket, close_code).await;
+            return;
+        }
+    };
+
+    let startup_payload = CurrentStartupPayload {
+        available_features: AvailableFeatures {
+            rtc: channel.web_rtc_enabled,
+            transcription: false,
+            audio_recording: false,
+            video_recording: false,
+        },
+        recording_state: RecordingState {
+            recording: Some(false),
+            audio: Some(false),
+            transcription: Some(false),
+            video: Some(false),
+        },
+    };
+    let startup_json = match serde_json::to_string(&startup_payload) {
+        Ok(startup_json) => startup_json,
+        Err(_error) => {
+            state
+                .stub_channels
+                .leave_session(&channel.uuid, &claims.session_id)
+                .await;
+            close_socket(&mut socket, CurrentWebSocketCloseCode::Error).await;
+            return;
+        }
+    };
+    if socket
+        .send(Message::Text(startup_json.into()))
+        .await
+        .is_err()
+    {
+        state
+            .stub_channels
+            .leave_session(&channel.uuid, &claims.session_id)
+            .await;
+        return;
+    }
+
+    while let Some(message) = socket.recv().await {
+        match message {
+            Ok(Message::Close(_)) => break,
+            Err(_error) => break,
+            Ok(_) => {}
+        }
+    }
+
+    state
+        .stub_channels
+        .leave_session(&channel.uuid, &claims.session_id)
+        .await;
+}
+
+fn parse_credentials(
+    message: Message,
+) -> Result<CurrentWebSocketCredentials, CurrentWebSocketCloseCode> {
+    let payload = match message {
+        Message::Text(payload) => payload.to_string(),
+        Message::Binary(payload) => String::from_utf8(payload.to_vec())
+            .map_err(|_error| CurrentWebSocketCloseCode::Error)?,
+        Message::Close(_) => return Err(CurrentWebSocketCloseCode::Clean),
+        Message::Ping(_) | Message::Pong(_) => return Err(CurrentWebSocketCloseCode::Error),
+    };
+    let payload: AuthenticationPayload =
+        serde_json::from_str(&payload).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+    Ok(match payload {
+        AuthenticationPayload::Credentials(credentials) => credentials,
+        AuthenticationPayload::Jwt(jwt) => CurrentWebSocketCredentials {
+            channel_uuid: None,
+            jwt,
+        },
+    })
+}
+
+async fn authenticate(
+    state: &RuntimeState,
+    credentials: CurrentWebSocketCredentials,
+) -> Result<(StubChannel, WebSocketConnectClaims), CurrentWebSocketCloseCode> {
+    let claims = if let Some(channel_uuid) = credentials.channel_uuid.as_deref() {
+        let Some(channel) = state.stub_channels.get_by_uuid(channel_uuid).await else {
+            return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+        };
+        let key = channel.key.as_deref().unwrap_or(&state.config.auth_key);
+        let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, key)
+            .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?;
+        let channel = join_stub_session(state, &channel.uuid, &claims).await?;
+        return Ok((channel, claims));
+    } else {
+        auth::verify::<WebSocketConnectClaims>(&credentials.jwt, &state.config.auth_key)
+            .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?
+    };
+    let Some(channel) = state
+        .stub_channels
+        .get_by_uuid(&claims.sfu_channel_uuid)
+        .await
+    else {
+        return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+    };
+    if channel.key.is_some() {
+        return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+    }
+    let channel = join_stub_session(state, &channel.uuid, &claims).await?;
+    Ok((channel, claims))
+}
+
+async fn join_stub_session(
+    state: &RuntimeState,
+    channel_uuid: &str,
+    claims: &WebSocketConnectClaims,
+) -> Result<StubChannel, CurrentWebSocketCloseCode> {
+    state
+        .stub_channels
+        .join_session(channel_uuid, &claims.session_id, state.config.channel_size)
+        .await
+        .map_err(|error| match error {
+            StubChannelJoinError::MissingChannel => CurrentWebSocketCloseCode::AuthenticationFailed,
+            StubChannelJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+        })
+}
+
+async fn close_socket(socket: &mut WebSocket, close_code: CurrentWebSocketCloseCode) {
+    let _result = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: u16::from(close_code),
+            reason: "".into(),
+        })))
+        .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        task::JoinHandle,
+        time::sleep,
+    };
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{self, protocol::frame::coding::CloseCode},
+    };
+
+    use super::*;
+    use crate::{
+        config::Config,
+        runtime::{http_server::app, stub_channels::StubChannelRegistry},
+        signaling::{
+            auth::{RegisteredJwtClaims, sign},
+            http::CreateChannelQuery,
+            shared::SessionId,
+        },
+    };
+
+    const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
+    const TEST_CHANNEL_KEY: &str = "Y2hhbm5lbC1rZXk=";
+    type TestWebSocket =
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+    struct TestServer {
+        addr: SocketAddr,
+        handle: JoinHandle<()>,
+        stub_channels: Arc<StubChannelRegistry>,
+    }
+
+    impl TestServer {
+        fn url(&self) -> String {
+            format!("ws://{}/", self.addr)
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
+        Config {
+            auth_key: TEST_AUTH_KEY.to_owned(),
+            bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            authentication_timeout_ms,
+            channel_size,
+        }
+    }
+
+    async fn spawn_test_server(
+        authentication_timeout_ms: u64,
+        channel_size: usize,
+    ) -> Option<TestServer> {
+        let stub_channels = Arc::new(StubChannelRegistry::new());
+        let state = RuntimeState {
+            config: test_config(authentication_timeout_ms, channel_size),
+            stub_channels: Arc::clone(&stub_channels),
+        };
+        let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
+        let addr = listener.local_addr().ok()?;
+        let handle = tokio::spawn(async move {
+            let result = axum::serve(listener, app(state)).await;
+            assert!(
+                result.is_ok(),
+                "test server should stop cleanly: {result:?}"
+            );
+        });
+        Some(TestServer {
+            addr,
+            handle,
+            stub_channels,
+        })
+    }
+
+    async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
+        let websocket = connect_async(server.url()).await.ok()?;
+        Some(websocket.0)
+    }
+
+    fn signed_connect_claims(
+        key: &str,
+        channel_uuid: &str,
+        session_id: SessionId,
+    ) -> Option<String> {
+        sign(
+            &WebSocketConnectClaims {
+                registered: RegisteredJwtClaims::default(),
+                sfu_channel_uuid: channel_uuid.to_owned(),
+                session_id,
+                label: Some("Alice".to_owned()),
+                permissions: None,
+            },
+            key,
+        )
+        .ok()
+    }
+
+    async fn create_channel(
+        server: &TestServer,
+        issuer: &str,
+        key: Option<&str>,
+        query: CreateChannelQuery,
+    ) -> StubChannel {
+        server
+            .stub_channels
+            .create_or_get(issuer, key, &query)
+            .await
+    }
+
+    async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<TestWebSocket> {
+        let mut websocket = connect_websocket(server).await?;
+        let payload = serde_json::to_string(&serde_json::json!({ "jwt": token })).ok()?;
+        websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await
+            .ok()?;
+        Some(websocket)
+    }
+
+    async fn read_message(
+        websocket: &mut TestWebSocket,
+    ) -> Option<tungstenite::Result<tungstenite::Message>> {
+        websocket.next().await
+    }
+
+    async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
+        loop {
+            let message = read_message(websocket).await?;
+            if let tungstenite::Message::Close(frame) = message.ok()? {
+                return frame.map(|frame| frame.code);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn websocket_times_out_when_client_never_authenticates() {
+        let server = spawn_test_server(25, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let websocket = connect_websocket(&server).await;
+        assert!(websocket.is_some());
+        let Some(mut websocket) = websocket else {
+            return;
+        };
+
+        let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
+        assert!(
+            close_code.is_ok(),
+            "timeout close should arrive promptly: {close_code:?}"
+        );
+        assert_eq!(close_code.ok().flatten(), Some(CloseCode::Library(4107)),);
+    }
+
+    #[tokio::test]
+    async fn websocket_authenticates_with_channel_key_and_sends_startup_payload() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel = create_channel(
+            &server,
+            "issuer-a",
+            Some(TEST_CHANNEL_KEY),
+            CreateChannelQuery::default(),
+        )
+        .await;
+        let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel.uuid, SessionId::Integer(7));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let websocket = connect_websocket(&server).await;
+        assert!(websocket.is_some());
+        let Some(mut websocket) = websocket else {
+            return;
+        };
+        let payload = serde_json::to_string(&CurrentWebSocketCredentials {
+            channel_uuid: Some(channel.uuid.clone()),
+            jwt: token,
+        })
+        .ok();
+        assert!(payload.is_some());
+        let Some(payload) = payload else {
+            return;
+        };
+
+        let send_result = websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await;
+        assert!(
+            send_result.is_ok(),
+            "auth payload should send: {send_result:?}"
+        );
+
+        let message = read_message(&mut websocket).await;
+        assert!(message.is_some(), "startup payload should exist");
+        let Some(message) = message else {
+            return;
+        };
+        assert!(
+            message.is_ok(),
+            "startup payload should be readable: {message:?}"
+        );
+        let Some(message) = message.ok() else {
+            return;
+        };
+        let tungstenite::Message::Text(startup_json) = message else {
+            return;
+        };
+        let startup = serde_json::from_str::<CurrentStartupPayload>(&startup_json);
+        assert!(
+            startup.is_ok(),
+            "startup payload should deserialize: {startup:?}"
+        );
+        let Some(startup) = startup.ok() else {
+            return;
+        };
+        assert_eq!(
+            startup,
+            CurrentStartupPayload {
+                available_features: AvailableFeatures {
+                    rtc: true,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+                recording_state: RecordingState {
+                    recording: Some(false),
+                    audio: Some(false),
+                    transcription: Some(false),
+                    video: Some(false),
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_accepts_global_key_without_explicit_channel_uuid() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(9));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let websocket = connect_websocket(&server).await;
+        assert!(websocket.is_some());
+        let Some(mut websocket) = websocket else {
+            return;
+        };
+        let payload = serde_json::to_string(&serde_json::json!({ "jwt": token })).ok();
+        assert!(payload.is_some());
+        let Some(payload) = payload else {
+            return;
+        };
+
+        let send_result = websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await;
+        assert!(
+            send_result.is_ok(),
+            "jwt-only payload should send: {send_result:?}"
+        );
+
+        let message = read_message(&mut websocket).await;
+        assert!(message.is_some(), "startup payload should exist");
+        let Some(message) = message else {
+            return;
+        };
+        assert!(
+            message.is_ok(),
+            "startup payload should be readable: {message:?}"
+        );
+        assert!(matches!(message.ok(), Some(tungstenite::Message::Text(_))));
+    }
+
+    #[tokio::test]
+    async fn websocket_rejects_invalid_json_payload() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let websocket = connect_websocket(&server).await;
+        assert!(websocket.is_some());
+        let Some(mut websocket) = websocket else {
+            return;
+        };
+
+        let send_result = websocket
+            .send(tungstenite::Message::Text("not-json".into()))
+            .await;
+        assert!(
+            send_result.is_ok(),
+            "invalid payload should still send: {send_result:?}"
+        );
+
+        assert_eq!(
+            read_close_code(&mut websocket).await,
+            Some(CloseCode::Error),
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_enforces_channel_capacity_and_releases_slot_on_disconnect() {
+        let server = spawn_test_server(1_000, 1).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+
+        let first_token =
+            signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(1));
+        let second_token =
+            signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(2));
+        let third_token =
+            signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(3));
+        assert!(first_token.is_some());
+        assert!(second_token.is_some());
+        assert!(third_token.is_some());
+        let (Some(first_token), Some(second_token), Some(third_token)) =
+            (first_token, second_token, third_token)
+        else {
+            return;
+        };
+
+        let first_websocket = authenticate_with_jwt(&server, &first_token).await;
+        assert!(first_websocket.is_some());
+        let Some(mut first_websocket) = first_websocket else {
+            return;
+        };
+        let startup = read_message(&mut first_websocket).await;
+        assert!(startup.is_some(), "first startup payload should exist");
+        let Some(startup) = startup else {
+            return;
+        };
+        assert!(
+            startup.is_ok(),
+            "first startup payload should arrive: {startup:?}"
+        );
+
+        let second_websocket = authenticate_with_jwt(&server, &second_token).await;
+        assert!(second_websocket.is_some());
+        let Some(mut second_websocket) = second_websocket else {
+            return;
+        };
+        assert_eq!(
+            read_close_code(&mut second_websocket).await,
+            Some(CloseCode::Library(4109)),
+        );
+
+        let close_result = first_websocket.close(None).await;
+        assert!(
+            close_result.is_ok(),
+            "first websocket should close cleanly: {close_result:?}"
+        );
+        drop(first_websocket);
+        sleep(Duration::from_millis(20)).await;
+
+        let third_websocket = authenticate_with_jwt(&server, &third_token).await;
+        assert!(third_websocket.is_some());
+        let Some(mut third_websocket) = third_websocket else {
+            return;
+        };
+        let startup = read_message(&mut third_websocket).await;
+        assert!(startup.is_some(), "third startup payload should exist");
+        let Some(startup) = startup else {
+            return;
+        };
+        assert!(
+            startup.is_ok(),
+            "third startup payload should arrive after cleanup: {startup:?}"
+        );
+        assert!(matches!(startup.ok(), Some(tungstenite::Message::Text(_))));
+    }
+}

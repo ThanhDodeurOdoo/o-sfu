@@ -5,6 +5,10 @@
 - `src/signaling.rs` + `src/signaling/`: frozen bundle-facing contract types, current wire reference types, auth claims, transport/bootstrap primitives, ...
   The first replacement prottype keeps the current wire protocol under a bundle (that will be added to odoo codebase) contract so the Odoo-facing API stays stable while the server runtime is replaced
 
+> [!WARNING]  
+> Early phase of developments, the readme may not be up to date, or be incorrect.
+>
+
 ## Development
 
 Run the regular workspace checks from the repository root:
