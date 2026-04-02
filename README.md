@@ -2,7 +2,8 @@
 
 - `router/`: isolated router crate for the core routing domain.
 - `src/runtime.rs`: application bootstrap shell around the core crates.
-- `src/signaling.rs` + `src/signaling/`: bundle-facing contract types, current wire reference types, auth claims,transport/bootstrap primitives,...
+- `src/signaling.rs` + `src/signaling/`: frozen bundle-facing contract types, current wire reference types, auth claims, transport/bootstrap primitives, ...
+  The first replacement prottype keeps the current wire protocol under a bundle (that will be added to odoo codebase) contract so the Odoo-facing API stays stable while the server runtime is replaced
 
 ## Development
 
