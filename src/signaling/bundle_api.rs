@@ -257,22 +257,22 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Debug;
 
-    use serde::{de::DeserializeOwned, Serialize};
-    use serde_json::{json, Value};
+    use serde::{Serialize, de::DeserializeOwned};
+    use serde_json::{Value, json};
 
     use super::{
-        bundle_session_info_key, BundleBroadcastCall, BundleBroadcastUpdate, BundleConnectCall,
-        BundleConnectOptions, BundleConnectionState, BundleMethodCall, BundleProtocolStrategy,
-        BundleRecordingOptions, BundleStartRecordingCall, BundleStateChange, BundleUpdate,
-        BundleUpdateDownloadCall, BundleUpdateInfoCall, BundleUpdateInfoOptions, BundleUpdateKind,
-        BundleUpdateUploadCall, CHANNEL_FULL_CLOSE_CAUSE, FIRST_BUNDLE_PROTOCOL_STRATEGY,
-        FIRST_BUNDLE_PROTOCOL_VERSION,
+        BundleBroadcastCall, BundleBroadcastUpdate, BundleConnectCall, BundleConnectOptions,
+        BundleConnectionState, BundleMethodCall, BundleProtocolStrategy, BundleRecordingOptions,
+        BundleStartRecordingCall, BundleStateChange, BundleUpdate, BundleUpdateDownloadCall,
+        BundleUpdateInfoCall, BundleUpdateInfoOptions, BundleUpdateKind, BundleUpdateUploadCall,
+        CHANNEL_FULL_CLOSE_CAUSE, FIRST_BUNDLE_PROTOCOL_STRATEGY, FIRST_BUNDLE_PROTOCOL_VERSION,
+        bundle_session_info_key,
     };
+    use crate::signaling::CURRENT_WIRE_PROTOCOL_VERSION;
     use crate::signaling::shared::{
         DownloadStates, RecordingState, RecordingStateUpdate, SessionId, SessionInfo, StopCode,
         StreamType,
     };
-    use crate::signaling::CURRENT_WIRE_PROTOCOL_VERSION;
 
     fn assert_round_trip<T>(value: &T, expected_json: Value) -> serde_json::Result<()>
     where

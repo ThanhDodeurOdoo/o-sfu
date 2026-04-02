@@ -5,25 +5,27 @@ use tokio::runtime::Builder;
 
 use crate::{config::Config, signaling::CURRENT_WIRE_PROTOCOL_VERSION};
 
+pub(crate) mod channel;
 mod http_server;
 mod stub_bus;
-mod stub_channels;
+#[doc(hidden)]
+pub mod testing;
 mod websocket_server;
 
+use channel::ChannelManager;
 use http_server::serve_http;
-use stub_channels::StubChannelRegistry;
 
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
     pub current_wire_protocol_version: u16,
-    stub_channels: Arc<StubChannelRegistry>,
+    channels: Arc<ChannelManager>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     pub config: Config,
-    pub stub_channels: Arc<StubChannelRegistry>,
+    pub channels: Arc<ChannelManager>,
 }
 
 impl Runtime {
@@ -32,14 +34,14 @@ impl Runtime {
         Self {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
-            stub_channels: Arc::new(StubChannelRegistry::new()),
+            channels: Arc::new(ChannelManager::new()),
         }
     }
 
     async fn run_until_stopped(self) -> Result<()> {
         serve_http(RuntimeState {
             config: self.config,
-            stub_channels: self.stub_channels,
+            channels: self.channels,
         })
         .await
     }

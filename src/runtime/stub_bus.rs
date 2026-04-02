@@ -1,12 +1,19 @@
+use std::sync::Arc;
+
 use axum::extract::ws::{Message, WebSocket};
+use futures_util::SinkExt;
+use futures_util::stream::SplitSink;
 use serde_json::{Map, Value, json};
 
+use super::channel::Channel;
 use crate::signaling::{
     current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
     current_protocol::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
-        CurrentServerRequest, CurrentTransportBootstrapPayload, CurrentWebSocketCloseCode,
+        CurrentServerMessage, CurrentServerRequest, CurrentTransportBootstrapPayload,
+        CurrentWebSocketCloseCode,
     },
+    shared::SessionId,
     webrtc::{
         DtlsParameters, IceCandidate, IceParameters, PublishOptions, PublishOptionsByMediaKind,
         RtpCapabilities, SctpParameters, TransportBootstrap,
@@ -17,6 +24,8 @@ const STUB_SERVER_BUS_ID: u64 = 0;
 const STUB_STC_TRANSPORT_ID: &str = "stc-stub";
 const STUB_CTS_TRANSPORT_ID: &str = "cts-stub";
 
+pub(super) type WsWriter = SplitSink<WebSocket, Message>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StubBusOutcome {
     Continue,
@@ -24,24 +33,31 @@ pub(super) enum StubBusOutcome {
     Close(CurrentWebSocketCloseCode),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct StubBusSession {
+    session_id: SessionId,
+    channel: Arc<Channel>,
     next_request_counter: u64,
     next_producer_counter: u64,
 }
 
 impl StubBusSession {
     #[must_use]
-    pub(super) fn new() -> Self {
-        Self::default()
+    pub(super) fn new(session_id: SessionId, channel: Arc<Channel>) -> Self {
+        Self {
+            session_id,
+            channel,
+            next_request_counter: 0,
+            next_producer_counter: 0,
+        }
     }
 
     pub(super) async fn send_transport_bootstrap(
         &mut self,
-        socket: &mut WebSocket,
+        writer: &mut WsWriter,
     ) -> Result<(), ()> {
         self.send_request(
-            socket,
+            writer,
             CurrentServerRequest::BootstrapTransports(stub_transport_bootstrap_payload()),
         )
         .await
@@ -50,7 +66,7 @@ impl StubBusSession {
 
     pub(super) async fn handle_frame(
         &mut self,
-        socket: &mut WebSocket,
+        writer: &mut WsWriter,
         message: Message,
     ) -> StubBusOutcome {
         let batch = match parse_batch(message) {
@@ -59,7 +75,7 @@ impl StubBusSession {
             Err(close_code) => return StubBusOutcome::Close(close_code),
         };
         for envelope in batch {
-            match self.handle_envelope(socket, envelope).await {
+            match self.handle_envelope(writer, envelope).await {
                 Ok(()) => {}
                 Err(outcome) => return outcome,
             }
@@ -69,7 +85,7 @@ impl StubBusSession {
 
     async fn handle_envelope(
         &mut self,
-        socket: &mut WebSocket,
+        writer: &mut WsWriter,
         envelope: CurrentBusEnvelope,
     ) -> Result<(), StubBusOutcome> {
         let CurrentBusEnvelope {
@@ -82,12 +98,12 @@ impl StubBusSession {
         }
         if let Some(request_id) = need_response {
             let response = self.dispatch_request(message);
-            self.send_response(socket, request_id, response)
+            self.send_response(writer, request_id, response)
                 .await
                 .map_err(|_error| StubBusOutcome::Break)?;
             return Ok(());
         }
-        Self::dispatch_message(message);
+        self.dispatch_message(message).await;
         Ok(())
     }
 
@@ -113,8 +129,29 @@ impl StubBusSession {
         }
     }
 
-    fn dispatch_message(message: Value) {
-        let _result = serde_json::from_value::<CurrentClientMessage>(message);
+    async fn dispatch_message(&self, message: Value) {
+        match serde_json::from_value::<CurrentClientMessage>(message) {
+            Ok(CurrentClientMessage::Broadcast(payload)) => {
+                self.channel.broadcast(&self.session_id, payload).await;
+            }
+            Ok(CurrentClientMessage::UpdateSessionInfo(payload)) => {
+                self.channel
+                    .update_session_info(
+                        &self.session_id,
+                        payload.info,
+                        payload.need_refresh.unwrap_or(false),
+                    )
+                    .await;
+            }
+            Ok(
+                CurrentClientMessage::UpdateUploadState(_)
+                | CurrentClientMessage::UpdateDownloadState(_),
+            ) => {
+                // Production change and consumption change are deferred
+                // until the router model carries producer/consumer state.
+            }
+            Err(_error) => {}
+        }
     }
 
     fn next_request_id(&mut self) -> CurrentBusRequestId {
@@ -129,7 +166,7 @@ impl StubBusSession {
 
     async fn send_request(
         &mut self,
-        socket: &mut WebSocket,
+        writer: &mut WsWriter,
         request: CurrentServerRequest,
     ) -> Result<(), CurrentWebSocketCloseCode> {
         let message =
@@ -139,17 +176,17 @@ impl StubBusSession {
             need_response: Some(self.next_request_id()),
             response_to: None,
         }];
-        send_batch(socket, batch).await
+        send_batch(writer, batch).await
     }
 
     async fn send_response(
         &self,
-        socket: &mut WebSocket,
+        writer: &mut WsWriter,
         request_id: CurrentBusRequestId,
         response: Value,
     ) -> Result<(), CurrentWebSocketCloseCode> {
         send_batch(
-            socket,
+            writer,
             vec![CurrentBusEnvelope {
                 message: response,
                 need_response: None,
@@ -158,6 +195,23 @@ impl StubBusSession {
         )
         .await
     }
+}
+
+/// Serialize a server message into a single-envelope Bus batch and send it.
+pub(super) async fn send_server_message_batch(
+    writer: &mut WsWriter,
+    message: &CurrentServerMessage,
+) -> Result<(), CurrentWebSocketCloseCode> {
+    let value = serde_json::to_value(message).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+    send_batch(
+        writer,
+        vec![CurrentBusEnvelope {
+            message: value,
+            need_response: None,
+            response_to: None,
+        }],
+    )
+    .await
 }
 
 fn parse_batch(message: Message) -> Result<Option<CurrentBusBatch>, CurrentWebSocketCloseCode> {
@@ -174,12 +228,12 @@ fn parse_batch(message: Message) -> Result<Option<CurrentBusBatch>, CurrentWebSo
 }
 
 async fn send_batch(
-    socket: &mut WebSocket,
+    writer: &mut WsWriter,
     batch: CurrentBusBatch,
 ) -> Result<(), CurrentWebSocketCloseCode> {
     let payload =
         serde_json::to_string(&batch).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
-    socket
+    writer
         .send(Message::Text(payload.into()))
         .await
         .map_err(|_error| CurrentWebSocketCloseCode::Error)

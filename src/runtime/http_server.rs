@@ -65,14 +65,14 @@ async fn channel(
     if query.recording_address.is_some() && claims.key.is_none() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let stub_channel = state
-        .stub_channels
+    let channel = state
+        .channels
         .create_or_get(issuer, claims.key.as_deref(), &query)
         .await;
     (
         StatusCode::OK,
         axum::Json(ChannelResponse {
-            uuid: stub_channel.uuid,
+            uuid: channel.uuid().to_owned(),
             url: request_base_url(&headers, &state.config),
         }),
     )
@@ -83,10 +83,15 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
     let Ok(token) = str::from_utf8(&body) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    match auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(_) => StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+    let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
+        return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+    };
+    for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
+        if let Some(channel) = state.channels.get_by_uuid(channel_uuid).await {
+            channel.disconnect_sessions(session_ids).await;
+        }
     }
+    StatusCode::OK.into_response()
 }
 
 fn authorization_token(headers: &HeaderMap) -> Option<&str> {
@@ -130,12 +135,13 @@ mod tests {
     use super::app;
     use crate::{
         config::Config,
-        runtime::{RuntimeState, stub_channels::StubChannelRegistry},
+        runtime::{RuntimeState, channel::ChannelManager},
         signaling::{
             auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
             http::{
                 CHANNEL_PATH, ChannelResponse, DISCONNECT_PATH, NOOP_PATH, NoopResponse, STATS_PATH,
             },
+            shared::SessionId,
         },
     };
 
@@ -153,7 +159,7 @@ mod tests {
     fn test_state() -> RuntimeState {
         RuntimeState {
             config: test_config(),
-            stub_channels: Arc::new(StubChannelRegistry::new()),
+            channels: Arc::new(ChannelManager::new()),
         }
     }
 
@@ -171,11 +177,13 @@ mod tests {
         .ok()
     }
 
-    fn signed_disconnect_claims() -> Option<String> {
+    fn signed_disconnect_claims(
+        session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
+    ) -> Option<String> {
         auth::sign(
             &HttpDisconnectClaims {
                 registered: RegisteredJwtClaims::default(),
-                session_ids_by_channel: BTreeMap::new(),
+                session_ids_by_channel,
             },
             TEST_AUTH_KEY,
         )
@@ -322,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn channel_returns_stub_uuid_and_request_base_url() {
+    async fn channel_returns_uuid_and_request_base_url() {
         let token = signed_channel_claims(Some("issuer-a"), Some("Y2hhbm5lbC1rZXk="));
         assert!(token.is_some());
         let Some(token) = token else {
@@ -397,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_accepts_valid_jwt() {
-        let token = signed_disconnect_claims();
+        let token = signed_disconnect_claims(BTreeMap::new());
         assert!(token.is_some());
         let Some(token) = token else {
             return;

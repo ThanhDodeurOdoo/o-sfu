@@ -76,8 +76,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats, NoopResponse,
-        SessionsStats, StatsResponse, API_VERSION,
+        API_VERSION, ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats,
+        NoopResponse, SessionsStats, StatsResponse,
     };
 
     #[test]

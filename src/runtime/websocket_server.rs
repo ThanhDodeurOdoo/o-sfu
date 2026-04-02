@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -7,20 +8,21 @@ use axum::{
     },
     response::Response,
 };
+use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use serde::Deserialize;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use super::{
     RuntimeState,
-    stub_bus::{StubBusOutcome, StubBusSession},
-    stub_channels::{StubChannel, StubChannelJoinError},
+    channel::{Channel, ChannelJoinError, SessionOutbound},
+    stub_bus::{StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch},
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
     current_protocol::{
         CurrentStartupPayload, CurrentWebSocketCloseCode, CurrentWebSocketCredentials,
     },
-    shared::{AvailableFeatures, RecordingState},
 };
 
 #[derive(Debug, Deserialize)]
@@ -37,107 +39,134 @@ pub(super) async fn upgrade(
     websocket.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: RuntimeState) {
-    let credentials = match timeout(
-        Duration::from_millis(state.config.authentication_timeout_ms),
-        socket.recv(),
-    )
-    .await
-    {
-        Err(_) => {
-            close_socket(&mut socket, CurrentWebSocketCloseCode::Timeout).await;
+async fn handle_socket(socket: WebSocket, state: RuntimeState) {
+    let (mut ws_writer, mut ws_reader) = socket.split();
+
+    let credentials = match receive_credentials(&state, &mut ws_reader).await {
+        Ok(c) => c,
+        Err(Some(code)) => {
+            close_writer(&mut ws_writer, code).await;
             return;
         }
-        Ok(None) => return,
-        Ok(Some(Err(_error))) => {
-            close_socket(&mut socket, CurrentWebSocketCloseCode::Error).await;
-            return;
-        }
-        Ok(Some(Ok(message))) => match parse_credentials(message) {
-            Ok(credentials) => credentials,
-            Err(close_code) => {
-                close_socket(&mut socket, close_code).await;
-                return;
-            }
-        },
+        Err(None) => return,
     };
 
     let (channel, claims) = match authenticate(&state, credentials).await {
         Ok(result) => result,
-        Err(close_code) => {
-            close_socket(&mut socket, close_code).await;
+        Err(code) => {
+            close_writer(&mut ws_writer, code).await;
             return;
         }
     };
 
+    let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+    if let Err(error) = channel
+        .join_session(
+            claims.session_id.clone(),
+            claims.label.clone(),
+            claims.permissions.clone().unwrap_or_default(),
+            outbound_tx,
+            state.config.channel_size,
+        )
+        .await
+    {
+        let code = match error {
+            ChannelJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+        };
+        close_writer(&mut ws_writer, code).await;
+        return;
+    }
+
+    if send_startup(&channel, &mut ws_writer).await.is_err() {
+        channel.leave_session(&claims.session_id).await;
+        return;
+    }
+
+    let mut stub_bus = StubBusSession::new(claims.session_id.clone(), Arc::clone(&channel));
+    if stub_bus
+        .send_transport_bootstrap(&mut ws_writer)
+        .await
+        .is_err()
+    {
+        channel.leave_session(&claims.session_id).await;
+        return;
+    }
+
+    run_message_loop(&mut ws_writer, &mut ws_reader, outbound_rx, &mut stub_bus).await;
+    channel.leave_session(&claims.session_id).await;
+}
+
+type WsReader = SplitStream<WebSocket>;
+
+async fn receive_credentials(
+    state: &RuntimeState,
+    reader: &mut WsReader,
+) -> Result<CurrentWebSocketCredentials, Option<CurrentWebSocketCloseCode>> {
+    match timeout(
+        Duration::from_millis(state.config.authentication_timeout_ms),
+        reader.next(),
+    )
+    .await
+    {
+        Err(_) => Err(Some(CurrentWebSocketCloseCode::Timeout)),
+        Ok(None) => Err(None),
+        Ok(Some(Err(_error))) => Err(Some(CurrentWebSocketCloseCode::Error)),
+        Ok(Some(Ok(message))) => parse_credentials(message).map_err(Some),
+    }
+}
+
+async fn send_startup(channel: &Channel, writer: &mut WsWriter) -> Result<(), ()> {
     let startup_payload = CurrentStartupPayload {
-        available_features: AvailableFeatures {
-            rtc: channel.web_rtc_enabled,
-            transcription: false,
-            audio_recording: false,
-            video_recording: false,
-        },
-        recording_state: RecordingState {
-            recording: Some(false),
-            audio: Some(false),
-            transcription: Some(false),
-            video: Some(false),
-        },
+        available_features: channel.available_features(),
+        recording_state: channel.recording_state().await,
     };
-    let startup_json = match serde_json::to_string(&startup_payload) {
-        Ok(startup_json) => startup_json,
-        Err(_error) => {
-            state
-                .stub_channels
-                .leave_session(&channel.uuid, &claims.session_id)
-                .await;
-            close_socket(&mut socket, CurrentWebSocketCloseCode::Error).await;
-            return;
-        }
-    };
-    if socket
+    let startup_json = serde_json::to_string(&startup_payload).map_err(|_error| ())?;
+    writer
         .send(Message::Text(startup_json.into()))
         .await
-        .is_err()
-    {
-        state
-            .stub_channels
-            .leave_session(&channel.uuid, &claims.session_id)
-            .await;
-        return;
-    }
+        .map_err(|_error| ())
+}
 
-    let mut stub_bus = StubBusSession::new();
-    if stub_bus
-        .send_transport_bootstrap(&mut socket)
-        .await
-        .is_err()
-    {
-        state
-            .stub_channels
-            .leave_session(&channel.uuid, &claims.session_id)
-            .await;
-        return;
-    }
-
-    while let Some(message) = socket.recv().await {
-        match message {
-            Ok(message) => match stub_bus.handle_frame(&mut socket, message).await {
-                StubBusOutcome::Continue => {}
-                StubBusOutcome::Break => break,
-                StubBusOutcome::Close(close_code) => {
-                    close_socket(&mut socket, close_code).await;
-                    break;
+async fn run_message_loop(
+    writer: &mut WsWriter,
+    reader: &mut WsReader,
+    mut outbound_rx: mpsc::UnboundedReceiver<SessionOutbound>,
+    stub_bus: &mut StubBusSession,
+) {
+    loop {
+        tokio::select! {
+            msg = reader.next() => {
+                match msg {
+                    Some(Ok(message)) => {
+                        match stub_bus.handle_frame(writer, message).await {
+                            StubBusOutcome::Continue => {}
+                            StubBusOutcome::Break => break,
+                            StubBusOutcome::Close(code) => {
+                                close_writer(writer, code).await;
+                                break;
+                            }
+                        }
+                    }
+                    Some(Err(_error)) => break,
+                    None => break,
                 }
-            },
-            Err(_error) => break,
+            }
+            outbound = outbound_rx.recv() => {
+                match outbound {
+                    Some(SessionOutbound::Message(msg)) => {
+                        if send_server_message_batch(writer, &msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(SessionOutbound::Close(code)) => {
+                        close_writer(writer, code).await;
+                        break;
+                    }
+                    None => break,
+                }
+            }
         }
     }
-
-    state
-        .stub_channels
-        .leave_session(&channel.uuid, &claims.session_id)
-        .await;
 }
 
 fn parse_credentials(
@@ -164,51 +193,32 @@ fn parse_credentials(
 async fn authenticate(
     state: &RuntimeState,
     credentials: CurrentWebSocketCredentials,
-) -> Result<(StubChannel, WebSocketConnectClaims), CurrentWebSocketCloseCode> {
-    let claims = if let Some(channel_uuid) = credentials.channel_uuid.as_deref() {
-        let Some(channel) = state.stub_channels.get_by_uuid(channel_uuid).await else {
+) -> Result<(Arc<Channel>, WebSocketConnectClaims), CurrentWebSocketCloseCode> {
+    if let Some(channel_uuid) = credentials.channel_uuid.as_deref() {
+        let Some(channel) = state.channels.get_by_uuid(channel_uuid).await else {
             return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
         };
-        let key = channel.key.as_deref().unwrap_or(&state.config.auth_key);
+        let key = channel.key().unwrap_or(&state.config.auth_key);
         let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, key)
             .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?;
-        let channel = join_stub_session(state, &channel.uuid, &claims).await?;
+        if claims.sfu_channel_uuid != channel_uuid {
+            return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+        }
         return Ok((channel, claims));
-    } else {
-        auth::verify::<WebSocketConnectClaims>(&credentials.jwt, &state.config.auth_key)
-            .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?
-    };
-    let Some(channel) = state
-        .stub_channels
-        .get_by_uuid(&claims.sfu_channel_uuid)
-        .await
-    else {
+    }
+    let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, &state.config.auth_key)
+        .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?;
+    let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
         return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
     };
-    if channel.key.is_some() {
+    if channel.key().is_some() {
         return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
     }
-    let channel = join_stub_session(state, &channel.uuid, &claims).await?;
     Ok((channel, claims))
 }
 
-async fn join_stub_session(
-    state: &RuntimeState,
-    channel_uuid: &str,
-    claims: &WebSocketConnectClaims,
-) -> Result<StubChannel, CurrentWebSocketCloseCode> {
-    state
-        .stub_channels
-        .join_session(channel_uuid, &claims.session_id, state.config.channel_size)
-        .await
-        .map_err(|error| match error {
-            StubChannelJoinError::MissingChannel => CurrentWebSocketCloseCode::AuthenticationFailed,
-            StubChannelJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
-        })
-}
-
-async fn close_socket(socket: &mut WebSocket, close_code: CurrentWebSocketCloseCode) {
-    let _result = socket
+async fn close_writer(writer: &mut WsWriter, close_code: CurrentWebSocketCloseCode) {
+    let _result = writer
         .send(Message::Close(Some(CloseFrame {
             code: u16::from(close_code),
             reason: "".into(),
@@ -217,6 +227,10 @@ async fn close_socket(socket: &mut WebSocket, close_code: CurrentWebSocketCloseC
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    reason = "test assertions use panic for clear failure messages"
+)]
 mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc;
@@ -235,18 +249,19 @@ mod tests {
     use super::*;
     use crate::{
         config::Config,
-        runtime::{http_server::app, stub_channels::StubChannelRegistry},
+        runtime::{channel::ChannelManager, http_server::app},
         signaling::{
             auth::{RegisteredJwtClaims, sign},
             current_bus::{
                 CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
             },
             current_protocol::{
-                CurrentClientRequest, CurrentPublishTrackPayload, CurrentServerRequest,
+                CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
+                CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
                 CurrentTransportConnectPayload,
             },
             http::CreateChannelQuery,
-            shared::{SessionId, StreamType},
+            shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
             webrtc::{DtlsParameters, MediaKind, RtpParameters},
         },
     };
@@ -259,7 +274,7 @@ mod tests {
     struct TestServer {
         addr: SocketAddr,
         handle: JoinHandle<()>,
-        stub_channels: Arc<StubChannelRegistry>,
+        channels: Arc<ChannelManager>,
     }
 
     impl TestServer {
@@ -287,10 +302,10 @@ mod tests {
         authentication_timeout_ms: u64,
         channel_size: usize,
     ) -> Option<TestServer> {
-        let stub_channels = Arc::new(StubChannelRegistry::new());
+        let channels = Arc::new(ChannelManager::new());
         let state = RuntimeState {
             config: test_config(authentication_timeout_ms, channel_size),
-            stub_channels: Arc::clone(&stub_channels),
+            channels: Arc::clone(&channels),
         };
         let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
         let addr = listener.local_addr().ok()?;
@@ -304,7 +319,7 @@ mod tests {
         Some(TestServer {
             addr,
             handle,
-            stub_channels,
+            channels,
         })
     }
 
@@ -336,11 +351,8 @@ mod tests {
         issuer: &str,
         key: Option<&str>,
         query: CreateChannelQuery,
-    ) -> StubChannel {
-        server
-            .stub_channels
-            .create_or_get(issuer, key, &query)
-            .await
+    ) -> Arc<Channel> {
+        server.channels.create_or_get(issuer, key, &query).await
     }
 
     async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<TestWebSocket> {
@@ -421,6 +433,29 @@ mod tests {
         response_batch.first().cloned()
     }
 
+    async fn send_bus_message(
+        websocket: &mut TestWebSocket,
+        message: CurrentClientMessage,
+    ) -> Option<()> {
+        let payload = serde_json::to_string(&vec![CurrentBusEnvelope {
+            message: serde_json::to_value(message).ok()?,
+            need_response: None,
+            response_to: None,
+        }])
+        .ok()?;
+        websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await
+            .ok()?;
+        Some(())
+    }
+
+    async fn read_server_message(websocket: &mut TestWebSocket) -> Option<CurrentServerMessage> {
+        let batch = read_bus_batch(websocket).await?;
+        let envelope = batch.first()?;
+        serde_json::from_value(envelope.message.clone()).ok()
+    }
+
     async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
         loop {
             let message = read_message(websocket).await?;
@@ -428,6 +463,17 @@ mod tests {
                 return frame.map(|frame| frame.code);
             }
         }
+    }
+
+    async fn setup_authenticated_session(
+        server: &TestServer,
+        channel: &Arc<Channel>,
+        session_id: SessionId,
+    ) -> Option<TestWebSocket> {
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id)?;
+        let (mut websocket, _startup) = authenticate_and_read_startup(server, &token).await?;
+        acknowledge_transport_bootstrap(&mut websocket).await?;
+        Some(websocket)
     }
 
     #[tokio::test]
@@ -465,7 +511,7 @@ mod tests {
             CreateChannelQuery::default(),
         )
         .await;
-        let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel.uuid, SessionId::Integer(7));
+        let token = signed_connect_claims(TEST_CHANNEL_KEY, channel.uuid(), SessionId::Integer(7));
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -476,7 +522,7 @@ mod tests {
             return;
         };
         let payload = serde_json::to_string(&CurrentWebSocketCredentials {
-            channel_uuid: Some(channel.uuid.clone()),
+            channel_uuid: Some(channel.uuid().to_owned()),
             jwt: token,
         })
         .ok();
@@ -536,6 +582,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn websocket_rejects_explicit_channel_uuid_that_disagrees_with_claims() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let first_channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let second_channel =
+            create_channel(&server, "issuer-b", None, CreateChannelQuery::default()).await;
+        let token =
+            signed_connect_claims(TEST_AUTH_KEY, first_channel.uuid(), SessionId::Integer(8));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let websocket = connect_websocket(&server).await;
+        assert!(websocket.is_some());
+        let Some(mut websocket) = websocket else {
+            return;
+        };
+        let payload = serde_json::to_string(&CurrentWebSocketCredentials {
+            channel_uuid: Some(second_channel.uuid().to_owned()),
+            jwt: token,
+        })
+        .ok();
+        assert!(payload.is_some());
+        let Some(payload) = payload else {
+            return;
+        };
+
+        let send_result = websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await;
+        assert!(
+            send_result.is_ok(),
+            "mismatched auth payload should still send: {send_result:?}"
+        );
+
+        assert_eq!(
+            read_close_code(&mut websocket).await,
+            Some(CloseCode::Library(4106)),
+        );
+    }
+
+    #[tokio::test]
     async fn websocket_accepts_global_key_without_explicit_channel_uuid() {
         let server = spawn_test_server(1_000, 100).await;
         assert!(server.is_some());
@@ -544,7 +636,7 @@ mod tests {
         };
         let channel =
             create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(9));
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(9));
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -589,7 +681,7 @@ mod tests {
         };
         let channel =
             create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(10));
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(10));
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -649,7 +741,7 @@ mod tests {
         };
         let channel =
             create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(11));
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(11));
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -729,7 +821,7 @@ mod tests {
         };
         let channel =
             create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-        let token = signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(12));
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(12));
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -819,11 +911,11 @@ mod tests {
             create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
 
         let first_token =
-            signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(1));
+            signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(1));
         let second_token =
-            signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(2));
+            signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(2));
         let third_token =
-            signed_connect_claims(TEST_AUTH_KEY, &channel.uuid, SessionId::Integer(3));
+            signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(3));
         assert!(first_token.is_some());
         assert!(second_token.is_some());
         assert!(third_token.is_some());
@@ -855,7 +947,7 @@ mod tests {
         };
         assert_eq!(
             read_close_code(&mut second_websocket).await,
-            Some(CloseCode::Library(4109)),
+            Some(CloseCode::Library(4109)), // Channel full
         );
 
         let close_result = first_websocket.close(None).await;
@@ -881,5 +973,120 @@ mod tests {
             "third startup payload should arrive after cleanup: {startup:?}"
         );
         assert!(matches!(startup.ok(), Some(tungstenite::Message::Text(_))));
+    }
+
+    // ── Phase 3 integration tests: real channel/session behavior ──
+
+    #[tokio::test]
+    async fn broadcast_reaches_other_sessions_in_same_channel() {
+        let server = spawn_test_server(1_000, 10).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+
+        let mut alice = setup_authenticated_session(&server, &channel, SessionId::Integer(1)).await;
+        let mut bob = setup_authenticated_session(&server, &channel, SessionId::Integer(2)).await;
+        assert!(alice.is_some());
+        assert!(bob.is_some());
+        let Some(ref mut alice) = alice else { return };
+        let Some(ref mut bob) = bob else { return };
+
+        // Alice broadcasts
+        let sent = send_bus_message(
+            alice,
+            CurrentClientMessage::Broadcast(serde_json::json!({"text": "hello"})),
+        )
+        .await;
+        assert!(sent.is_some());
+
+        // Bob should receive the broadcast
+        let msg = read_server_message(bob).await;
+        assert!(msg.is_some(), "bob should receive broadcast");
+        if let Some(CurrentServerMessage::Broadcast(payload)) = msg {
+            assert_eq!(payload.sender_id, SessionId::Integer(1));
+            assert_eq!(payload.message, serde_json::json!({"text": "hello"}));
+        } else {
+            panic!("expected Broadcast, got {msg:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_leave_notifies_remaining_peers() {
+        let server = spawn_test_server(1_000, 10).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+
+        let mut alice = setup_authenticated_session(&server, &channel, SessionId::Integer(1)).await;
+        let bob = setup_authenticated_session(&server, &channel, SessionId::Integer(2)).await;
+        assert!(alice.is_some());
+        assert!(bob.is_some());
+        let Some(ref mut alice) = alice else { return };
+        let Some(mut bob) = bob else { return };
+
+        // Bob disconnects
+        let close_result = bob.close(None).await;
+        assert!(close_result.is_ok());
+        drop(bob);
+        sleep(Duration::from_millis(50)).await;
+
+        // Alice should receive SESSION_LEAVE
+        let msg = read_server_message(alice).await;
+        assert!(msg.is_some(), "alice should receive session departure");
+        if let Some(CurrentServerMessage::SessionDeparted(payload)) = msg {
+            assert_eq!(payload.session_id, SessionId::Integer(2));
+        } else {
+            panic!("expected SessionDeparted, got {msg:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn info_change_broadcasts_to_all_sessions() {
+        let server = spawn_test_server(1_000, 10).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+
+        let mut alice = setup_authenticated_session(&server, &channel, SessionId::Integer(1)).await;
+        let mut bob = setup_authenticated_session(&server, &channel, SessionId::Integer(2)).await;
+        assert!(alice.is_some());
+        assert!(bob.is_some());
+        let Some(ref mut alice) = alice else { return };
+        let Some(ref mut bob) = bob else { return };
+
+        // Alice updates her session info
+        let sent = send_bus_message(
+            alice,
+            CurrentClientMessage::UpdateSessionInfo(CurrentSessionInfoUpdatePayload {
+                info: SessionInfo {
+                    is_talking: Some(true),
+                    ..SessionInfo::default()
+                },
+                need_refresh: None,
+            }),
+        )
+        .await;
+        assert!(sent.is_some());
+
+        // Both Alice and Bob should receive the info change
+        let alice_msg = read_server_message(alice).await;
+        let bob_msg = read_server_message(bob).await;
+        assert!(alice_msg.is_some(), "alice should receive info change");
+        assert!(bob_msg.is_some(), "bob should receive info change");
+        if let Some(CurrentServerMessage::SessionInfoChanged(snapshot)) = bob_msg {
+            assert!(snapshot.contains_key("1"));
+            assert_eq!(snapshot.get("1").and_then(|i| i.is_talking), Some(true));
+        } else {
+            panic!("expected SessionInfoChanged, got {bob_msg:?}");
+        }
     }
 }

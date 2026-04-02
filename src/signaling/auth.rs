@@ -3,8 +3,8 @@ use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -218,8 +218,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        sign, verify, AuthenticationError, HttpChannelClaims, HttpDisconnectClaims,
-        RegisteredJwtClaims, WebSocketConnectClaims,
+        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
+        WebSocketConnectClaims, sign, verify,
     };
     use crate::signaling::shared::{SessionId, SessionPermissions};
 
