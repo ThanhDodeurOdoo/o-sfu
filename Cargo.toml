@@ -116,4 +116,5 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tower = { version = "0.5", features = ["util"] }

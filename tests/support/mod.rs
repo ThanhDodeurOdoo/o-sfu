@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use futures_util::{SinkExt, StreamExt};
+use reqwest::StatusCode;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async,
@@ -11,13 +13,16 @@ use o_sfu::{
     config::Config,
     runtime::testing::TestServer,
     signaling::{
-        auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
+        auth::{
+            HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
+            sign,
+        },
         current_bus::{CurrentBusBatch, CurrentBusEnvelope},
         current_protocol::{
             CurrentClientMessage, CurrentServerMessage, CurrentStartupPayload,
             CurrentWebSocketCredentials,
         },
-        http::CreateChannelQuery,
+        http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
         shared::{SessionId, SessionPermissions},
     },
 };
@@ -55,21 +60,137 @@ pub fn signed_connect_claims(
     .ok()
 }
 
+pub fn signed_channel_claims(issuer: &str, key: Option<&str>) -> Option<String> {
+    sign(
+        &HttpChannelClaims {
+            registered: RegisteredJwtClaims {
+                iss: Some(issuer.to_owned()),
+                ..RegisteredJwtClaims::default()
+            },
+            key: key.map(str::to_owned),
+        },
+        TEST_AUTH_KEY,
+    )
+    .ok()
+}
+
+pub fn signed_disconnect_claims(
+    session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
+) -> Option<String> {
+    sign(
+        &HttpDisconnectClaims {
+            registered: RegisteredJwtClaims::default(),
+            session_ids_by_channel,
+        },
+        TEST_AUTH_KEY,
+    )
+    .ok()
+}
+
 pub async fn create_channel(
     server: &TestServer,
     issuer: &str,
     key: Option<&str>,
 ) -> Option<String> {
-    Some(
-        server
-            .create_channel(issuer, key, &CreateChannelQuery::default())
-            .await,
-    )
+    let token = signed_channel_claims(issuer, key)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}{CHANNEL_PATH}", server.http_base_url()))
+        .bearer_auth(token)
+        .query(&CreateChannelQuery::default())
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let payload = response.json::<ChannelResponse>().await.ok()?;
+    Some(payload.uuid)
+}
+
+pub async fn disconnect_sessions_via_http(
+    server: &TestServer,
+    session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
+) -> Option<StatusCode> {
+    let token = signed_disconnect_claims(session_ids_by_channel)?;
+    let response = reqwest::Client::new()
+        .post(format!("{}{DISCONNECT_PATH}", server.http_base_url()))
+        .body(token)
+        .send()
+        .await
+        .ok()?;
+    Some(response.status())
 }
 
 pub async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
     let websocket = connect_async(server.ws_url()).await.ok()?;
     Some(websocket.0)
+}
+
+pub struct FakeWebSocketClient {
+    websocket: TestWebSocket,
+}
+
+impl FakeWebSocketClient {
+    pub async fn connect(server: &TestServer) -> Option<Self> {
+        Some(Self {
+            websocket: connect_websocket(server).await?,
+        })
+    }
+
+    pub async fn authenticate_with_credentials(
+        server: &TestServer,
+        credentials: &CurrentWebSocketCredentials,
+    ) -> Option<Self> {
+        Some(Self {
+            websocket: authenticate_with_credentials(server, credentials).await?,
+        })
+    }
+
+    pub async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<Self> {
+        Some(Self {
+            websocket: authenticate_with_jwt(server, token).await?,
+        })
+    }
+
+    pub async fn authenticate_and_bootstrap(
+        server: &TestServer,
+        token: &str,
+    ) -> Option<(Self, CurrentStartupPayload)> {
+        let mut client = Self::authenticate_with_jwt(server, token).await?;
+        let startup = client.read_startup().await?;
+        client.acknowledge_transport_bootstrap().await?;
+        Some((client, startup))
+    }
+
+    pub async fn read_startup(&mut self) -> Option<CurrentStartupPayload> {
+        let startup_json = read_text_message(&mut self.websocket).await?;
+        serde_json::from_str::<CurrentStartupPayload>(&startup_json).ok()
+    }
+
+    pub async fn acknowledge_transport_bootstrap(&mut self) -> Option<()> {
+        acknowledge_transport_bootstrap(&mut self.websocket).await
+    }
+
+    pub async fn send_bus_message(&mut self, message: CurrentClientMessage) -> Option<()> {
+        send_bus_message(&mut self.websocket, message).await
+    }
+
+    pub async fn read_server_message(&mut self) -> Option<CurrentServerMessage> {
+        read_server_message(&mut self.websocket).await
+    }
+
+    pub async fn read_close_code(&mut self) -> Option<CloseCode> {
+        read_close_code(&mut self.websocket).await
+    }
+
+    pub async fn close(mut self) -> Option<()> {
+        self.websocket.close(None).await.ok()?;
+        Some(())
+    }
+
+    pub async fn read_bus_batch(&mut self) -> Option<CurrentBusBatch> {
+        read_bus_batch(&mut self.websocket).await
+    }
 }
 
 pub async fn authenticate_with_credentials(
@@ -93,16 +214,6 @@ pub async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<T
         .await
         .ok()?;
     Some(websocket)
-}
-
-pub async fn authenticate_and_read_startup(
-    server: &TestServer,
-    token: &str,
-) -> Option<(TestWebSocket, CurrentStartupPayload)> {
-    let mut websocket = authenticate_with_jwt(server, token).await?;
-    let startup_json = read_text_message(&mut websocket).await?;
-    let startup = serde_json::from_str::<CurrentStartupPayload>(&startup_json).ok()?;
-    Some((websocket, startup))
 }
 
 pub async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> Option<()> {
