@@ -464,7 +464,7 @@ mod websocket_server_tests {
     }
 
     #[tokio::test]
-    async fn websocket_sends_stub_transport_bootstrap_after_startup() {
+    async fn websocket_sends_router_capabilities_in_transport_bootstrap_after_startup() {
         let server = spawn_test_server(1_000, 100).await;
         assert!(server.is_some());
         let Some(server) = server else {
@@ -514,12 +514,76 @@ mod websocket_server_tests {
         };
         assert_eq!(payload.download_transport.id, "stc-stub");
         assert_eq!(payload.upload_transport.id, "cts-stub");
+        let codecs = payload
+            .router_capabilities
+            .0
+            .get("codecs")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !codecs.is_empty(),
+            "router capabilities should contain codecs"
+        );
+        assert!(
+            codecs
+                .iter()
+                .any(|codec| codec.get("mimeType") == Some(&serde_json::json!("audio/opus"))),
+            "router capabilities should include opus"
+        );
+        assert!(
+            codecs
+                .iter()
+                .any(|codec| codec.get("mimeType") == Some(&serde_json::json!("video/VP8"))),
+            "router capabilities should include VP8"
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_persists_client_capabilities_from_transport_bootstrap_response() {
+        let server = spawn_test_server(1_000, 100).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let session_id = SessionId::Integer(110);
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+
+        let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
+        assert!(
+            acknowledged.is_some(),
+            "transport bootstrap should round-trip"
+        );
+
+        let stored_capabilities = timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(capabilities) = channel.client_rtp_capabilities(&session_id).await {
+                    return Some(capabilities);
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        assert!(stored_capabilities.is_some());
         assert_eq!(
-            payload.router_capabilities.0,
-            serde_json::json!({
+            stored_capabilities.map(|capabilities| capabilities.0),
+            Some(serde_json::json!({
                 "codecs": [],
                 "headerExtensions": []
-            })
+            }))
         );
     }
 

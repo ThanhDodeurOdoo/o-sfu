@@ -15,10 +15,12 @@ use crate::signaling::{
     },
     http::{ChannelStats, CreateChannelQuery, IncomingBitRateStats, SessionsStats},
     shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, SessionPermissions},
+    webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
 
 mod manager;
 mod router_state;
+mod rtp_capabilities;
 #[cfg(test)]
 mod tests;
 
@@ -81,6 +83,7 @@ struct ActiveSession {
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
     permissions: SessionPermissions,
     info: SessionInfo,
+    client_rtp_capabilities: Option<SignalingRtpCapabilities>,
     connection_id: u64,
     sender: mpsc::UnboundedSender<SessionOutbound>,
 }
@@ -138,6 +141,10 @@ impl Channel {
 
     pub async fn recording_state(&self) -> RecordingState {
         self.state.read().await.recording_state.clone()
+    }
+
+    pub async fn router_rtp_capabilities(&self) -> o_sfu_router::RtpCapabilities {
+        self.state.read().await.router.rtp_capabilities().clone()
     }
 
     pub async fn stats(&self) -> ChannelStats {
@@ -201,6 +208,7 @@ impl Channel {
             session.label.clone_from(&label);
             session.permissions.clone_from(&permissions);
             session.info = SessionInfo::default();
+            session.client_rtp_capabilities = None;
             session.connection_id = connection_id;
             session.sender = sender;
             Some(old_sender)
@@ -211,6 +219,7 @@ impl Channel {
                     label,
                     permissions: permissions.clone(),
                     info: SessionInfo::default(),
+                    client_rtp_capabilities: None,
                     connection_id,
                     sender,
                 },
@@ -362,6 +371,20 @@ impl Channel {
         }
     }
 
+    pub async fn set_client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+        capabilities: SignalingRtpCapabilities,
+    ) -> bool {
+        let mut state = self.state.write().await;
+        let Some(session) = state.sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.client_rtp_capabilities = Some(capabilities);
+        drop(state);
+        true
+    }
+
     #[cfg(test)]
     pub(super) async fn session_count(&self) -> usize {
         self.state.read().await.sessions.len()
@@ -382,6 +405,19 @@ impl Channel {
             .await
             .router
             .session_permissions(session_id)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<SignalingRtpCapabilities> {
+        self.state
+            .read()
+            .await
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.client_rtp_capabilities.clone())
     }
 
     pub(super) async fn is_empty(&self) -> bool {

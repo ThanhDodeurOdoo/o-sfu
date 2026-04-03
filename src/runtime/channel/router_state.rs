@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::{
-    Router, RouterError, RouterId, Session as RouterSession, SessionId as RouterSessionId,
-    SessionInfo as RouterSessionInfo, SessionPermissions as RouterSessionPermissions,
+    Router, RouterError, RouterId, RtpCapabilities, Session as RouterSession,
+    SessionId as RouterSessionId, SessionInfo as RouterSessionInfo,
+    SessionPermissions as RouterSessionPermissions,
 };
 
+use super::rtp_capabilities::default_router_rtp_capabilities;
 use crate::signaling::shared::{
     SessionId, SessionInfo as SignalingSessionInfo,
     SessionPermissions as SignalingSessionPermissions,
@@ -13,6 +15,7 @@ use crate::signaling::shared::{
 #[derive(Debug)]
 pub(super) struct ChannelRouterState {
     router: Router,
+    rtp_capabilities: RtpCapabilities,
     router_session_ids_by_session_id: BTreeMap<SessionId, RouterSessionId>,
 }
 
@@ -20,8 +23,13 @@ impl ChannelRouterState {
     pub(super) fn new(router_id: RouterId) -> Self {
         Self {
             router: Router::new(router_id),
+            rtp_capabilities: default_router_rtp_capabilities(),
             router_session_ids_by_session_id: BTreeMap::new(),
         }
+    }
+
+    pub(super) fn rtp_capabilities(&self) -> &RtpCapabilities {
+        &self.rtp_capabilities
     }
 
     /// Ensure the pure router contains a session matching the signaling-layer session.
