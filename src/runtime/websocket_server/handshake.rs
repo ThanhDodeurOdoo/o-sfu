@@ -6,11 +6,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use tracing::{Span, field, info};
 
 use super::{ConnectedSession, WsReader, close_writer};
 use crate::runtime::{
     RuntimeState,
-    channel::{Channel, ChannelManagerJoinError},
+    channel::{Channel, ChannelManagerJoinError, SessionOutbound},
     stub_bus::{StubBusSession, WsWriter},
 };
 use crate::signaling::{
@@ -18,6 +19,7 @@ use crate::signaling::{
     current_protocol::{
         CurrentStartupPayload, CurrentWebSocketCloseCode, CurrentWebSocketCredentials,
     },
+    shared::SessionId,
 };
 
 #[derive(Debug, Deserialize)]
@@ -32,67 +34,21 @@ pub(super) async fn establish_session(
     writer: &mut WsWriter,
     reader: &mut WsReader,
 ) -> Option<ConnectedSession> {
-    let credentials = match receive_credentials(state, reader).await {
-        Ok(credentials) => credentials,
-        Err(Some(code)) => {
-            close_writer(writer, code).await;
-            return None;
-        }
-        Err(None) => return None,
-    };
-
-    let (channel, claims) = match authenticate(state, credentials).await {
-        Ok(result) => result,
-        Err(code) => {
-            close_writer(writer, code).await;
-            return None;
-        }
-    };
-
-    let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-    let session_id = claims.session_id.clone();
-    let (channel, connection_id) = match state
-        .channels
-        .join_session(
-            channel.uuid(),
-            session_id.clone(),
-            claims.label,
-            claims.permissions.unwrap_or_default(),
-            outbound_tx,
-            state.config.channel_size,
-        )
-        .await
-    {
-        Ok(result) => result,
-        Err(error) => {
-            let close_code = match error {
-                ChannelManagerJoinError::MissingChannel => {
-                    CurrentWebSocketCloseCode::AuthenticationFailed
-                }
-                ChannelManagerJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
-            };
-            close_writer(writer, close_code).await;
-            return None;
-        }
-    };
-
-    if send_startup(&channel, writer).await.is_err() {
-        state
-            .channels
-            .leave_session(channel.uuid(), &session_id, connection_id)
-            .await;
-        return None;
-    }
-
+    let credentials = receive_credentials_or_reject(state, writer, reader).await?;
+    let (channel, claims) = authenticate_session(state, writer, credentials).await?;
+    let (session_id, outbound_rx, channel, connection_id) =
+        join_authenticated_session(state, writer, channel, claims).await?;
+    record_session_span(&channel, &session_id);
     let mut stub_bus = StubBusSession::new(session_id.clone(), Arc::clone(&channel));
-    if stub_bus.send_transport_bootstrap(writer).await.is_err() {
-        state
-            .channels
-            .leave_session(channel.uuid(), &session_id, connection_id)
-            .await;
-        return None;
-    }
-
+    initialize_session(
+        state,
+        writer,
+        &channel,
+        &session_id,
+        connection_id,
+        &mut stub_bus,
+    )
+    .await?;
     Some(ConnectedSession {
         channel,
         session_id,
@@ -105,7 +61,7 @@ pub(super) async fn establish_session(
 async fn receive_credentials(
     state: &RuntimeState,
     reader: &mut WsReader,
-) -> Result<CurrentWebSocketCredentials, Option<CurrentWebSocketCloseCode>> {
+) -> Result<Option<CurrentWebSocketCredentials>, Option<CurrentWebSocketCloseCode>> {
     match timeout(
         Duration::from_millis(state.config.authentication_timeout_ms),
         reader.next(),
@@ -113,9 +69,28 @@ async fn receive_credentials(
     .await
     {
         Err(_) => Err(Some(CurrentWebSocketCloseCode::Timeout)),
-        Ok(None) => Err(None),
+        Ok(None) => Ok(None),
         Ok(Some(Err(_error))) => Err(Some(CurrentWebSocketCloseCode::Error)),
-        Ok(Some(Ok(message))) => parse_credentials(message).map_err(Some),
+        Ok(Some(Ok(message))) => parse_credentials(message).map(Some).map_err(Some),
+    }
+}
+
+async fn receive_credentials_or_reject(
+    state: &RuntimeState,
+    writer: &mut WsWriter,
+    reader: &mut WsReader,
+) -> Option<CurrentWebSocketCredentials> {
+    match receive_credentials(state, reader).await {
+        Ok(Some(credentials)) => Some(credentials),
+        Ok(None) => None,
+        Err(close_code) => {
+            reject_handshake(
+                Some(writer),
+                close_code,
+                "rejecting websocket during credential receive",
+            )
+            .await
+        }
     }
 }
 
@@ -166,6 +141,121 @@ async fn authenticate(
         return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
     }
     Ok((channel, claims))
+}
+
+async fn authenticate_session(
+    state: &RuntimeState,
+    writer: &mut WsWriter,
+    credentials: CurrentWebSocketCredentials,
+) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
+    match authenticate(state, credentials).await {
+        Ok(result) => Some(result),
+        Err(code) => {
+            reject_handshake(
+                Some(writer),
+                Some(code),
+                "rejecting websocket during authentication",
+            )
+            .await
+        }
+    }
+}
+
+async fn join_authenticated_session(
+    state: &RuntimeState,
+    writer: &mut WsWriter,
+    channel: Arc<Channel>,
+    claims: WebSocketConnectClaims,
+) -> Option<(
+    SessionId,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+    Arc<Channel>,
+    u64,
+)> {
+    let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+    let session_id = claims.session_id.clone();
+    let join_result = state
+        .channels
+        .join_session(
+            channel.uuid(),
+            session_id.clone(),
+            claims.label,
+            claims.permissions.unwrap_or_default(),
+            outbound_tx,
+            state.config.channel_size,
+        )
+        .await;
+    match join_result {
+        Ok((channel, connection_id)) => Some((session_id, outbound_rx, channel, connection_id)),
+        Err(error) => {
+            let close_code = match error {
+                ChannelManagerJoinError::MissingChannel => {
+                    CurrentWebSocketCloseCode::AuthenticationFailed
+                }
+                ChannelManagerJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+            };
+            reject_handshake(
+                Some(writer),
+                Some(close_code),
+                "rejecting websocket during session join",
+            )
+            .await
+        }
+    }
+}
+
+fn record_session_span(channel: &Channel, session_id: &SessionId) {
+    let current_span = Span::current();
+    current_span.record("channel_uuid", field::display(channel.uuid()));
+    current_span.record("session_id", field::debug(session_id));
+    info!("websocket session established");
+}
+
+async fn initialize_session(
+    state: &RuntimeState,
+    writer: &mut WsWriter,
+    channel: &Arc<Channel>,
+    session_id: &SessionId,
+    connection_id: u64,
+    stub_bus: &mut StubBusSession,
+) -> Option<()> {
+    if send_startup(channel, writer).await.is_err() {
+        info!("failed to send startup payload");
+        cleanup_failed_session(state, channel, session_id, connection_id).await;
+        return None;
+    }
+    if stub_bus.send_transport_bootstrap(writer).await.is_err() {
+        info!("failed to send transport bootstrap");
+        cleanup_failed_session(state, channel, session_id, connection_id).await;
+        return None;
+    }
+    Some(())
+}
+
+async fn cleanup_failed_session(
+    state: &RuntimeState,
+    channel: &Channel,
+    session_id: &SessionId,
+    connection_id: u64,
+) {
+    state
+        .channels
+        .leave_session(channel.uuid(), session_id, connection_id)
+        .await;
+}
+
+async fn reject_handshake<T>(
+    writer: Option<&mut WsWriter>,
+    close_code: Option<CurrentWebSocketCloseCode>,
+    message: &str,
+) -> Option<T> {
+    if let Some(code) = close_code {
+        info!(close_code = u16::from(code), "{message}");
+        if let Some(writer) = writer {
+            close_writer(writer, code).await;
+        }
+    }
+    None
 }
 
 async fn send_startup(channel: &Channel, writer: &mut WsWriter) -> Result<(), ()> {

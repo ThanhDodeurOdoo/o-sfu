@@ -10,6 +10,7 @@ use axum::{
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
+use tracing::{Instrument, field, info, info_span};
 
 use super::{
     RuntimeState,
@@ -41,27 +42,38 @@ pub(super) async fn upgrade(
 }
 
 async fn handle_socket(socket: WebSocket, state: RuntimeState) {
-    let (mut ws_writer, mut ws_reader) = socket.split();
-    let Some(mut session) =
-        handshake::establish_session(&state, &mut ws_writer, &mut ws_reader).await
-    else {
-        return;
-    };
-    session_loop::run(
-        &mut ws_writer,
-        &mut ws_reader,
-        &mut session.outbound_rx,
-        &mut session.stub_bus,
-    )
-    .await;
-    state
-        .channels
-        .leave_session(
-            session.channel.uuid(),
-            &session.session_id,
-            session.connection_id,
+    async move {
+        let (mut ws_writer, mut ws_reader) = socket.split();
+        info!("accepted websocket connection");
+        let Some(mut session) =
+            handshake::establish_session(&state, &mut ws_writer, &mut ws_reader).await
+        else {
+            return;
+        };
+        info!("entering websocket session loop");
+        session_loop::run(
+            &mut ws_writer,
+            &mut ws_reader,
+            &mut session.outbound_rx,
+            &mut session.stub_bus,
         )
         .await;
+        info!("closing websocket session");
+        state
+            .channels
+            .leave_session(
+                session.channel.uuid(),
+                &session.session_id,
+                session.connection_id,
+            )
+            .await;
+    }
+    .instrument(info_span!(
+        "ws.connection",
+        channel_uuid = field::Empty,
+        session_id = field::Empty
+    ))
+    .await;
 }
 
 async fn close_writer(writer: &mut WsWriter, close_code: CurrentWebSocketCloseCode) {

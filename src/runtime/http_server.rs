@@ -10,6 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use tokio::net::TcpListener;
+use tracing::info;
 
 use super::{RuntimeState, websocket_server};
 use crate::{
@@ -24,6 +25,10 @@ use crate::{
 };
 
 pub async fn serve_http(state: RuntimeState) -> Result<()> {
+    info!(
+        bind_address = %state.config.bind_address,
+        "starting HTTP and WebSocket listener"
+    );
     let listener = TcpListener::bind(state.config.bind_address).await?;
     axum::serve(listener, app(state)).await?;
     Ok(())

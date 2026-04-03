@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use anyhow::anyhow;
 use tokio::runtime::Builder;
+use tracing_subscriber::EnvFilter;
 
 use crate::{config::Config, signaling::CURRENT_WIRE_PROTOCOL_VERSION};
 
@@ -47,10 +49,24 @@ impl Runtime {
     }
 }
 
+fn init_tracing() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_error| EnvFilter::new("o_sfu=info,o_sfu_router=info")),
+        )
+        .with_target(false)
+        .compact()
+        .try_init()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(())
+}
+
 /// # Errors
 ///
 /// Returns an error when configuration loading fails or the HTTP server cannot bind.
 pub fn run() -> Result<()> {
+    init_tracing()?;
     let runtime = Runtime::new(Config::from_env()?);
     Builder::new_multi_thread()
         .enable_all()
