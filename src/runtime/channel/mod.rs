@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use o_sfu_router::RouterId;
 use tokio::sync::{RwLock, mpsc};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::signaling::{
@@ -15,10 +17,12 @@ use crate::signaling::{
 };
 
 mod manager;
+mod router_state;
 #[cfg(test)]
 mod tests;
 
 pub use manager::ChannelManager;
+use router_state::ChannelRouterState;
 
 /// A message the server pushes to a connected session's WebSocket handler.
 #[derive(Debug, Clone)]
@@ -32,12 +36,14 @@ pub enum SessionOutbound {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelJoinError {
     ChannelFull,
+    RouterState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelManagerJoinError {
     MissingChannel,
     ChannelFull,
+    RouterState,
 }
 
 /// A single discussion channel owning sessions, features, and recording state.
@@ -54,11 +60,12 @@ pub struct Channel {
     state: RwLock<ChannelState>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ChannelState {
     sessions: BTreeMap<SessionId, ActiveSession>,
     next_connection_id: u64,
     recording_state: RecordingState,
+    router: ChannelRouterState,
 }
 
 #[derive(Debug)]
@@ -76,22 +83,19 @@ struct ActiveSession {
 }
 
 impl Channel {
-    pub(super) fn new(issuer: String, key: Option<String>, query: &CreateChannelQuery) -> Self {
+    pub(super) fn new(
+        router_id: RouterId,
+        issuer: String,
+        key: Option<String>,
+        query: &CreateChannelQuery,
+    ) -> Self {
         Self {
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
             web_rtc_enabled: query.web_rtc_enabled(),
             recording_address: query.recording_address.clone(),
-            state: RwLock::new(ChannelState {
-                recording_state: RecordingState {
-                    recording: Some(false),
-                    audio: Some(false),
-                    transcription: Some(false),
-                    video: Some(false),
-                },
-                ..ChannelState::default()
-            }),
+            state: RwLock::new(ChannelState::new(router_id)),
         }
     }
 
@@ -147,6 +151,18 @@ impl Channel {
         }
         let connection_id = state.next_connection_id;
         state.next_connection_id += 1;
+        if is_new
+            && state
+                .router
+                .ensure_session(&session_id, connection_id)
+                .is_err()
+        {
+            error!(
+                ?session_id,
+                "failed to mirror session join into channel router"
+            );
+            return Err(ChannelJoinError::RouterState);
+        }
         let previous_sender = if let Some(session) = state.sessions.get_mut(&session_id) {
             let old_sender = session.sender.clone();
             session.label.clone_from(&label);
@@ -187,6 +203,13 @@ impl Channel {
             return;
         };
         if session.connection_id != connection_id {
+            return;
+        }
+        if state.router.remove_session(session_id).is_err() {
+            error!(
+                ?session_id,
+                "failed to mirror session leave into channel router"
+            );
             return;
         }
         state.sessions.remove(session_id);
@@ -250,6 +273,16 @@ impl Channel {
         let mut state = self.state.write().await;
         let mut departed = Vec::new();
         for session_id in session_ids {
+            if !state.sessions.contains_key(session_id) {
+                continue;
+            }
+            if state.router.remove_session(session_id).is_err() {
+                error!(
+                    ?session_id,
+                    "failed to mirror bulk disconnect into channel router"
+                );
+                continue;
+            }
             if let Some(session) = state.sessions.remove(session_id) {
                 let _ = session
                     .sender
@@ -270,8 +303,29 @@ impl Channel {
         self.state.read().await.sessions.len()
     }
 
+    #[cfg(test)]
+    pub(super) async fn router_session_count(&self) -> usize {
+        self.state.read().await.router.session_count()
+    }
+
     pub(super) async fn is_empty(&self) -> bool {
         self.state.read().await.sessions.is_empty()
+    }
+}
+
+impl ChannelState {
+    fn new(router_id: RouterId) -> Self {
+        Self {
+            sessions: BTreeMap::new(),
+            next_connection_id: 0,
+            recording_state: RecordingState {
+                recording: Some(false),
+                audio: Some(false),
+                transcription: Some(false),
+                video: Some(false),
+            },
+            router: ChannelRouterState::new(router_id),
+        }
     }
 }
 

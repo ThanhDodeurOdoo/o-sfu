@@ -117,6 +117,7 @@ mod channel_tests {
             )
             .await;
         assert!(first_connection.is_ok());
+        assert_eq!(channel.router_session_count().await, 1);
 
         let (tx2, mut rx2) = test_sender();
         let second_connection = channel
@@ -129,6 +130,7 @@ mod channel_tests {
             )
             .await;
         assert!(second_connection.is_ok());
+        assert_eq!(channel.router_session_count().await, 1);
         assert!(matches!(
             rx1.try_recv().ok(),
             Some(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked))
@@ -145,6 +147,7 @@ mod channel_tests {
             .leave_session(&SessionId::Integer(1), first_connection)
             .await;
         assert_eq!(channel.session_count().await, 1);
+        assert_eq!(channel.router_session_count().await, 1);
 
         channel
             .broadcast(&SessionId::Integer(99), serde_json::json!("hello"))
@@ -156,6 +159,7 @@ mod channel_tests {
             .leave_session(&SessionId::Integer(1), second_connection)
             .await;
         assert_eq!(channel.session_count().await, 0);
+        assert_eq!(channel.router_session_count().await, 0);
     }
 
     #[tokio::test]
@@ -511,6 +515,38 @@ mod channel_tests {
         ));
         assert!(rx1.try_recv().is_err());
         assert_eq!(channel.session_count().await, 0);
+        assert_eq!(channel.router_session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn channel_maps_string_session_ids_into_router_sessions() {
+        let manager = ChannelManager::new();
+        let channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let (tx, _rx) = test_sender();
+        let joined = channel
+            .join_session(
+                SessionId::String("guest-1".to_owned()),
+                None,
+                SessionPermissions::default(),
+                tx,
+                10,
+            )
+            .await;
+        assert!(joined.is_ok());
+        assert_eq!(channel.session_count().await, 1);
+        assert_eq!(channel.router_session_count().await, 1);
+
+        let Some(connection_id) = joined.ok() else {
+            return;
+        };
+
+        channel
+            .leave_session(&SessionId::String("guest-1".to_owned()), connection_id)
+            .await;
+        assert_eq!(channel.session_count().await, 0);
+        assert_eq!(channel.router_session_count().await, 0);
     }
 
     #[tokio::test]

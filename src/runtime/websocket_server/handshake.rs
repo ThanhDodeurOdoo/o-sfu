@@ -189,10 +189,10 @@ async fn join_authenticated_session(
         Ok((channel, connection_id)) => Some((session_id, outbound_rx, channel, connection_id)),
         Err(error) => {
             let close_code = match error {
-                ChannelManagerJoinError::MissingChannel => {
+                ChannelManagerJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+                ChannelManagerJoinError::MissingChannel | ChannelManagerJoinError::RouterState => {
                     CurrentWebSocketCloseCode::AuthenticationFailed
                 }
-                ChannelManagerJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
             };
             reject_handshake(
                 Some(writer),

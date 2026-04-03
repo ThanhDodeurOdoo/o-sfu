@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use o_sfu_router::RouterId;
 use tokio::sync::{RwLock, mpsc};
 
 use super::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
@@ -18,6 +19,7 @@ pub struct ChannelManager {
 #[derive(Debug, Default)]
 struct ChannelManagerState {
     channels_by_uuid: BTreeMap<String, Arc<Channel>>,
+    next_router_id: u64,
     uuids_by_issuer: BTreeMap<String, String>,
 }
 
@@ -50,7 +52,10 @@ impl ChannelManager {
         {
             return Arc::clone(channel);
         }
+        let router_id = RouterId(state.next_router_id);
+        state.next_router_id = state.next_router_id.saturating_add(1);
         let channel = Arc::new(Channel::new(
+            router_id,
             issuer.to_owned(),
             key.map(str::to_owned),
             query,
@@ -92,6 +97,7 @@ impl ChannelManager {
             .await
             .map_err(|error| match error {
                 ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
+                ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
             })?;
         Ok((channel, connection_id))
     }

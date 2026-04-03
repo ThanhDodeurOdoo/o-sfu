@@ -39,6 +39,11 @@ impl Router {
         self.id
     }
 
+    #[must_use]
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
     /// # Errors
     ///
     /// Returns [`RouterError::DuplicateSession`] when the session already exists.
