@@ -8,6 +8,11 @@ use crate::signaling::{
 
 #[allow(
     dead_code,
+    reason = "Phase-7 ICE candidate parsing scaffolding is prepared before transport wiring starts using it."
+)]
+mod ice;
+#[allow(
+    dead_code,
     reason = "Phase-7 SDP parsing scaffolding is prepared before transport wiring starts using it."
 )]
 mod sdp;
