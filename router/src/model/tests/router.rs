@@ -1,8 +1,11 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use super::helpers::assert_router_is_consistent;
 use crate::{
-    Consumer, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError, RouterId, Session,
-    SessionId, SessionInfo, SessionPermissions, SessionState, StreamType, Transport,
-    TransportDirection, TransportId,
+    Consumer, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError, RouterEvent,
+    RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissions, SessionState,
+    StreamType, Transport, TransportDirection, TransportId,
 };
 
 fn session(id: SessionId) -> Session {
@@ -600,4 +603,90 @@ fn router_updates_session_permissions_and_info() {
     assert_eq!(session.permissions(), permissions);
     assert_eq!(session.info(), info);
     assert_router_is_consistent(&router);
+}
+
+#[derive(Clone, Default)]
+struct EventCaptureObserver {
+    events: Rc<RefCell<Vec<RouterEvent>>>,
+}
+
+impl EventCaptureObserver {
+    fn recorded_events(&self) -> Vec<RouterEvent> {
+        self.events.borrow().clone()
+    }
+}
+
+impl RouterObserver for EventCaptureObserver {
+    fn on_event(&mut self, event: RouterEvent) {
+        self.events.borrow_mut().push(event);
+    }
+}
+
+#[test]
+fn router_emits_session_and_producer_lifecycle_events() {
+    let observer = EventCaptureObserver::default();
+    let inspector = observer.clone();
+    let mut router = Router::new_with_observer(RouterId(1), observer);
+
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Video,
+            StreamType::Camera,
+        )),
+        Ok(())
+    );
+    assert_eq!(router.remove_session(SessionId(10)), Ok(()));
+    assert_eq!(router.remove_session(SessionId(20)), Ok(()));
+
+    assert_eq!(
+        inspector.recorded_events(),
+        vec![
+            RouterEvent::SessionJoined {
+                session_id: SessionId(10),
+            },
+            RouterEvent::SessionJoined {
+                session_id: SessionId(20),
+            },
+            RouterEvent::ProducerAdded {
+                session_id: SessionId(10),
+                transport_id: TransportId(100),
+                producer_id: ProducerId(300),
+                media_kind: MediaKind::Video,
+                stream_type: StreamType::Camera,
+            },
+            RouterEvent::ProducerRemoved {
+                session_id: SessionId(10),
+                transport_id: TransportId(100),
+                producer_id: ProducerId(300),
+                media_kind: MediaKind::Video,
+                stream_type: StreamType::Camera,
+            },
+            RouterEvent::SessionLeft {
+                session_id: SessionId(10),
+            },
+            RouterEvent::SessionLeft {
+                session_id: SessionId(20),
+            },
+        ]
+    );
 }

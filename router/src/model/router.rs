@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
-    Transport, TransportDirection, TransportId,
+    Consumer, ConsumerId, NoopRouterObserver, Producer, ProducerId, RouterError, RouterEvent,
+    RouterId, RouterObserver, Session, SessionId, Transport, TransportDirection, TransportId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Router {
+#[derive(Debug)]
+pub struct Router<O: RouterObserver = NoopRouterObserver> {
     pub(super) id: RouterId,
     pub(super) sessions: BTreeMap<SessionId, Session>,
     pub(super) transports: BTreeMap<TransportId, Transport>,
@@ -16,11 +16,19 @@ pub struct Router {
     pub(super) transport_producers: BTreeMap<TransportId, BTreeSet<ProducerId>>,
     pub(super) transport_consumers: BTreeMap<TransportId, BTreeSet<ConsumerId>>,
     pub(super) producer_consumers: BTreeMap<ProducerId, BTreeSet<ConsumerId>>,
+    observer: O,
 }
 
-impl Router {
+impl Router<NoopRouterObserver> {
     #[must_use]
     pub fn new(id: RouterId) -> Self {
+        Self::new_with_observer(id, NoopRouterObserver)
+    }
+}
+
+impl<O: RouterObserver> Router<O> {
+    #[must_use]
+    pub fn new_with_observer(id: RouterId, observer: O) -> Self {
         Self {
             id,
             sessions: BTreeMap::new(),
@@ -31,6 +39,7 @@ impl Router {
             transport_producers: BTreeMap::new(),
             transport_consumers: BTreeMap::new(),
             producer_consumers: BTreeMap::new(),
+            observer,
         }
     }
 
@@ -57,6 +66,8 @@ impl Router {
             return Err(RouterError::DuplicateSession(session_id));
         }
         self.sessions.insert(session_id, session);
+        self.observer
+            .on_event(RouterEvent::SessionJoined { session_id });
         Ok(())
     }
 
@@ -119,9 +130,12 @@ impl Router {
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
+        let media_kind = producer.media_kind();
+        let stream_type = producer.stream_type();
         let Some(transport) = self.transports.get(&transport_id) else {
             return Err(RouterError::MissingTransport(transport_id));
         };
+        let session_id = transport.session_id();
         if transport.direction() != TransportDirection::Receive {
             return Err(RouterError::ProducerRequiresReceiveTransport(transport_id));
         }
@@ -133,6 +147,13 @@ impl Router {
             .entry(transport_id)
             .or_default()
             .insert(producer_id);
+        self.observer.on_event(RouterEvent::ProducerAdded {
+            session_id,
+            transport_id,
+            producer_id,
+            media_kind,
+            stream_type,
+        });
         Ok(())
     }
 
@@ -242,6 +263,8 @@ impl Router {
         for transport_id in transport_ids {
             self.remove_transport(transport_id);
         }
+        self.observer
+            .on_event(RouterEvent::SessionLeft { session_id });
 
         Ok(())
     }
@@ -264,25 +287,29 @@ impl Router {
 
         let producer_ids = Self::take_ids(&mut self.transport_producers, &transport_id);
         for producer_id in producer_ids {
-            self.remove_producer(producer_id);
+            self.remove_producer(producer_id, transport.session_id());
         }
     }
 
-    fn remove_producer(&mut self, producer_id: ProducerId) {
+    fn remove_producer(&mut self, producer_id: ProducerId, session_id: SessionId) {
         let Some(producer) = self.producers.remove(&producer_id) else {
             return;
         };
+        let transport_id = producer.transport_id();
 
-        Self::remove_index_member(
-            &mut self.transport_producers,
-            producer.transport_id(),
-            &producer_id,
-        );
+        Self::remove_index_member(&mut self.transport_producers, transport_id, &producer_id);
 
         let consumer_ids = Self::take_ids(&mut self.producer_consumers, &producer_id);
         for consumer_id in consumer_ids {
             self.remove_consumer(consumer_id);
         }
+        self.observer.on_event(RouterEvent::ProducerRemoved {
+            session_id,
+            transport_id,
+            producer_id,
+            media_kind: producer.media_kind(),
+            stream_type: producer.stream_type(),
+        });
     }
 
     fn remove_consumer(&mut self, consumer_id: ConsumerId) {

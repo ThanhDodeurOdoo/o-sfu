@@ -41,3 +41,6 @@ cargo kani -p o-sfu-router
 - explain kani proofs
 - explain router layer
 - general architecture (mostly based on odoo sfu, for compatibility reason)
+
+"rust" and "tests" github workflows have overlap, "rust" exists because it's the default one from github, will probably remove later 
+The router and rfc sections may be split into separate crates later (but too annoying for now)

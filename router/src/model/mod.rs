@@ -2,6 +2,7 @@ mod consumer;
 mod error;
 mod ids;
 mod media;
+mod observer;
 mod producer;
 mod router;
 mod rtp;
@@ -16,6 +17,7 @@ pub use self::consumer::Consumer;
 pub use self::error::RouterError;
 pub use self::ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId};
 pub use self::media::{MediaKind, StreamType};
+pub use self::observer::{NoopRouterObserver, RouterEvent, RouterObserver};
 pub use self::producer::Producer;
 pub use self::router::Router;
 pub use self::rtp::{
