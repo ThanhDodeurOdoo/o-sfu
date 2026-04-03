@@ -9,6 +9,7 @@ use crate::{config::Config, signaling::CURRENT_WIRE_PROTOCOL_VERSION};
 
 pub(crate) mod channel;
 mod http_server;
+mod metrics;
 mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
@@ -16,18 +17,21 @@ mod websocket_server;
 
 use channel::ChannelManager;
 use http_server::serve_http;
+use metrics::RuntimeMetrics;
 
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
     pub current_wire_protocol_version: u16,
     channels: Arc<ChannelManager>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
-    pub config: Config,
-    pub channels: Arc<ChannelManager>,
+    config: Config,
+    channels: Arc<ChannelManager>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl Runtime {
@@ -37,6 +41,7 @@ impl Runtime {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
             channels: Arc::new(ChannelManager::new()),
+            metrics: Arc::new(RuntimeMetrics::default()),
         }
     }
 
@@ -44,6 +49,7 @@ impl Runtime {
         serve_http(RuntimeState {
             config: self.config,
             channels: self.channels,
+            metrics: self.metrics,
         })
         .await
     }

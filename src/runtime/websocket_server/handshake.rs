@@ -38,8 +38,13 @@ pub(super) async fn establish_session(
     let (channel, claims) = authenticate_session(state, writer, credentials).await?;
     let (session_id, outbound_rx, channel, connection_id) =
         join_authenticated_session(state, writer, channel, claims).await?;
+    state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut stub_bus = StubBusSession::new(session_id.clone(), Arc::clone(&channel));
+    let mut stub_bus = StubBusSession::new(
+        session_id.clone(),
+        Arc::clone(&channel),
+        Arc::clone(&state.metrics),
+    );
     initialize_session(
         state,
         writer,
@@ -81,10 +86,14 @@ async fn receive_credentials_or_reject(
     reader: &mut WsReader,
 ) -> Option<CurrentWebSocketCredentials> {
     match receive_credentials(state, reader).await {
-        Ok(Some(credentials)) => Some(credentials),
+        Ok(Some(credentials)) => {
+            state.metrics.record_ws_handshake_credentials_received();
+            Some(credentials)
+        }
         Ok(None) => None,
         Err(close_code) => {
             reject_handshake(
+                state,
                 Some(writer),
                 close_code,
                 "rejecting websocket during credential receive",
@@ -152,6 +161,7 @@ async fn authenticate_session(
         Ok(result) => Some(result),
         Err(code) => {
             reject_handshake(
+                state,
                 Some(writer),
                 Some(code),
                 "rejecting websocket during authentication",
@@ -195,6 +205,7 @@ async fn join_authenticated_session(
                 }
             };
             reject_handshake(
+                state,
                 Some(writer),
                 Some(close_code),
                 "rejecting websocket during session join",
@@ -221,11 +232,13 @@ async fn initialize_session(
 ) -> Option<()> {
     if send_startup(channel, writer).await.is_err() {
         info!("failed to send startup payload");
+        state.metrics.record_ws_startup_send_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
     }
     if stub_bus.send_transport_bootstrap(writer).await.is_err() {
         info!("failed to send transport bootstrap");
+        state.metrics.record_ws_transport_bootstrap_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
     }
@@ -245,10 +258,12 @@ async fn cleanup_failed_session(
 }
 
 async fn reject_handshake<T>(
+    state: &RuntimeState,
     writer: Option<&mut WsWriter>,
     close_code: Option<CurrentWebSocketCloseCode>,
     message: &str,
 ) -> Option<T> {
+    state.metrics.record_ws_handshake_rejection(close_code);
     if let Some(code) = close_code {
         info!(close_code = u16::from(code), "{message}");
         if let Some(writer) = writer {

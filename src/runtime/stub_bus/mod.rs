@@ -5,6 +5,7 @@ use serde_json::Value;
 use tracing::{debug, trace};
 
 use super::channel::Channel;
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
     current_protocol::{
@@ -30,16 +31,22 @@ pub(super) enum StubBusOutcome {
 pub(super) struct StubBusSession {
     session_id: SessionId,
     channel: Arc<Channel>,
+    metrics: Arc<RuntimeMetrics>,
     next_request_counter: u64,
     next_producer_counter: u64,
 }
 
 impl StubBusSession {
     #[must_use]
-    pub(super) fn new(session_id: SessionId, channel: Arc<Channel>) -> Self {
+    pub(super) fn new(
+        session_id: SessionId,
+        channel: Arc<Channel>,
+        metrics: Arc<RuntimeMetrics>,
+    ) -> Self {
         Self {
             session_id,
             channel,
+            metrics,
             next_request_counter: 0,
             next_producer_counter: 0,
         }
@@ -64,9 +71,15 @@ impl StubBusSession {
         message: Message,
     ) -> StubBusOutcome {
         let batch = match codec::parse_batch(message) {
-            Ok(Some(batch)) => batch,
+            Ok(Some(batch)) => {
+                self.metrics.record_ws_bus_batch_received(batch.len());
+                batch
+            }
             Ok(None) => return StubBusOutcome::Break,
-            Err(close_code) => return StubBusOutcome::Close(close_code),
+            Err(close_code) => {
+                self.metrics.record_ws_bus_parse_failure();
+                return StubBusOutcome::Close(close_code);
+            }
         };
         trace!(batch_len = batch.len(), "dispatching client bus batch");
         for envelope in batch {
@@ -89,10 +102,12 @@ impl StubBusSession {
             response_to,
         } = envelope;
         if response_to.is_some() {
+            self.metrics.record_ws_bus_client_response_ignored();
             debug!("ignoring client response frame");
             return Ok(());
         }
         if let Some(request_id) = need_response {
+            self.metrics.record_ws_bus_client_request();
             debug!(request_id = %request_id.as_str(), "dispatching client bus request");
             let response = self.dispatch_request(message);
             self.send_response(writer, request_id, response)
@@ -100,6 +115,7 @@ impl StubBusSession {
                 .map_err(|_error| StubBusOutcome::Break)?;
             return Ok(());
         }
+        self.metrics.record_ws_bus_client_message();
         debug!("dispatching client bus message");
         self.dispatch_message(message).await;
         Ok(())
@@ -107,6 +123,7 @@ impl StubBusSession {
 
     fn dispatch_request(&mut self, message: Value) -> Value {
         let Ok(request) = serde_json::from_value::<CurrentClientRequest>(message) else {
+            self.metrics.record_ws_bus_client_request_decode_failure();
             debug!("failed to decode client bus request, returning empty object");
             return empty_object();
         };
@@ -115,6 +132,7 @@ impl StubBusSession {
 
     async fn dispatch_message(&self, message: Value) {
         let Ok(message) = serde_json::from_value::<CurrentClientMessage>(message) else {
+            self.metrics.record_ws_bus_client_message_decode_failure();
             debug!("failed to decode client bus message");
             return;
         };
@@ -143,7 +161,13 @@ impl StubBusSession {
             need_response: Some(self.next_request_id()),
             response_to: None,
         }];
-        codec::send_batch(writer, batch).await
+        let result = codec::send_batch(writer, batch).await;
+        if result.is_ok() {
+            self.metrics.record_ws_bus_batch_sent(1);
+        } else {
+            self.metrics.record_ws_bus_send_failure();
+        }
+        result
     }
 
     async fn send_response(
@@ -152,7 +176,7 @@ impl StubBusSession {
         request_id: CurrentBusRequestId,
         response: Value,
     ) -> Result<(), CurrentWebSocketCloseCode> {
-        codec::send_batch(
+        let result = codec::send_batch(
             writer,
             vec![CurrentBusEnvelope {
                 message: response,
@@ -160,7 +184,13 @@ impl StubBusSession {
                 response_to: Some(request_id),
             }],
         )
-        .await
+        .await;
+        if result.is_ok() {
+            self.metrics.record_ws_bus_batch_sent(1);
+        } else {
+            self.metrics.record_ws_bus_send_failure();
+        }
+        result
     }
 
     fn handle_request(&mut self, request: &CurrentClientRequest) -> Value {
@@ -180,6 +210,7 @@ impl StubBusSession {
 
     fn handle_publish_request(&mut self) -> Value {
         self.next_producer_counter += 1;
+        self.metrics.record_ws_bus_stub_publish_request();
         debug!(
             producer_id = self.next_producer_counter,
             "handled stub publish request"

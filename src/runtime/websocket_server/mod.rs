@@ -44,20 +44,24 @@ pub(super) async fn upgrade(
 async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     async move {
         let (mut ws_writer, mut ws_reader) = socket.split();
+        state.metrics.record_ws_connection_accepted();
         info!("accepted websocket connection");
         let Some(mut session) =
             handshake::establish_session(&state, &mut ws_writer, &mut ws_reader).await
         else {
             return;
         };
+        state.metrics.record_ws_session_loop_started();
         info!("entering websocket session loop");
-        session_loop::run(
+        let exit_reason = session_loop::run(
             &mut ws_writer,
             &mut ws_reader,
             &mut session.outbound_rx,
             &mut session.stub_bus,
+            &state.metrics,
         )
         .await;
+        state.metrics.record_ws_session_loop_exit(exit_reason);
         info!("closing websocket session");
         state
             .channels

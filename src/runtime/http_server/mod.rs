@@ -48,11 +48,13 @@ pub(super) fn app(state: RuntimeState) -> Router {
         .with_state(state)
 }
 
-async fn noop() -> impl IntoResponse {
+async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
+    state.metrics.record_http_noop_request();
     axum::Json(NoopResponse::ok())
 }
 
 async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
+    state.metrics.record_http_stats_request();
     axum::Json(state.channels.stats().await)
 }
 
@@ -62,16 +64,21 @@ async fn channel(
     headers: HeaderMap,
     Query(query): Query<CreateChannelQuery>,
 ) -> Response {
+    state.metrics.record_http_channel_request();
     let Some(token) = authorization_token(&headers) else {
+        state.metrics.record_http_channel_unauthorized();
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let Ok(claims) = auth::verify::<HttpChannelClaims>(token, &state.config.auth_key) else {
+        state.metrics.record_http_channel_unauthorized();
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let Some(issuer) = claims.registered.iss.as_deref() else {
+        state.metrics.record_http_channel_forbidden();
         return StatusCode::FORBIDDEN.into_response();
     };
     if query.recording_address.is_some() && claims.key.is_none() {
+        state.metrics.record_http_channel_bad_request();
         return StatusCode::BAD_REQUEST.into_response();
     }
     let remote_address = request_remote_address(
@@ -82,6 +89,7 @@ async fn channel(
         .channels
         .create_or_get_with_remote_address(issuer, claims.key.as_deref(), &remote_address, &query)
         .await;
+    state.metrics.record_http_channel_success();
     (
         StatusCode::OK,
         axum::Json(ChannelResponse {
@@ -93,10 +101,13 @@ async fn channel(
 }
 
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
+    state.metrics.record_http_disconnect_request();
     let Ok(token) = str::from_utf8(&body) else {
+        state.metrics.record_http_disconnect_bad_request();
         return StatusCode::BAD_REQUEST.into_response();
     };
     let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
+        state.metrics.record_http_disconnect_unprocessable_entity();
         return StatusCode::UNPROCESSABLE_ENTITY.into_response();
     };
     for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
@@ -105,6 +116,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
             .disconnect_sessions(channel_uuid, session_ids)
             .await;
     }
+    state.metrics.record_http_disconnect_success();
     StatusCode::OK.into_response()
 }
 

@@ -21,7 +21,7 @@ mod websocket_server_tests {
     use super::super::*;
     use crate::{
         config::Config,
-        runtime::{channel::ChannelManager, http_server::app},
+        runtime::{channel::ChannelManager, http_server::app, metrics::RuntimeMetrics},
         signaling::{
             auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
             current_bus::{
@@ -47,6 +47,7 @@ mod websocket_server_tests {
         addr: SocketAddr,
         handle: JoinHandle<()>,
         channels: Arc<ChannelManager>,
+        state: RuntimeState,
     }
 
     impl TestServer {
@@ -78,11 +79,13 @@ mod websocket_server_tests {
         let state = RuntimeState {
             config: test_config(authentication_timeout_ms, channel_size),
             channels: Arc::clone(&channels),
+            metrics: Arc::new(RuntimeMetrics::default()),
         };
+        let state_for_server = state.clone();
         let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
         let addr = listener.local_addr().ok()?;
         let handle = tokio::spawn(async move {
-            let result = axum::serve(listener, app(state)).await;
+            let result = axum::serve(listener, app(state_for_server)).await;
             assert!(
                 result.is_ok(),
                 "test server should stop cleanly: {result:?}"
@@ -92,6 +95,7 @@ mod websocket_server_tests {
             addr,
             handle,
             channels,
+            state,
         })
     }
 
@@ -267,6 +271,11 @@ mod websocket_server_tests {
             "timeout close should arrive promptly: {close_code:?}"
         );
         assert_eq!(close_code.ok().flatten(), Some(CloseCode::Library(4107)));
+
+        sleep(Duration::from_millis(20)).await;
+        let metrics = server.state.metrics.snapshot();
+        assert_eq!(metrics.ws_connections_accepted, 1);
+        assert_eq!(metrics.ws_handshake_rejected_timeout, 1);
     }
 
     #[tokio::test]
@@ -351,6 +360,16 @@ mod websocket_server_tests {
                 },
             }
         );
+
+        let close_result = websocket.close(None).await;
+        assert!(close_result.is_ok());
+        sleep(Duration::from_millis(20)).await;
+
+        let metrics = server.state.metrics.snapshot();
+        assert_eq!(metrics.ws_connections_accepted, 1);
+        assert_eq!(metrics.ws_handshake_credentials_received, 1);
+        assert_eq!(metrics.ws_sessions_joined, 1);
+        assert_eq!(metrics.ws_session_loops_started, 1);
     }
 
     #[tokio::test]
