@@ -13,6 +13,8 @@ pub(crate) enum TransportConnectDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportAdapterError {
     TransportUnavailable,
+    InvalidInput,
+    UnsupportedFeature,
 }
 
 /// Runtime boundary between signaling/session orchestration and transport-specific behavior.

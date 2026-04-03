@@ -151,6 +151,7 @@ pub(super) struct ParsedIceCandidate {
     candidate_type: IceCandidateType,
 }
 
+#[cfg(test)]
 impl ParsedIceCandidate {
     #[must_use]
     pub(super) fn component_id(&self) -> u16 {
