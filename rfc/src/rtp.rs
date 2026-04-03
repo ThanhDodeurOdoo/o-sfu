@@ -35,9 +35,16 @@ pub const RTP_DYNAMIC_PAYLOAD_TYPE_END: u8 = 127;
 
 /// Payload type values reserved to avoid confusion with RTCP packet types.
 ///
-/// Reference: RFC 3551 section 6 (payload types 72 and 73 are reserved).
+/// When the marker bit is set, these payload types produce second-byte values
+/// that collide with RTCP packet types 200–204 (SR, RR, SDES, BYE, APP).
+/// This is critical for RTP/RTCP multiplexing per RFC 5761 section 4.
+///
+/// Reference: RFC 3551 section 6.
 pub const RTP_RESERVED_PAYLOAD_TYPE_72: u8 = 72;
 pub const RTP_RESERVED_PAYLOAD_TYPE_73: u8 = 73;
+pub const RTP_RESERVED_PAYLOAD_TYPE_74: u8 = 74;
+pub const RTP_RESERVED_PAYLOAD_TYPE_75: u8 = 75;
+pub const RTP_RESERVED_PAYLOAD_TYPE_76: u8 = 76;
 
 /// Common static RTP/AVP payload type assignments.
 ///
@@ -73,34 +80,18 @@ pub enum AvpStaticPayloadType {
 
 impl AvpStaticPayloadType {
     #[must_use]
+    #[expect(clippy::as_conversions, reason = "repr(u8) guarantees safe identity cast")]
     pub const fn as_u8(self) -> u8 {
-        match self {
-            Self::Pcmu => 0,
-            Self::Gsm => 3,
-            Self::G723 => 4,
-            Self::Dvi4_8000 => 5,
-            Self::Dvi4_16000 => 6,
-            Self::Lpc => 7,
-            Self::Pcma => 8,
-            Self::G722 => 9,
-            Self::L16Stereo => 10,
-            Self::L16Mono => 11,
-            Self::Qcelp => 12,
-            Self::ComfortNoise => 13,
-            Self::Mpa => 14,
-            Self::G728 => 15,
-            Self::Dvi4_11025 => 16,
-            Self::Dvi4_22050 => 17,
-            Self::G729 => 18,
-            Self::Celb => 25,
-            Self::Jpeg => 26,
-            Self::Nv => 28,
-            Self::H261 => 31,
-            Self::Mpv => 32,
-            Self::Mp2t => 33,
-            Self::H263 => 34,
-        }
+        self as u8
     }
+}
+
+/// Returns `true` if `payload_type` falls in the dynamic range (96–127).
+///
+/// Reference: RFC 3551 section 6.
+#[must_use]
+pub const fn is_dynamic_payload_type(payload_type: u8) -> bool {
+    payload_type >= RTP_DYNAMIC_PAYLOAD_TYPE_START && payload_type <= RTP_DYNAMIC_PAYLOAD_TYPE_END
 }
 
 /// RTCP packet type codes defined by RFC 3550 section 12.1.
@@ -146,12 +137,6 @@ pub mod header_extension {
     pub const TWO_BYTE_DATA_LEN_MAX: u8 = u8::MAX;
 
     #[must_use]
-    pub const fn is_dynamic_payload_type(payload_type: u8) -> bool {
-        payload_type >= super::RTP_DYNAMIC_PAYLOAD_TYPE_START
-            && payload_type <= super::RTP_DYNAMIC_PAYLOAD_TYPE_END
-    }
-
-    #[must_use]
     pub const fn is_one_byte_id(id: u8) -> bool {
         id >= ONE_BYTE_ID_MIN && id <= ONE_BYTE_ID_MAX
     }
@@ -169,8 +154,10 @@ pub mod header_extension {
 mod tests {
     use super::{
         AvpStaticPayloadType, RTP_DYNAMIC_PAYLOAD_TYPE_END, RTP_DYNAMIC_PAYLOAD_TYPE_START,
+        RTP_RESERVED_PAYLOAD_TYPE_72, RTP_RESERVED_PAYLOAD_TYPE_73, RTP_RESERVED_PAYLOAD_TYPE_74,
+        RTP_RESERVED_PAYLOAD_TYPE_75, RTP_RESERVED_PAYLOAD_TYPE_76, header_extension,
+        is_dynamic_payload_type,
     };
-    use crate::rtp::header_extension;
 
     #[test]
     fn static_payload_values_match_assigned_numbers() {
@@ -183,9 +170,25 @@ mod tests {
     fn dynamic_payload_range_helpers_follow_rfc3551() {
         assert_eq!(RTP_DYNAMIC_PAYLOAD_TYPE_START, 96);
         assert_eq!(RTP_DYNAMIC_PAYLOAD_TYPE_END, 127);
-        assert!(!header_extension::is_dynamic_payload_type(95));
-        assert!(header_extension::is_dynamic_payload_type(96));
-        assert!(header_extension::is_dynamic_payload_type(127));
+        assert!(!is_dynamic_payload_type(95));
+        assert!(is_dynamic_payload_type(96));
+        assert!(is_dynamic_payload_type(127));
+    }
+
+    /// RFC 3551 section 6 reserves payload types 72–76 to avoid collision
+    /// with RTCP packet types 200–204 when the marker bit is set.
+    #[test]
+    fn reserved_payload_types_cover_full_rtcp_range() {
+        assert_eq!(
+            [
+                RTP_RESERVED_PAYLOAD_TYPE_72,
+                RTP_RESERVED_PAYLOAD_TYPE_73,
+                RTP_RESERVED_PAYLOAD_TYPE_74,
+                RTP_RESERVED_PAYLOAD_TYPE_75,
+                RTP_RESERVED_PAYLOAD_TYPE_76,
+            ],
+            [72, 73, 74, 75, 76]
+        );
     }
 
     #[test]
