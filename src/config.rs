@@ -6,12 +6,12 @@ use crate::signaling::DEFAULT_AUTHENTICATION_TIMEOUT_MS;
 
 const DEFAULT_CHANNEL_SIZE: usize = 100;
 const TRANSPORT_BACKEND_STUB: &str = "stub";
-const TRANSPORT_BACKEND_WEBRTC_RS: &str = "webrtc-rs";
+const TRANSPORT_BACKEND_RTC: &str = "rtc";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportBackend {
     Stub,
-    WebRtcRs,
+    Rtc,
 }
 
 impl FromStr for TransportBackend {
@@ -20,9 +20,9 @@ impl FromStr for TransportBackend {
     fn from_str(value: &str) -> Result<Self> {
         match value {
             TRANSPORT_BACKEND_STUB => Ok(Self::Stub),
-            TRANSPORT_BACKEND_WEBRTC_RS => Ok(Self::WebRtcRs),
+            TRANSPORT_BACKEND_RTC => Ok(Self::Rtc),
             _ => Err(anyhow!(
-                "TRANSPORT_BACKEND must be either `{TRANSPORT_BACKEND_STUB}` or `{TRANSPORT_BACKEND_WEBRTC_RS}`"
+                "TRANSPORT_BACKEND must be either `{TRANSPORT_BACKEND_STUB}` or `{TRANSPORT_BACKEND_RTC}`"
             )),
         }
     }
@@ -68,7 +68,7 @@ impl Config {
         let transport_backend = parse_optional_env(
             &mut get_var,
             "TRANSPORT_BACKEND",
-            "TRANSPORT_BACKEND must be either `stub` or `webrtc-rs`",
+            "TRANSPORT_BACKEND must be either `stub` or `rtc`",
         )?
         .unwrap_or(TransportBackend::Stub);
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
@@ -141,17 +141,17 @@ mod tests {
     }
 
     #[test]
-    fn config_accepts_webrtc_rs_transport_backend() {
+    fn config_accepts_rtc_transport_backend() {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
-            "TRANSPORT_BACKEND" => Some("webrtc-rs".to_owned()),
+            "TRANSPORT_BACKEND" => Some("rtc".to_owned()),
             _ => None,
         });
         assert!(config.is_ok());
         let Some(config) = config.ok() else {
             return;
         };
-        assert_eq!(config.transport_backend, TransportBackend::WebRtcRs);
+        assert_eq!(config.transport_backend, TransportBackend::Rtc);
     }
 
     #[test]

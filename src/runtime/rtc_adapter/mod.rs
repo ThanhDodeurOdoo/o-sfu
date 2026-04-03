@@ -34,18 +34,18 @@ struct TransportStateKey {
     direction: TransportConnectDirection,
 }
 
-/// Placeholder transport adapter for the selected phase-7 backend (`webrtc-rs`).
+/// Placeholder transport adapter for the selected phase-7 backend (`rtc`).
 ///
 /// During the library-selection phase this delegates to the deterministic stub
 /// transport behavior so signaling and channel lifecycle flows remain stable
 /// while SDP/ICE/DTLS integration is added incrementally.
 #[derive(Debug, Default)]
-pub(super) struct WebRtcRsTransportAdapter {
+pub(super) struct RtcTransportAdapter {
     fallback: StubWebRtcAdapter,
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
 }
 
-impl TransportAdapter for WebRtcRsTransportAdapter {
+impl TransportAdapter for RtcTransportAdapter {
     fn transport_bootstrap_payload(
         &self,
         session_id: &SessionId,
@@ -74,7 +74,7 @@ impl TransportAdapter for WebRtcRsTransportAdapter {
         debug!(
             ?direction,
             session_id = ?session_id,
-            "validated DTLS parameters and transport lifecycle state before placeholder webrtc-rs connect"
+            "validated DTLS parameters and transport lifecycle state before placeholder rtc connect"
         );
         self.fallback
             .connect_transport(session_id, direction, dtls_parameters, sdp_offer)?;
@@ -107,7 +107,7 @@ fn map_sdp_diagnostic_to_adapter_error(
                 rfc_section = diagnostic.rfc_reference().section(),
                 rfc_url = diagnostic.rfc_reference().url(),
                 replay_context,
-                "invalid SDP offer on webrtc-rs adapter boundary"
+                "invalid SDP offer on rtc adapter boundary"
             );
             TransportAdapterError::InvalidInput
         }
@@ -121,7 +121,7 @@ fn map_sdp_diagnostic_to_adapter_error(
                 rfc_section = diagnostic.rfc_reference().section(),
                 rfc_url = diagnostic.rfc_reference().url(),
                 replay_context,
-                "unsupported SDP feature on webrtc-rs adapter boundary"
+                "unsupported SDP feature on rtc adapter boundary"
             );
             TransportAdapterError::UnsupportedFeature
         }
@@ -131,7 +131,7 @@ fn map_sdp_diagnostic_to_adapter_error(
 fn log_validated_sdp_media_sections(media_sections: &[sdp::ParsedMediaSection]) {
     debug!(
         media_section_count = media_sections.len(),
-        "validated SDP offer on webrtc-rs adapter boundary"
+        "validated SDP offer on rtc adapter boundary"
     );
     for section in media_sections {
         debug!(
@@ -144,7 +144,7 @@ fn log_validated_sdp_media_sections(media_sections: &[sdp::ParsedMediaSection]) 
     }
 }
 
-impl WebRtcRsTransportAdapter {
+impl RtcTransportAdapter {
     fn mark_bootstrap_sent(&self, session_id: &SessionId) -> Result<(), TransportAdapterError> {
         let Ok(mut states) = self.transport_states.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -214,7 +214,7 @@ fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), Tran
                     rfc_section = diagnostic.rfc_reference().section(),
                     rfc_url = diagnostic.rfc_reference().url(),
                     replay_context = diagnostic.replay_context(),
-                    "invalid DTLS payload on webrtc-rs adapter boundary"
+                    "invalid DTLS payload on rtc adapter boundary"
                 );
                 Err(TransportAdapterError::InvalidInput)
             }
@@ -225,7 +225,7 @@ fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), Tran
                     rfc_section = diagnostic.rfc_reference().section(),
                     rfc_url = diagnostic.rfc_reference().url(),
                     replay_context = diagnostic.replay_context(),
-                    "unsupported DTLS feature on webrtc-rs adapter boundary"
+                    "unsupported DTLS feature on rtc adapter boundary"
                 );
                 Err(TransportAdapterError::UnsupportedFeature)
             }
@@ -264,7 +264,7 @@ fn validate_ice_candidates(
                         rfc_section = diagnostic.rfc_reference().section(),
                         rfc_url = diagnostic.rfc_reference().url(),
                         replay_context = diagnostic.replay_context(),
-                        "invalid bootstrap ICE candidate on webrtc-rs adapter boundary"
+                        "invalid bootstrap ICE candidate on rtc adapter boundary"
                     );
                     return Err(TransportAdapterError::InvalidInput);
                 }
@@ -276,7 +276,7 @@ fn validate_ice_candidates(
                         rfc_section = diagnostic.rfc_reference().section(),
                         rfc_url = diagnostic.rfc_reference().url(),
                         replay_context = diagnostic.replay_context(),
-                        "unsupported bootstrap ICE candidate on webrtc-rs adapter boundary"
+                        "unsupported bootstrap ICE candidate on rtc adapter boundary"
                     );
                     return Err(TransportAdapterError::UnsupportedFeature);
                 }
@@ -303,7 +303,7 @@ mod tests {
     use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
     use serde_json::json;
 
-    use super::{WebRtcRsTransportAdapter, validate_bootstrap_payload, validate_dtls_parameters};
+    use super::{RtcTransportAdapter, validate_bootstrap_payload, validate_dtls_parameters};
     use crate::{
         runtime::transport_adapter::{
             TransportAdapter, TransportAdapterError, TransportConnectDirection,
@@ -336,8 +336,8 @@ a=mid:0\r\n";
                 "codecs": [],
                 "headerExtensions": []
             })),
-            download_transport: sample_transport_bootstrap("stc-webrtc-rs", candidate.clone()),
-            upload_transport: sample_transport_bootstrap("cts-webrtc-rs", candidate),
+            download_transport: sample_transport_bootstrap("stc-rtc", candidate.clone()),
+            upload_transport: sample_transport_bootstrap("cts-rtc", candidate),
             publish_options_by_media_kind: PublishOptionsByMediaKind {
                 audio: PublishOptions(json!({ "stopTracks": false })),
                 video: PublishOptions(json!({ "stopTracks": false })),
@@ -429,8 +429,8 @@ a=mid:0\r\n";
     }
 
     #[test]
-    fn webrtc_rs_transport_connect_rejects_invalid_dtls_before_fallback() {
-        let adapter = WebRtcRsTransportAdapter::default();
+    fn rtc_transport_connect_rejects_invalid_dtls_before_fallback() {
+        let adapter = RtcTransportAdapter::default();
         let result = adapter.connect_transport(
             &SessionId::Integer(7),
             TransportConnectDirection::Upload,
@@ -444,8 +444,8 @@ a=mid:0\r\n";
     }
 
     #[test]
-    fn webrtc_rs_transport_connect_requires_bootstrap_first() {
-        let adapter = WebRtcRsTransportAdapter::default();
+    fn rtc_transport_connect_requires_bootstrap_first() {
+        let adapter = RtcTransportAdapter::default();
         let result = adapter.connect_transport(
             &SessionId::Integer(8),
             TransportConnectDirection::Upload,
@@ -456,8 +456,8 @@ a=mid:0\r\n";
     }
 
     #[test]
-    fn webrtc_rs_transport_connect_succeeds_after_bootstrap() {
-        let adapter = WebRtcRsTransportAdapter::default();
+    fn rtc_transport_connect_succeeds_after_bootstrap() {
+        let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(9);
         let bootstrap_result =
             adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
@@ -472,8 +472,8 @@ a=mid:0\r\n";
     }
 
     #[test]
-    fn webrtc_rs_transport_connect_rejects_duplicate_direction_connect() {
-        let adapter = WebRtcRsTransportAdapter::default();
+    fn rtc_transport_connect_rejects_duplicate_direction_connect() {
+        let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(10);
         let bootstrap_result =
             adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
@@ -495,8 +495,8 @@ a=mid:0\r\n";
     }
 
     #[test]
-    fn webrtc_rs_transport_connect_rejects_invalid_sdp_before_fallback() {
-        let adapter = WebRtcRsTransportAdapter::default();
+    fn rtc_transport_connect_rejects_invalid_sdp_before_fallback() {
+        let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(11);
         let bootstrap_result =
             adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
@@ -511,8 +511,8 @@ a=mid:0\r\n";
     }
 
     #[test]
-    fn webrtc_rs_transport_connect_rejects_unsupported_sdp_before_fallback() {
-        let adapter = WebRtcRsTransportAdapter::default();
+    fn rtc_transport_connect_rejects_unsupported_sdp_before_fallback() {
+        let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(12);
         let bootstrap_result =
             adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());

@@ -76,9 +76,9 @@ async fn websocket_startup_and_transport_bootstrap_work_from_integration_test() 
 }
 
 #[tokio::test]
-async fn websocket_startup_and_transport_bootstrap_work_with_webrtc_rs_backend_placeholder() {
+async fn websocket_startup_and_transport_bootstrap_work_with_rtc_backend_placeholder() {
     let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::WebRtcRs;
+    config.transport_backend = TransportBackend::Rtc;
     let server = spawn_test_server(config).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {

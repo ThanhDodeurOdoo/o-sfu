@@ -13,19 +13,19 @@ use crate::{
 pub(crate) mod channel;
 mod http_server;
 mod metrics;
+mod rtc_adapter;
 mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
 mod transport_adapter;
-mod webrtc_rs_adapter;
 mod websocket_server;
 
 use channel::ChannelManager;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
+use rtc_adapter::RtcTransportAdapter;
 use stub_bus::StubWebRtcAdapter;
 use transport_adapter::TransportAdapter;
-use webrtc_rs_adapter::WebRtcRsTransportAdapter;
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -96,6 +96,6 @@ pub fn run() -> Result<()> {
 fn build_transport_adapter(backend: TransportBackend) -> Arc<dyn TransportAdapter> {
     match backend {
         TransportBackend::Stub => Arc::new(StubWebRtcAdapter::default()),
-        TransportBackend::WebRtcRs => Arc::new(WebRtcRsTransportAdapter::default()),
+        TransportBackend::Rtc => Arc::new(RtcTransportAdapter::default()),
     }
 }
