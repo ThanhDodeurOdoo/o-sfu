@@ -33,3 +33,11 @@ Then run the proof harnesses with:
 ```bash
 cargo kani -p o-sfu-router
 ```
+
+## TODO (formatting in a pretty way later)
+
+- explain rfc files and how they act as reference for implementations using them
+- explain the metrics system (intended to be compatible with openTelemetry)
+- explain kani proofs
+- explain router layer
+- general architecture (mostly based on odoo sfu, for compatibility reason)

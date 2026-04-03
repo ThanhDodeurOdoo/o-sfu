@@ -5,6 +5,7 @@ mod media;
 mod producer;
 mod router;
 mod rtp;
+mod rtp_negotiation;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,10 @@ pub use self::router::Router;
 pub use self::rtp::{
     RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability, RtpCodecParameters,
     RtpEncoding, RtpHeaderExtension, RtpParameters,
+};
+pub use self::rtp_negotiation::{
+    RtpNegotiationError, can_consume, derive_consumable_rtp_parameters,
+    negotiate_consumer_rtp_parameters,
 };
 pub use self::session::{Session, SessionInfo, SessionPermissions, SessionState};
 pub use self::transport::{Transport, TransportDirection};

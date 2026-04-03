@@ -1,7 +1,8 @@
 use crate::rfc::webrtc;
 use crate::{
     MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
-    RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpParameters,
+    RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpNegotiationError, RtpParameters,
+    can_consume, derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
 
 #[test]
@@ -73,4 +74,185 @@ fn rtp_parameters_collect_codec_header_and_encoding_data() {
     assert_eq!(parameters.codecs().count(), 1);
     assert_eq!(parameters.header_extensions().count(), 1);
     assert_eq!(parameters.encodings().count(), 1);
+}
+
+#[test]
+fn derive_consumable_parameters_maps_payload_types_and_rtx_association() {
+    let router_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
+                .with_preferred_payload_type(101)
+                .with_parameter("packetization-mode", "1")
+                .with_parameter("profile-level-id", "4d0032")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_preferred_payload_type(102)
+                .with_parameter("apt", "101"),
+        ],
+        vec![
+            RtpHeaderExtension::new(webrtc::rtp_header_extension_uri::MID, 1),
+            RtpHeaderExtension::new(
+                webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+                5,
+            ),
+        ],
+    );
+    let producer_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "H264", 111, 90_000)
+                .with_parameter("packetization-mode", "1")
+                .with_parameter("profile-level-id", "4d0032")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
+            RtpCodecParameters::new(MediaKind::Video, "rtx", 112, 90_000)
+                .with_parameter("apt", "111"),
+        ],
+        vec![
+            RtpHeaderExtension::new(webrtc::rtp_header_extension_uri::MID, 1),
+            RtpHeaderExtension::new(webrtc::rtp_header_extension_uri::ABS_SEND_TIME, 4),
+        ],
+        vec![
+            RtpEncoding::new()
+                .with_rid("f")
+                .with_ssrc(1234)
+                .with_codec_payload_type(111),
+        ],
+    )
+    .with_mid("video-0");
+
+    let consumable_result =
+        derive_consumable_rtp_parameters(&producer_parameters, &router_capabilities);
+    assert!(consumable_result.is_ok());
+    let Ok(consumable) = consumable_result else {
+        return;
+    };
+    let codecs = consumable.codecs().collect::<Vec<_>>();
+    assert_eq!(codecs.len(), 2);
+    let Some(first_codec) = codecs.first() else {
+        return;
+    };
+    assert_eq!(first_codec.payload_type(), 101);
+    let Some(second_codec) = codecs.get(1) else {
+        return;
+    };
+    assert_eq!(second_codec.payload_type(), 102);
+    assert_eq!(
+        second_codec
+            .parameters()
+            .find_map(|(name, value)| (name == "apt").then_some(value)),
+        Some("101")
+    );
+    assert_eq!(consumable.mid(), Some("video-0"));
+    let header_extension_uris = consumable
+        .header_extensions()
+        .map(RtpHeaderExtension::uri)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        header_extension_uris,
+        vec![
+            webrtc::rtp_header_extension_uri::MID,
+            webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+        ]
+    );
+    let first_encoding = consumable.encodings().next();
+    assert!(first_encoding.is_some());
+    let Some(first_encoding) = first_encoding else {
+        return;
+    };
+    assert_eq!(first_encoding.codec_payload_type(), Some(101));
+}
+
+#[test]
+fn consumer_negotiation_keeps_abs_send_time_and_filters_transport_cc_feedback() {
+    let consumable_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "VP8", 96, 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
+            RtpCodecParameters::new(MediaKind::Video, "rtx", 97, 90_000)
+                .with_parameter("apt", "96"),
+        ],
+        vec![RtpHeaderExtension::new(
+            webrtc::rtp_header_extension_uri::ABS_SEND_TIME,
+            4,
+        )],
+        vec![RtpEncoding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_preferred_payload_type(100)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_preferred_payload_type(101)
+                .with_parameter("apt", "96"),
+        ],
+        vec![RtpHeaderExtension::new(
+            webrtc::rtp_header_extension_uri::ABS_SEND_TIME,
+            4,
+        )],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    let Ok(negotiated) = negotiated_result else {
+        return;
+    };
+    let codecs = negotiated.codecs().collect::<Vec<_>>();
+    assert_eq!(codecs.len(), 2);
+    let first_codec_feedback = codecs
+        .first()
+        .map(|codec| {
+            codec
+                .rtcp_feedback()
+                .map(RtcpFeedback::kind)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(first_codec_feedback.contains(&&RtcpFeedbackKind::NackPli));
+    assert!(first_codec_feedback.contains(&&RtcpFeedbackKind::GoogRemb));
+    assert!(!first_codec_feedback.contains(&&RtcpFeedbackKind::TransportCc));
+    let header_extension_uris = negotiated
+        .header_extensions()
+        .map(RtpHeaderExtension::uri)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        header_extension_uris,
+        vec![webrtc::rtp_header_extension_uri::ABS_SEND_TIME]
+    );
+}
+
+#[test]
+fn consumer_negotiation_fails_when_no_media_codec_matches() {
+    let consumable_parameters = RtpParameters::new(
+        vec![RtpCodecParameters::new(
+            MediaKind::Audio,
+            "opus",
+            111,
+            48_000,
+        )],
+        vec![],
+        vec![],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_preferred_payload_type(96),
+        ],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
 }

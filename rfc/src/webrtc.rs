@@ -124,6 +124,18 @@ pub mod rtp_header_extension_uri {
     /// Reference: RFC 8852.
     pub const REPAIRED_RTP_STREAM_ID: &str =
         rtp_header_extension_sdes_urn!("repaired-rtp-stream-id");
+
+    /// Absolute send time RTP header extension URI.
+    ///
+    /// Reference: <https://www.webrtc.org/experiments/rtp-hdrext/abs-send-time>
+    pub const ABS_SEND_TIME: &str = "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time";
+
+    /// Transport-wide sequence number RTP header extension URI.
+    ///
+    /// Reference:
+    /// <https://www.ietf.org/archive/id/draft-holmer-rmcat-transport-wide-cc-extensions-01.txt>
+    pub const TRANSPORT_WIDE_CC_DRAFT_01: &str =
+        "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01";
 }
 
 /// RTCP SDES item type defined for MID.
@@ -167,6 +179,14 @@ mod tests {
         assert_eq!(
             rtp_header_extension_uri::MID,
             "urn:ietf:params:rtp-hdrext:sdes:mid"
+        );
+        assert_eq!(
+            rtp_header_extension_uri::ABS_SEND_TIME,
+            "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"
+        );
+        assert_eq!(
+            rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+            "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
         );
         assert_eq!(RTCP_SDES_ITEM_MID, 15);
     }
