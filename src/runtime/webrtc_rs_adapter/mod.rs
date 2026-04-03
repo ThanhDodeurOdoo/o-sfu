@@ -1,3 +1,8 @@
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+
 use super::{
     stub_bus::StubWebRtcAdapter,
     transport_adapter::{TransportAdapter, TransportAdapterError, TransportConnectDirection},
@@ -25,6 +30,18 @@ const CANDIDATE_FIELD_PORT: &str = "port";
 const CANDIDATE_FIELD_TYPE: &str = "type";
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportLifecycleState {
+    BootstrapSent,
+    Connected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TransportStateKey {
+    session_id: SessionId,
+    direction: TransportConnectDirection,
+}
+
 /// Placeholder transport adapter for the selected phase-7 backend (`webrtc-rs`).
 ///
 /// During the library-selection phase this delegates to the deterministic stub
@@ -33,17 +50,20 @@ const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 #[derive(Debug, Default)]
 pub(super) struct WebRtcRsTransportAdapter {
     fallback: StubWebRtcAdapter,
+    transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
 }
 
 impl TransportAdapter for WebRtcRsTransportAdapter {
     fn transport_bootstrap_payload(
         &self,
+        session_id: &SessionId,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
         let payload = self
             .fallback
-            .transport_bootstrap_payload(router_capabilities)?;
+            .transport_bootstrap_payload(session_id, router_capabilities)?;
         validate_bootstrap_payload(&payload)?;
+        self.mark_bootstrap_sent(session_id)?;
         Ok(payload)
     }
 
@@ -54,13 +74,75 @@ impl TransportAdapter for WebRtcRsTransportAdapter {
         dtls_parameters: &DtlsParameters,
     ) -> Result<(), TransportAdapterError> {
         validate_dtls_parameters(dtls_parameters)?;
+        self.ensure_connect_transition(session_id, direction)?;
         debug!(
             ?direction,
             session_id = ?session_id,
-            "validated DTLS parameters before placeholder webrtc-rs transport connect"
+            "validated DTLS parameters and transport lifecycle state before placeholder webrtc-rs connect"
         );
         self.fallback
-            .connect_transport(session_id, direction, dtls_parameters)
+            .connect_transport(session_id, direction, dtls_parameters)?;
+        self.mark_connected(session_id, direction)?;
+        Ok(())
+    }
+}
+
+impl WebRtcRsTransportAdapter {
+    fn mark_bootstrap_sent(&self, session_id: &SessionId) -> Result<(), TransportAdapterError> {
+        let Ok(mut states) = self.transport_states.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        for direction in [
+            TransportConnectDirection::Upload,
+            TransportConnectDirection::Download,
+        ] {
+            states.insert(
+                TransportStateKey {
+                    session_id: session_id.clone(),
+                    direction,
+                },
+                TransportLifecycleState::BootstrapSent,
+            );
+        }
+        Ok(())
+    }
+
+    fn ensure_connect_transition(
+        &self,
+        session_id: &SessionId,
+        direction: TransportConnectDirection,
+    ) -> Result<(), TransportAdapterError> {
+        let key = TransportStateKey {
+            session_id: session_id.clone(),
+            direction,
+        };
+        let Ok(states) = self.transport_states.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        match states.get(&key) {
+            Some(TransportLifecycleState::BootstrapSent) => Ok(()),
+            Some(TransportLifecycleState::Connected) => Err(TransportAdapterError::InvalidInput),
+            None => Err(TransportAdapterError::TransportUnavailable),
+        }
+    }
+
+    fn mark_connected(
+        &self,
+        session_id: &SessionId,
+        direction: TransportConnectDirection,
+    ) -> Result<(), TransportAdapterError> {
+        let key = TransportStateKey {
+            session_id: session_id.clone(),
+            direction,
+        };
+        let Ok(mut states) = self.transport_states.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(state) = states.get_mut(&key) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        *state = TransportLifecycleState::Connected;
+        Ok(())
     }
 }
 
@@ -190,6 +272,7 @@ fn extract_candidate_u64_field(
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
     use serde_json::json;
 
     use super::{WebRtcRsTransportAdapter, validate_bootstrap_payload, validate_dtls_parameters};
@@ -202,14 +285,19 @@ mod tests {
             shared::SessionId,
             webrtc::{
                 DtlsParameters, IceCandidate, IceParameters, PublishOptions,
-                PublishOptionsByMediaKind, RtpCapabilities, SctpParameters, TransportBootstrap,
+                PublishOptionsByMediaKind, RtpCapabilities as WireRtpCapabilities, SctpParameters,
+                TransportBootstrap,
             },
         },
     };
 
+    fn empty_router_capabilities() -> RouterRtpCapabilities {
+        RouterRtpCapabilities::new(vec![], vec![])
+    }
+
     fn sample_bootstrap_payload(candidate: IceCandidate) -> CurrentTransportBootstrapPayload {
         CurrentTransportBootstrapPayload {
-            router_capabilities: RtpCapabilities(json!({
+            router_capabilities: WireRtpCapabilities(json!({
                 "codecs": [],
                 "headerExtensions": []
             })),
@@ -320,5 +408,76 @@ mod tests {
             })),
         );
         assert_eq!(result, Err(TransportAdapterError::InvalidInput));
+    }
+
+    #[test]
+    fn webrtc_rs_transport_connect_requires_bootstrap_first() {
+        let adapter = WebRtcRsTransportAdapter::default();
+        let result = adapter.connect_transport(
+            &SessionId::Integer(8),
+            TransportConnectDirection::Upload,
+            &DtlsParameters(json!({
+                "role": "client",
+                "fingerprints": [{
+                    "algorithm": "sha-256",
+                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+                }]
+            })),
+        );
+        assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
+    }
+
+    #[test]
+    fn webrtc_rs_transport_connect_succeeds_after_bootstrap() {
+        let adapter = WebRtcRsTransportAdapter::default();
+        let session_id = SessionId::Integer(9);
+        let bootstrap_result =
+            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        assert!(bootstrap_result.is_ok());
+        let connect_result = adapter.connect_transport(
+            &session_id,
+            TransportConnectDirection::Upload,
+            &DtlsParameters(json!({
+                "role": "client",
+                "fingerprints": [{
+                    "algorithm": "sha-256",
+                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+                }]
+            })),
+        );
+        assert_eq!(connect_result, Ok(()));
+    }
+
+    #[test]
+    fn webrtc_rs_transport_connect_rejects_duplicate_direction_connect() {
+        let adapter = WebRtcRsTransportAdapter::default();
+        let session_id = SessionId::Integer(10);
+        let bootstrap_result =
+            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        assert!(bootstrap_result.is_ok());
+        let first_connect = adapter.connect_transport(
+            &session_id,
+            TransportConnectDirection::Upload,
+            &DtlsParameters(json!({
+                "role": "client",
+                "fingerprints": [{
+                    "algorithm": "sha-256",
+                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+                }]
+            })),
+        );
+        assert_eq!(first_connect, Ok(()));
+        let second_connect = adapter.connect_transport(
+            &session_id,
+            TransportConnectDirection::Upload,
+            &DtlsParameters(json!({
+                "role": "client",
+                "fingerprints": [{
+                    "algorithm": "sha-256",
+                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+                }]
+            })),
+        );
+        assert_eq!(second_connect, Err(TransportAdapterError::InvalidInput));
     }
 }

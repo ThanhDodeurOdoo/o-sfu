@@ -81,6 +81,7 @@ impl StubWebRtcAdapter {
 impl TransportAdapter for StubWebRtcAdapter {
     fn transport_bootstrap_payload(
         &self,
+        _session_id: &SessionId,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::BootstrapRequested);
@@ -150,7 +151,7 @@ impl StubBusSession {
         let router_capabilities = self.channel.router_rtp_capabilities().await;
         let Ok(bootstrap_payload) = self
             .transport_adapter
-            .transport_bootstrap_payload(&router_capabilities)
+            .transport_bootstrap_payload(&self.session_id, &router_capabilities)
         else {
             return Err(());
         };

@@ -4,7 +4,7 @@ use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload, shared::SessionId, webrtc::DtlsParameters,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TransportConnectDirection {
     Upload,
     Download,
@@ -25,6 +25,7 @@ pub(crate) trait TransportAdapter: Debug + Send + Sync {
     /// Build the `INIT_TRANSPORTS` payload for a newly authenticated session.
     fn transport_bootstrap_payload(
         &self,
+        session_id: &SessionId,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError>;
 
