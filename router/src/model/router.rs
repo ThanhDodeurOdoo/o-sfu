@@ -111,7 +111,7 @@ impl Router {
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
-    pub fn add_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
+    pub fn add_consumer(&mut self, mut consumer: Consumer) -> Result<(), RouterError> {
         let consumer_id = consumer.id();
         let transport_id = consumer.transport_id();
         let producer_id = consumer.producer_id();
@@ -141,6 +141,7 @@ impl Router {
         if self.consumers.contains_key(&consumer_id) {
             return Err(RouterError::DuplicateConsumer(consumer_id));
         }
+        consumer.set_producer_paused(producer.paused());
         self.consumers.insert(consumer_id, consumer);
         self.transport_consumers
             .entry(transport_id)
@@ -150,6 +151,47 @@ impl Router {
             .entry(producer_id)
             .or_default()
             .insert(consumer_id);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    pub fn set_producer_paused(
+        &mut self,
+        producer_id: ProducerId,
+        paused: bool,
+    ) -> Result<(), RouterError> {
+        let Some(producer) = self.producers.get_mut(&producer_id) else {
+            return Err(RouterError::MissingProducer(producer_id));
+        };
+        producer.set_paused(paused);
+
+        let consumer_ids: Vec<_> = self
+            .producer_consumers
+            .get(&producer_id)
+            .map_or_else(Vec::new, |ids| ids.iter().copied().collect());
+        for consumer_id in consumer_ids {
+            if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
+                consumer.set_producer_paused(paused);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
+    pub fn set_consumer_paused(
+        &mut self,
+        consumer_id: ConsumerId,
+        paused: bool,
+    ) -> Result<(), RouterError> {
+        let Some(consumer) = self.consumers.get_mut(&consumer_id) else {
+            return Err(RouterError::MissingConsumer(consumer_id));
+        };
+        consumer.set_paused(paused);
         Ok(())
     }
 

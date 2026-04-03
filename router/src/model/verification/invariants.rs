@@ -16,6 +16,7 @@ impl<
             && self.references_are_valid()
             && self.transport_directions_are_valid()
             && self.consumer_media_matches_producer()
+            && self.consumer_pause_shadows_producer()
     }
 
     fn session_ids_are_unique(&self) -> bool {
@@ -140,6 +141,18 @@ impl<
                         consumer.media_kind() != producer.media_kind()
                             || consumer.stream_type() != producer.stream_type()
                     })
+            }) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn consumer_pause_shadows_producer(&self) -> bool {
+        for consumer in &self.consumers {
+            if consumer.is_some_and(|consumer| {
+                self.producer_by_id(consumer.producer_id())
+                    .is_some_and(|producer| consumer.producer_paused() != producer.paused())
             }) {
                 return false;
             }

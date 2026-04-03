@@ -112,7 +112,7 @@ impl<
     /// stream type does not match its source producer,
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
-    pub(crate) fn add_consumer(&mut self, consumer: Consumer) -> Result<(), ProofRouterError> {
+    pub(crate) fn add_consumer(&mut self, mut consumer: Consumer) -> Result<(), ProofRouterError> {
         let Some(transport) = self.transport_by_id(consumer.transport_id()) else {
             return Err(RouterError::MissingTransport(consumer.transport_id()).into());
         };
@@ -141,7 +141,47 @@ impl<
         if self.contains_consumer(consumer.id()) {
             return Err(RouterError::DuplicateConsumer(consumer.id()).into());
         }
+        consumer.set_producer_paused(producer.paused());
         self.insert_consumer(consumer)
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    pub(crate) fn set_producer_paused(
+        &mut self,
+        producer_id: ProducerId,
+        paused: bool,
+    ) -> Result<(), ProofRouterError> {
+        let Some(producer) = self.producer_by_id_mut(producer_id) else {
+            return Err(RouterError::MissingProducer(producer_id).into());
+        };
+        producer.set_paused(paused);
+
+        for consumer in &mut self.consumers {
+            if let Some(consumer) = consumer.as_mut()
+                && consumer.producer_id() == producer_id
+            {
+                consumer.set_producer_paused(paused);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
+    pub(crate) fn set_consumer_paused(
+        &mut self,
+        consumer_id: ConsumerId,
+        paused: bool,
+    ) -> Result<(), ProofRouterError> {
+        let Some(consumer) = self.consumer_by_id_mut(consumer_id) else {
+            return Err(RouterError::MissingConsumer(consumer_id).into());
+        };
+        consumer.set_paused(paused);
+        Ok(())
     }
 
     /// # Errors
@@ -255,6 +295,20 @@ impl<
                 *slot = None;
             }
         }
+    }
+
+    fn producer_by_id_mut(&mut self, producer_id: ProducerId) -> Option<&mut Producer> {
+        self.producers.iter_mut().find_map(|slot| {
+            slot.as_mut()
+                .filter(|producer| producer.id() == producer_id)
+        })
+    }
+
+    fn consumer_by_id_mut(&mut self, consumer_id: ConsumerId) -> Option<&mut Consumer> {
+        self.consumers.iter_mut().find_map(|slot| {
+            slot.as_mut()
+                .filter(|consumer| consumer.id() == consumer_id)
+        })
     }
 
     fn push_removed_id<T: Copy>(removed_ids: &mut [Option<T>], value: T) {

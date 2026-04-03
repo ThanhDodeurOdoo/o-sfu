@@ -293,3 +293,255 @@ fn consumers_must_match_their_producer_stream_type() {
     );
     assert_router_is_consistent(&router);
 }
+
+#[test]
+fn new_consumers_inherit_their_producer_pause_state() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
+
+    assert_eq!(
+        router.add_consumer(Consumer::new(
+            ConsumerId(400),
+            ProducerId(300),
+            TransportId(200),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+
+    let consumer = router.consumers.get(&ConsumerId(400));
+    assert!(consumer.is_some());
+    let Some(consumer) = consumer else {
+        return;
+    };
+    assert!(!consumer.paused());
+    assert!(consumer.producer_paused());
+    assert_router_is_consistent(&router);
+}
+
+#[test]
+fn pausing_a_producer_updates_all_dependent_consumers() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(Session::new(SessionId(30))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(201),
+            SessionId(30),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Video,
+            StreamType::Camera,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_consumer(Consumer::new(
+            ConsumerId(400),
+            ProducerId(300),
+            TransportId(200),
+            MediaKind::Video,
+            StreamType::Camera,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_consumer(Consumer::new(
+            ConsumerId(401),
+            ProducerId(300),
+            TransportId(201),
+            MediaKind::Video,
+            StreamType::Camera,
+        )),
+        Ok(())
+    );
+
+    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
+
+    let producer = router.producers.get(&ProducerId(300));
+    assert!(producer.is_some());
+    let Some(producer) = producer else {
+        return;
+    };
+    assert!(producer.paused());
+    assert!(
+        router
+            .consumers
+            .get(&ConsumerId(400))
+            .is_some_and(Consumer::producer_paused)
+    );
+    assert!(
+        router
+            .consumers
+            .get(&ConsumerId(401))
+            .is_some_and(Consumer::producer_paused)
+    );
+    assert_router_is_consistent(&router);
+}
+
+#[test]
+fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_consumer(Consumer::new(
+            ConsumerId(400),
+            ProducerId(300),
+            TransportId(200),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
+
+    assert_eq!(router.set_producer_paused(ProducerId(300), false), Ok(()));
+
+    assert!(
+        router
+            .producers
+            .get(&ProducerId(300))
+            .is_some_and(|producer| !producer.paused())
+    );
+    assert!(
+        router
+            .consumers
+            .get(&ConsumerId(400))
+            .is_some_and(|consumer| !consumer.producer_paused())
+    );
+    assert_router_is_consistent(&router);
+}
+
+#[test]
+fn pausing_a_consumer_only_changes_its_local_pause_flag() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_consumer(Consumer::new(
+            ConsumerId(400),
+            ProducerId(300),
+            TransportId(200),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+
+    assert_eq!(router.set_consumer_paused(ConsumerId(400), true), Ok(()));
+
+    let consumer = router.consumers.get(&ConsumerId(400));
+    assert!(consumer.is_some());
+    let Some(consumer) = consumer else {
+        return;
+    };
+    assert!(consumer.paused());
+    assert!(!consumer.producer_paused());
+    assert_router_is_consistent(&router);
+}

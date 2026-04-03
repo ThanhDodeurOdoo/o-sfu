@@ -5,6 +5,7 @@ use crate::{
 };
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
+type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;
 
 #[kani::proof]
 fn join_session_preserves_invariants() {
@@ -268,6 +269,158 @@ fn consumers_are_rejected_when_stream_type_differs_from_producer() {
                 actual: StreamType::Screen,
             },
         )),
+    );
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn new_consumers_inherit_their_producer_pause_shadow() {
+    let mut router = ProofRouter::new(RouterId(0));
+
+    let _ = router.join_session(Session::new(SessionId(1)));
+    let _ = router.join_session(Session::new(SessionId(2)));
+    let _ = router.open_transport(Transport::new(
+        TransportId(10),
+        SessionId(1),
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        TransportId(20),
+        SessionId(2),
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        ProducerId(30),
+        TransportId(10),
+        MediaKind::Audio,
+        StreamType::Audio,
+    ));
+    let _ = router.set_producer_paused(ProducerId(30), true);
+    let _ = router.add_consumer(Consumer::new(
+        ConsumerId(40),
+        ProducerId(30),
+        TransportId(20),
+        MediaKind::Audio,
+        StreamType::Audio,
+    ));
+
+    assert!(
+        router
+            .consumers
+            .iter()
+            .flatten()
+            .all(|consumer| consumer.producer_paused())
+    );
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn pausing_a_producer_updates_all_dependent_consumers() {
+    let mut router = PauseProofRouter::new(RouterId(0));
+
+    let _ = router.join_session(Session::new(SessionId(1)));
+    let _ = router.join_session(Session::new(SessionId(2)));
+    let _ = router.join_session(Session::new(SessionId(3)));
+    let _ = router.open_transport(Transport::new(
+        TransportId(10),
+        SessionId(1),
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        TransportId(20),
+        SessionId(2),
+        TransportDirection::Send,
+    ));
+    let _ = router.open_transport(Transport::new(
+        TransportId(21),
+        SessionId(3),
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        ProducerId(30),
+        TransportId(10),
+        MediaKind::Video,
+        StreamType::Camera,
+    ));
+    let _ = router.add_consumer(Consumer::new(
+        ConsumerId(40),
+        ProducerId(30),
+        TransportId(20),
+        MediaKind::Video,
+        StreamType::Camera,
+    ));
+    let _ = router.add_consumer(Consumer::new(
+        ConsumerId(41),
+        ProducerId(30),
+        TransportId(21),
+        MediaKind::Video,
+        StreamType::Camera,
+    ));
+
+    let _ = router.set_producer_paused(ProducerId(30), true);
+
+    assert!(
+        router
+            .consumers
+            .iter()
+            .flatten()
+            .all(|consumer| consumer.producer_paused())
+    );
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
+    let mut router = PauseProofRouter::new(RouterId(0));
+
+    let _ = router.join_session(Session::new(SessionId(1)));
+    let _ = router.join_session(Session::new(SessionId(2)));
+    let _ = router.join_session(Session::new(SessionId(3)));
+    let _ = router.open_transport(Transport::new(
+        TransportId(10),
+        SessionId(1),
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        TransportId(20),
+        SessionId(2),
+        TransportDirection::Send,
+    ));
+    let _ = router.open_transport(Transport::new(
+        TransportId(21),
+        SessionId(3),
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        ProducerId(30),
+        TransportId(10),
+        MediaKind::Video,
+        StreamType::Camera,
+    ));
+    let _ = router.add_consumer(Consumer::new(
+        ConsumerId(40),
+        ProducerId(30),
+        TransportId(20),
+        MediaKind::Video,
+        StreamType::Camera,
+    ));
+    let _ = router.add_consumer(Consumer::new(
+        ConsumerId(41),
+        ProducerId(30),
+        TransportId(21),
+        MediaKind::Video,
+        StreamType::Camera,
+    ));
+    let _ = router.set_producer_paused(ProducerId(30), true);
+
+    let _ = router.set_producer_paused(ProducerId(30), false);
+
+    assert!(
+        router
+            .consumers
+            .iter()
+            .flatten()
+            .all(|consumer| !consumer.producer_paused())
     );
     assert!(router.satisfies_invariants());
 }

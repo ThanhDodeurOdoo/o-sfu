@@ -7,6 +7,8 @@ pub struct Consumer {
     transport_id: TransportId,
     media_kind: MediaKind,
     stream_type: StreamType,
+    paused: bool,
+    producer_paused: bool,
 }
 
 impl Consumer {
@@ -24,6 +26,8 @@ impl Consumer {
             transport_id,
             media_kind,
             stream_type,
+            paused: false,
+            producer_paused: false,
         }
     }
 
@@ -50,5 +54,23 @@ impl Consumer {
     #[must_use]
     pub fn stream_type(&self) -> StreamType {
         self.stream_type
+    }
+
+    #[must_use]
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    #[must_use]
+    pub fn producer_paused(&self) -> bool {
+        self.producer_paused
+    }
+
+    pub(super) fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    pub(super) fn set_producer_paused(&mut self, producer_paused: bool) {
+        self.producer_paused = producer_paused;
     }
 }

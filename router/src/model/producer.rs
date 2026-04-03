@@ -6,6 +6,7 @@ pub struct Producer {
     transport_id: TransportId,
     media_kind: MediaKind,
     stream_type: StreamType,
+    paused: bool,
 }
 
 impl Producer {
@@ -21,6 +22,7 @@ impl Producer {
             transport_id,
             media_kind,
             stream_type,
+            paused: false,
         }
     }
 
@@ -42,5 +44,14 @@ impl Producer {
     #[must_use]
     pub fn stream_type(&self) -> StreamType {
         self.stream_type
+    }
+
+    #[must_use]
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    pub(super) fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
     }
 }

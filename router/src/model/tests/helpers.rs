@@ -132,5 +132,16 @@ fn assert_producer_consumer_index(router: &Router) {
             return;
         };
         assert!(producer_consumer_ids.contains(consumer_id));
+        let producer = router.producers.get(&consumer.producer_id());
+        assert!(
+            producer.is_some(),
+            "missing producer {:?} for consumer {:?}",
+            consumer.producer_id(),
+            consumer_id
+        );
+        let Some(producer) = producer else {
+            return;
+        };
+        assert_eq!(consumer.producer_paused(), producer.paused());
     }
 }
