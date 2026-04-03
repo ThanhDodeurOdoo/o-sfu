@@ -5,8 +5,8 @@ use crate::rfc::webrtc;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     webrtc::{
-        DtlsParameters, IceCandidate, IceParameters, PublishOptions, PublishOptionsByMediaKind,
-        RtpCapabilities, SctpParameters, TransportBootstrap,
+        DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
+        PublishOptionsByMediaKind, RtpCapabilities, SctpParameters, TransportBootstrap,
     },
 };
 
@@ -153,21 +153,21 @@ fn stub_transport_bootstrap(id: &str) -> TransportBootstrap {
             "password": "pwd",
             "iceLite": true
         })),
-        ice_candidates: vec![IceCandidate(json!({
-            "foundation": "foundation",
-            "priority": 1,
-            "ip": "203.0.113.10",
-            "protocol": webrtc::ICE_TRANSPORT_UDP,
-            "port": 40000,
-            "type": webrtc::ICE_CANDIDATE_TYPE_HOST
-        }))],
-        dtls_parameters: DtlsParameters(json!({
-            "role": "auto",
-            "fingerprints": [{
-                "algorithm": "sha-256",
-                "value": "AA:BB:CC"
-            }]
-        })),
+        ice_candidates: vec![IceCandidate {
+            foundation: String::from("foundation"),
+            priority: 1,
+            ip: String::from("203.0.113.10"),
+            protocol: String::from(webrtc::ICE_TRANSPORT_UDP),
+            port: 40_000,
+            candidate_type: String::from(webrtc::ICE_CANDIDATE_TYPE_HOST),
+        }],
+        dtls_parameters: DtlsParameters {
+            role: String::from("auto"),
+            fingerprints: vec![DtlsFingerprint {
+                algorithm: String::from("sha-256"),
+                value: String::from("AA:BB:CC"),
+            }],
+        },
         sctp_parameters: SctpParameters(json!({
             "port": 5000,
             "OS": 1024,

@@ -241,7 +241,7 @@ mod tests {
         SessionInfo, SessionPermissions, StopCode, StreamType,
     };
     use crate::signaling::webrtc::{
-        DtlsParameters, IceCandidate, IceParameters, MediaKind, PublishOptions,
+        DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, MediaKind, PublishOptions,
         PublishOptionsByMediaKind, RtpCapabilities, RtpParameters, SctpParameters,
         TransportBootstrap,
     };
@@ -263,21 +263,21 @@ mod tests {
                 "password": "pwd",
                 "iceLite": true
             })),
-            ice_candidates: vec![IceCandidate(json!({
-                "foundation": "foundation",
-                "priority": 1,
-                "ip": "203.0.113.10",
-                "protocol": "udp",
-                "port": 40000,
-                "type": "host"
-            }))],
-            dtls_parameters: DtlsParameters(json!({
-                "role": "auto",
-                "fingerprints": [{
-                    "algorithm": "sha-256",
-                    "value": "AA:BB:CC"
-                }]
-            })),
+            ice_candidates: vec![IceCandidate {
+                foundation: String::from("foundation"),
+                priority: 1,
+                ip: String::from("203.0.113.10"),
+                protocol: String::from("udp"),
+                port: 40_000,
+                candidate_type: String::from("host"),
+            }],
+            dtls_parameters: DtlsParameters {
+                role: String::from("auto"),
+                fingerprints: vec![DtlsFingerprint {
+                    algorithm: String::from("sha-256"),
+                    value: String::from("AA:BB:CC"),
+                }],
+            },
             sctp_parameters: SctpParameters(json!({
                 "port": 5000,
                 "OS": 1024,
@@ -423,14 +423,26 @@ mod tests {
     #[test]
     fn current_client_requests_round_trip() -> serde_json::Result<()> {
         let connect_payload = CurrentTransportConnectPayload {
-            dtls_parameters: DtlsParameters(json!({ "role": "client" })),
+            dtls_parameters: DtlsParameters {
+                role: String::from("client"),
+                fingerprints: vec![DtlsFingerprint {
+                    algorithm: String::from("sha-256"),
+                    value: String::from("AA:BB:CC"),
+                }],
+            },
         };
         assert_round_trip(
             &CurrentClientRequest::ConnectUploadTransport(connect_payload.clone()),
             json!({
                 "name": "CONNECT_CTS_TRANSPORT",
                 "payload": {
-                    "dtlsParameters": { "role": "client" }
+                    "dtlsParameters": {
+                        "role": "client",
+                        "fingerprints": [{
+                            "algorithm": "sha-256",
+                            "value": "AA:BB:CC"
+                        }]
+                    }
                 }
             }),
         )?;
@@ -440,7 +452,13 @@ mod tests {
             json!({
                 "name": "CONNECT_STC_TRANSPORT",
                 "payload": {
-                    "dtlsParameters": { "role": "client" }
+                    "dtlsParameters": {
+                        "role": "client",
+                        "fingerprints": [{
+                            "algorithm": "sha-256",
+                            "value": "AA:BB:CC"
+                        }]
+                    }
                 }
             }),
         )?;

@@ -99,7 +99,7 @@ impl TransportAdapter for StubWebRtcAdapter {
             direction,
             dtls_parameters: dtls_parameters.clone(),
         });
-        if dtls_parameters.0.is_null() {
+        if dtls_parameters.role.is_empty() || dtls_parameters.fingerprints.is_empty() {
             self.record_event(StubWebRtcEvent::TransportConnectRejected {
                 session_id: session_id.clone(),
                 direction,

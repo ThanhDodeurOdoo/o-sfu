@@ -9,13 +9,34 @@ macro_rules! opaque_json_type {
     };
 }
 
-opaque_json_type!(DtlsParameters);
-opaque_json_type!(IceCandidate);
 opaque_json_type!(IceParameters);
 opaque_json_type!(PublishOptions);
 opaque_json_type!(RtpCapabilities);
 opaque_json_type!(RtpParameters);
 opaque_json_type!(SctpParameters);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtlsFingerprint {
+    pub algorithm: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtlsParameters {
+    pub role: String,
+    pub fingerprints: Vec<DtlsFingerprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IceCandidate {
+    pub foundation: String,
+    pub priority: u64,
+    pub ip: String,
+    pub protocol: String,
+    pub port: u64,
+    #[serde(rename = "type")]
+    pub candidate_type: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaKind {

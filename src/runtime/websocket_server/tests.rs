@@ -40,7 +40,7 @@ mod websocket_server_tests {
             },
             http::CreateChannelQuery,
             shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
-            webrtc::{DtlsParameters, MediaKind, RtpParameters},
+            webrtc::{DtlsFingerprint, DtlsParameters, MediaKind, RtpParameters},
         },
     };
 
@@ -288,6 +288,25 @@ mod websocket_server_tests {
         let (mut websocket, _startup) = authenticate_and_read_startup(server, &token).await?;
         acknowledge_transport_bootstrap(&mut websocket).await?;
         Some(websocket)
+    }
+
+    fn sample_client_dtls_parameters() -> DtlsParameters {
+        DtlsParameters {
+            role: String::from("client"),
+            fingerprints: vec![DtlsFingerprint {
+                algorithm: String::from("sha-256"),
+                value: String::from(
+                    "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+                ),
+            }],
+        }
+    }
+
+    fn invalid_dtls_parameters_for_stub_rejection() -> DtlsParameters {
+        DtlsParameters {
+            role: String::new(),
+            fingerprints: vec![],
+        }
     }
 
     #[tokio::test]
@@ -688,9 +707,7 @@ mod websocket_server_tests {
         let upload_response = send_bus_request_and_read_response(
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
-                dtls_parameters: DtlsParameters(serde_json::json!({
-                    "role": "client"
-                })),
+                dtls_parameters: sample_client_dtls_parameters(),
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 1),
         )
@@ -699,9 +716,7 @@ mod websocket_server_tests {
         let download_response = send_bus_request_and_read_response(
             &mut websocket,
             CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
-                dtls_parameters: DtlsParameters(serde_json::json!({
-                    "role": "client"
-                })),
+                dtls_parameters: sample_client_dtls_parameters(),
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 2),
         )
@@ -718,9 +733,7 @@ mod websocket_server_tests {
             StubWebRtcEvent::TransportConnectRequested {
                 session_id: session_id.clone(),
                 direction: TransportConnectDirection::Upload,
-                dtls_parameters: DtlsParameters(serde_json::json!({
-                    "role": "client"
-                })),
+                dtls_parameters: sample_client_dtls_parameters(),
             },
             StubWebRtcEvent::TransportConnected {
                 session_id: session_id.clone(),
@@ -729,9 +742,7 @@ mod websocket_server_tests {
             StubWebRtcEvent::TransportConnectRequested {
                 session_id: session_id.clone(),
                 direction: TransportConnectDirection::Download,
-                dtls_parameters: DtlsParameters(serde_json::json!({
-                    "role": "client"
-                })),
+                dtls_parameters: sample_client_dtls_parameters(),
             },
             StubWebRtcEvent::TransportConnected {
                 session_id,
@@ -770,7 +781,7 @@ mod websocket_server_tests {
         let connect_response = send_bus_request_and_read_response(
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
-                dtls_parameters: DtlsParameters(serde_json::Value::Null),
+                dtls_parameters: invalid_dtls_parameters_for_stub_rejection(),
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 12, 1),
         )
@@ -787,7 +798,7 @@ mod websocket_server_tests {
             StubWebRtcEvent::TransportConnectRequested {
                 session_id: session_id.clone(),
                 direction: TransportConnectDirection::Upload,
-                dtls_parameters: DtlsParameters(serde_json::Value::Null),
+                dtls_parameters: invalid_dtls_parameters_for_stub_rejection(),
             },
             StubWebRtcEvent::TransportConnectRejected {
                 session_id,
@@ -825,9 +836,7 @@ mod websocket_server_tests {
         let connect_response = send_bus_request_and_read_response(
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
-                dtls_parameters: DtlsParameters(serde_json::json!({
-                    "role": "client"
-                })),
+                dtls_parameters: sample_client_dtls_parameters(),
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 0),
         )

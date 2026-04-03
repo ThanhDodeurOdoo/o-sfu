@@ -42,5 +42,10 @@ cargo kani -p o-sfu-router
 - explain router layer
 - general architecture (mostly based on odoo sfu, for compatibility reason)
 
-"rust" and "tests" github workflows have overlap, "rust" exists because it's the default one from github, will probably remove later 
+## Nice to have:
+- Good docstring or "readme" for each feature directory (eg: websocket_server, web_rtc, http_server,...) explaining the role of each component
+
+## TODO cleanup later
+
+- "rust" and "tests" github workflows have overlap, "rust" exists because it's the default one from github, will probably remove later 
 The router and rfc sections may be split into separate crates later (but too annoying for now)

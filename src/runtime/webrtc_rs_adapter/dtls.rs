@@ -1,7 +1,7 @@
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 use tracing::{error, trace, warn};
 
-use crate::signaling::webrtc::DtlsParameters;
+use crate::signaling::webrtc::{DtlsFingerprint, DtlsParameters};
 use o_sfu_router::RfcReference;
 
 const ROLE_PATH: &str = "$.role";
@@ -78,75 +78,15 @@ impl ParsedDtlsParameters {
 pub(super) fn parse_dtls_parameters(
     raw_dtls_parameters: &DtlsParameters,
 ) -> DtlsParseResult<ParsedDtlsParameters> {
+    let raw_json =
+        serde_json::to_string(raw_dtls_parameters).unwrap_or_else(|_error| String::from("{}"));
     trace!(
-        dtls_parameters = %raw_dtls_parameters.0,
+        dtls_parameters = %raw_json,
         "parsing incoming DTLS parameters"
     );
-    let raw_json = raw_dtls_parameters.0.to_string();
-    let Some(dtls) = raw_dtls_parameters.0.as_object() else {
-        let diagnostic = invalid_input(
-            "DTLS parameters payload must be a JSON object",
-            String::from("object"),
-            raw_dtls_parameters.0.to_string(),
-            "$",
-            RFC_5763_SECTION_5,
-            &raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
+    let role = parse_role(raw_dtls_parameters.role.as_str(), &raw_json)?;
 
-    let Some(role_value) = dtls.get("role") else {
-        let diagnostic = invalid_input(
-            "DTLS role is missing",
-            String::from("auto|client|server"),
-            String::from("<missing>"),
-            ROLE_PATH,
-            RFC_5763_SECTION_5,
-            &raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(role_token) = role_value.as_str() else {
-        let diagnostic = invalid_input(
-            "DTLS role must be a string",
-            String::from("auto|client|server"),
-            role_value.to_string(),
-            ROLE_PATH,
-            RFC_5763_SECTION_5,
-            &raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let role = parse_role(role_token, &raw_json)?;
-
-    let Some(fingerprints_value) = dtls.get("fingerprints") else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprints array is missing",
-            String::from("non-empty array"),
-            String::from("<missing>"),
-            FINGERPRINTS_PATH,
-            RFC_4572_SECTION_5,
-            &raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(fingerprints_array) = fingerprints_value.as_array() else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprints must be an array",
-            String::from("non-empty array"),
-            fingerprints_value.to_string(),
-            FINGERPRINTS_PATH,
-            RFC_4572_SECTION_5,
-            &raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    if fingerprints_array.is_empty() {
+    if raw_dtls_parameters.fingerprints.is_empty() {
         let diagnostic = invalid_input(
             "DTLS fingerprints array cannot be empty",
             String::from("at least one fingerprint"),
@@ -159,9 +99,9 @@ pub(super) fn parse_dtls_parameters(
         return Err(Box::new(diagnostic));
     }
 
-    let mut fingerprints = Vec::with_capacity(fingerprints_array.len());
-    for fingerprint_value in fingerprints_array {
-        let fingerprint = parse_fingerprint(fingerprint_value, &raw_json)?;
+    let mut fingerprints = Vec::with_capacity(raw_dtls_parameters.fingerprints.len());
+    for fingerprint in &raw_dtls_parameters.fingerprints {
+        let fingerprint = parse_fingerprint(fingerprint, &raw_json)?;
         fingerprints.push(fingerprint);
     }
 
@@ -190,77 +130,15 @@ fn parse_role(role_token: &str, raw_json: &str) -> DtlsParseResult<ParsedDtlsRol
 }
 
 fn parse_fingerprint(
-    fingerprint_value: &serde_json::Value,
+    fingerprint: &DtlsFingerprint,
     raw_json: &str,
 ) -> DtlsParseResult<ParsedDtlsFingerprint> {
-    let Some(fingerprint) = fingerprint_value.as_object() else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprint entry must be an object",
-            String::from("{algorithm,value}"),
-            fingerprint_value.to_string(),
-            FINGERPRINTS_PATH,
-            RFC_4572_SECTION_5,
-            raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-
-    let Some(algorithm_value) = fingerprint.get("algorithm") else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprint algorithm is missing",
-            String::from("sha-256"),
-            String::from("<missing>"),
-            "$.fingerprints[*].algorithm",
-            RFC_4572_SECTION_5,
-            raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(algorithm_token) = algorithm_value.as_str() else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprint algorithm must be a string",
-            String::from("sha-256"),
-            algorithm_value.to_string(),
-            "$.fingerprints[*].algorithm",
-            RFC_4572_SECTION_5,
-            raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let algorithm = parse_fingerprint_algorithm(algorithm_token, raw_json)?;
-
-    let Some(value_value) = fingerprint.get("value") else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprint value is missing",
-            String::from("colon-separated uppercase hex pairs"),
-            String::from("<missing>"),
-            "$.fingerprints[*].value",
-            RFC_4572_SECTION_5,
-            raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(value_token) = value_value.as_str() else {
-        let diagnostic = invalid_input(
-            "DTLS fingerprint value must be a string",
-            String::from("colon-separated uppercase hex pairs"),
-            value_value.to_string(),
-            "$.fingerprints[*].value",
-            RFC_4572_SECTION_5,
-            raw_json,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    validate_sha256_fingerprint(value_token, raw_json)?;
+    let algorithm = parse_fingerprint_algorithm(fingerprint.algorithm.as_str(), raw_json)?;
+    validate_sha256_fingerprint(fingerprint.value.as_str(), raw_json)?;
 
     Ok(ParsedDtlsFingerprint {
         algorithm,
-        value: value_token.to_owned(),
+        value: fingerprint.value.clone(),
     })
 }
 
@@ -396,22 +274,25 @@ fn log_diagnostic(diagnostic: &DtlsParseDiagnostic) {
 #[cfg(test)]
 mod tests {
     use o_sfu_router::ParseDiagnosticKind;
-    use serde_json::json;
 
     use super::{ParsedDtlsRole, parse_dtls_parameters};
-    use crate::signaling::webrtc::DtlsParameters;
+    use crate::signaling::webrtc::{DtlsFingerprint, DtlsParameters};
 
     const VALID_SHA256_FINGERPRINT: &str = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
 
+    fn sample_dtls_parameters(role: &str, algorithm: &str, value: &str) -> DtlsParameters {
+        DtlsParameters {
+            role: role.to_owned(),
+            fingerprints: vec![DtlsFingerprint {
+                algorithm: algorithm.to_owned(),
+                value: value.to_owned(),
+            }],
+        }
+    }
+
     #[test]
     fn parse_dtls_parameters_accepts_valid_sha256_payload() {
-        let dtls_parameters = DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": [{
-                "algorithm": "sha-256",
-                "value": VALID_SHA256_FINGERPRINT,
-            }]
-        }));
+        let dtls_parameters = sample_dtls_parameters("client", "sha-256", VALID_SHA256_FINGERPRINT);
         let result = parse_dtls_parameters(&dtls_parameters);
         assert!(result.is_ok());
         let Some(parsed) = result.ok() else {
@@ -422,8 +303,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_dtls_parameters_rejects_non_object_payload() {
-        let dtls_parameters = DtlsParameters(json!(true));
+    fn parse_dtls_parameters_rejects_empty_fingerprints_array() {
+        let dtls_parameters = DtlsParameters {
+            role: String::from("client"),
+            fingerprints: vec![],
+        };
         let result = parse_dtls_parameters(&dtls_parameters);
         assert!(result.is_err());
         let Some(diagnostic) = result.err() else {
@@ -432,19 +316,14 @@ mod tests {
         assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
-            "DTLS parameters payload must be a JSON object"
+            "DTLS fingerprints array cannot be empty"
         );
     }
 
     #[test]
     fn parse_dtls_parameters_rejects_unknown_role() {
-        let dtls_parameters = DtlsParameters(json!({
-            "role": "passive",
-            "fingerprints": [{
-                "algorithm": "sha-256",
-                "value": VALID_SHA256_FINGERPRINT,
-            }]
-        }));
+        let dtls_parameters =
+            sample_dtls_parameters("passive", "sha-256", VALID_SHA256_FINGERPRINT);
         let result = parse_dtls_parameters(&dtls_parameters);
         assert!(result.is_err());
         let Some(diagnostic) = result.err() else {
@@ -456,13 +335,11 @@ mod tests {
 
     #[test]
     fn parse_dtls_parameters_marks_sha1_as_unsupported() {
-        let dtls_parameters = DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": [{
-                "algorithm": "sha-1",
-                "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD",
-            }]
-        }));
+        let dtls_parameters = sample_dtls_parameters(
+            "client",
+            "sha-1",
+            "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD",
+        );
         let result = parse_dtls_parameters(&dtls_parameters);
         assert!(result.is_err());
         let Some(diagnostic) = result.err() else {
@@ -477,13 +354,7 @@ mod tests {
 
     #[test]
     fn parse_dtls_parameters_rejects_malformed_fingerprint() {
-        let dtls_parameters = DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": [{
-                "algorithm": "sha-256",
-                "value": "AA:BB:CC",
-            }]
-        }));
+        let dtls_parameters = sample_dtls_parameters("client", "sha-256", "AA:BB:CC");
         let result = parse_dtls_parameters(&dtls_parameters);
         assert!(result.is_err());
         let Some(diagnostic) = result.err() else {
@@ -498,13 +369,7 @@ mod tests {
 
     #[test]
     fn parse_dtls_parameters_preserves_replay_context() {
-        let dtls_parameters = DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": [{
-                "algorithm": "sha-256",
-                "value": "ZZ",
-            }]
-        }));
+        let dtls_parameters = sample_dtls_parameters("client", "sha-256", "ZZ");
         let result = parse_dtls_parameters(&dtls_parameters);
         assert!(result.is_err());
         let Some(diagnostic) = result.err() else {

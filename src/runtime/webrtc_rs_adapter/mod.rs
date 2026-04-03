@@ -24,12 +24,6 @@ mod parse_diagnostic;
 )]
 mod sdp;
 
-const CANDIDATE_FIELD_FOUNDATION: &str = "foundation";
-const CANDIDATE_FIELD_PRIORITY: &str = "priority";
-const CANDIDATE_FIELD_IP: &str = "ip";
-const CANDIDATE_FIELD_PROTOCOL: &str = "protocol";
-const CANDIDATE_FIELD_PORT: &str = "port";
-const CANDIDATE_FIELD_TYPE: &str = "type";
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +191,7 @@ fn validate_ice_candidates(
     candidates: &[IceCandidate],
 ) -> Result<(), TransportAdapterError> {
     for candidate in candidates {
-        let line = candidate_to_sdp_line(candidate)?;
+        let line = candidate_to_sdp_line(candidate);
         match ice::parse_ice_candidate(line.as_str()) {
             Ok(_parsed) => {}
             Err(diagnostic) => match diagnostic.kind() {
@@ -231,45 +225,16 @@ fn validate_ice_candidates(
     Ok(())
 }
 
-fn candidate_to_sdp_line(candidate: &IceCandidate) -> Result<String, TransportAdapterError> {
-    let Some(object) = candidate.0.as_object() else {
-        return Err(TransportAdapterError::InvalidInput);
-    };
-    let foundation = extract_candidate_string_field(object, CANDIDATE_FIELD_FOUNDATION)?;
-    let priority = extract_candidate_u64_field(object, CANDIDATE_FIELD_PRIORITY)?;
-    let ip = extract_candidate_string_field(object, CANDIDATE_FIELD_IP)?;
-    let protocol = extract_candidate_string_field(object, CANDIDATE_FIELD_PROTOCOL)?;
-    let port = extract_candidate_u64_field(object, CANDIDATE_FIELD_PORT)?;
-    let candidate_type = extract_candidate_string_field(object, CANDIDATE_FIELD_TYPE)?;
-    Ok(format!(
-        "candidate:{foundation} {CANDIDATE_COMPONENT_ID_RTP} {protocol} {priority} {ip} {port} typ {candidate_type}"
-    ))
-}
-
-fn extract_candidate_string_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<String, TransportAdapterError> {
-    let Some(value) = object.get(key) else {
-        return Err(TransportAdapterError::InvalidInput);
-    };
-    let Some(string) = value.as_str() else {
-        return Err(TransportAdapterError::InvalidInput);
-    };
-    Ok(string.to_owned())
-}
-
-fn extract_candidate_u64_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<u64, TransportAdapterError> {
-    let Some(value) = object.get(key) else {
-        return Err(TransportAdapterError::InvalidInput);
-    };
-    let Some(number) = value.as_u64() else {
-        return Err(TransportAdapterError::InvalidInput);
-    };
-    Ok(number)
+fn candidate_to_sdp_line(candidate: &IceCandidate) -> String {
+    format!(
+        "candidate:{} {CANDIDATE_COMPONENT_ID_RTP} {} {} {} {} typ {}",
+        candidate.foundation,
+        candidate.protocol,
+        candidate.priority,
+        candidate.ip,
+        candidate.port,
+        candidate.candidate_type,
+    )
 }
 
 #[cfg(test)]
@@ -286,7 +251,7 @@ mod tests {
             current_protocol::CurrentTransportBootstrapPayload,
             shared::SessionId,
             webrtc::{
-                DtlsParameters, IceCandidate, IceParameters, PublishOptions,
+                DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
                 PublishOptionsByMediaKind, RtpCapabilities as WireRtpCapabilities, SctpParameters,
                 TransportBootstrap,
             },
@@ -312,6 +277,29 @@ mod tests {
         }
     }
 
+    fn sample_sha256_dtls_parameters(role: &str) -> DtlsParameters {
+        DtlsParameters {
+            role: role.to_owned(),
+            fingerprints: vec![DtlsFingerprint {
+                algorithm: String::from("sha-256"),
+                value: String::from(
+                    "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+                ),
+            }],
+        }
+    }
+
+    fn sample_candidate(protocol: &str, port: u64) -> IceCandidate {
+        IceCandidate {
+            foundation: String::from("foundation"),
+            priority: 2_113_937_151,
+            ip: String::from("203.0.113.10"),
+            protocol: protocol.to_owned(),
+            port,
+            candidate_type: String::from("host"),
+        }
+    }
+
     fn sample_transport_bootstrap(id: &str, candidate: IceCandidate) -> TransportBootstrap {
         TransportBootstrap {
             id: id.to_owned(),
@@ -321,13 +309,7 @@ mod tests {
                 "iceLite": true
             })),
             ice_candidates: vec![candidate],
-            dtls_parameters: DtlsParameters(json!({
-                "role": "auto",
-                "fingerprints": [{
-                    "algorithm": "sha-256",
-                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-                }]
-            })),
+            dtls_parameters: sample_sha256_dtls_parameters("auto"),
             sctp_parameters: SctpParameters(json!({
                 "port": 5000,
                 "OS": 1024,
@@ -339,61 +321,41 @@ mod tests {
 
     #[test]
     fn validate_dtls_parameters_accepts_client_sha256_payload() {
-        let result = validate_dtls_parameters(&DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": [{
-                "algorithm": "sha-256",
-                "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-            }]
-        })));
+        let result = validate_dtls_parameters(&sample_sha256_dtls_parameters("client"));
         assert_eq!(result, Ok(()));
     }
 
     #[test]
     fn validate_dtls_parameters_maps_invalid_payload_to_invalid_input() {
-        let result = validate_dtls_parameters(&DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": []
-        })));
+        let result = validate_dtls_parameters(&DtlsParameters {
+            role: String::from("client"),
+            fingerprints: vec![],
+        });
         assert_eq!(result, Err(TransportAdapterError::InvalidInput));
     }
 
     #[test]
     fn validate_dtls_parameters_maps_unsupported_payload_to_unsupported_feature() {
-        let result = validate_dtls_parameters(&DtlsParameters(json!({
-            "role": "client",
-            "fingerprints": [{
-                "algorithm": "sha-1",
-                "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD"
-            }]
-        })));
+        let result = validate_dtls_parameters(&DtlsParameters {
+            role: String::from("client"),
+            fingerprints: vec![DtlsFingerprint {
+                algorithm: String::from("sha-1"),
+                value: String::from("AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD"),
+            }],
+        });
         assert_eq!(result, Err(TransportAdapterError::UnsupportedFeature));
     }
 
     #[test]
     fn validate_bootstrap_payload_accepts_supported_candidate_shape() {
-        let payload = sample_bootstrap_payload(IceCandidate(json!({
-            "foundation": "foundation",
-            "priority": 2_113_937_151_u64,
-            "ip": "203.0.113.10",
-            "protocol": "udp",
-            "port": 40_000_u64,
-            "type": "host"
-        })));
+        let payload = sample_bootstrap_payload(sample_candidate("udp", 40_000));
         let result = validate_bootstrap_payload(&payload);
         assert_eq!(result, Ok(()));
     }
 
     #[test]
     fn validate_bootstrap_payload_rejects_unsupported_candidate_shape() {
-        let payload = sample_bootstrap_payload(IceCandidate(json!({
-            "foundation": "foundation",
-            "priority": 2_113_937_151_u64,
-            "ip": "203.0.113.10",
-            "protocol": "tcp",
-            "port": 9_u64,
-            "type": "host"
-        })));
+        let payload = sample_bootstrap_payload(sample_candidate("tcp", 9));
         let result = validate_bootstrap_payload(&payload);
         assert_eq!(result, Err(TransportAdapterError::UnsupportedFeature));
     }
@@ -404,10 +366,10 @@ mod tests {
         let result = adapter.connect_transport(
             &SessionId::Integer(7),
             TransportConnectDirection::Upload,
-            &DtlsParameters(json!({
-                "role": "client",
-                "fingerprints": []
-            })),
+            &DtlsParameters {
+                role: String::from("client"),
+                fingerprints: vec![],
+            },
         );
         assert_eq!(result, Err(TransportAdapterError::InvalidInput));
     }
@@ -418,13 +380,7 @@ mod tests {
         let result = adapter.connect_transport(
             &SessionId::Integer(8),
             TransportConnectDirection::Upload,
-            &DtlsParameters(json!({
-                "role": "client",
-                "fingerprints": [{
-                    "algorithm": "sha-256",
-                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-                }]
-            })),
+            &sample_sha256_dtls_parameters("client"),
         );
         assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
     }
@@ -439,13 +395,7 @@ mod tests {
         let connect_result = adapter.connect_transport(
             &session_id,
             TransportConnectDirection::Upload,
-            &DtlsParameters(json!({
-                "role": "client",
-                "fingerprints": [{
-                    "algorithm": "sha-256",
-                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-                }]
-            })),
+            &sample_sha256_dtls_parameters("client"),
         );
         assert_eq!(connect_result, Ok(()));
     }
@@ -460,25 +410,13 @@ mod tests {
         let first_connect = adapter.connect_transport(
             &session_id,
             TransportConnectDirection::Upload,
-            &DtlsParameters(json!({
-                "role": "client",
-                "fingerprints": [{
-                    "algorithm": "sha-256",
-                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-                }]
-            })),
+            &sample_sha256_dtls_parameters("client"),
         );
         assert_eq!(first_connect, Ok(()));
         let second_connect = adapter.connect_transport(
             &session_id,
             TransportConnectDirection::Upload,
-            &DtlsParameters(json!({
-                "role": "client",
-                "fingerprints": [{
-                    "algorithm": "sha-256",
-                    "value": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-                }]
-            })),
+            &sample_sha256_dtls_parameters("client"),
         );
         assert_eq!(second_connect, Err(TransportAdapterError::InvalidInput));
     }
