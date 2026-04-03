@@ -4,7 +4,10 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use tokio::{net::TcpListener, task::JoinHandle};
 
-use super::{RuntimeState, channel::ChannelManager, http_server::app, metrics::RuntimeMetrics};
+use super::{
+    RuntimeState, channel::ChannelManager, http_server::app, metrics::RuntimeMetrics,
+    stub_bus::StubTransportAdapter,
+};
 use crate::{config::Config, signaling::http::CreateChannelQuery};
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
@@ -59,6 +62,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         config,
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
+        transport_adapter: Arc::new(StubTransportAdapter),
     };
     let listener = TcpListener::bind(state.config.bind_address).await?;
     let addr = listener

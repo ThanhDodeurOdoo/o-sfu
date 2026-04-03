@@ -13,11 +13,14 @@ mod metrics;
 mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
+mod transport_adapter;
 mod websocket_server;
 
 use channel::ChannelManager;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
+use stub_bus::StubTransportAdapter;
+use transport_adapter::TransportAdapter;
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -25,6 +28,7 @@ pub struct Runtime {
     pub current_wire_protocol_version: u16,
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
+    transport_adapter: Arc<dyn TransportAdapter>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +36,7 @@ pub(super) struct RuntimeState {
     config: Config,
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
+    transport_adapter: Arc<dyn TransportAdapter>,
 }
 
 impl Runtime {
@@ -42,6 +47,7 @@ impl Runtime {
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
             channels: Arc::new(ChannelManager::new()),
             metrics: Arc::new(RuntimeMetrics::default()),
+            transport_adapter: Arc::new(StubTransportAdapter),
         }
     }
 
@@ -50,6 +56,7 @@ impl Runtime {
             config: self.config,
             channels: self.channels,
             metrics: self.metrics,
+            transport_adapter: self.transport_adapter,
         })
         .await
     }

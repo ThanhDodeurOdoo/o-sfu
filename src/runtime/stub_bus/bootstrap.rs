@@ -10,7 +10,6 @@ use crate::signaling::{
     },
 };
 
-pub(super) const STUB_SERVER_BUS_ID: u64 = 0;
 const STUB_STC_TRANSPORT_ID: &str = "stc-stub";
 const STUB_CTS_TRANSPORT_ID: &str = "cts-stub";
 

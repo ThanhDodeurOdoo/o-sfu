@@ -44,6 +44,7 @@ pub(super) async fn establish_session(
         session_id.clone(),
         Arc::clone(&channel),
         Arc::clone(&state.metrics),
+        Arc::clone(&state.transport_adapter),
     );
     initialize_session(
         state,

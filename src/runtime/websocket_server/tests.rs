@@ -21,7 +21,10 @@ mod websocket_server_tests {
     use super::super::*;
     use crate::{
         config::Config,
-        runtime::{channel::ChannelManager, http_server::app, metrics::RuntimeMetrics},
+        runtime::{
+            channel::ChannelManager, http_server::app, metrics::RuntimeMetrics,
+            stub_bus::StubTransportAdapter,
+        },
         signaling::{
             auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
             current_bus::{
@@ -80,6 +83,7 @@ mod websocket_server_tests {
             config: test_config(authentication_timeout_ms, channel_size),
             channels: Arc::clone(&channels),
             metrics: Arc::new(RuntimeMetrics::default()),
+            transport_adapter: Arc::new(StubTransportAdapter),
         };
         let state_for_server = state.clone();
         let listener = TcpListener::bind(state.config.bind_address).await.ok()?;

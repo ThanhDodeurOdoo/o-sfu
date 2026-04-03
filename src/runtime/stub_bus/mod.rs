@@ -5,21 +5,27 @@ use serde_json::Value;
 use tracing::{debug, trace};
 
 use super::channel::Channel;
-use crate::runtime::metrics::RuntimeMetrics;
+use crate::runtime::{
+    metrics::RuntimeMetrics,
+    transport_adapter::{TransportAdapter, TransportAdapterError, TransportConnectDirection},
+};
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
     current_protocol::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
-        CurrentServerRequest, CurrentWebSocketCloseCode,
+        CurrentServerRequest, CurrentTransportBootstrapPayload, CurrentTransportConnectPayload,
+        CurrentWebSocketCloseCode,
     },
     shared::SessionId,
-    webrtc::RtpCapabilities,
+    webrtc::{DtlsParameters, RtpCapabilities},
 };
 
 mod bootstrap;
 mod codec;
 
 pub(crate) use codec::{WsWriter, send_server_message_batch};
+
+const STUB_SERVER_BUS_ID: u64 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StubBusOutcome {
@@ -28,11 +34,36 @@ pub(super) enum StubBusOutcome {
     Close(CurrentWebSocketCloseCode),
 }
 
+#[derive(Debug, Default)]
+pub(super) struct StubTransportAdapter;
+
+impl TransportAdapter for StubTransportAdapter {
+    fn transport_bootstrap_payload(
+        &self,
+        router_capabilities: &o_sfu_router::RtpCapabilities,
+    ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+        Ok(bootstrap::transport_bootstrap_payload(router_capabilities))
+    }
+
+    fn connect_transport(
+        &self,
+        _session_id: &SessionId,
+        _direction: TransportConnectDirection,
+        dtls_parameters: &DtlsParameters,
+    ) -> Result<(), TransportAdapterError> {
+        if dtls_parameters.0.is_null() {
+            return Err(TransportAdapterError::TransportUnavailable);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct StubBusSession {
     session_id: SessionId,
     channel: Arc<Channel>,
     metrics: Arc<RuntimeMetrics>,
+    transport_adapter: Arc<dyn TransportAdapter>,
     next_request_counter: u64,
     next_producer_counter: u64,
     pending_transport_bootstrap_request_id: Option<CurrentBusRequestId>,
@@ -44,11 +75,13 @@ impl StubBusSession {
         session_id: SessionId,
         channel: Arc<Channel>,
         metrics: Arc<RuntimeMetrics>,
+        transport_adapter: Arc<dyn TransportAdapter>,
     ) -> Self {
         Self {
             session_id,
             channel,
             metrics,
+            transport_adapter,
             next_request_counter: 0,
             next_producer_counter: 0,
             pending_transport_bootstrap_request_id: None,
@@ -60,8 +93,13 @@ impl StubBusSession {
         writer: &mut WsWriter,
     ) -> Result<(), ()> {
         let router_capabilities = self.channel.router_rtp_capabilities().await;
+        let Ok(bootstrap_payload) = self
+            .transport_adapter
+            .transport_bootstrap_payload(&router_capabilities)
+        else {
+            return Err(());
+        };
         debug!("sending transport bootstrap");
-        let bootstrap_payload = bootstrap::transport_bootstrap_payload(&router_capabilities);
         let request_id = self
             .send_request(
                 writer,
@@ -128,7 +166,7 @@ impl StubBusSession {
     fn next_request_id(&mut self) -> CurrentBusRequestId {
         let request_id = CurrentBusRequestId::new(
             CurrentBusOrigin::Server,
-            bootstrap::STUB_SERVER_BUS_ID,
+            STUB_SERVER_BUS_ID,
             self.next_request_counter,
         );
         self.next_request_counter += 1;
@@ -265,10 +303,11 @@ impl StubBusSession {
 
     fn handle_request(&mut self, request: &CurrentClientRequest) -> Value {
         match request {
-            CurrentClientRequest::ConnectUploadTransport(_)
-            | CurrentClientRequest::ConnectDownloadTransport(_) => {
-                debug!("handled stub transport connect request");
-                empty_object()
+            CurrentClientRequest::ConnectUploadTransport(payload) => {
+                self.handle_transport_connect_request(payload, TransportConnectDirection::Upload)
+            }
+            CurrentClientRequest::ConnectDownloadTransport(payload) => {
+                self.handle_transport_connect_request(payload, TransportConnectDirection::Download)
             }
             CurrentClientRequest::PublishTrack(_) => self.handle_publish_request(),
             CurrentClientRequest::StartRecording(_) | CurrentClientRequest::StopRecording => {
@@ -276,6 +315,23 @@ impl StubBusSession {
                 Value::Bool(false)
             }
         }
+    }
+
+    fn handle_transport_connect_request(
+        &self,
+        payload: &CurrentTransportConnectPayload,
+        direction: TransportConnectDirection,
+    ) -> Value {
+        if self
+            .transport_adapter
+            .connect_transport(&self.session_id, direction, &payload.dtls_parameters)
+            .is_err()
+        {
+            debug!(?direction, "transport adapter failed to connect transport");
+            return empty_object();
+        }
+        debug!(?direction, "handled transport connect request");
+        empty_object()
     }
 
     fn handle_publish_request(&mut self) -> Value {
