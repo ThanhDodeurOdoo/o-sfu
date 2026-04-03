@@ -44,13 +44,16 @@ fn router_accepts_a_basic_publish_and_subscribe_flow() {
         Ok(())
     );
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Ok(())
     );
 
@@ -113,13 +116,16 @@ fn removing_a_session_cleans_dependent_resources() {
         Ok(())
     );
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Ok(())
     );
 
@@ -192,13 +198,16 @@ fn consumers_must_use_send_transports() {
     );
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Video,
-            StreamType::Camera,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Video,
+                StreamType::Camera,
+            ),
+            true,
+        ),
         Err(RouterError::ConsumerRequiresSendTransport(TransportId(200)))
     );
     assert_router_is_consistent(&router);
@@ -237,13 +246,16 @@ fn consumers_must_match_their_producer_media_kind() {
     );
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Video,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Video,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Err(RouterError::ConsumerMediaKindMismatch {
             producer_id: ProducerId(300),
             expected: MediaKind::Audio,
@@ -286,17 +298,70 @@ fn consumers_must_match_their_producer_stream_type() {
     );
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Video,
-            StreamType::Screen,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Video,
+                StreamType::Screen,
+            ),
+            true,
+        ),
         Err(RouterError::ConsumerStreamTypeMismatch {
             producer_id: ProducerId(300),
             expected: StreamType::Camera,
             actual: StreamType::Screen,
+        })
+    );
+    assert_router_is_consistent(&router);
+}
+
+#[test]
+fn consumers_are_rejected_when_capabilities_are_incompatible() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+
+    assert_eq!(
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            false,
+        ),
+        Err(RouterError::IncompatibleCapabilities {
+            producer_id: ProducerId(300),
         })
     );
     assert_router_is_consistent(&router);
@@ -336,13 +401,16 @@ fn new_consumers_inherit_their_producer_pause_state() {
     assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Ok(())
     );
 
@@ -397,23 +465,29 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
         Ok(())
     );
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Video,
-            StreamType::Camera,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Video,
+                StreamType::Camera,
+            ),
+            true,
+        ),
         Ok(())
     );
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(401),
-            ProducerId(300),
-            TransportId(201),
-            MediaKind::Video,
-            StreamType::Camera,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(401),
+                ProducerId(300),
+                TransportId(201),
+                MediaKind::Video,
+                StreamType::Camera,
+            ),
+            true,
+        ),
         Ok(())
     );
 
@@ -472,13 +546,16 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
         Ok(())
     );
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Ok(())
     );
     assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
@@ -532,13 +609,16 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
         Ok(())
     );
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            ConsumerId(400),
-            ProducerId(300),
-            TransportId(200),
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Ok(())
     );
 

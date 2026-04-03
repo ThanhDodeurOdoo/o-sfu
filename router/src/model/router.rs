@@ -157,16 +157,28 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// The `capable` parameter is the result of the external capability negotiation
+    /// (e.g. [`crate::rtp_negotiation::can_consume`]). The router treats it as an opaque boolean
+    /// gate: when `false`, the consumer is rejected without inspecting RTP parameters.
+    /// This keeps the full ORTC matching logic outside the router while allowing the router
+    /// to enforce the gate structurally.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
-    /// consumers, [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
+    /// consumers, [`RouterError::IncompatibleCapabilities`] when the external capability
+    /// negotiation determined that the consumer cannot consume the producer,
+    /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
-    pub fn add_consumer(&mut self, mut consumer: Consumer) -> Result<(), RouterError> {
+    pub fn add_consumer(
+        &mut self,
+        mut consumer: Consumer,
+        capable: bool,
+    ) -> Result<(), RouterError> {
         let consumer_id = consumer.id();
         let transport_id = consumer.transport_id();
         let producer_id = consumer.producer_id();
@@ -179,6 +191,9 @@ impl<O: RouterObserver> Router<O> {
         let Some(producer) = self.producers.get(&producer_id) else {
             return Err(RouterError::MissingProducer(producer_id));
         };
+        if !capable {
+            return Err(RouterError::IncompatibleCapabilities { producer_id });
+        }
         if consumer.media_kind() != producer.media_kind() {
             return Err(RouterError::ConsumerMediaKindMismatch {
                 producer_id,

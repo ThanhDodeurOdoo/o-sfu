@@ -22,4 +22,7 @@ pub enum RouterError {
         expected: StreamType,
         actual: StreamType,
     },
+    IncompatibleCapabilities {
+        producer_id: ProducerId,
+    },
 }

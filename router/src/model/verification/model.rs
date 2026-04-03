@@ -132,17 +132,25 @@ impl<
         self.insert_producer(producer)
     }
 
+    /// The `capable` parameter abstracts the external capability negotiation as a boolean gate.
+    /// When `false`, the consumer is rejected with [`RouterError::IncompatibleCapabilities`].
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
-    /// consumers, [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
+    /// consumers, [`RouterError::IncompatibleCapabilities`] when `capable` is `false`,
+    /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
-    pub(crate) fn add_consumer(&mut self, mut consumer: Consumer) -> Result<(), ProofRouterError> {
+    pub(crate) fn add_consumer(
+        &mut self,
+        mut consumer: Consumer,
+        capable: bool,
+    ) -> Result<(), ProofRouterError> {
         let Some(transport) = self.transport_by_id(consumer.transport_id()) else {
             return Err(RouterError::MissingTransport(consumer.transport_id()).into());
         };
@@ -152,6 +160,12 @@ impl<
         let Some(producer) = self.producer_by_id(consumer.producer_id()) else {
             return Err(RouterError::MissingProducer(consumer.producer_id()).into());
         };
+        if !capable {
+            return Err(RouterError::IncompatibleCapabilities {
+                producer_id: consumer.producer_id(),
+            }
+            .into());
+        }
         if consumer.media_kind() != producer.media_kind() {
             return Err(RouterError::ConsumerMediaKindMismatch {
                 producer_id: consumer.producer_id(),

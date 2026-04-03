@@ -71,13 +71,16 @@ fn routing_flow_preserves_invariants() {
         MediaKind::Audio,
         StreamType::Audio,
     ));
-    let _ = router.add_consumer(Consumer::new(
-        consumer,
-        producer,
-        transport_b,
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            consumer,
+            producer,
+            transport_b,
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        true,
+    );
 
     assert!(router.satisfies_invariants());
 }
@@ -104,13 +107,16 @@ fn session_teardown_preserves_invariants() {
         MediaKind::Audio,
         StreamType::Audio,
     ));
-    let _ = router.add_consumer(Consumer::new(
-        ConsumerId(40),
-        ProducerId(30),
-        TransportId(20),
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(40),
+            ProducerId(30),
+            TransportId(20),
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        true,
+    );
 
     let _ = router.remove_session(SessionId(1));
 
@@ -180,13 +186,16 @@ fn consumers_are_rejected_on_receive_transports() {
     ));
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            consumer_id,
-            producer_id,
-            consumer_transport,
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                consumer_id,
+                producer_id,
+                consumer_transport,
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Err(ProofRouterError::Router(
             crate::RouterError::ConsumerRequiresSendTransport(consumer_transport),
         )),
@@ -228,13 +237,16 @@ fn consumers_are_rejected_when_media_kind_differs_from_producer() {
     ));
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            consumer_id,
-            producer_id,
-            consumer_transport,
-            MediaKind::Video,
-            StreamType::Audio,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                consumer_id,
+                producer_id,
+                consumer_transport,
+                MediaKind::Video,
+                StreamType::Audio,
+            ),
+            true,
+        ),
         Err(ProofRouterError::Router(
             crate::RouterError::ConsumerMediaKindMismatch {
                 producer_id,
@@ -280,13 +292,16 @@ fn consumers_are_rejected_when_stream_type_differs_from_producer() {
     ));
 
     assert_eq!(
-        router.add_consumer(Consumer::new(
-            consumer_id,
-            producer_id,
-            consumer_transport,
-            MediaKind::Video,
-            StreamType::Screen,
-        )),
+        router.add_consumer(
+            Consumer::new(
+                consumer_id,
+                producer_id,
+                consumer_transport,
+                MediaKind::Video,
+                StreamType::Screen,
+            ),
+            true,
+        ),
         Err(ProofRouterError::Router(
             crate::RouterError::ConsumerStreamTypeMismatch {
                 producer_id,
@@ -321,13 +336,16 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
         StreamType::Audio,
     ));
     let _ = router.set_producer_paused(ProducerId(30), true);
-    let _ = router.add_consumer(Consumer::new(
-        ConsumerId(40),
-        ProducerId(30),
-        TransportId(20),
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(40),
+            ProducerId(30),
+            TransportId(20),
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        true,
+    );
 
     assert!(
         router
@@ -367,20 +385,26 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
         MediaKind::Video,
         StreamType::Camera,
     ));
-    let _ = router.add_consumer(Consumer::new(
-        ConsumerId(40),
-        ProducerId(30),
-        TransportId(20),
-        MediaKind::Video,
-        StreamType::Camera,
-    ));
-    let _ = router.add_consumer(Consumer::new(
-        ConsumerId(41),
-        ProducerId(30),
-        TransportId(21),
-        MediaKind::Video,
-        StreamType::Camera,
-    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(40),
+            ProducerId(30),
+            TransportId(20),
+            MediaKind::Video,
+            StreamType::Camera,
+        ),
+        true,
+    );
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(41),
+            ProducerId(30),
+            TransportId(21),
+            MediaKind::Video,
+            StreamType::Camera,
+        ),
+        true,
+    );
 
     let _ = router.set_producer_paused(ProducerId(30), true);
 
@@ -422,20 +446,26 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
         MediaKind::Video,
         StreamType::Camera,
     ));
-    let _ = router.add_consumer(Consumer::new(
-        ConsumerId(40),
-        ProducerId(30),
-        TransportId(20),
-        MediaKind::Video,
-        StreamType::Camera,
-    ));
-    let _ = router.add_consumer(Consumer::new(
-        ConsumerId(41),
-        ProducerId(30),
-        TransportId(21),
-        MediaKind::Video,
-        StreamType::Camera,
-    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(40),
+            ProducerId(30),
+            TransportId(20),
+            MediaKind::Video,
+            StreamType::Camera,
+        ),
+        true,
+    );
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(41),
+            ProducerId(30),
+            TransportId(21),
+            MediaKind::Video,
+            StreamType::Camera,
+        ),
+        true,
+    );
     let _ = router.set_producer_paused(ProducerId(30), true);
 
     let _ = router.set_producer_paused(ProducerId(30), false);
@@ -446,6 +476,57 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             .iter()
             .flatten()
             .all(|consumer| !consumer.producer_paused())
+    );
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn consumers_are_rejected_when_capabilities_are_incompatible() {
+    let mut router = ProofRouter::new(RouterId(0));
+
+    let session_a = SessionId(kani::any());
+    let session_b = SessionId(kani::any());
+    let producer_transport = TransportId(kani::any());
+    let consumer_transport = TransportId(kani::any());
+    let producer_id = ProducerId(kani::any());
+    let consumer_id = ConsumerId(kani::any());
+
+    kani::assume(session_a != session_b);
+    kani::assume(producer_transport != consumer_transport);
+
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
+    let _ = router.open_transport(Transport::new(
+        producer_transport,
+        session_a,
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        consumer_transport,
+        session_b,
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        producer_id,
+        producer_transport,
+        MediaKind::Audio,
+        StreamType::Audio,
+    ));
+
+    assert_eq!(
+        router.add_consumer(
+            Consumer::new(
+                consumer_id,
+                producer_id,
+                consumer_transport,
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            false,
+        ),
+        Err(ProofRouterError::Router(
+            crate::RouterError::IncompatibleCapabilities { producer_id },
+        )),
     );
     assert!(router.satisfies_invariants());
 }
