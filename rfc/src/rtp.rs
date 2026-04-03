@@ -80,7 +80,10 @@ pub enum AvpStaticPayloadType {
 
 impl AvpStaticPayloadType {
     #[must_use]
-    #[expect(clippy::as_conversions, reason = "repr(u8) guarantees safe identity cast")]
+    #[expect(
+        clippy::as_conversions,
+        reason = "repr(u8) guarantees safe identity cast"
+    )]
     pub const fn as_u8(self) -> u8 {
         self as u8
     }
