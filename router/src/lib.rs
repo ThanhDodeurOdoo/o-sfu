@@ -6,3 +6,4 @@ pub use self::model::{
     RtpEncoding, RtpHeaderExtension, RtpParameters, Session, SessionId, SessionInfo,
     SessionPermissions, SessionState, StreamType, Transport, TransportDirection, TransportId,
 };
+pub use o_sfu_rfc as rfc;

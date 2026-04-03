@@ -1,3 +1,9 @@
+//! RFC references for this module:
+//! - RTP base protocol: <https://www.rfc-editor.org/rfc/rfc3550>
+//! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
+//! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
+//! - ORTC API dictionaries (for type-shape alignment): <https://www.w3.org/TR/ortc/>
+
 use std::collections::BTreeMap;
 
 use super::MediaKind;

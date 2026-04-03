@@ -1,3 +1,4 @@
+use crate::rfc::webrtc;
 use crate::{
     MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
     RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpParameters,
@@ -28,7 +29,7 @@ fn header_extensions_and_capabilities_expose_entries() {
     let capabilities = RtpCapabilities::new(
         vec![RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)],
         vec![RtpHeaderExtension::new(
-            "urn:ietf:params:rtp-hdrext:sdes:mid",
+            webrtc::rtp_header_extension_uri::MID,
             1,
         )],
     );
@@ -45,7 +46,7 @@ fn header_extensions_and_capabilities_expose_entries() {
             .header_extensions()
             .map(|header| (header.uri(), header.id(), header.encrypt()))
             .collect::<Vec<_>>(),
-        vec![("urn:ietf:params:rtp-hdrext:sdes:mid", 1, false)]
+        vec![(webrtc::rtp_header_extension_uri::MID, 1, false)]
     );
 }
 

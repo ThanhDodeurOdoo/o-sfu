@@ -715,6 +715,7 @@ dependencies = [
  "base64",
  "futures-util",
  "hmac",
+ "o-sfu-rfc",
  "o-sfu-router",
  "reqwest",
  "serde",
@@ -730,8 +731,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "o-sfu-rfc"
+version = "0.1.0"
+
+[[package]]
 name = "o-sfu-router"
 version = "0.1.0"
+dependencies = [
+ "o-sfu-rfc",
+]
 
 [[package]]
 name = "once_cell"

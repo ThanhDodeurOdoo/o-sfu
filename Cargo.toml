@@ -1,5 +1,5 @@
 [workspace]
-members = ["router"]
+members = ["router", "rfc"]
 resolver = "3"
 
 [workspace.package]
@@ -16,6 +16,7 @@ crossbeam-channel = "0.5"
 flatbuffers = "25.12"
 futures-util = "0.3"
 hmac = "0.13"
+o-sfu-rfc = { path = "rfc" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11.0"
@@ -106,6 +107,7 @@ axum.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 hmac.workspace = true
+o-sfu-rfc.workspace = true
 o-sfu-router = { path = "router" }
 serde.workspace = true
 serde_json.workspace = true

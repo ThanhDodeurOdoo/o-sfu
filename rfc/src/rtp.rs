@@ -1,0 +1,201 @@
+//! RFC references for this module:
+//! - RTP base protocol: <https://www.rfc-editor.org/rfc/rfc3550>
+//! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
+//! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
+
+/// RTP version defined by RFC 3550 section 5.1.
+pub const RTP_VERSION: u8 = 2;
+
+/// Fixed RTP header length in bytes with no CSRC and no extension.
+///
+/// Reference: RFC 3550 section 5.1.
+pub const RTP_FIXED_HEADER_BYTES: usize = 12;
+
+/// Maximum number of CSRC identifiers in the RTP fixed header.
+///
+/// The CC field is 4 bits, so the valid range is 0..=15.
+/// Reference: RFC 3550 section 5.1.
+pub const RTP_MAX_CSRC_COUNT: u8 = 15;
+
+/// Sequence number rollover modulus for the 16-bit RTP sequence number.
+///
+/// Reference: RFC 3550 section 5.1.
+pub const RTP_SEQUENCE_NUMBER_MODULUS: u32 = 1_u32 << 16;
+
+/// Timestamp rollover modulus for the 32-bit RTP timestamp field.
+///
+/// Reference: RFC 3550 section 5.1.
+pub const RTP_TIMESTAMP_MODULUS: u64 = 1_u64 << 32;
+
+/// Dynamic RTP payload type range in RTP/AVP.
+///
+/// Reference: RFC 3551 section 6.
+pub const RTP_DYNAMIC_PAYLOAD_TYPE_START: u8 = 96;
+pub const RTP_DYNAMIC_PAYLOAD_TYPE_END: u8 = 127;
+
+/// Payload type values reserved to avoid confusion with RTCP packet types.
+///
+/// Reference: RFC 3551 section 6 (payload types 72 and 73 are reserved).
+pub const RTP_RESERVED_PAYLOAD_TYPE_72: u8 = 72;
+pub const RTP_RESERVED_PAYLOAD_TYPE_73: u8 = 73;
+
+/// Common static RTP/AVP payload type assignments.
+///
+/// Reference: RFC 3551 section 6, tables 4 and 5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AvpStaticPayloadType {
+    Pcmu = 0,
+    Gsm = 3,
+    G723 = 4,
+    Dvi4_8000 = 5,
+    Dvi4_16000 = 6,
+    Lpc = 7,
+    Pcma = 8,
+    G722 = 9,
+    L16Stereo = 10,
+    L16Mono = 11,
+    Qcelp = 12,
+    ComfortNoise = 13,
+    Mpa = 14,
+    G728 = 15,
+    Dvi4_11025 = 16,
+    Dvi4_22050 = 17,
+    G729 = 18,
+    Celb = 25,
+    Jpeg = 26,
+    Nv = 28,
+    H261 = 31,
+    Mpv = 32,
+    Mp2t = 33,
+    H263 = 34,
+}
+
+impl AvpStaticPayloadType {
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::Pcmu => 0,
+            Self::Gsm => 3,
+            Self::G723 => 4,
+            Self::Dvi4_8000 => 5,
+            Self::Dvi4_16000 => 6,
+            Self::Lpc => 7,
+            Self::Pcma => 8,
+            Self::G722 => 9,
+            Self::L16Stereo => 10,
+            Self::L16Mono => 11,
+            Self::Qcelp => 12,
+            Self::ComfortNoise => 13,
+            Self::Mpa => 14,
+            Self::G728 => 15,
+            Self::Dvi4_11025 => 16,
+            Self::Dvi4_22050 => 17,
+            Self::G729 => 18,
+            Self::Celb => 25,
+            Self::Jpeg => 26,
+            Self::Nv => 28,
+            Self::H261 => 31,
+            Self::Mpv => 32,
+            Self::Mp2t => 33,
+            Self::H263 => 34,
+        }
+    }
+}
+
+/// RTCP packet type codes defined by RFC 3550 section 12.1.
+pub const RTCP_PACKET_TYPE_SR: u8 = 200;
+pub const RTCP_PACKET_TYPE_RR: u8 = 201;
+pub const RTCP_PACKET_TYPE_SDES: u8 = 202;
+pub const RTCP_PACKET_TYPE_BYE: u8 = 203;
+pub const RTCP_PACKET_TYPE_APP: u8 = 204;
+
+/// RTCP SDES item type codes from RFC 3550 section 12.2.
+pub const RTCP_SDES_ITEM_CNAME: u8 = 1;
+pub const RTCP_SDES_ITEM_NAME: u8 = 2;
+pub const RTCP_SDES_ITEM_EMAIL: u8 = 3;
+pub const RTCP_SDES_ITEM_PHONE: u8 = 4;
+pub const RTCP_SDES_ITEM_LOC: u8 = 5;
+pub const RTCP_SDES_ITEM_TOOL: u8 = 6;
+pub const RTCP_SDES_ITEM_NOTE: u8 = 7;
+pub const RTCP_SDES_ITEM_PRIV: u8 = 8;
+
+/// RTP header-extension profile IDs from RFC 8285.
+pub mod header_extension {
+    /// RFC 8285 one-byte header extension profile ID.
+    pub const ONE_BYTE_PROFILE_ID: u16 = 0xBEDE;
+
+    /// Base value for the RFC 8285 two-byte header profile with appbits set to 0.
+    pub const TWO_BYTE_PROFILE_ID_BASE: u16 = 0x1000;
+
+    /// Mask for the fixed 12-bit prefix (`0x100`) in the two-byte profile ID.
+    pub const TWO_BYTE_PROFILE_PREFIX_MASK: u16 = 0xFFF0;
+
+    /// One-byte header extension identifier values.
+    pub const ONE_BYTE_ID_PAD: u8 = 0;
+    pub const ONE_BYTE_ID_MIN: u8 = 1;
+    pub const ONE_BYTE_ID_MAX: u8 = 14;
+    pub const ONE_BYTE_ID_RESERVED: u8 = 15;
+
+    /// One-byte header extension data size bounds from RFC 8285 section 4.2.
+    pub const ONE_BYTE_DATA_LEN_MIN: u8 = 1;
+    pub const ONE_BYTE_DATA_LEN_MAX: u8 = 16;
+
+    /// Two-byte header extension data size bounds from RFC 8285 section 4.3.
+    pub const TWO_BYTE_DATA_LEN_MIN: u8 = 0;
+    pub const TWO_BYTE_DATA_LEN_MAX: u8 = u8::MAX;
+
+    #[must_use]
+    pub const fn is_dynamic_payload_type(payload_type: u8) -> bool {
+        payload_type >= super::RTP_DYNAMIC_PAYLOAD_TYPE_START
+            && payload_type <= super::RTP_DYNAMIC_PAYLOAD_TYPE_END
+    }
+
+    #[must_use]
+    pub const fn is_one_byte_id(id: u8) -> bool {
+        id >= ONE_BYTE_ID_MIN && id <= ONE_BYTE_ID_MAX
+    }
+
+    #[must_use]
+    pub fn two_byte_profile_id(appbits: u8) -> Option<u16> {
+        if appbits > 0x0F {
+            return None;
+        }
+        Some(TWO_BYTE_PROFILE_ID_BASE | u16::from(appbits))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AvpStaticPayloadType, RTP_DYNAMIC_PAYLOAD_TYPE_END, RTP_DYNAMIC_PAYLOAD_TYPE_START,
+    };
+    use crate::rtp::header_extension;
+
+    #[test]
+    fn static_payload_values_match_assigned_numbers() {
+        assert_eq!(AvpStaticPayloadType::Pcmu.as_u8(), 0);
+        assert_eq!(AvpStaticPayloadType::Pcma.as_u8(), 8);
+        assert_eq!(AvpStaticPayloadType::H263.as_u8(), 34);
+    }
+
+    #[test]
+    fn dynamic_payload_range_helpers_follow_rfc3551() {
+        assert_eq!(RTP_DYNAMIC_PAYLOAD_TYPE_START, 96);
+        assert_eq!(RTP_DYNAMIC_PAYLOAD_TYPE_END, 127);
+        assert!(!header_extension::is_dynamic_payload_type(95));
+        assert!(header_extension::is_dynamic_payload_type(96));
+        assert!(header_extension::is_dynamic_payload_type(127));
+    }
+
+    #[test]
+    fn header_extension_helpers_validate_id_and_profile() {
+        assert!(header_extension::is_one_byte_id(1));
+        assert!(header_extension::is_one_byte_id(14));
+        assert!(!header_extension::is_one_byte_id(0));
+        assert!(!header_extension::is_one_byte_id(15));
+        assert_eq!(header_extension::two_byte_profile_id(0), Some(0x1000));
+        assert_eq!(header_extension::two_byte_profile_id(15), Some(0x100F));
+        assert_eq!(header_extension::two_byte_profile_id(16), None);
+    }
+}

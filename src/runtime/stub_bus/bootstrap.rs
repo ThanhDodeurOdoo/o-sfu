@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use crate::rfc::webrtc;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     webrtc::{
@@ -44,9 +45,9 @@ fn stub_transport_bootstrap(id: &str) -> TransportBootstrap {
             "foundation": "foundation",
             "priority": 1,
             "ip": "203.0.113.10",
-            "protocol": "udp",
+            "protocol": webrtc::ICE_TRANSPORT_UDP,
             "port": 40000,
-            "type": "host"
+            "type": webrtc::ICE_CANDIDATE_TYPE_HOST
         }))],
         dtls_parameters: DtlsParameters(json!({
             "role": "auto",
