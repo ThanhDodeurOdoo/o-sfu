@@ -20,7 +20,7 @@ mod websocket_server_tests {
 
     use super::super::*;
     use crate::{
-        config::Config,
+        config::{Config, TransportBackend},
         runtime::{
             channel::ChannelManager,
             http_server::app,
@@ -74,6 +74,7 @@ mod websocket_server_tests {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
             authentication_timeout_ms,
             channel_size,
+            transport_backend: TransportBackend::Stub,
         }
     }
 

@@ -5,7 +5,10 @@ use anyhow::anyhow;
 use tokio::runtime::Builder;
 use tracing_subscriber::EnvFilter;
 
-use crate::{config::Config, signaling::CURRENT_WIRE_PROTOCOL_VERSION};
+use crate::{
+    config::{Config, TransportBackend},
+    signaling::CURRENT_WIRE_PROTOCOL_VERSION,
+};
 
 pub(crate) mod channel;
 mod http_server;
@@ -14,6 +17,7 @@ mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
 mod transport_adapter;
+mod webrtc_rs_adapter;
 mod websocket_server;
 
 use channel::ChannelManager;
@@ -21,6 +25,7 @@ use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use stub_bus::StubWebRtcAdapter;
 use transport_adapter::TransportAdapter;
+use webrtc_rs_adapter::WebRtcRsTransportAdapter;
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -42,12 +47,13 @@ pub(super) struct RuntimeState {
 impl Runtime {
     #[must_use]
     pub fn new(config: Config) -> Self {
+        let transport_adapter = build_transport_adapter(config.transport_backend);
         Self {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
             channels: Arc::new(ChannelManager::new()),
             metrics: Arc::new(RuntimeMetrics::default()),
-            transport_adapter: Arc::new(StubWebRtcAdapter::default()),
+            transport_adapter,
         }
     }
 
@@ -85,4 +91,11 @@ pub fn run() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(runtime.run_until_stopped())
+}
+
+fn build_transport_adapter(backend: TransportBackend) -> Arc<dyn TransportAdapter> {
+    match backend {
+        TransportBackend::Stub => Arc::new(StubWebRtcAdapter::default()),
+        TransportBackend::WebRtcRs => Arc::new(WebRtcRsTransportAdapter::default()),
+    }
 }

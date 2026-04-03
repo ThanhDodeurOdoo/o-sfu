@@ -5,8 +5,8 @@ use anyhow::{Result, anyhow};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use super::{
-    RuntimeState, channel::ChannelManager, http_server::app, metrics::RuntimeMetrics,
-    stub_bus::StubWebRtcAdapter,
+    RuntimeState, build_transport_adapter, channel::ChannelManager, http_server::app,
+    metrics::RuntimeMetrics,
 };
 use crate::{config::Config, signaling::http::CreateChannelQuery};
 
@@ -58,11 +58,12 @@ impl Drop for TestServer {
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let channels = Arc::new(ChannelManager::new());
+    let transport_backend = config.transport_backend;
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
-        transport_adapter: Arc::new(StubWebRtcAdapter::default()),
+        transport_adapter: build_transport_adapter(transport_backend),
     };
     let listener = TcpListener::bind(state.config.bind_address).await?;
     let addr = listener

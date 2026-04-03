@@ -10,7 +10,7 @@ use tokio_tungstenite::{
 };
 
 use o_sfu::{
-    config::Config,
+    config::{Config, TransportBackend},
     runtime::testing::TestServer,
     signaling::{
         auth::{
@@ -39,6 +39,7 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
         bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         authentication_timeout_ms,
         channel_size,
+        transport_backend: TransportBackend::Stub,
     }
 }
 

@@ -11,7 +11,7 @@ use tower::util::ServiceExt;
 
 use super::app;
 use crate::{
-    config::Config,
+    config::{Config, TransportBackend},
     runtime::{
         RuntimeState, channel::ChannelManager, metrics::RuntimeMetrics, stub_bus::StubWebRtcAdapter,
     },
@@ -33,6 +33,7 @@ fn test_config() -> Config {
         bind_address: SocketAddr::from(([127, 0, 0, 1], 8080)),
         authentication_timeout_ms: 10_000,
         channel_size: 100,
+        transport_backend: TransportBackend::Stub,
     }
 }
 

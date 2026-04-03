@@ -12,6 +12,7 @@ use tokio::time::{Duration, sleep};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use o_sfu::{
+    config::TransportBackend,
     runtime::testing::spawn_test_server,
     signaling::{
         current_protocol::{
@@ -72,6 +73,50 @@ async fn websocket_startup_and_transport_bootstrap_work_from_integration_test() 
         return;
     };
     assert_eq!(batch.len(), 1);
+}
+
+#[tokio::test]
+async fn websocket_startup_and_transport_bootstrap_work_with_webrtc_rs_backend_placeholder() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::WebRtcRs;
+    let server = spawn_test_server(config).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-a", Some(TEST_CHANNEL_KEY)).await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+    let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel, SessionId::Integer(701));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+
+    let client = FakeWebSocketClient::authenticate_with_credentials(
+        &server,
+        &CurrentWebSocketCredentials {
+            channel_uuid: Some(channel),
+            jwt: token,
+        },
+    )
+    .await;
+    assert!(client.is_some());
+    let Some(mut client) = client else {
+        return;
+    };
+
+    let startup = client.read_startup().await;
+    assert!(startup.is_some());
+    let Some(startup) = startup else {
+        return;
+    };
+    assert!(startup.available_features.rtc);
+
+    let batch = client.read_bus_batch().await;
+    assert!(batch.is_some(), "bootstrap batch should be sent");
 }
 
 #[tokio::test]
