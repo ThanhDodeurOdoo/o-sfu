@@ -6,7 +6,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use super::{
     RuntimeState, channel::ChannelManager, http_server::app, metrics::RuntimeMetrics,
-    stub_bus::StubTransportAdapter,
+    stub_bus::StubWebRtcAdapter,
 };
 use crate::{config::Config, signaling::http::CreateChannelQuery};
 
@@ -62,7 +62,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         config,
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
-        transport_adapter: Arc::new(StubTransportAdapter),
+        transport_adapter: Arc::new(StubWebRtcAdapter::default()),
     };
     let listener = TcpListener::bind(state.config.bind_address).await?;
     let addr = listener

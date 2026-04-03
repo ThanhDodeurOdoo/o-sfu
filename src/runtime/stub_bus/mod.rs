@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::ws::Message;
 use serde_json::Value;
@@ -34,26 +34,81 @@ pub(super) enum StubBusOutcome {
     Close(CurrentWebSocketCloseCode),
 }
 
-#[derive(Debug, Default)]
-pub(super) struct StubTransportAdapter;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StubWebRtcEvent {
+    BootstrapRequested,
+    TransportConnectRequested {
+        session_id: SessionId,
+        direction: TransportConnectDirection,
+        dtls_parameters: DtlsParameters,
+    },
+    TransportConnected {
+        session_id: SessionId,
+        direction: TransportConnectDirection,
+    },
+    TransportConnectRejected {
+        session_id: SessionId,
+        direction: TransportConnectDirection,
+    },
+}
 
-impl TransportAdapter for StubTransportAdapter {
+#[derive(Debug, Clone, Default)]
+pub(super) struct StubWebRtcAdapter {
+    events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
+}
+
+impl StubWebRtcAdapter {
+    fn record_event(&self, event: StubWebRtcEvent) {
+        match self.events.lock() {
+            Ok(mut events) => {
+                events.push(event);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().push(event);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn snapshot_events(&self) -> Vec<StubWebRtcEvent> {
+        match self.events.lock() {
+            Ok(events) => events.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
+impl TransportAdapter for StubWebRtcAdapter {
     fn transport_bootstrap_payload(
         &self,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::BootstrapRequested);
         Ok(bootstrap::transport_bootstrap_payload(router_capabilities))
     }
 
     fn connect_transport(
         &self,
-        _session_id: &SessionId,
-        _direction: TransportConnectDirection,
+        session_id: &SessionId,
+        direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
     ) -> Result<(), TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::TransportConnectRequested {
+            session_id: session_id.clone(),
+            direction,
+            dtls_parameters: dtls_parameters.clone(),
+        });
         if dtls_parameters.0.is_null() {
+            self.record_event(StubWebRtcEvent::TransportConnectRejected {
+                session_id: session_id.clone(),
+                direction,
+            });
             return Err(TransportAdapterError::TransportUnavailable);
         }
+        self.record_event(StubWebRtcEvent::TransportConnected {
+            session_id: session_id.clone(),
+            direction,
+        });
         Ok(())
     }
 }

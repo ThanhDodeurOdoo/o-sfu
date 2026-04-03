@@ -19,7 +19,7 @@ mod websocket_server;
 use channel::ChannelManager;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
-use stub_bus::StubTransportAdapter;
+use stub_bus::StubWebRtcAdapter;
 use transport_adapter::TransportAdapter;
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl Runtime {
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
             channels: Arc::new(ChannelManager::new()),
             metrics: Arc::new(RuntimeMetrics::default()),
-            transport_adapter: Arc::new(StubTransportAdapter),
+            transport_adapter: Arc::new(StubWebRtcAdapter::default()),
         }
     }
 

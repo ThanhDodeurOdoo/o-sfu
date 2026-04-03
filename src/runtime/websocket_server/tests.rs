@@ -22,8 +22,11 @@ mod websocket_server_tests {
     use crate::{
         config::Config,
         runtime::{
-            channel::ChannelManager, http_server::app, metrics::RuntimeMetrics,
-            stub_bus::StubTransportAdapter,
+            channel::ChannelManager,
+            http_server::app,
+            metrics::RuntimeMetrics,
+            stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
+            transport_adapter::{TransportAdapter, TransportConnectDirection},
         },
         signaling::{
             auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -78,12 +81,25 @@ mod websocket_server_tests {
         authentication_timeout_ms: u64,
         channel_size: usize,
     ) -> Option<TestServer> {
+        spawn_test_server_with_adapter(
+            authentication_timeout_ms,
+            channel_size,
+            Arc::new(StubWebRtcAdapter::default()),
+        )
+        .await
+    }
+
+    async fn spawn_test_server_with_adapter(
+        authentication_timeout_ms: u64,
+        channel_size: usize,
+        transport_adapter: Arc<dyn TransportAdapter>,
+    ) -> Option<TestServer> {
         let channels = Arc::new(ChannelManager::new());
         let state = RuntimeState {
             config: test_config(authentication_timeout_ms, channel_size),
             channels: Arc::clone(&channels),
             metrics: Arc::new(RuntimeMetrics::default()),
-            transport_adapter: Arc::new(StubTransportAdapter),
+            transport_adapter,
         };
         let state_for_server = state.clone();
         let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
@@ -101,6 +117,23 @@ mod websocket_server_tests {
             channels,
             state,
         })
+    }
+
+    async fn wait_for_stub_webrtc_events(
+        adapter: &StubWebRtcAdapter,
+        event_count: usize,
+    ) -> Option<Vec<StubWebRtcEvent>> {
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let events = adapter.snapshot_events();
+                if events.len() >= event_count {
+                    return events;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .ok()
     }
 
     async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
@@ -589,6 +622,178 @@ mod websocket_server_tests {
                 "headerExtensions": []
             }))
         );
+    }
+
+    #[tokio::test]
+    async fn websocket_emits_stub_webrtc_bootstrap_event() {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        let transport_adapter: Arc<dyn TransportAdapter> =
+            Arc::<StubWebRtcAdapter>::clone(&adapter);
+        let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(210));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+
+        let batch = read_bus_batch(&mut websocket).await;
+        assert!(batch.is_some());
+
+        let events = wait_for_stub_webrtc_events(&adapter, 1).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        assert_eq!(events, vec![StubWebRtcEvent::BootstrapRequested]);
+    }
+
+    #[tokio::test]
+    async fn websocket_emits_stub_webrtc_directional_connect_events() {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        let transport_adapter: Arc<dyn TransportAdapter> =
+            Arc::<StubWebRtcAdapter>::clone(&adapter);
+        let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let session_id = SessionId::Integer(211);
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
+        assert!(acknowledged.is_some());
+
+        let upload_response = send_bus_request_and_read_response(
+            &mut websocket,
+            CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: DtlsParameters(serde_json::json!({
+                    "role": "client"
+                })),
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 1),
+        )
+        .await;
+        assert!(upload_response.is_some());
+        let download_response = send_bus_request_and_read_response(
+            &mut websocket,
+            CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: DtlsParameters(serde_json::json!({
+                    "role": "client"
+                })),
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 2),
+        )
+        .await;
+        assert!(download_response.is_some());
+
+        let events = wait_for_stub_webrtc_events(&adapter, 5).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        let expected = vec![
+            StubWebRtcEvent::BootstrapRequested,
+            StubWebRtcEvent::TransportConnectRequested {
+                session_id: session_id.clone(),
+                direction: TransportConnectDirection::Upload,
+                dtls_parameters: DtlsParameters(serde_json::json!({
+                    "role": "client"
+                })),
+            },
+            StubWebRtcEvent::TransportConnected {
+                session_id: session_id.clone(),
+                direction: TransportConnectDirection::Upload,
+            },
+            StubWebRtcEvent::TransportConnectRequested {
+                session_id: session_id.clone(),
+                direction: TransportConnectDirection::Download,
+                dtls_parameters: DtlsParameters(serde_json::json!({
+                    "role": "client"
+                })),
+            },
+            StubWebRtcEvent::TransportConnected {
+                session_id,
+                direction: TransportConnectDirection::Download,
+            },
+        ];
+        assert_eq!(events, expected);
+    }
+
+    #[tokio::test]
+    async fn websocket_emits_stub_webrtc_rejected_connect_event_for_invalid_dtls() {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        let transport_adapter: Arc<dyn TransportAdapter> =
+            Arc::<StubWebRtcAdapter>::clone(&adapter);
+        let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let session_id = SessionId::Integer(212);
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
+        assert!(acknowledged.is_some());
+
+        let connect_response = send_bus_request_and_read_response(
+            &mut websocket,
+            CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: DtlsParameters(serde_json::Value::Null),
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 12, 1),
+        )
+        .await;
+        assert!(connect_response.is_some());
+
+        let events = wait_for_stub_webrtc_events(&adapter, 3).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        let expected = vec![
+            StubWebRtcEvent::BootstrapRequested,
+            StubWebRtcEvent::TransportConnectRequested {
+                session_id: session_id.clone(),
+                direction: TransportConnectDirection::Upload,
+                dtls_parameters: DtlsParameters(serde_json::Value::Null),
+            },
+            StubWebRtcEvent::TransportConnectRejected {
+                session_id,
+                direction: TransportConnectDirection::Upload,
+            },
+        ];
+        assert_eq!(events, expected);
     }
 
     #[tokio::test]
