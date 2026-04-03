@@ -87,31 +87,43 @@ impl DtlsSrtpProtectionProfile {
 
 /// RTP header-extension URIs commonly needed by WebRTC endpoints.
 pub mod rtp_header_extension_uri {
+    macro_rules! rtp_header_extension_urn {
+        ($suffix:literal) => {
+            concat!("urn:ietf:params:rtp-hdrext:", $suffix)
+        };
+    }
+
+    macro_rules! rtp_header_extension_sdes_urn {
+        ($suffix:literal) => {
+            concat!("urn:ietf:params:rtp-hdrext:sdes:", $suffix)
+        };
+    }
+
     /// MID RTP header extension URI.
     ///
     /// Reference: RFC 8843 section 15.2.
-    pub const MID: &str = "urn:ietf:params:rtp-hdrext:sdes:mid";
+    pub const MID: &str = rtp_header_extension_sdes_urn!("mid");
 
     /// Audio level RTP header extension URI.
     ///
     /// Reference: RFC 6464 section 3.
-    pub const SSRC_AUDIO_LEVEL: &str = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
+    pub const SSRC_AUDIO_LEVEL: &str = rtp_header_extension_urn!("ssrc-audio-level");
 
     /// Mixer-to-client audio level RTP header extension URI.
     ///
     /// Reference: RFC 6465 section 4.
-    pub const CSRC_AUDIO_LEVEL: &str = "urn:ietf:params:rtp-hdrext:csrc-audio-level";
+    pub const CSRC_AUDIO_LEVEL: &str = rtp_header_extension_urn!("csrc-audio-level");
 
     /// RTP stream ID extension URI.
     ///
     /// Reference: RFC 8852.
-    pub const RTP_STREAM_ID: &str = "urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id";
+    pub const RTP_STREAM_ID: &str = rtp_header_extension_sdes_urn!("rtp-stream-id");
 
     /// Repaired RTP stream ID extension URI.
     ///
     /// Reference: RFC 8852.
     pub const REPAIRED_RTP_STREAM_ID: &str =
-        "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id";
+        rtp_header_extension_sdes_urn!("repaired-rtp-stream-id");
 }
 
 /// RTCP SDES item type defined for MID.
