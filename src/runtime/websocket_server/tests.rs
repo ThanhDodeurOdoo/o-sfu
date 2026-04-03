@@ -23,14 +23,14 @@ mod websocket_server_tests {
         config::Config,
         runtime::{channel::ChannelManager, http_server::app},
         signaling::{
-            auth::{RegisteredJwtClaims, sign},
+            auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
             current_bus::{
                 CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
             },
             current_protocol::{
                 CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
                 CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
-                CurrentTransportConnectPayload,
+                CurrentStartupPayload, CurrentTransportConnectPayload, CurrentWebSocketCredentials,
             },
             http::CreateChannelQuery,
             shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
