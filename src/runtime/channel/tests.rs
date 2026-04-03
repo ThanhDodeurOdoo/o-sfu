@@ -3,6 +3,7 @@
     reason = "test assertions use panic for clear failure messages"
 )]
 mod channel_tests {
+    use o_sfu_router::SessionPermissions as RouterSessionPermissions;
     use tokio::sync::mpsc;
 
     use super::super::{
@@ -547,6 +548,59 @@ mod channel_tests {
             .await;
         assert_eq!(channel.session_count().await, 0);
         assert_eq!(channel.router_session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn channel_keeps_router_session_permissions_in_sync() {
+        let manager = ChannelManager::new();
+        let channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let permissions = SessionPermissions {
+            transcription: Some(true),
+            audio_recording: Some(false),
+            video_recording: Some(true),
+        };
+        let (first_tx, _first_rx) = test_sender();
+        let joined = channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                permissions.clone(),
+                first_tx,
+                10,
+            )
+            .await;
+        assert!(joined.is_ok());
+        assert_eq!(
+            channel
+                .router_session_permissions(&SessionId::Integer(1))
+                .await,
+            Some(RouterSessionPermissions::new(true, false, true))
+        );
+
+        let replacement_permissions = SessionPermissions {
+            transcription: Some(false),
+            audio_recording: Some(true),
+            video_recording: Some(false),
+        };
+        let (second_tx, _second_rx) = test_sender();
+        let replaced = channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                replacement_permissions,
+                second_tx,
+                10,
+            )
+            .await;
+        assert!(replaced.is_ok());
+        assert_eq!(
+            channel
+                .router_session_permissions(&SessionId::Integer(1))
+                .await,
+            Some(RouterSessionPermissions::new(false, true, false))
+        );
     }
 
     #[tokio::test]

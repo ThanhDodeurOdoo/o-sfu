@@ -1,16 +1,41 @@
 use super::{ProofRouterModel, model::ProofRouterError};
 use crate::{
     Consumer, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session, SessionId,
-    StreamType, Transport, TransportDirection, TransportId,
+    SessionInfo, SessionPermissions, StreamType, Transport, TransportDirection, TransportId,
 };
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
 type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;
 
+fn session(id: SessionId) -> Session {
+    Session::new(id, SessionPermissions::default())
+}
+
 #[kani::proof]
 fn join_session_preserves_invariants() {
     let mut router = ProofRouter::new(RouterId(0));
-    let _ = router.join_session(Session::new(SessionId(kani::any())));
+    let _ = router.join_session(session(SessionId(kani::any())));
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn session_updates_preserve_invariants() {
+    let mut router = ProofRouter::new(RouterId(0));
+    let session_id = SessionId(kani::any());
+    let permissions = SessionPermissions::new(kani::any(), kani::any(), kani::any());
+    let info = SessionInfo::new(
+        kani::any(),
+        kani::any(),
+        kani::any(),
+        kani::any(),
+        kani::any(),
+        kani::any(),
+    );
+
+    let _ = router.join_session(session(session_id));
+    let _ = router.update_session_permissions(session_id, permissions);
+    let _ = router.update_session_info(session_id, info);
+
     assert!(router.satisfies_invariants());
 }
 
@@ -28,8 +53,8 @@ fn routing_flow_preserves_invariants() {
     kani::assume(session_a != session_b);
     kani::assume(transport_a != transport_b);
 
-    let _ = router.join_session(Session::new(session_a));
-    let _ = router.join_session(Session::new(session_b));
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
     let _ = router.open_transport(Transport::new(
         transport_a,
         session_a,
@@ -61,8 +86,8 @@ fn routing_flow_preserves_invariants() {
 fn session_teardown_preserves_invariants() {
     let mut router = ProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(Session::new(SessionId(1)));
-    let _ = router.join_session(Session::new(SessionId(2)));
+    let _ = router.join_session(session(SessionId(1)));
+    let _ = router.join_session(session(SessionId(2)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),
@@ -100,7 +125,7 @@ fn producers_are_rejected_on_send_transports() {
     let transport_id = TransportId(kani::any());
     let producer_id = ProducerId(kani::any());
 
-    let _ = router.join_session(Session::new(session_id));
+    let _ = router.join_session(session(session_id));
     let _ = router.open_transport(Transport::new(
         transport_id,
         session_id,
@@ -135,8 +160,8 @@ fn consumers_are_rejected_on_receive_transports() {
     kani::assume(session_a != session_b);
     kani::assume(producer_transport != consumer_transport);
 
-    let _ = router.join_session(Session::new(session_a));
-    let _ = router.join_session(Session::new(session_b));
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
     let _ = router.open_transport(Transport::new(
         producer_transport,
         session_a,
@@ -183,8 +208,8 @@ fn consumers_are_rejected_when_media_kind_differs_from_producer() {
     kani::assume(session_a != session_b);
     kani::assume(producer_transport != consumer_transport);
 
-    let _ = router.join_session(Session::new(session_a));
-    let _ = router.join_session(Session::new(session_b));
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
     let _ = router.open_transport(Transport::new(
         producer_transport,
         session_a,
@@ -235,8 +260,8 @@ fn consumers_are_rejected_when_stream_type_differs_from_producer() {
     kani::assume(session_a != session_b);
     kani::assume(producer_transport != consumer_transport);
 
-    let _ = router.join_session(Session::new(session_a));
-    let _ = router.join_session(Session::new(session_b));
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
     let _ = router.open_transport(Transport::new(
         producer_transport,
         session_a,
@@ -277,8 +302,8 @@ fn consumers_are_rejected_when_stream_type_differs_from_producer() {
 fn new_consumers_inherit_their_producer_pause_shadow() {
     let mut router = ProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(Session::new(SessionId(1)));
-    let _ = router.join_session(Session::new(SessionId(2)));
+    let _ = router.join_session(session(SessionId(1)));
+    let _ = router.join_session(session(SessionId(2)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),
@@ -318,9 +343,9 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = PauseProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(Session::new(SessionId(1)));
-    let _ = router.join_session(Session::new(SessionId(2)));
-    let _ = router.join_session(Session::new(SessionId(3)));
+    let _ = router.join_session(session(SessionId(1)));
+    let _ = router.join_session(session(SessionId(2)));
+    let _ = router.join_session(session(SessionId(3)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),
@@ -373,9 +398,9 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let mut router = PauseProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(Session::new(SessionId(1)));
-    let _ = router.join_session(Session::new(SessionId(2)));
-    let _ = router.join_session(Session::new(SessionId(3)));
+    let _ = router.join_session(session(SessionId(1)));
+    let _ = router.join_session(session(SessionId(2)));
+    let _ = router.join_session(session(SessionId(3)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),

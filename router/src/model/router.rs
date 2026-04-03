@@ -44,6 +44,10 @@ impl Router {
         self.sessions.len()
     }
 
+    pub fn sessions(&self) -> impl Iterator<Item = &Session> {
+        self.sessions.values()
+    }
+
     /// # Errors
     ///
     /// Returns [`RouterError::DuplicateSession`] when the session already exists.
@@ -53,6 +57,36 @@ impl Router {
             return Err(RouterError::DuplicateSession(session_id));
         }
         self.sessions.insert(session_id, session);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingSession`] when the session does not exist.
+    pub fn update_session_permissions(
+        &mut self,
+        session_id: SessionId,
+        permissions: super::SessionPermissions,
+    ) -> Result<(), RouterError> {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return Err(RouterError::MissingSession(session_id));
+        };
+        session.set_permissions(permissions);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingSession`] when the session does not exist.
+    pub fn update_session_info(
+        &mut self,
+        session_id: SessionId,
+        info: super::SessionInfo,
+    ) -> Result<(), RouterError> {
+        let Some(session) = self.sessions.get_mut(&session_id) else {
+            return Err(RouterError::MissingSession(session_id));
+        };
+        session.set_info(info);
         Ok(())
     }
 
@@ -199,9 +233,10 @@ impl Router {
     ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
     pub fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
-        if self.sessions.remove(&session_id).is_none() {
+        let Some(mut session) = self.sessions.remove(&session_id) else {
             return Err(RouterError::MissingSession(session_id));
-        }
+        };
+        session.close();
 
         let transport_ids = Self::take_ids(&mut self.session_transports, &session_id);
         for transport_id in transport_ids {

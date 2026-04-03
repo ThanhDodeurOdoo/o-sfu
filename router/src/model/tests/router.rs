@@ -1,15 +1,20 @@
 use super::helpers::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError, RouterId, Session,
-    SessionId, StreamType, Transport, TransportDirection, TransportId,
+    SessionId, SessionInfo, SessionPermissions, SessionState, StreamType, Transport,
+    TransportDirection, TransportId,
 };
+
+fn session(id: SessionId) -> Session {
+    Session::new(id, SessionPermissions::default())
+}
 
 #[test]
 fn router_accepts_a_basic_publish_and_subscribe_flow() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -77,8 +82,8 @@ fn router_rejects_orphan_resources() {
 fn removing_a_session_cleans_dependent_resources() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -127,7 +132,7 @@ fn removing_a_session_cleans_dependent_resources() {
 fn producers_must_use_receive_transports() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -155,8 +160,8 @@ fn producers_must_use_receive_transports() {
 fn consumers_must_use_send_transports() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -200,8 +205,8 @@ fn consumers_must_use_send_transports() {
 fn consumers_must_match_their_producer_media_kind() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -249,8 +254,8 @@ fn consumers_must_match_their_producer_media_kind() {
 fn consumers_must_match_their_producer_stream_type() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -298,8 +303,8 @@ fn consumers_must_match_their_producer_stream_type() {
 fn new_consumers_inherit_their_producer_pause_state() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -352,9 +357,9 @@ fn new_consumers_inherit_their_producer_pause_state() {
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(30))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(30))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -436,8 +441,8 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -496,8 +501,8 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
 fn pausing_a_consumer_only_changes_its_local_pause_flag() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(Session::new(SessionId(20))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),
@@ -543,5 +548,56 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
     };
     assert!(consumer.paused());
     assert!(!consumer.producer_paused());
+    assert_router_is_consistent(&router);
+}
+
+#[test]
+fn joined_sessions_store_permissions_and_default_info() {
+    let mut router = Router::new(RouterId(1));
+    let permissions = SessionPermissions::new(true, false, true);
+
+    assert_eq!(
+        router.join_session(Session::new(SessionId(10), permissions)),
+        Ok(())
+    );
+
+    let session = router.sessions().next();
+    assert!(session.is_some());
+    let Some(session) = session else {
+        return;
+    };
+    assert_eq!(session.state(), SessionState::Active);
+    assert_eq!(session.permissions(), permissions);
+    assert_eq!(session.info(), SessionInfo::default());
+}
+
+#[test]
+fn router_updates_session_permissions_and_info() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    let permissions = SessionPermissions::new(true, true, false);
+    let info = SessionInfo::new(
+        Some(true),
+        Some(false),
+        Some(true),
+        Some(false),
+        Some(true),
+        Some(false),
+    );
+
+    assert_eq!(
+        router.update_session_permissions(SessionId(10), permissions),
+        Ok(())
+    );
+    assert_eq!(router.update_session_info(SessionId(10), info), Ok(()));
+
+    let session = router.sessions().next();
+    assert!(session.is_some());
+    let Some(session) = session else {
+        return;
+    };
+    assert_eq!(session.permissions(), permissions);
+    assert_eq!(session.info(), info);
     assert_router_is_consistent(&router);
 }

@@ -10,6 +10,7 @@ impl<
     #[must_use]
     pub(crate) fn satisfies_invariants(&self) -> bool {
         self.session_ids_are_unique()
+            && self.live_sessions_are_active()
             && self.transport_ids_are_unique()
             && self.producer_ids_are_unique()
             && self.consumer_ids_are_unique()
@@ -17,6 +18,13 @@ impl<
             && self.transport_directions_are_valid()
             && self.consumer_media_matches_producer()
             && self.consumer_pause_shadows_producer()
+    }
+
+    fn live_sessions_are_active(&self) -> bool {
+        self.sessions
+            .iter()
+            .flatten()
+            .all(|session| session.state() == crate::SessionState::Active)
     }
 
     fn session_ids_are_unique(&self) -> bool {

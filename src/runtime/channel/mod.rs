@@ -142,16 +142,6 @@ impl Channel {
 
     pub async fn stats(&self) -> ChannelStats {
         let state = self.state.read().await;
-        let camera_count = state
-            .sessions
-            .values()
-            .filter(|session| session.info.is_camera_on == Some(true))
-            .count();
-        let screen_count = state
-            .sessions
-            .values()
-            .filter(|session| session.info.is_screen_sharing_on == Some(true))
-            .count();
         ChannelStats {
             create_date: self.create_date.clone(),
             uuid: self.uuid.clone(),
@@ -164,8 +154,8 @@ impl Channel {
                     camera: 0,
                 },
                 count: state.router.session_count(),
-                camera_count: u64::try_from(camera_count).unwrap_or(u64::MAX),
-                screen_count: u64::try_from(screen_count).unwrap_or(u64::MAX),
+                camera_count: state.router.camera_count(),
+                screen_count: state.router.screen_count(),
             },
             web_rtc_enabled: self.web_rtc_enabled,
         }
@@ -197,7 +187,7 @@ impl Channel {
         if is_new
             && state
                 .router
-                .ensure_session(&session_id, connection_id)
+                .ensure_session(&session_id, connection_id, &permissions)
                 .is_err()
         {
             error!(
@@ -219,7 +209,7 @@ impl Channel {
                 session_id.clone(),
                 ActiveSession {
                     label,
-                    permissions,
+                    permissions: permissions.clone(),
                     info: SessionInfo::default(),
                     connection_id,
                     sender,
@@ -227,6 +217,23 @@ impl Channel {
             );
             None
         };
+        if previous_sender.is_some()
+            && state
+                .router
+                .update_session_permissions(&session_id, &permissions)
+                .and_then(|()| {
+                    state
+                        .router
+                        .update_session_info(&session_id, &SessionInfo::default())
+                })
+                .is_err()
+        {
+            error!(
+                ?session_id,
+                "failed to mirror session replacement into channel router"
+            );
+            return Err(ChannelJoinError::RouterState);
+        }
         if let Some(old_sender) = previous_sender {
             let _ = old_sender.send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
             let departure = CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
@@ -287,10 +294,24 @@ impl Channel {
         need_refresh: bool,
     ) {
         let mut state = self.state.write().await;
-        let Some(session) = state.sessions.get_mut(session_id) else {
-            return;
+        let updated_info = {
+            let Some(session) = state.sessions.get_mut(session_id) else {
+                return;
+            };
+            session.info = info;
+            session.info.clone()
         };
-        session.info = info;
+        if state
+            .router
+            .update_session_info(session_id, &updated_info)
+            .is_err()
+        {
+            error!(
+                ?session_id,
+                "failed to mirror session info update into channel router"
+            );
+            return;
+        }
         let snapshot: CurrentSessionInfoSnapshotById = if need_refresh {
             state
                 .sessions
@@ -349,6 +370,18 @@ impl Channel {
     #[cfg(test)]
     pub(super) async fn router_session_count(&self) -> usize {
         usize::try_from(self.state.read().await.router.session_count()).unwrap_or(usize::MAX)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn router_session_permissions(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<o_sfu_router::SessionPermissions> {
+        self.state
+            .read()
+            .await
+            .router
+            .session_permissions(session_id)
     }
 
     pub(super) async fn is_empty(&self) -> bool {
