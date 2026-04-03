@@ -14,6 +14,7 @@ impl<
             && self.producer_ids_are_unique()
             && self.consumer_ids_are_unique()
             && self.references_are_valid()
+            && self.transport_directions_are_valid()
     }
 
     fn session_ids_are_unique(&self) -> bool {
@@ -99,6 +100,30 @@ impl<
             if consumer.is_some_and(|consumer| {
                 !self.contains_transport(consumer.transport_id())
                     || !self.contains_producer(consumer.producer_id())
+            }) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn transport_directions_are_valid(&self) -> bool {
+        for producer in &self.producers {
+            if producer.is_some_and(|producer| {
+                self.transport_by_id(producer.transport_id())
+                    .is_some_and(|transport| {
+                        transport.direction() != crate::TransportDirection::Receive
+                    })
+            }) {
+                return false;
+            }
+        }
+        for consumer in &self.consumers {
+            if consumer.is_some_and(|consumer| {
+                self.transport_by_id(consumer.transport_id())
+                    .is_some_and(|transport| {
+                        transport.direction() != crate::TransportDirection::Send
+                    })
             }) {
                 return false;
             }

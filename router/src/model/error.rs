@@ -10,4 +10,6 @@ pub enum RouterError {
     MissingTransport(TransportId),
     MissingProducer(ProducerId),
     MissingConsumer(ConsumerId),
+    ProducerRequiresReceiveTransport(TransportId),
+    ConsumerRequiresSendTransport(TransportId),
 }

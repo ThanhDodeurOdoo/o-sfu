@@ -1,6 +1,6 @@
 use super::super::{
     Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
-    Transport, TransportId,
+    Transport, TransportDirection, TransportId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,11 +84,17 @@ impl<
     /// # Errors
     ///
     /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist,
-    /// [`RouterError::DuplicateProducer`] when the producer already exists,
+    /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
+    /// producers, [`RouterError::DuplicateProducer`] when the producer already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
     pub(crate) fn add_producer(&mut self, producer: Producer) -> Result<(), ProofRouterError> {
-        if !self.contains_transport(producer.transport_id()) {
+        let Some(transport) = self.transport_by_id(producer.transport_id()) else {
             return Err(RouterError::MissingTransport(producer.transport_id()).into());
+        };
+        if transport.direction() != TransportDirection::Receive {
+            return Err(
+                RouterError::ProducerRequiresReceiveTransport(producer.transport_id()).into(),
+            );
         }
         if self.contains_producer(producer.id()) {
             return Err(RouterError::DuplicateProducer(producer.id()).into());
@@ -100,11 +106,16 @@ impl<
     ///
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
+    /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
+    /// consumers,
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
     pub(crate) fn add_consumer(&mut self, consumer: Consumer) -> Result<(), ProofRouterError> {
-        if !self.contains_transport(consumer.transport_id()) {
+        let Some(transport) = self.transport_by_id(consumer.transport_id()) else {
             return Err(RouterError::MissingTransport(consumer.transport_id()).into());
+        };
+        if transport.direction() != TransportDirection::Send {
+            return Err(RouterError::ConsumerRequiresSendTransport(consumer.transport_id()).into());
         }
         if !self.contains_producer(consumer.producer_id()) {
             return Err(RouterError::MissingProducer(consumer.producer_id()).into());
@@ -262,6 +273,15 @@ impl<
             }
         }
         false
+    }
+
+    pub(super) fn transport_by_id(&self, transport_id: TransportId) -> Option<Transport> {
+        for transport in &self.transports {
+            if transport.is_some_and(|transport| transport.id() == transport_id) {
+                return *transport;
+            }
+        }
+        None
     }
 
     pub(super) fn contains_producer(&self, producer_id: ProducerId) -> bool {

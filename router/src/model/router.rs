@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
-    Transport, TransportId,
+    Transport, TransportDirection, TransportId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,12 +75,16 @@ impl Router {
     /// # Errors
     ///
     /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist
-    /// or [`RouterError::DuplicateProducer`] when the producer already exists.
+    /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
+    /// producers, or [`RouterError::DuplicateProducer`] when the producer already exists.
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
-        if !self.transports.contains_key(&transport_id) {
+        let Some(transport) = self.transports.get(&transport_id) else {
             return Err(RouterError::MissingTransport(transport_id));
+        };
+        if transport.direction() != TransportDirection::Receive {
+            return Err(RouterError::ProducerRequiresReceiveTransport(transport_id));
         }
         if self.producers.contains_key(&producer_id) {
             return Err(RouterError::DuplicateProducer(producer_id));
@@ -97,13 +101,18 @@ impl Router {
     ///
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
+    /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
+    /// consumers,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
     pub fn add_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
         let consumer_id = consumer.id();
         let transport_id = consumer.transport_id();
         let producer_id = consumer.producer_id();
-        if !self.transports.contains_key(&transport_id) {
+        let Some(transport) = self.transports.get(&transport_id) else {
             return Err(RouterError::MissingTransport(transport_id));
+        };
+        if transport.direction() != TransportDirection::Send {
+            return Err(RouterError::ConsumerRequiresSendTransport(transport_id));
         }
         if !self.producers.contains_key(&producer_id) {
             return Err(RouterError::MissingProducer(producer_id));
