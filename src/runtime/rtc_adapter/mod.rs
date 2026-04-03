@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     stub_bus::StubWebRtcAdapter,
-    transport_adapter::{TransportAdapter, TransportAdapterError, TransportConnectDirection},
+    transport_adapter::{TransportAdapterError, TransportConnectDirection},
 };
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
@@ -45,21 +45,22 @@ pub(super) struct RtcTransportAdapter {
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
 }
 
-impl TransportAdapter for RtcTransportAdapter {
-    fn transport_bootstrap_payload(
+impl RtcTransportAdapter {
+    pub(super) async fn transport_bootstrap_payload(
         &self,
         session_id: &SessionId,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
         let payload = self
             .fallback
-            .transport_bootstrap_payload(session_id, router_capabilities)?;
+            .transport_bootstrap_payload(session_id, router_capabilities)
+            .await?;
         validate_bootstrap_payload(&payload)?;
         self.mark_bootstrap_sent(session_id)?;
         Ok(payload)
     }
 
-    fn connect_transport(
+    pub(super) async fn connect_transport(
         &self,
         session_id: &SessionId,
         direction: TransportConnectDirection,
@@ -77,7 +78,8 @@ impl TransportAdapter for RtcTransportAdapter {
             "validated DTLS parameters and transport lifecycle state before placeholder rtc connect"
         );
         self.fallback
-            .connect_transport(session_id, direction, dtls_parameters, sdp_offer)?;
+            .connect_transport(session_id, direction, dtls_parameters, sdp_offer)
+            .await?;
         self.mark_connected(session_id, direction)?;
         Ok(())
     }
@@ -305,9 +307,7 @@ mod tests {
 
     use super::{RtcTransportAdapter, validate_bootstrap_payload, validate_dtls_parameters};
     use crate::{
-        runtime::transport_adapter::{
-            TransportAdapter, TransportAdapterError, TransportConnectDirection,
-        },
+        runtime::transport_adapter::{TransportAdapterError, TransportConnectDirection},
         signaling::{
             current_protocol::CurrentTransportBootstrapPayload,
             shared::SessionId,
@@ -428,101 +428,119 @@ a=mid:0\r\n";
         assert_eq!(result, Err(TransportAdapterError::UnsupportedFeature));
     }
 
-    #[test]
-    fn rtc_transport_connect_rejects_invalid_dtls_before_fallback() {
+    #[tokio::test]
+    async fn rtc_transport_connect_rejects_invalid_dtls_before_fallback() {
         let adapter = RtcTransportAdapter::default();
-        let result = adapter.connect_transport(
-            &SessionId::Integer(7),
-            TransportConnectDirection::Upload,
-            &DtlsParameters {
-                role: String::from("client"),
-                fingerprints: vec![],
-            },
-            None,
-        );
+        let result = adapter
+            .connect_transport(
+                &SessionId::Integer(7),
+                TransportConnectDirection::Upload,
+                &DtlsParameters {
+                    role: String::from("client"),
+                    fingerprints: vec![],
+                },
+                None,
+            )
+            .await;
         assert_eq!(result, Err(TransportAdapterError::InvalidInput));
     }
 
-    #[test]
-    fn rtc_transport_connect_requires_bootstrap_first() {
+    #[tokio::test]
+    async fn rtc_transport_connect_requires_bootstrap_first() {
         let adapter = RtcTransportAdapter::default();
-        let result = adapter.connect_transport(
-            &SessionId::Integer(8),
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-        );
+        let result = adapter
+            .connect_transport(
+                &SessionId::Integer(8),
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
         assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
     }
 
-    #[test]
-    fn rtc_transport_connect_succeeds_after_bootstrap() {
+    #[tokio::test]
+    async fn rtc_transport_connect_succeeds_after_bootstrap() {
         let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(9);
-        let bootstrap_result =
-            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
         assert!(bootstrap_result.is_ok());
-        let connect_result = adapter.connect_transport(
-            &session_id,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            Some(VALID_SDP_OFFER),
-        );
+        let connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                Some(VALID_SDP_OFFER),
+            )
+            .await;
         assert_eq!(connect_result, Ok(()));
     }
 
-    #[test]
-    fn rtc_transport_connect_rejects_duplicate_direction_connect() {
+    #[tokio::test]
+    async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
         let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(10);
-        let bootstrap_result =
-            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
         assert!(bootstrap_result.is_ok());
-        let first_connect = adapter.connect_transport(
-            &session_id,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-        );
+        let first_connect = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
         assert_eq!(first_connect, Ok(()));
-        let second_connect = adapter.connect_transport(
-            &session_id,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-        );
+        let second_connect = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
         assert_eq!(second_connect, Err(TransportAdapterError::InvalidInput));
     }
 
-    #[test]
-    fn rtc_transport_connect_rejects_invalid_sdp_before_fallback() {
+    #[tokio::test]
+    async fn rtc_transport_connect_rejects_invalid_sdp_before_fallback() {
         let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(11);
-        let bootstrap_result =
-            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
         assert!(bootstrap_result.is_ok());
-        let connect_result = adapter.connect_transport(
-            &session_id,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            Some("v=0\r\ns=-\r\nt=0 0\r\n"),
-        );
+        let connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                Some("v=0\r\ns=-\r\nt=0 0\r\n"),
+            )
+            .await;
         assert_eq!(connect_result, Err(TransportAdapterError::InvalidInput));
     }
 
-    #[test]
-    fn rtc_transport_connect_rejects_unsupported_sdp_before_fallback() {
+    #[tokio::test]
+    async fn rtc_transport_connect_rejects_unsupported_sdp_before_fallback() {
         let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(12);
-        let bootstrap_result =
-            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
         assert!(bootstrap_result.is_ok());
-        let connect_result = adapter.connect_transport(
-            &session_id,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            Some("m=audio 9 RTP/SAVPF 111\r\n"),
-        );
+        let connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                Some("m=audio 9 RTP/SAVPF 111\r\n"),
+            )
+            .await;
         assert_eq!(
             connect_result,
             Err(TransportAdapterError::UnsupportedFeature)

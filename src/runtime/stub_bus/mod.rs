@@ -7,7 +7,9 @@ use tracing::{debug, trace};
 use super::channel::Channel;
 use crate::runtime::{
     metrics::RuntimeMetrics,
-    transport_adapter::{TransportAdapter, TransportAdapterError, TransportConnectDirection},
+    transport_adapter::{
+        RuntimeTransportAdapter, TransportAdapterError, TransportConnectDirection,
+    },
 };
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
@@ -57,6 +59,10 @@ pub(super) struct StubWebRtcAdapter {
     events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
 }
 
+#[allow(
+    clippy::unused_async,
+    reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+)]
 impl StubWebRtcAdapter {
     fn record_event(&self, event: StubWebRtcEvent) {
         match self.events.lock() {
@@ -78,8 +84,12 @@ impl StubWebRtcAdapter {
     }
 }
 
-impl TransportAdapter for StubWebRtcAdapter {
-    fn transport_bootstrap_payload(
+impl StubWebRtcAdapter {
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn transport_bootstrap_payload(
         &self,
         _session_id: &SessionId,
         router_capabilities: &o_sfu_router::RtpCapabilities,
@@ -88,7 +98,11 @@ impl TransportAdapter for StubWebRtcAdapter {
         Ok(bootstrap::transport_bootstrap_payload(router_capabilities))
     }
 
-    fn connect_transport(
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn connect_transport(
         &self,
         session_id: &SessionId,
         direction: TransportConnectDirection,
@@ -120,7 +134,7 @@ pub(super) struct StubBusSession {
     session_id: SessionId,
     channel: Arc<Channel>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: Arc<dyn TransportAdapter>,
+    transport_adapter: RuntimeTransportAdapter,
     next_request_counter: u64,
     next_producer_counter: u64,
     pending_transport_bootstrap_request_id: Option<CurrentBusRequestId>,
@@ -132,7 +146,7 @@ impl StubBusSession {
         session_id: SessionId,
         channel: Arc<Channel>,
         metrics: Arc<RuntimeMetrics>,
-        transport_adapter: Arc<dyn TransportAdapter>,
+        transport_adapter: RuntimeTransportAdapter,
     ) -> Self {
         Self {
             session_id,
@@ -153,6 +167,7 @@ impl StubBusSession {
         let Ok(bootstrap_payload) = self
             .transport_adapter
             .transport_bootstrap_payload(&self.session_id, &router_capabilities)
+            .await
         else {
             return Err(());
         };
@@ -202,13 +217,13 @@ impl StubBusSession {
         true
     }
 
-    fn dispatch_request(&mut self, message: Value) -> Value {
+    async fn dispatch_request(&mut self, message: Value) -> Value {
         let Ok(request) = serde_json::from_value::<CurrentClientRequest>(message) else {
             self.metrics.record_ws_bus_client_request_decode_failure();
             debug!("failed to decode client bus request, returning empty object");
             return empty_object();
         };
-        self.handle_request(&request)
+        self.handle_request(&request).await
     }
 
     async fn dispatch_message(&self, message: Value) {
@@ -345,7 +360,7 @@ impl StubBusSession {
     ) -> Result<(), StubBusOutcome> {
         self.metrics.record_ws_bus_client_request();
         debug!(request_id = %request_id.as_str(), "dispatching client bus request");
-        let response = self.dispatch_request(message);
+        let response = self.dispatch_request(message).await;
         self.send_response(writer, request_id, response)
             .await
             .map_err(|_error| StubBusOutcome::Break)
@@ -358,13 +373,15 @@ impl StubBusSession {
         Ok(())
     }
 
-    fn handle_request(&mut self, request: &CurrentClientRequest) -> Value {
+    async fn handle_request(&mut self, request: &CurrentClientRequest) -> Value {
         match request {
             CurrentClientRequest::ConnectUploadTransport(payload) => {
                 self.handle_transport_connect_request(payload, TransportConnectDirection::Upload)
+                    .await
             }
             CurrentClientRequest::ConnectDownloadTransport(payload) => {
                 self.handle_transport_connect_request(payload, TransportConnectDirection::Download)
+                    .await
             }
             CurrentClientRequest::PublishTrack(_) => self.handle_publish_request(),
             CurrentClientRequest::StartRecording(_) | CurrentClientRequest::StopRecording => {
@@ -374,7 +391,7 @@ impl StubBusSession {
         }
     }
 
-    fn handle_transport_connect_request(
+    async fn handle_transport_connect_request(
         &self,
         payload: &CurrentTransportConnectPayload,
         direction: TransportConnectDirection,
@@ -387,6 +404,7 @@ impl StubBusSession {
                 &payload.dtls_parameters,
                 payload.sdp_offer.as_deref(),
             )
+            .await
             .is_err()
         {
             debug!(?direction, "transport adapter failed to connect transport");

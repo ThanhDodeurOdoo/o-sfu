@@ -23,9 +23,7 @@ mod websocket_server;
 use channel::ChannelManager;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
-use rtc_adapter::RtcTransportAdapter;
-use stub_bus::StubWebRtcAdapter;
-use transport_adapter::TransportAdapter;
+use transport_adapter::RuntimeTransportAdapter;
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -33,7 +31,7 @@ pub struct Runtime {
     pub current_wire_protocol_version: u16,
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: Arc<dyn TransportAdapter>,
+    transport_adapter: RuntimeTransportAdapter,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +39,7 @@ pub(super) struct RuntimeState {
     config: Config,
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: Arc<dyn TransportAdapter>,
+    transport_adapter: RuntimeTransportAdapter,
 }
 
 impl Runtime {
@@ -93,9 +91,9 @@ pub fn run() -> Result<()> {
         .block_on(runtime.run_until_stopped())
 }
 
-fn build_transport_adapter(backend: TransportBackend) -> Arc<dyn TransportAdapter> {
+fn build_transport_adapter(backend: TransportBackend) -> RuntimeTransportAdapter {
     match backend {
-        TransportBackend::Stub => Arc::new(StubWebRtcAdapter::default()),
-        TransportBackend::Rtc => Arc::new(RtcTransportAdapter::default()),
+        TransportBackend::Stub => RuntimeTransportAdapter::stub(),
+        TransportBackend::Rtc => RuntimeTransportAdapter::rtc(),
     }
 }

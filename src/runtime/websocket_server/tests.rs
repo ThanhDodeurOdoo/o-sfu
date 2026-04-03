@@ -26,7 +26,7 @@ mod websocket_server_tests {
             http_server::app,
             metrics::RuntimeMetrics,
             stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
-            transport_adapter::{TransportAdapter, TransportConnectDirection},
+            transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection},
         },
         signaling::{
             auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -85,7 +85,7 @@ mod websocket_server_tests {
         spawn_test_server_with_adapter(
             authentication_timeout_ms,
             channel_size,
-            Arc::new(StubWebRtcAdapter::default()),
+            RuntimeTransportAdapter::stub(),
         )
         .await
     }
@@ -93,7 +93,7 @@ mod websocket_server_tests {
     async fn spawn_test_server_with_adapter(
         authentication_timeout_ms: u64,
         channel_size: usize,
-        transport_adapter: Arc<dyn TransportAdapter>,
+        transport_adapter: RuntimeTransportAdapter,
     ) -> Option<TestServer> {
         let channels = Arc::new(ChannelManager::new());
         let state = RuntimeState {
@@ -647,8 +647,8 @@ mod websocket_server_tests {
     #[tokio::test]
     async fn websocket_emits_stub_webrtc_bootstrap_event() {
         let adapter = Arc::new(StubWebRtcAdapter::default());
-        let transport_adapter: Arc<dyn TransportAdapter> =
-            Arc::<StubWebRtcAdapter>::clone(&adapter);
+        let transport_adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
         let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
         assert!(server.is_some());
         let Some(server) = server else {
@@ -681,8 +681,8 @@ mod websocket_server_tests {
     #[tokio::test]
     async fn websocket_emits_stub_webrtc_directional_connect_events() {
         let adapter = Arc::new(StubWebRtcAdapter::default());
-        let transport_adapter: Arc<dyn TransportAdapter> =
-            Arc::<StubWebRtcAdapter>::clone(&adapter);
+        let transport_adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
         let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
         assert!(server.is_some());
         let Some(server) = server else {
@@ -757,8 +757,8 @@ mod websocket_server_tests {
     #[tokio::test]
     async fn websocket_emits_stub_webrtc_rejected_connect_event_for_invalid_dtls() {
         let adapter = Arc::new(StubWebRtcAdapter::default());
-        let transport_adapter: Arc<dyn TransportAdapter> =
-            Arc::<StubWebRtcAdapter>::clone(&adapter);
+        let transport_adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
         let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
         assert!(server.is_some());
         let Some(server) = server else {

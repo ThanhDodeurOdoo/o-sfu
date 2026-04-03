@@ -13,7 +13,8 @@ use super::app;
 use crate::{
     config::{Config, TransportBackend},
     runtime::{
-        RuntimeState, channel::ChannelManager, metrics::RuntimeMetrics, stub_bus::StubWebRtcAdapter,
+        RuntimeState, channel::ChannelManager, metrics::RuntimeMetrics,
+        transport_adapter::RuntimeTransportAdapter,
     },
     signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
@@ -42,7 +43,7 @@ fn test_state() -> RuntimeState {
         config: test_config(),
         channels: Arc::new(ChannelManager::new()),
         metrics: Arc::new(RuntimeMetrics::default()),
-        transport_adapter: Arc::new(StubWebRtcAdapter::default()),
+        transport_adapter: RuntimeTransportAdapter::stub(),
     }
 }
 
