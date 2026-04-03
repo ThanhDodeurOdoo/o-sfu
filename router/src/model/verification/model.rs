@@ -107,7 +107,9 @@ impl<
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
-    /// consumers,
+    /// consumers, [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
+    /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
+    /// stream type does not match its source producer,
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
     pub(crate) fn add_consumer(&mut self, consumer: Consumer) -> Result<(), ProofRouterError> {
@@ -117,8 +119,24 @@ impl<
         if transport.direction() != TransportDirection::Send {
             return Err(RouterError::ConsumerRequiresSendTransport(consumer.transport_id()).into());
         }
-        if !self.contains_producer(consumer.producer_id()) {
+        let Some(producer) = self.producer_by_id(consumer.producer_id()) else {
             return Err(RouterError::MissingProducer(consumer.producer_id()).into());
+        };
+        if consumer.media_kind() != producer.media_kind() {
+            return Err(RouterError::ConsumerMediaKindMismatch {
+                producer_id: consumer.producer_id(),
+                expected: producer.media_kind(),
+                actual: consumer.media_kind(),
+            }
+            .into());
+        }
+        if consumer.stream_type() != producer.stream_type() {
+            return Err(RouterError::ConsumerStreamTypeMismatch {
+                producer_id: consumer.producer_id(),
+                expected: producer.stream_type(),
+                actual: consumer.stream_type(),
+            }
+            .into());
         }
         if self.contains_consumer(consumer.id()) {
             return Err(RouterError::DuplicateConsumer(consumer.id()).into());
@@ -291,6 +309,15 @@ impl<
             }
         }
         false
+    }
+
+    pub(super) fn producer_by_id(&self, producer_id: ProducerId) -> Option<Producer> {
+        for producer in &self.producers {
+            if producer.is_some_and(|producer| producer.id() == producer_id) {
+                return *producer;
+            }
+        }
+        None
     }
 
     fn contains_consumer(&self, consumer_id: ConsumerId) -> bool {

@@ -107,7 +107,9 @@ impl Router {
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
-    /// consumers,
+    /// consumers, [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
+    /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
+    /// stream type does not match its source producer,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
     pub fn add_consumer(&mut self, consumer: Consumer) -> Result<(), RouterError> {
         let consumer_id = consumer.id();
@@ -119,8 +121,22 @@ impl Router {
         if transport.direction() != TransportDirection::Send {
             return Err(RouterError::ConsumerRequiresSendTransport(transport_id));
         }
-        if !self.producers.contains_key(&producer_id) {
+        let Some(producer) = self.producers.get(&producer_id) else {
             return Err(RouterError::MissingProducer(producer_id));
+        };
+        if consumer.media_kind() != producer.media_kind() {
+            return Err(RouterError::ConsumerMediaKindMismatch {
+                producer_id,
+                expected: producer.media_kind(),
+                actual: consumer.media_kind(),
+            });
+        }
+        if consumer.stream_type() != producer.stream_type() {
+            return Err(RouterError::ConsumerStreamTypeMismatch {
+                producer_id,
+                expected: producer.stream_type(),
+                actual: consumer.stream_type(),
+            });
         }
         if self.consumers.contains_key(&consumer_id) {
             return Err(RouterError::DuplicateConsumer(consumer_id));

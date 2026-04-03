@@ -1,4 +1,4 @@
-use super::{ConsumerId, ProducerId, SessionId, TransportId};
+use super::{ConsumerId, MediaKind, ProducerId, SessionId, StreamType, TransportId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterError {
@@ -12,4 +12,14 @@ pub enum RouterError {
     MissingConsumer(ConsumerId),
     ProducerRequiresReceiveTransport(TransportId),
     ConsumerRequiresSendTransport(TransportId),
+    ConsumerMediaKindMismatch {
+        producer_id: ProducerId,
+        expected: MediaKind,
+        actual: MediaKind,
+    },
+    ConsumerStreamTypeMismatch {
+        producer_id: ProducerId,
+        expected: StreamType,
+        actual: StreamType,
+    },
 }
