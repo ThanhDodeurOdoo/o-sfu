@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use o_sfu_router::RouterId;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, mpsc};
 use tracing::error;
 use uuid::Uuid;
@@ -12,7 +13,7 @@ use crate::signaling::{
         CurrentBroadcastPayload, CurrentServerMessage, CurrentSessionDeparturePayload,
         CurrentSessionInfoSnapshotById, CurrentWebSocketCloseCode,
     },
-    http::CreateChannelQuery,
+    http::{ChannelStats, CreateChannelQuery, IncomingBitRateStats, SessionsStats},
     shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, SessionPermissions},
 };
 
@@ -51,9 +52,11 @@ pub enum ChannelManagerJoinError {
 /// Identity fields (uuid, issuer, key, features) are immutable after creation.
 /// Mutable state (sessions, recording) is behind an interior lock.
 pub struct Channel {
+    create_date: String,
     uuid: String,
     issuer: String,
     key: Option<String>,
+    remote_address: String,
     web_rtc_enabled: bool,
     #[allow(dead_code, reason = "stored for future recording pipeline integration")]
     recording_address: Option<String>,
@@ -87,12 +90,15 @@ impl Channel {
         router_id: RouterId,
         issuer: String,
         key: Option<String>,
+        remote_address: String,
         query: &CreateChannelQuery,
     ) -> Self {
         Self {
+            create_date: rfc3339_now(),
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
+            remote_address,
             web_rtc_enabled: query.web_rtc_enabled(),
             recording_address: query.recording_address.clone(),
             state: RwLock::new(ChannelState::new(router_id)),
@@ -114,6 +120,12 @@ impl Channel {
         self.key.as_deref()
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub fn create_date(&self) -> &str {
+        &self.create_date
+    }
+
     #[must_use]
     pub fn available_features(&self) -> AvailableFeatures {
         AvailableFeatures {
@@ -126,6 +138,37 @@ impl Channel {
 
     pub async fn recording_state(&self) -> RecordingState {
         self.state.read().await.recording_state.clone()
+    }
+
+    pub async fn stats(&self) -> ChannelStats {
+        let state = self.state.read().await;
+        let camera_count = state
+            .sessions
+            .values()
+            .filter(|session| session.info.is_camera_on == Some(true))
+            .count();
+        let screen_count = state
+            .sessions
+            .values()
+            .filter(|session| session.info.is_screen_sharing_on == Some(true))
+            .count();
+        ChannelStats {
+            create_date: self.create_date.clone(),
+            uuid: self.uuid.clone(),
+            remote_address: self.remote_address.clone(),
+            sessions_stats: SessionsStats {
+                incoming_bit_rate: IncomingBitRateStats {
+                    total: 0,
+                    screen: 0,
+                    audio: 0,
+                    camera: 0,
+                },
+                count: state.router.session_count(),
+                camera_count: u64::try_from(camera_count).unwrap_or(u64::MAX),
+                screen_count: u64::try_from(screen_count).unwrap_or(u64::MAX),
+            },
+            web_rtc_enabled: self.web_rtc_enabled,
+        }
     }
 
     /// Add a session to this channel. Returns an error if the channel is at capacity
@@ -305,7 +348,7 @@ impl Channel {
 
     #[cfg(test)]
     pub(super) async fn router_session_count(&self) -> usize {
-        self.state.read().await.router.session_count()
+        usize::try_from(self.state.read().await.router.session_count()).unwrap_or(usize::MAX)
     }
 
     pub(super) async fn is_empty(&self) -> bool {
@@ -351,9 +394,18 @@ fn send_to_all_except(
 impl fmt::Debug for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Channel")
+            .field("create_date", &self.create_date)
             .field("uuid", &self.uuid)
             .field("issuer", &self.issuer)
+            .field("remote_address", &self.remote_address)
             .field("web_rtc_enabled", &self.web_rtc_enabled)
             .finish_non_exhaustive()
+    }
+}
+
+fn rfc3339_now() -> String {
+    match OffsetDateTime::now_utc().format(&Rfc3339) {
+        Ok(timestamp) => timestamp,
+        Err(_error) => String::from("1970-01-01T00:00:00Z"),
     }
 }

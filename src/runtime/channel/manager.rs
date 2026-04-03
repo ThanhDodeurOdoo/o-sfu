@@ -6,9 +6,11 @@ use tokio::sync::{RwLock, mpsc};
 
 use super::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
 use crate::signaling::{
-    http::CreateChannelQuery,
+    http::{CreateChannelQuery, StatsResponse},
     shared::{SessionId, SessionPermissions},
 };
+
+const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
 
 /// Manages all active channels with idempotent creation by issuer.
 #[derive(Debug, Default)]
@@ -38,6 +40,19 @@ impl ChannelManager {
         key: Option<&str>,
         query: &CreateChannelQuery,
     ) -> Arc<Channel> {
+        self.create_or_get_with_remote_address(issuer, key, UNKNOWN_REMOTE_ADDRESS, query)
+            .await
+    }
+
+    /// Create a channel for the given issuer, preserving the remote address that
+    /// originally provisioned it for observability surfaces such as `/v1/stats`.
+    pub async fn create_or_get_with_remote_address(
+        &self,
+        issuer: &str,
+        key: Option<&str>,
+        remote_address: &str,
+        query: &CreateChannelQuery,
+    ) -> Arc<Channel> {
         {
             let state = self.state.read().await;
             if let Some(uuid) = state.uuids_by_issuer.get(issuer)
@@ -58,6 +73,7 @@ impl ChannelManager {
             router_id,
             issuer.to_owned(),
             key.map(str::to_owned),
+            remote_address.to_owned(),
             query,
         ));
         let channel_uuid = channel.uuid().to_owned();
@@ -73,6 +89,22 @@ impl ChannelManager {
     pub async fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Channel>> {
         let state = self.state.read().await;
         state.channels_by_uuid.get(uuid).map(Arc::clone)
+    }
+
+    pub async fn stats(&self) -> StatsResponse {
+        let channels = {
+            let state = self.state.read().await;
+            state
+                .channels_by_uuid
+                .values()
+                .map(Arc::clone)
+                .collect::<Vec<_>>()
+        };
+        let mut stats = Vec::with_capacity(channels.len());
+        for channel in channels {
+            stats.push(channel.stats().await);
+        }
+        stats
     }
 
     #[allow(

@@ -1,10 +1,10 @@
-use std::str;
+use std::{net::SocketAddr, str};
 
 use anyhow::Result;
 use axum::{
-    Router,
+    Extension, Router,
     body::Bytes,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -18,8 +18,8 @@ use crate::{
     signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims},
         http::{
-            CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery, DISCONNECT_PATH,
-            NOOP_PATH, NoopResponse, STATS_PATH, StatsResponse,
+            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, NOOP_PATH,
+            NoopResponse, STATS_PATH,
         },
     },
 };
@@ -30,7 +30,11 @@ pub async fn serve_http(state: RuntimeState) -> Result<()> {
         "starting HTTP and WebSocket listener"
     );
     let listener = TcpListener::bind(state.config.bind_address).await?;
-    axum::serve(listener, app(state)).await?;
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -48,13 +52,13 @@ async fn noop() -> impl IntoResponse {
     axum::Json(NoopResponse::ok())
 }
 
-async fn stats() -> impl IntoResponse {
-    let placeholder: StatsResponse = Vec::<ChannelStats>::new();
-    axum::Json(placeholder)
+async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
+    axum::Json(state.channels.stats().await)
 }
 
 async fn channel(
     State(state): State<RuntimeState>,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Query(query): Query<CreateChannelQuery>,
 ) -> Response {
@@ -70,9 +74,13 @@ async fn channel(
     if query.recording_address.is_some() && claims.key.is_none() {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let remote_address = request_remote_address(
+        &headers,
+        connect_info.map(|Extension(ConnectInfo(addr))| addr),
+    );
     let channel = state
         .channels
-        .create_or_get(issuer, claims.key.as_deref(), &query)
+        .create_or_get_with_remote_address(issuer, claims.key.as_deref(), &remote_address, &query)
         .await;
     (
         StatusCode::OK,
@@ -119,6 +127,13 @@ fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
         })
         .unwrap_or_else(|| config.bind_address.to_string());
     format!("{scheme}://{host}")
+}
+
+fn request_remote_address(headers: &HeaderMap, connect_info: Option<SocketAddr>) -> String {
+    forwarded_header(headers, "x-forwarded-for")
+        .map(str::to_owned)
+        .or_else(|| connect_info.map(|addr| addr.ip().to_string()))
+        .unwrap_or_else(|| String::from("unknown"))
 }
 
 fn forwarded_header<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'headers str> {

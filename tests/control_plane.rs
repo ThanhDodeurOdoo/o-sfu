@@ -18,6 +18,7 @@ use o_sfu::{
             CurrentClientMessage, CurrentServerMessage, CurrentSessionInfoUpdatePayload,
             CurrentWebSocketCredentials,
         },
+        http::{STATS_PATH, StatsResponse},
         shared::{SessionId, SessionInfo, StreamType},
     },
 };
@@ -245,6 +246,95 @@ async fn session_info_change_reaches_other_session_from_integration_test() {
     } else {
         panic!("expected session info update");
     }
+}
+
+#[tokio::test]
+async fn stats_reports_live_session_aggregates_from_integration_test() {
+    let server = spawn_test_server(test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-a", None).await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let alice = FakeWebSocketClient::authenticate_and_bootstrap(&server, &alice_token).await;
+    let bob = FakeWebSocketClient::authenticate_and_bootstrap(&server, &bob_token).await;
+    assert!(alice.is_some());
+    assert!(bob.is_some());
+    let Some((mut alice, _startup)) = alice else {
+        return;
+    };
+    let Some((mut bob, _startup)) = bob else {
+        return;
+    };
+
+    let alice_sent = alice
+        .send_bus_message(CurrentClientMessage::UpdateSessionInfo(
+            CurrentSessionInfoUpdatePayload {
+                info: SessionInfo {
+                    is_camera_on: Some(true),
+                    ..SessionInfo::default()
+                },
+                need_refresh: None,
+            },
+        ))
+        .await;
+    let bob_sent = bob
+        .send_bus_message(CurrentClientMessage::UpdateSessionInfo(
+            CurrentSessionInfoUpdatePayload {
+                info: SessionInfo {
+                    is_screen_sharing_on: Some(true),
+                    ..SessionInfo::default()
+                },
+                need_refresh: None,
+            },
+        ))
+        .await;
+    assert!(alice_sent.is_some());
+    assert!(bob_sent.is_some());
+
+    let _ = alice.read_server_message().await;
+    let _ = alice.read_server_message().await;
+    let _ = bob.read_server_message().await;
+    let _ = bob.read_server_message().await;
+
+    let response = reqwest::get(format!("{}{STATS_PATH}", server.http_base_url()))
+        .await
+        .ok();
+    assert!(response.is_some());
+    let Some(response) = response else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::OK);
+    let stats = response.json::<StatsResponse>().await.ok();
+    assert!(stats.is_some());
+    let Some(stats) = stats else {
+        return;
+    };
+    assert_eq!(stats.len(), 1);
+    let first = stats.first();
+    assert!(first.is_some());
+    let Some(first) = first else {
+        return;
+    };
+    assert_eq!(first.uuid, channel);
+    assert_eq!(first.sessions_stats.count, 2);
+    assert_eq!(first.sessions_stats.camera_count, 1);
+    assert_eq!(first.sessions_stats.screen_count, 1);
+    assert_eq!(first.sessions_stats.incoming_bit_rate.total, 0);
+    assert!(first.web_rtc_enabled);
+    assert_eq!(first.remote_address, "127.0.0.1");
 }
 
 #[tokio::test]

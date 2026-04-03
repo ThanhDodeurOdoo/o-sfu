@@ -6,6 +6,7 @@ use axum::{
     response::Response as AxumResponse,
 };
 use serde::de::DeserializeOwned;
+use tokio::sync::mpsc;
 use tower::util::ServiceExt;
 
 use super::app;
@@ -15,9 +16,10 @@ use crate::{
     signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
         http::{
-            CHANNEL_PATH, ChannelResponse, DISCONNECT_PATH, NOOP_PATH, NoopResponse, STATS_PATH,
+            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, NOOP_PATH,
+            NoopResponse, STATS_PATH, StatsResponse,
         },
-        shared::SessionId,
+        shared::{SessionId, SessionInfo, SessionPermissions},
     },
 };
 
@@ -103,13 +105,62 @@ async fn noop_returns_ok_response() {
 }
 
 #[tokio::test]
-async fn stats_returns_placeholder_data() {
+async fn stats_returns_live_channel_data() {
+    let state = test_state();
+    let query = CreateChannelQuery::default();
+    let channel = state
+        .channels
+        .create_or_get_with_remote_address("issuer-a", None, "203.0.113.10", &query)
+        .await;
+    let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
+    let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
+    let alice_join = channel
+        .join_session(
+            SessionId::Integer(1),
+            None,
+            SessionPermissions::default(),
+            alice_tx,
+            10,
+        )
+        .await;
+    let bob_join = channel
+        .join_session(
+            SessionId::Integer(2),
+            None,
+            SessionPermissions::default(),
+            bob_tx,
+            10,
+        )
+        .await;
+    assert!(alice_join.is_ok());
+    assert!(bob_join.is_ok());
+    channel
+        .update_session_info(
+            &SessionId::Integer(1),
+            SessionInfo {
+                is_camera_on: Some(true),
+                ..SessionInfo::default()
+            },
+            false,
+        )
+        .await;
+    channel
+        .update_session_info(
+            &SessionId::Integer(2),
+            SessionInfo {
+                is_screen_sharing_on: Some(true),
+                ..SessionInfo::default()
+            },
+            false,
+        )
+        .await;
+
     let request = build_request(Request::get(STATS_PATH), Body::empty());
     assert!(request.is_some());
     let Some(request) = request else {
         return;
     };
-    let response = app(test_state()).oneshot(request).await;
+    let response = app(state).oneshot(request).await;
     assert!(
         response.is_ok(),
         "stats request should succeed: {response:?}"
@@ -118,12 +169,28 @@ async fn stats_returns_placeholder_data() {
         return;
     };
     assert_eq!(response.status(), StatusCode::OK);
-    let payload: Option<serde_json::Value> = parse_json(response).await;
+    let payload: Option<StatsResponse> = parse_json(response).await;
     assert!(payload.is_some());
     let Some(payload) = payload else {
         return;
     };
-    assert_eq!(payload, serde_json::json!([]));
+    assert_eq!(payload.len(), 1);
+    let first = payload.first();
+    assert!(first.is_some());
+    let Some(first) = first else {
+        return;
+    };
+    assert_eq!(first.uuid, channel.uuid());
+    assert_eq!(first.remote_address, "203.0.113.10");
+    assert_eq!(first.sessions_stats.count, 2);
+    assert_eq!(first.sessions_stats.camera_count, 1);
+    assert_eq!(first.sessions_stats.screen_count, 1);
+    assert_eq!(first.sessions_stats.incoming_bit_rate.total, 0);
+    assert_eq!(first.sessions_stats.incoming_bit_rate.audio, 0);
+    assert_eq!(first.sessions_stats.incoming_bit_rate.camera, 0);
+    assert_eq!(first.sessions_stats.incoming_bit_rate.screen, 0);
+    assert!(first.web_rtc_enabled);
+    assert_eq!(first.create_date, channel.create_date());
 }
 
 #[tokio::test]
@@ -238,6 +305,62 @@ async fn channel_returns_uuid_and_request_base_url() {
     };
     assert!(!payload.uuid.is_empty());
     assert_eq!(payload.url, "http://sfu.example.com");
+}
+
+#[tokio::test]
+async fn channel_uses_forwarded_remote_address_for_stats() {
+    let token = signed_channel_claims(Some("issuer-a"), None);
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let create_request = build_request(
+        Request::get(CHANNEL_PATH)
+            .header(header::HOST, "sfu.example.com")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header("x-forwarded-for", "198.51.100.24, 10.0.0.1"),
+        Body::empty(),
+    );
+    assert!(create_request.is_some());
+    let Some(create_request) = create_request else {
+        return;
+    };
+    let state = test_state();
+    let create_response = app(state.clone()).oneshot(create_request).await;
+    assert!(
+        create_response.is_ok(),
+        "channel request should complete: {create_response:?}"
+    );
+    let Some(create_response) = create_response.ok() else {
+        return;
+    };
+    assert_eq!(create_response.status(), StatusCode::OK);
+
+    let stats_request = build_request(Request::get(STATS_PATH), Body::empty());
+    assert!(stats_request.is_some());
+    let Some(stats_request) = stats_request else {
+        return;
+    };
+    let stats_response = app(state).oneshot(stats_request).await;
+    assert!(
+        stats_response.is_ok(),
+        "stats request should succeed: {stats_response:?}"
+    );
+    let Some(stats_response) = stats_response.ok() else {
+        return;
+    };
+    let payload: Option<StatsResponse> = parse_json(stats_response).await;
+    assert!(payload.is_some());
+    let Some(payload) = payload else {
+        return;
+    };
+    assert_eq!(payload.len(), 1);
+    let first = payload.first();
+    assert!(first.is_some());
+    let Some(first) = first else {
+        return;
+    };
+    assert_eq!(first.remote_address, "198.51.100.24");
 }
 
 #[tokio::test]

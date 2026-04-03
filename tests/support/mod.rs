@@ -96,6 +96,7 @@ pub async fn create_channel(
     let response = reqwest::Client::new()
         .get(format!("{}{CHANNEL_PATH}", server.http_base_url()))
         .bearer_auth(token)
+        .header("x-forwarded-for", "127.0.0.1")
         .query(&CreateChannelQuery::default())
         .send()
         .await

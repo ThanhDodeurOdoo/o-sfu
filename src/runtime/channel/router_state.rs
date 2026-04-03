@@ -67,8 +67,7 @@ impl ChannelRouterState {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn session_count(&self) -> usize {
-        self.router.session_count()
+    pub(super) fn session_count(&self) -> u64 {
+        u64::try_from(self.router.session_count()).unwrap_or(u64::MAX)
     }
 }
