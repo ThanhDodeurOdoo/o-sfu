@@ -1,4 +1,5 @@
 mod consumer;
+mod diagnostic;
 mod error;
 mod ids;
 mod media;
@@ -14,6 +15,9 @@ mod transport;
 pub(crate) mod verification;
 
 pub use self::consumer::Consumer;
+pub use self::diagnostic::{
+    ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
+};
 pub use self::error::RouterError;
 pub use self::ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId};
 pub use self::media::{MediaKind, StreamType};

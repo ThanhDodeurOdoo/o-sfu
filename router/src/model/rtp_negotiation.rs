@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
-    RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpParameters,
+    MediaKind, ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
+    RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability, RtpCodecParameters,
+    RtpEncoding, RtpHeaderExtension, RtpParameters,
 };
 use crate::rfc::webrtc;
 
@@ -27,6 +28,48 @@ pub enum RtpNegotiationError {
         associated_payload_type: u8,
     },
     NoCompatibleConsumerCodec,
+}
+
+const RFC_3264_SECTION_6: RfcReference = RfcReference::new(
+    "RFC 3264",
+    "section 6",
+    "https://www.rfc-editor.org/rfc/rfc3264#section-6",
+);
+const RFC_4588_SECTION_8_1: RfcReference = RfcReference::new(
+    "RFC 4588",
+    "section 8.1",
+    "https://www.rfc-editor.org/rfc/rfc4588#section-8.1",
+);
+
+impl ParseDiagnostic for RtpNegotiationError {
+    fn diagnostic(&self) -> ParseDiagnosticSpec {
+        match self {
+            Self::UnsupportedProducerCodec { .. } => ParseDiagnosticSpec::new(
+                ParseDiagnosticKind::UnsupportedFeature,
+                "producer codec is valid but not supported by router capabilities",
+                RFC_3264_SECTION_6,
+                "capture producer RTP parameters and router capabilities and replay derive_consumable_rtp_parameters",
+            ),
+            Self::InvalidAptParameter { .. } => ParseDiagnosticSpec::new(
+                ParseDiagnosticKind::InvalidInput,
+                "RTX codec has an invalid or missing apt parameter",
+                RFC_4588_SECTION_8_1,
+                "capture producer RTP parameters and replay derive_consumable_rtp_parameters to inspect RTX fmtp apt",
+            ),
+            Self::MissingAssociatedMediaCodecForRtx { .. } => ParseDiagnosticSpec::new(
+                ParseDiagnosticKind::InvalidInput,
+                "RTX codec references an associated payload type that is not negotiated",
+                RFC_4588_SECTION_8_1,
+                "capture producer RTP parameters and replay derive_consumable_rtp_parameters to inspect RTX apt mapping",
+            ),
+            Self::NoCompatibleConsumerCodec => ParseDiagnosticSpec::new(
+                ParseDiagnosticKind::UnsupportedFeature,
+                "consumer capabilities have no compatible media codec with the consumable set",
+                RFC_3264_SECTION_6,
+                "capture consumable RTP parameters and consumer capabilities and replay negotiate_consumer_rtp_parameters",
+            ),
+        }
+    }
 }
 
 /// Derive consumable RTP parameters from producer parameters and router capabilities.

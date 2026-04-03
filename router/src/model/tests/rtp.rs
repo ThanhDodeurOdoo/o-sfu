@@ -4,6 +4,7 @@ use crate::{
     RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpNegotiationError, RtpParameters,
     can_consume, derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
+use crate::{ParseDiagnostic, ParseDiagnosticKind};
 
 #[test]
 fn codec_capability_builder_keeps_optional_fields() {
@@ -255,4 +256,75 @@ fn consumer_negotiation_fails_when_no_media_codec_matches() {
         Err(RtpNegotiationError::NoCompatibleConsumerCodec)
     );
     assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn invalid_rtx_apt_is_reported_as_invalid_diagnostic() {
+    let router_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_preferred_payload_type(100),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_preferred_payload_type(101)
+                .with_parameter("apt", "100"),
+        ],
+        vec![],
+    );
+    let producer_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "VP8", 96, 90_000),
+            RtpCodecParameters::new(MediaKind::Video, "rtx", 97, 90_000)
+                .with_parameter("apt", "bad"),
+        ],
+        vec![],
+        vec![],
+    );
+
+    let negotiation = derive_consumable_rtp_parameters(&producer_parameters, &router_capabilities);
+    assert_eq!(
+        negotiation,
+        Err(RtpNegotiationError::InvalidAptParameter {
+            codec_name: "rtx".to_owned(),
+            payload_type: 97,
+        })
+    );
+    let Err(error) = negotiation else {
+        return;
+    };
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
+    assert_eq!(diagnostic.rfc_reference().document(), "RFC 4588",);
+    assert_eq!(diagnostic.rfc_reference().section(), "section 8.1");
+}
+
+#[test]
+fn incompatible_consumer_codec_is_reported_as_unsupported_diagnostic() {
+    let consumable_parameters = RtpParameters::new(
+        vec![RtpCodecParameters::new(
+            MediaKind::Audio,
+            "opus",
+            111,
+            48_000,
+        )],
+        vec![],
+        vec![],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)],
+        vec![],
+    );
+
+    let negotiation =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiation,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    let Err(error) = negotiation else {
+        return;
+    };
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
+    assert_eq!(diagnostic.rfc_reference().document(), "RFC 3264");
+    assert_eq!(diagnostic.rfc_reference().section(), "section 6");
 }
