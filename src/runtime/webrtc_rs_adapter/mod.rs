@@ -6,6 +6,12 @@ use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload, shared::SessionId, webrtc::DtlsParameters,
 };
 
+#[allow(
+    dead_code,
+    reason = "Phase-7 SDP parsing scaffolding is prepared before transport wiring starts using it."
+)]
+mod sdp;
+
 /// Placeholder transport adapter for the selected phase-7 backend (`webrtc-rs`).
 ///
 /// During the library-selection phase this delegates to the deterministic stub
