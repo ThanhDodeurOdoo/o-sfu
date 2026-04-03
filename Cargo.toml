@@ -1,5 +1,5 @@
 [workspace]
-members = ["router", "rfc"]
+members = ["rfc", "router"]
 resolver = "3"
 
 [workspace.package]
@@ -94,10 +94,11 @@ useless_let_if_seq = "warn"
 while_float = "warn"
 
 [package]
-authors.workspace = true
 description = "o-sfu"
-edition.workspace = true
 name = "o-sfu"
+
+authors.workspace = true
+edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
 

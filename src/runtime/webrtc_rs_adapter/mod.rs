@@ -12,10 +12,12 @@ use crate::signaling::{
     shared::SessionId,
     webrtc::{DtlsParameters, IceCandidate},
 };
+use o_sfu_router::ParseDiagnosticKind;
 use tracing::{debug, error, warn};
 
 mod dtls;
 mod ice;
+mod parse_diagnostic;
 #[allow(
     dead_code,
     reason = "Phase-7 SDP parsing scaffolding is prepared before transport wiring starts using it."
@@ -150,7 +152,7 @@ fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), Tran
     match dtls::parse_dtls_parameters(dtls_parameters) {
         Ok(_parsed) => Ok(()),
         Err(diagnostic) => match diagnostic.kind() {
-            dtls::DtlsDiagnosticKind::InvalidInput => {
+            ParseDiagnosticKind::InvalidInput => {
                 error!(
                     summary = diagnostic.summary(),
                     rfc_document = diagnostic.rfc_reference().document(),
@@ -161,7 +163,7 @@ fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), Tran
                 );
                 Err(TransportAdapterError::InvalidInput)
             }
-            dtls::DtlsDiagnosticKind::UnsupportedFeature => {
+            ParseDiagnosticKind::UnsupportedFeature => {
                 warn!(
                     summary = diagnostic.summary(),
                     rfc_document = diagnostic.rfc_reference().document(),
@@ -199,7 +201,7 @@ fn validate_ice_candidates(
         match ice::parse_ice_candidate(line.as_str()) {
             Ok(_parsed) => {}
             Err(diagnostic) => match diagnostic.kind() {
-                ice::IceDiagnosticKind::InvalidInput => {
+                ParseDiagnosticKind::InvalidInput => {
                     error!(
                         transport_id,
                         summary = diagnostic.summary(),
@@ -211,7 +213,7 @@ fn validate_ice_candidates(
                     );
                     return Err(TransportAdapterError::InvalidInput);
                 }
-                ice::IceDiagnosticKind::UnsupportedFeature => {
+                ParseDiagnosticKind::UnsupportedFeature => {
                     warn!(
                         transport_id,
                         summary = diagnostic.summary(),

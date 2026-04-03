@@ -1,6 +1,8 @@
+use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 use tracing::{error, trace, warn};
 
 use crate::signaling::webrtc::DtlsParameters;
+use o_sfu_router::RfcReference;
 
 const ROLE_PATH: &str = "$.role";
 const FINGERPRINTS_PATH: &str = "$.fingerprints";
@@ -9,57 +11,22 @@ const SUPPORTED_SHA256_FINGERPRINT_BYTE_LEN: usize = 32;
 const VALID_BUT_UNSUPPORTED_FINGERPRINT_ALGORITHMS: [&str; 4] =
     ["sha-1", "sha-224", "sha-384", "sha-512"];
 
-const RFC_5763_SECTION_5: DtlsRfcReference = DtlsRfcReference::new(
+const DTLS_REPLAY_CONTEXT_HINT: &str = "raw DTLS parameters JSON payload";
+
+const RFC_5763_SECTION_5: RfcReference = RfcReference::new(
     "RFC 5763",
     "5",
     "https://www.rfc-editor.org/rfc/rfc5763#section-5",
 );
-const RFC_4572_SECTION_5: DtlsRfcReference = DtlsRfcReference::new(
+const RFC_4572_SECTION_5: RfcReference = RfcReference::new(
     "RFC 4572",
     "5",
     "https://www.rfc-editor.org/rfc/rfc4572#section-5",
 );
 
-pub(super) type DtlsParseResult<T> = Result<T, Box<DtlsParseDiagnostic>>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DtlsDiagnosticKind {
-    InvalidInput,
-    UnsupportedFeature,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct DtlsRfcReference {
-    document: &'static str,
-    section: &'static str,
-    url: &'static str,
-}
-
-impl DtlsRfcReference {
-    #[must_use]
-    pub const fn new(document: &'static str, section: &'static str, url: &'static str) -> Self {
-        Self {
-            document,
-            section,
-            url,
-        }
-    }
-
-    #[must_use]
-    pub fn document(&self) -> &'static str {
-        self.document
-    }
-
-    #[must_use]
-    pub fn section(&self) -> &'static str {
-        self.section
-    }
-
-    #[must_use]
-    pub fn url(&self) -> &'static str {
-        self.url
-    }
-}
+pub(super) type DtlsParseResult<T> = ParseResult<T, DtlsInvalidContext, DtlsUnsupportedContext>;
+pub(super) type DtlsParseDiagnostic =
+    AdapterParseDiagnostic<DtlsInvalidContext, DtlsUnsupportedContext>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DtlsInvalidContext {
@@ -74,55 +41,6 @@ pub(super) struct DtlsUnsupportedContext {
     got: String,
     json_path: &'static str,
     raw_dtls_parameters: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum DtlsParseDiagnostic {
-    InvalidInput {
-        summary: &'static str,
-        rfc_reference: DtlsRfcReference,
-        context: Box<DtlsInvalidContext>,
-    },
-    UnsupportedFeature {
-        summary: &'static str,
-        rfc_reference: DtlsRfcReference,
-        context: Box<DtlsUnsupportedContext>,
-    },
-}
-
-impl DtlsParseDiagnostic {
-    #[must_use]
-    pub(super) fn kind(&self) -> DtlsDiagnosticKind {
-        match self {
-            Self::InvalidInput { .. } => DtlsDiagnosticKind::InvalidInput,
-            Self::UnsupportedFeature { .. } => DtlsDiagnosticKind::UnsupportedFeature,
-        }
-    }
-
-    #[must_use]
-    pub(super) fn summary(&self) -> &'static str {
-        match self {
-            Self::InvalidInput { summary, .. } | Self::UnsupportedFeature { summary, .. } => {
-                summary
-            }
-        }
-    }
-
-    #[must_use]
-    pub(super) fn rfc_reference(&self) -> DtlsRfcReference {
-        match self {
-            Self::InvalidInput { rfc_reference, .. }
-            | Self::UnsupportedFeature { rfc_reference, .. } => *rfc_reference,
-        }
-    }
-
-    #[must_use]
-    pub(super) fn replay_context(&self) -> &str {
-        match self {
-            Self::InvalidInput { context, .. } => &context.raw_dtls_parameters,
-            Self::UnsupportedFeature { context, .. } => &context.raw_dtls_parameters,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,67 +330,63 @@ fn invalid_input(
     expected: String,
     got: String,
     json_path: &'static str,
-    rfc_reference: DtlsRfcReference,
+    rfc_reference: RfcReference,
     raw_json: &str,
 ) -> DtlsParseDiagnostic {
-    DtlsParseDiagnostic::InvalidInput {
+    DtlsParseDiagnostic::invalid_input(
         summary,
         rfc_reference,
-        context: Box::new(DtlsInvalidContext {
+        DTLS_REPLAY_CONTEXT_HINT,
+        DtlsInvalidContext {
             expected,
             got,
             json_path,
             raw_dtls_parameters: raw_json.to_owned(),
-        }),
-    }
+        },
+        raw_json.to_owned(),
+    )
 }
 
 fn unsupported_feature(
     summary: &'static str,
     got: &str,
     json_path: &'static str,
-    rfc_reference: DtlsRfcReference,
+    rfc_reference: RfcReference,
     raw_json: &str,
 ) -> DtlsParseDiagnostic {
-    DtlsParseDiagnostic::UnsupportedFeature {
+    DtlsParseDiagnostic::unsupported_feature(
         summary,
         rfc_reference,
-        context: Box::new(DtlsUnsupportedContext {
+        DTLS_REPLAY_CONTEXT_HINT,
+        DtlsUnsupportedContext {
             got: got.to_owned(),
             json_path,
             raw_dtls_parameters: raw_json.to_owned(),
-        }),
-    }
+        },
+        raw_json.to_owned(),
+    )
 }
 
 fn log_diagnostic(diagnostic: &DtlsParseDiagnostic) {
     match diagnostic {
-        DtlsParseDiagnostic::InvalidInput {
-            summary,
-            rfc_reference,
-            context,
-        } => {
+        DtlsParseDiagnostic::InvalidInput { context, .. } => {
             error!(
-                summary,
+                summary = diagnostic.summary(),
                 expected = context.expected,
                 got = context.got,
                 json_path = context.json_path,
-                rfc_document = rfc_reference.document(),
-                rfc_section = rfc_reference.section(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
                 "invalid DTLS parameters"
             );
         }
-        DtlsParseDiagnostic::UnsupportedFeature {
-            summary,
-            rfc_reference,
-            context,
-        } => {
+        DtlsParseDiagnostic::UnsupportedFeature { context, .. } => {
             warn!(
-                summary,
+                summary = diagnostic.summary(),
                 got = context.got,
                 json_path = context.json_path,
-                rfc_document = rfc_reference.document(),
-                rfc_section = rfc_reference.section(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
                 "unsupported DTLS feature"
             );
         }
@@ -481,9 +395,10 @@ fn log_diagnostic(diagnostic: &DtlsParseDiagnostic) {
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_router::ParseDiagnosticKind;
     use serde_json::json;
 
-    use super::{DtlsDiagnosticKind, ParsedDtlsRole, parse_dtls_parameters};
+    use super::{ParsedDtlsRole, parse_dtls_parameters};
     use crate::signaling::webrtc::DtlsParameters;
 
     const VALID_SHA256_FINGERPRINT: &str = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
@@ -514,7 +429,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), DtlsDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
             "DTLS parameters payload must be a JSON object"
@@ -535,7 +450,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), DtlsDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(diagnostic.summary(), "DTLS role is invalid");
     }
 
@@ -553,7 +468,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), DtlsDiagnosticKind::UnsupportedFeature);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
         assert_eq!(
             diagnostic.summary(),
             "DTLS fingerprint algorithm is valid but not supported yet"
@@ -574,7 +489,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), DtlsDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
             "DTLS fingerprint length is invalid for sha-256"

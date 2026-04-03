@@ -1,5 +1,7 @@
 use std::net::IpAddr;
 
+use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
+use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
 const CANDIDATE_PREFIX: &str = "candidate:";
@@ -13,57 +15,22 @@ const ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE: &str = "srflx";
 const ICE_CANDIDATE_TYPE_PEER_REFLEXIVE: &str = "prflx";
 const ICE_CANDIDATE_TYPE_RELAYED: &str = "relay";
 
-const RFC_8445_SECTION_5_1_1: IceRfcReference = IceRfcReference::new(
+const ICE_REPLAY_CONTEXT_HINT: &str = "raw ICE candidate line";
+
+const RFC_8445_SECTION_5_1_1: RfcReference = RfcReference::new(
     "RFC 8445",
     "5.1.1",
     "https://www.rfc-editor.org/rfc/rfc8445#section-5.1.1",
 );
-const RFC_5245_SECTION_15_1: IceRfcReference = IceRfcReference::new(
+const RFC_5245_SECTION_15_1: RfcReference = RfcReference::new(
     "RFC 5245",
     "15.1",
     "https://www.rfc-editor.org/rfc/rfc5245#section-15.1",
 );
 
-pub(super) type IceParseResult<T> = Result<T, Box<IceParseDiagnostic>>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum IceDiagnosticKind {
-    InvalidInput,
-    UnsupportedFeature,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct IceRfcReference {
-    document: &'static str,
-    section: &'static str,
-    url: &'static str,
-}
-
-impl IceRfcReference {
-    #[must_use]
-    pub const fn new(document: &'static str, section: &'static str, url: &'static str) -> Self {
-        Self {
-            document,
-            section,
-            url,
-        }
-    }
-
-    #[must_use]
-    pub fn document(&self) -> &'static str {
-        self.document
-    }
-
-    #[must_use]
-    pub fn section(&self) -> &'static str {
-        self.section
-    }
-
-    #[must_use]
-    pub fn url(&self) -> &'static str {
-        self.url
-    }
-}
+pub(super) type IceParseResult<T> = ParseResult<T, IceInvalidContext, IceUnsupportedContext>;
+pub(super) type IceParseDiagnostic =
+    AdapterParseDiagnostic<IceInvalidContext, IceUnsupportedContext>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct IceInvalidContext {
@@ -76,55 +43,6 @@ pub(super) struct IceInvalidContext {
 pub(super) struct IceUnsupportedContext {
     got: String,
     raw_candidate: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum IceParseDiagnostic {
-    InvalidInput {
-        summary: &'static str,
-        rfc_reference: IceRfcReference,
-        context: Box<IceInvalidContext>,
-    },
-    UnsupportedFeature {
-        summary: &'static str,
-        rfc_reference: IceRfcReference,
-        context: Box<IceUnsupportedContext>,
-    },
-}
-
-impl IceParseDiagnostic {
-    #[must_use]
-    pub(super) fn kind(&self) -> IceDiagnosticKind {
-        match self {
-            Self::InvalidInput { .. } => IceDiagnosticKind::InvalidInput,
-            Self::UnsupportedFeature { .. } => IceDiagnosticKind::UnsupportedFeature,
-        }
-    }
-
-    #[must_use]
-    pub(super) fn summary(&self) -> &'static str {
-        match self {
-            Self::InvalidInput { summary, .. } | Self::UnsupportedFeature { summary, .. } => {
-                summary
-            }
-        }
-    }
-
-    #[must_use]
-    pub(super) fn rfc_reference(&self) -> IceRfcReference {
-        match self {
-            Self::InvalidInput { rfc_reference, .. }
-            | Self::UnsupportedFeature { rfc_reference, .. } => *rfc_reference,
-        }
-    }
-
-    #[must_use]
-    pub(super) fn replay_context(&self) -> &str {
-        match self {
-            Self::InvalidInput { context, .. } => &context.raw_candidate,
-            Self::UnsupportedFeature { context, .. } => &context.raw_candidate,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -476,62 +394,58 @@ fn invalid_input(
     summary: &'static str,
     expected: String,
     got: String,
-    rfc_reference: IceRfcReference,
+    rfc_reference: RfcReference,
     raw_candidate: &str,
 ) -> IceParseDiagnostic {
-    IceParseDiagnostic::InvalidInput {
+    IceParseDiagnostic::invalid_input(
         summary,
         rfc_reference,
-        context: Box::new(IceInvalidContext {
+        ICE_REPLAY_CONTEXT_HINT,
+        IceInvalidContext {
             expected,
             got,
             raw_candidate: raw_candidate.to_owned(),
-        }),
-    }
+        },
+        raw_candidate.to_owned(),
+    )
 }
 
 fn unsupported_feature(
     summary: &'static str,
     got: &str,
-    rfc_reference: IceRfcReference,
+    rfc_reference: RfcReference,
     raw_candidate: &str,
 ) -> IceParseDiagnostic {
-    IceParseDiagnostic::UnsupportedFeature {
+    IceParseDiagnostic::unsupported_feature(
         summary,
         rfc_reference,
-        context: Box::new(IceUnsupportedContext {
+        ICE_REPLAY_CONTEXT_HINT,
+        IceUnsupportedContext {
             got: got.to_owned(),
             raw_candidate: raw_candidate.to_owned(),
-        }),
-    }
+        },
+        raw_candidate.to_owned(),
+    )
 }
 
 fn log_diagnostic(diagnostic: &IceParseDiagnostic) {
     match diagnostic {
-        IceParseDiagnostic::InvalidInput {
-            summary,
-            rfc_reference,
-            context,
-        } => {
+        IceParseDiagnostic::InvalidInput { context, .. } => {
             error!(
-                summary,
+                summary = diagnostic.summary(),
                 expected = context.expected,
                 got = context.got,
-                rfc_document = rfc_reference.document(),
-                rfc_section = rfc_reference.section(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
                 "invalid ICE candidate"
             );
         }
-        IceParseDiagnostic::UnsupportedFeature {
-            summary,
-            rfc_reference,
-            context,
-        } => {
+        IceParseDiagnostic::UnsupportedFeature { context, .. } => {
             warn!(
-                summary,
+                summary = diagnostic.summary(),
                 got = context.got,
-                rfc_document = rfc_reference.document(),
-                rfc_section = rfc_reference.section(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
                 "unsupported ICE candidate feature"
             );
         }
@@ -540,7 +454,9 @@ fn log_diagnostic(diagnostic: &IceParseDiagnostic) {
 
 #[cfg(test)]
 mod tests {
-    use super::{IceCandidateType, IceDiagnosticKind, IceTransportProtocol, parse_ice_candidate};
+    use o_sfu_router::ParseDiagnosticKind;
+
+    use super::{IceCandidateType, IceTransportProtocol, parse_ice_candidate};
 
     #[test]
     fn parse_ice_candidate_accepts_supported_udp_host_candidate() {
@@ -562,7 +478,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), IceDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(diagnostic.summary(), "ICE candidate line is incomplete");
     }
 
@@ -574,7 +490,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), IceDiagnosticKind::UnsupportedFeature);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
         assert_eq!(
             diagnostic.summary(),
             "ICE TCP candidates are not supported yet"
@@ -589,7 +505,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), IceDiagnosticKind::UnsupportedFeature);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
         assert_eq!(
             diagnostic.summary(),
             "ICE RTCP component candidates are not supported yet"
@@ -604,7 +520,7 @@ mod tests {
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), IceDiagnosticKind::UnsupportedFeature);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
         assert_eq!(
             diagnostic.summary(),
             "ICE candidate extension attributes are not supported yet"

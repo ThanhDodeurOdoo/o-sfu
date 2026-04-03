@@ -1,3 +1,5 @@
+use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
+use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
 const MEDIA_DESCRIPTION_PREFIX: &str = "m=";
@@ -15,57 +17,22 @@ const MEDIA_KIND_AUDIO: &str = "audio";
 const MEDIA_KIND_VIDEO: &str = "video";
 const MEDIA_KIND_APPLICATION: &str = "application";
 
-const RFC_8866_SECTION_5_14: SdpRfcReference = SdpRfcReference::new(
+const SDP_REPLAY_CONTEXT_HINT: &str = "raw SDP offer payload";
+
+const RFC_8866_SECTION_5_14: RfcReference = RfcReference::new(
     "RFC 8866",
     "5.14",
     "https://www.rfc-editor.org/rfc/rfc8866#section-5.14",
 );
-const RFC_8829_SECTION_5_8: SdpRfcReference = SdpRfcReference::new(
+const RFC_8829_SECTION_5_8: RfcReference = RfcReference::new(
     "RFC 8829",
     "5.8",
     "https://www.rfc-editor.org/rfc/rfc8829#section-5.8",
 );
 
-pub(super) type SdpParseResult<T> = Result<T, Box<SdpParseDiagnostic>>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SdpDiagnosticKind {
-    InvalidInput,
-    UnsupportedFeature,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SdpRfcReference {
-    document: &'static str,
-    section: &'static str,
-    url: &'static str,
-}
-
-impl SdpRfcReference {
-    #[must_use]
-    pub const fn new(document: &'static str, section: &'static str, url: &'static str) -> Self {
-        Self {
-            document,
-            section,
-            url,
-        }
-    }
-
-    #[must_use]
-    pub fn document(&self) -> &'static str {
-        self.document
-    }
-
-    #[must_use]
-    pub fn section(&self) -> &'static str {
-        self.section
-    }
-
-    #[must_use]
-    pub fn url(&self) -> &'static str {
-        self.url
-    }
-}
+pub(super) type SdpParseResult<T> = ParseResult<T, SdpInvalidContext, SdpUnsupportedContext>;
+pub(super) type SdpParseDiagnostic =
+    AdapterParseDiagnostic<SdpInvalidContext, SdpUnsupportedContext>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SdpInvalidContext {
@@ -94,55 +61,6 @@ pub(super) struct SdpUnsupportedContext {
     line_number: usize,
     line: String,
     raw_sdp: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum SdpParseDiagnostic {
-    InvalidInput {
-        summary: &'static str,
-        rfc_reference: SdpRfcReference,
-        context: Box<SdpInvalidContext>,
-    },
-    UnsupportedFeature {
-        summary: &'static str,
-        rfc_reference: SdpRfcReference,
-        context: Box<SdpUnsupportedContext>,
-    },
-}
-
-impl SdpParseDiagnostic {
-    #[must_use]
-    pub(super) fn kind(&self) -> SdpDiagnosticKind {
-        match self {
-            Self::InvalidInput { .. } => SdpDiagnosticKind::InvalidInput,
-            Self::UnsupportedFeature { .. } => SdpDiagnosticKind::UnsupportedFeature,
-        }
-    }
-
-    #[must_use]
-    pub(super) fn summary(&self) -> &'static str {
-        match self {
-            Self::InvalidInput { summary, .. } | Self::UnsupportedFeature { summary, .. } => {
-                summary
-            }
-        }
-    }
-
-    #[must_use]
-    pub(super) fn rfc_reference(&self) -> SdpRfcReference {
-        match self {
-            Self::InvalidInput { rfc_reference, .. }
-            | Self::UnsupportedFeature { rfc_reference, .. } => *rfc_reference,
-        }
-    }
-
-    #[must_use]
-    pub(super) fn replay_context(&self) -> &str {
-        match self {
-            Self::InvalidInput { context, .. } => &context.raw_sdp,
-            Self::UnsupportedFeature { context, .. } => &context.raw_sdp,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -342,7 +260,7 @@ fn parse_media_kind(
     raw_sdp: &str,
     line_number: usize,
     line: &str,
-    rfc_reference: SdpRfcReference,
+    rfc_reference: RfcReference,
 ) -> SdpParseResult<ParsedMediaKind> {
     let media_kind = match token {
         MEDIA_KIND_AUDIO => ParsedMediaKind::Audio,
@@ -423,20 +341,22 @@ fn invalid_input(
     got: String,
     line_number: Option<usize>,
     line: Option<&str>,
-    rfc_reference: SdpRfcReference,
+    rfc_reference: RfcReference,
     raw_sdp: &str,
 ) -> SdpParseDiagnostic {
-    SdpParseDiagnostic::InvalidInput {
+    SdpParseDiagnostic::invalid_input(
         summary,
         rfc_reference,
-        context: Box::new(SdpInvalidContext {
+        SDP_REPLAY_CONTEXT_HINT,
+        SdpInvalidContext {
             expected,
             got,
             line_number,
             line: line.map(ToString::to_string),
             raw_sdp: raw_sdp.to_owned(),
-        }),
-    }
+        },
+        raw_sdp.to_owned(),
+    )
 }
 
 fn unsupported_feature(
@@ -444,50 +364,44 @@ fn unsupported_feature(
     got: &str,
     line_number: usize,
     line: &str,
-    rfc_reference: SdpRfcReference,
+    rfc_reference: RfcReference,
     raw_sdp: &str,
 ) -> SdpParseDiagnostic {
-    SdpParseDiagnostic::UnsupportedFeature {
+    SdpParseDiagnostic::unsupported_feature(
         summary,
         rfc_reference,
-        context: Box::new(SdpUnsupportedContext {
+        SDP_REPLAY_CONTEXT_HINT,
+        SdpUnsupportedContext {
             got: got.to_owned(),
             line_number,
             line: line.to_owned(),
             raw_sdp: raw_sdp.to_owned(),
-        }),
-    }
+        },
+        raw_sdp.to_owned(),
+    )
 }
 
 fn log_diagnostic(diagnostic: &SdpParseDiagnostic) {
     match diagnostic {
-        SdpParseDiagnostic::InvalidInput {
-            summary,
-            rfc_reference,
-            context,
-        } => {
+        SdpParseDiagnostic::InvalidInput { context, .. } => {
             error!(
-                summary,
+                summary = diagnostic.summary(),
                 expected = context.expected,
                 got = context.got,
                 line_number = context.line_number.map_or(0, |line| line),
-                rfc_document = rfc_reference.document(),
-                rfc_section = rfc_reference.section(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
                 "invalid SDP input"
             );
         }
-        SdpParseDiagnostic::UnsupportedFeature {
-            summary,
-            rfc_reference,
-            context,
-        } => {
+        SdpParseDiagnostic::UnsupportedFeature { context, .. } => {
             warn!(
-                summary,
+                summary = diagnostic.summary(),
                 got = context.got,
                 line_number = context.line_number,
                 line = context.line,
-                rfc_document = rfc_reference.document(),
-                rfc_section = rfc_reference.section(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
                 "unsupported SDP feature"
             );
         }
@@ -496,10 +410,9 @@ fn log_diagnostic(diagnostic: &SdpParseDiagnostic) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ParsedMediaKind, ParsedTransportProtocol, SdpDiagnosticKind, SdpParseDiagnostic,
-        parse_offer_sdp,
-    };
+    use o_sfu_router::ParseDiagnosticKind;
+
+    use super::{ParsedMediaKind, ParsedTransportProtocol, SdpParseDiagnostic, parse_offer_sdp};
 
     const VALID_OFFER_SDP: &str = "v=0\r\n\
 o=- 0 0 IN IP4 127.0.0.1\r\n\
@@ -543,7 +456,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
             "SDP offer did not contain any media description line"
@@ -558,7 +471,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
             "SDP media description line is incomplete"
@@ -572,7 +485,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
             "SDP media description has an invalid port field"
@@ -586,7 +499,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::UnsupportedFeature);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
         assert_eq!(
             diagnostic.summary(),
             "SDP transport protocol is valid but not supported yet"
@@ -600,7 +513,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         assert_eq!(
             diagnostic.summary(),
             "SDP media description has an invalid transport protocol token"
@@ -614,7 +527,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::UnsupportedFeature);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
         assert_eq!(
             diagnostic.summary(),
             "SDP media kind is valid but not supported yet"
@@ -628,7 +541,7 @@ a=mid:1\r\n";
         let Some(diagnostic) = result.err() else {
             return;
         };
-        assert_eq!(diagnostic.kind(), SdpDiagnosticKind::InvalidInput);
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
         let SdpParseDiagnostic::InvalidInput { context, .. } = diagnostic.as_ref() else {
             return;
         };
