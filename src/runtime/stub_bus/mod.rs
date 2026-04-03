@@ -93,6 +93,7 @@ impl TransportAdapter for StubWebRtcAdapter {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
+        _sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::TransportConnectRequested {
             session_id: session_id.clone(),
@@ -380,7 +381,12 @@ impl StubBusSession {
     ) -> Value {
         if self
             .transport_adapter
-            .connect_transport(&self.session_id, direction, &payload.dtls_parameters)
+            .connect_transport(
+                &self.session_id,
+                direction,
+                &payload.dtls_parameters,
+                payload.sdp_offer.as_deref(),
+            )
             .is_err()
         {
             debug!(?direction, "transport adapter failed to connect transport");

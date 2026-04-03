@@ -45,6 +45,16 @@ pub(super) struct SdpInvalidContext {
 
 impl SdpInvalidContext {
     #[must_use]
+    pub(super) fn expected(&self) -> &str {
+        &self.expected
+    }
+
+    #[must_use]
+    pub(super) fn got(&self) -> &str {
+        &self.got
+    }
+
+    #[must_use]
     pub(super) fn line_number(&self) -> Option<usize> {
         self.line_number
     }
@@ -52,6 +62,23 @@ impl SdpInvalidContext {
     #[must_use]
     pub(super) fn line(&self) -> Option<&str> {
         self.line.as_deref()
+    }
+}
+
+impl SdpUnsupportedContext {
+    #[must_use]
+    pub(super) fn got(&self) -> &str {
+        &self.got
+    }
+
+    #[must_use]
+    pub(super) fn line_number(&self) -> usize {
+        self.line_number
+    }
+
+    #[must_use]
+    pub(super) fn line(&self) -> &str {
+        &self.line
     }
 }
 

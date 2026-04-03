@@ -18,10 +18,6 @@ use tracing::{debug, error, warn};
 mod dtls;
 mod ice;
 mod parse_diagnostic;
-#[allow(
-    dead_code,
-    reason = "Phase-7 SDP parsing scaffolding is prepared before transport wiring starts using it."
-)]
 mod sdp;
 
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
@@ -68,7 +64,11 @@ impl TransportAdapter for WebRtcRsTransportAdapter {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
+        sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError> {
+        if let Some(sdp_offer) = sdp_offer {
+            validate_sdp_offer(sdp_offer)?;
+        }
         validate_dtls_parameters(dtls_parameters)?;
         self.ensure_connect_transition(session_id, direction)?;
         debug!(
@@ -77,9 +77,70 @@ impl TransportAdapter for WebRtcRsTransportAdapter {
             "validated DTLS parameters and transport lifecycle state before placeholder webrtc-rs connect"
         );
         self.fallback
-            .connect_transport(session_id, direction, dtls_parameters)?;
+            .connect_transport(session_id, direction, dtls_parameters, sdp_offer)?;
         self.mark_connected(session_id, direction)?;
         Ok(())
+    }
+}
+
+fn validate_sdp_offer(sdp_offer: &str) -> Result<(), TransportAdapterError> {
+    let parsed_offer = sdp::parse_offer_sdp(sdp_offer).map_err(|diagnostic| {
+        map_sdp_diagnostic_to_adapter_error(diagnostic.as_ref(), diagnostic.replay_context())
+    })?;
+    log_validated_sdp_media_sections(parsed_offer.media_sections());
+    Ok(())
+}
+
+fn map_sdp_diagnostic_to_adapter_error(
+    diagnostic: &sdp::SdpParseDiagnostic,
+    replay_context: &str,
+) -> TransportAdapterError {
+    match diagnostic {
+        sdp::SdpParseDiagnostic::InvalidInput { context, .. } => {
+            error!(
+                summary = diagnostic.summary(),
+                expected = context.expected(),
+                got = context.got(),
+                line_number = context.line_number().map_or(0, |line| line),
+                line = context.line().unwrap_or(""),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
+                rfc_url = diagnostic.rfc_reference().url(),
+                replay_context,
+                "invalid SDP offer on webrtc-rs adapter boundary"
+            );
+            TransportAdapterError::InvalidInput
+        }
+        sdp::SdpParseDiagnostic::UnsupportedFeature { context, .. } => {
+            warn!(
+                summary = diagnostic.summary(),
+                got = context.got(),
+                line_number = context.line_number(),
+                line = context.line(),
+                rfc_document = diagnostic.rfc_reference().document(),
+                rfc_section = diagnostic.rfc_reference().section(),
+                rfc_url = diagnostic.rfc_reference().url(),
+                replay_context,
+                "unsupported SDP feature on webrtc-rs adapter boundary"
+            );
+            TransportAdapterError::UnsupportedFeature
+        }
+    }
+}
+
+fn log_validated_sdp_media_sections(media_sections: &[sdp::ParsedMediaSection]) {
+    debug!(
+        media_section_count = media_sections.len(),
+        "validated SDP offer on webrtc-rs adapter boundary"
+    );
+    for section in media_sections {
+        debug!(
+            media_kind = ?section.media_kind(),
+            port = section.port(),
+            transport_protocol = ?section.transport_protocol(),
+            payload_format_count = section.formats().len(),
+            "parsed SDP media section"
+        );
     }
 }
 
@@ -258,6 +319,13 @@ mod tests {
         },
     };
 
+    const VALID_SDP_OFFER: &str = "v=0\r\n\
+o=- 0 0 IN IP4 127.0.0.1\r\n\
+s=-\r\n\
+t=0 0\r\n\
+m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n\
+a=mid:0\r\n";
+
     fn empty_router_capabilities() -> RouterRtpCapabilities {
         RouterRtpCapabilities::new(vec![], vec![])
     }
@@ -370,6 +438,7 @@ mod tests {
                 role: String::from("client"),
                 fingerprints: vec![],
             },
+            None,
         );
         assert_eq!(result, Err(TransportAdapterError::InvalidInput));
     }
@@ -381,6 +450,7 @@ mod tests {
             &SessionId::Integer(8),
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
         );
         assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
     }
@@ -396,6 +466,7 @@ mod tests {
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            Some(VALID_SDP_OFFER),
         );
         assert_eq!(connect_result, Ok(()));
     }
@@ -411,13 +482,50 @@ mod tests {
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
         );
         assert_eq!(first_connect, Ok(()));
         let second_connect = adapter.connect_transport(
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
         );
         assert_eq!(second_connect, Err(TransportAdapterError::InvalidInput));
+    }
+
+    #[test]
+    fn webrtc_rs_transport_connect_rejects_invalid_sdp_before_fallback() {
+        let adapter = WebRtcRsTransportAdapter::default();
+        let session_id = SessionId::Integer(11);
+        let bootstrap_result =
+            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        assert!(bootstrap_result.is_ok());
+        let connect_result = adapter.connect_transport(
+            &session_id,
+            TransportConnectDirection::Upload,
+            &sample_sha256_dtls_parameters("client"),
+            Some("v=0\r\ns=-\r\nt=0 0\r\n"),
+        );
+        assert_eq!(connect_result, Err(TransportAdapterError::InvalidInput));
+    }
+
+    #[test]
+    fn webrtc_rs_transport_connect_rejects_unsupported_sdp_before_fallback() {
+        let adapter = WebRtcRsTransportAdapter::default();
+        let session_id = SessionId::Integer(12);
+        let bootstrap_result =
+            adapter.transport_bootstrap_payload(&session_id, &empty_router_capabilities());
+        assert!(bootstrap_result.is_ok());
+        let connect_result = adapter.connect_transport(
+            &session_id,
+            TransportConnectDirection::Upload,
+            &sample_sha256_dtls_parameters("client"),
+            Some("m=audio 9 RTP/SAVPF 111\r\n"),
+        );
+        assert_eq!(
+            connect_result,
+            Err(TransportAdapterError::UnsupportedFeature)
+        );
     }
 }

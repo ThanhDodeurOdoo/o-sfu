@@ -49,3 +49,12 @@ cargo kani -p o-sfu-router
 
 - "rust" and "tests" github workflows have overlap, "rust" exists because it's the default one from github, will probably remove later 
 The router and rfc sections may be split into separate crates later (but too annoying for now)
+
+## random thoughts
+
+- having a "system" for directory layout:
+  - component_name/ (like http_server/)
+    - mod.rs for the main logic
+    - technical.rs for technical but well encapsulated logic used by the main file (helper functions, things that are not important to see to understand the logic)
+    - tests.rs for tests
+    - verification/... for formal verification (or a root/verification/component_name, not sure)

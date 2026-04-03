@@ -35,5 +35,6 @@ pub(crate) trait TransportAdapter: Debug + Send + Sync {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
+        sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError>;
 }

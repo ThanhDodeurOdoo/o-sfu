@@ -708,6 +708,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 1),
         )
@@ -717,6 +718,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 2),
         )
@@ -782,6 +784,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: invalid_dtls_parameters_for_stub_rejection(),
+                sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 12, 1),
         )
@@ -837,6 +840,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 0),
         )

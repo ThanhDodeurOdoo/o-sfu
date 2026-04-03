@@ -90,6 +90,8 @@ pub struct CurrentUploadStateChangePayload {
 pub struct CurrentTransportConnectPayload {
     #[serde(rename = "dtlsParameters")]
     pub dtls_parameters: DtlsParameters,
+    #[serde(rename = "sdpOffer", skip_serializing_if = "Option::is_none")]
+    pub sdp_offer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -430,6 +432,7 @@ mod tests {
                     value: String::from("AA:BB:CC"),
                 }],
             },
+            sdp_offer: None,
         };
         assert_round_trip(
             &CurrentClientRequest::ConnectUploadTransport(connect_payload.clone()),
@@ -511,6 +514,37 @@ mod tests {
                 id: "producer-1".to_owned(),
             },
             json!({ "id": "producer-1" }),
+        )
+    }
+
+    #[test]
+    fn current_transport_connect_payload_round_trip_with_sdp_offer() -> serde_json::Result<()> {
+        assert_round_trip(
+            &CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: DtlsParameters {
+                    role: String::from("client"),
+                    fingerprints: vec![DtlsFingerprint {
+                        algorithm: String::from("sha-256"),
+                        value: String::from("AA:BB:CC"),
+                    }],
+                },
+                sdp_offer: Some(String::from(
+                    "v=0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
+                )),
+            }),
+            json!({
+                "name": "CONNECT_CTS_TRANSPORT",
+                "payload": {
+                    "dtlsParameters": {
+                        "role": "client",
+                        "fingerprints": [{
+                            "algorithm": "sha-256",
+                            "value": "AA:BB:CC"
+                        }]
+                    },
+                    "sdpOffer": "v=0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+                }
+            }),
         )
     }
 
