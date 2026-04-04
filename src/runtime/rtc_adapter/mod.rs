@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::{
     collections::BTreeMap,
     fmt,
@@ -10,7 +11,6 @@ use std::{
 };
 
 use super::{
-    stub_bus::StubWebRtcAdapter,
     transport_adapter::{TransportAdapterError, TransportConnectDirection},
     transport_bootstrap,
 };
@@ -22,6 +22,7 @@ use crate::signaling::{
 use crate::{config::RtcPortRange, rfc::webrtc};
 use o_sfu_router::ParseDiagnosticKind;
 use serde_json::json;
+use str0m::Event;
 use str0m::config::Fingerprint;
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, IceCreds, Input, Output, Rtc};
@@ -68,6 +69,8 @@ struct RtcSessionState {
     local_ice_credentials: IceCreds,
     local_dtls_fingerprint: Fingerprint,
     transport_ids: SessionTransportIds,
+    remote_dtls_fingerprint: Option<String>,
+    dtls_started: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +91,6 @@ struct RtcBootstrapState {
 /// transport connect, packet-loop driving, and media forwarding remain staged
 /// behind the same boundary for later steps.
 pub(super) struct RtcTransportAdapter {
-    fallback: StubWebRtcAdapter,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     bootstrap_state: Arc<Mutex<RtcBootstrapState>>,
@@ -99,7 +101,6 @@ pub(super) struct RtcTransportAdapter {
 impl RtcTransportAdapter {
     pub(super) fn new(public_ip: IpAddr, rtc_port_range: RtcPortRange) -> Self {
         Self {
-            fallback: StubWebRtcAdapter::default(),
             public_ip,
             rtc_port_range,
             bootstrap_state: Arc::new(Mutex::new(RtcBootstrapState::default())),
@@ -124,6 +125,10 @@ impl RtcTransportAdapter {
         Ok(payload)
     }
 
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async while runtime call sites and sibling adapters keep the same signature"
+    )]
     pub(super) async fn connect_transport(
         &self,
         session_id: &SessionId,
@@ -134,16 +139,14 @@ impl RtcTransportAdapter {
         if let Some(sdp_offer) = sdp_offer {
             validate_sdp_offer(sdp_offer)?;
         }
-        validate_dtls_parameters(dtls_parameters)?;
+        let parsed_dtls_parameters = parse_dtls_parameters(dtls_parameters)?;
         self.ensure_connect_transition(session_id, direction)?;
         debug!(
             ?direction,
             session_id = ?session_id,
-            "validated DTLS parameters and transport lifecycle state before placeholder rtc connect"
+            "validated DTLS parameters and transport lifecycle state before rtc transport connect"
         );
-        self.fallback
-            .connect_transport(session_id, direction, dtls_parameters, sdp_offer)
-            .await?;
+        self.apply_transport_connect(session_id, direction, &parsed_dtls_parameters)?;
         self.mark_connected(session_id, direction)?;
         Ok(())
     }
@@ -221,6 +224,58 @@ impl RtcTransportAdapter {
         current_runtime.spawn(async move {
             run_packet_loop(bootstrap_state).await;
         });
+        Ok(())
+    }
+
+    fn apply_transport_connect(
+        &self,
+        session_id: &SessionId,
+        direction: TransportConnectDirection,
+        parsed_dtls_parameters: &dtls::ParsedDtlsParameters,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(session_state) = bootstrap_state.sessions.get_mut(session_id) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(primary_fingerprint) = parsed_dtls_parameters.fingerprints().first() else {
+            return Err(TransportAdapterError::InvalidInput);
+        };
+        let fingerprint_literal = format!(
+            "{} {}",
+            primary_fingerprint.algorithm(),
+            primary_fingerprint.value()
+        );
+        let remote_fingerprint = parse_remote_fingerprint(primary_fingerprint)?;
+        ensure_remote_fingerprint_compatibility(session_state, &fingerprint_literal)?;
+        let should_start_dtls = !session_state.dtls_started;
+        {
+            let mut direct_api = session_state.rtc.direct_api();
+            if session_state.remote_dtls_fingerprint.is_none() {
+                direct_api.set_remote_fingerprint(remote_fingerprint);
+                session_state.remote_dtls_fingerprint = Some(fingerprint_literal);
+            }
+            if should_start_dtls {
+                let local_active_role = local_dtls_active_role(parsed_dtls_parameters.role());
+                direct_api
+                    .start_dtls(local_active_role)
+                    .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
+                session_state.dtls_started = true;
+                debug!(
+                    ?direction,
+                    session_id = ?session_id,
+                    local_active_role,
+                    "started rtc DTLS handshake after transport connect"
+                );
+            } else {
+                debug!(
+                    ?direction,
+                    session_id = ?session_id,
+                    "rtc DTLS handshake already started for session"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -328,9 +383,24 @@ fn pump_session_outputs(
                         contents: Vec::from(transmit.contents),
                     });
                 }
-                Ok(Output::Event(event)) => {
-                    trace!(session_id = ?session_id, ?event, "rtc packet loop event");
-                }
+                Ok(Output::Event(event)) => match &event {
+                    Event::IceConnectionStateChange(state) => {
+                        debug!(
+                            session_id = ?session_id,
+                            ?state,
+                            "rtc ICE connection state transition"
+                        );
+                    }
+                    Event::Connected => {
+                        debug!(
+                            session_id = ?session_id,
+                            "rtc DTLS transport reached connected state"
+                        );
+                    }
+                    _ => {
+                        trace!(session_id = ?session_id, ?event, "rtc packet loop event");
+                    }
+                },
                 Ok(Output::Timeout(timeout_at)) => {
                     if timeout_at <= now {
                         if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
@@ -502,6 +572,8 @@ fn ensure_session_rtc_state(
             local_ice_credentials,
             local_dtls_fingerprint,
             transport_ids,
+            remote_dtls_fingerprint: None,
+            dtls_started: false,
         },
     );
     Ok(())
@@ -567,6 +639,34 @@ fn validate_sdp_offer(sdp_offer: &str) -> Result<(), TransportAdapterError> {
     })?;
     log_validated_sdp_media_sections(parsed_offer.media_sections());
     Ok(())
+}
+
+fn parse_remote_fingerprint(
+    fingerprint: &dtls::ParsedDtlsFingerprint,
+) -> Result<Fingerprint, TransportAdapterError> {
+    let fingerprint_string = format!("{} {}", fingerprint.algorithm(), fingerprint.value());
+    Fingerprint::from_str(&fingerprint_string).map_err(|_error| TransportAdapterError::InvalidInput)
+}
+
+fn ensure_remote_fingerprint_compatibility(
+    session_state: &RtcSessionState,
+    remote_fingerprint: &str,
+) -> Result<(), TransportAdapterError> {
+    let Some(existing_fingerprint) = session_state.remote_dtls_fingerprint.as_deref() else {
+        return Ok(());
+    };
+    if existing_fingerprint == remote_fingerprint {
+        Ok(())
+    } else {
+        Err(TransportAdapterError::InvalidInput)
+    }
+}
+
+fn local_dtls_active_role(parsed_role: dtls::ParsedDtlsRole) -> bool {
+    match parsed_role {
+        dtls::ParsedDtlsRole::Server => true,
+        dtls::ParsedDtlsRole::Auto | dtls::ParsedDtlsRole::Client => false,
+    }
 }
 
 fn map_sdp_diagnostic_to_adapter_error(
@@ -681,9 +781,11 @@ impl RtcTransportAdapter {
     }
 }
 
-fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), TransportAdapterError> {
+fn parse_dtls_parameters(
+    dtls_parameters: &DtlsParameters,
+) -> Result<dtls::ParsedDtlsParameters, TransportAdapterError> {
     match dtls::parse_dtls_parameters(dtls_parameters) {
-        Ok(_parsed) => Ok(()),
+        Ok(parsed) => Ok(parsed),
         Err(diagnostic) => match diagnostic.kind() {
             ParseDiagnosticKind::InvalidInput => {
                 error!(
@@ -709,6 +811,11 @@ fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), Tran
             }
         },
     }
+}
+
+#[cfg(test)]
+fn validate_dtls_parameters(dtls_parameters: &DtlsParameters) -> Result<(), TransportAdapterError> {
+    parse_dtls_parameters(dtls_parameters).map(|_parsed| ())
 }
 
 fn validate_bootstrap_payload(
@@ -825,13 +932,18 @@ a=mid:0\r\n";
     }
 
     fn sample_sha256_dtls_parameters(role: &str) -> DtlsParameters {
+        sample_sha256_dtls_parameters_with_value(
+            role,
+            "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+        )
+    }
+
+    fn sample_sha256_dtls_parameters_with_value(role: &str, value: &str) -> DtlsParameters {
         DtlsParameters {
             role: role.to_owned(),
             fingerprints: vec![DtlsFingerprint {
                 algorithm: String::from("sha-256"),
-                value: String::from(
-                    "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
-                ),
+                value: value.to_owned(),
             }],
         }
     }
@@ -908,7 +1020,7 @@ a=mid:0\r\n";
     }
 
     #[tokio::test]
-    async fn rtc_transport_connect_rejects_invalid_dtls_before_fallback() {
+    async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
         let adapter = RtcTransportAdapter::default();
         let result = adapter
             .connect_transport(
@@ -1059,7 +1171,7 @@ a=mid:0\r\n";
     }
 
     #[tokio::test]
-    async fn rtc_transport_connect_rejects_invalid_sdp_before_fallback() {
+    async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
         let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(11);
         let bootstrap_result = adapter
@@ -1078,7 +1190,7 @@ a=mid:0\r\n";
     }
 
     #[tokio::test]
-    async fn rtc_transport_connect_rejects_unsupported_sdp_before_fallback() {
+    async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
         let adapter = RtcTransportAdapter::default();
         let session_id = SessionId::Integer(12);
         let bootstrap_result = adapter
@@ -1096,6 +1208,68 @@ a=mid:0\r\n";
         assert_eq!(
             connect_result,
             Err(TransportAdapterError::UnsupportedFeature)
+        );
+    }
+
+    #[tokio::test]
+    async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_context() {
+        let adapter = RtcTransportAdapter::default();
+        let session_id = SessionId::Integer(16);
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
+        assert!(bootstrap_result.is_ok());
+        let upload_connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
+        assert_eq!(upload_connect_result, Ok(()));
+        let download_connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Download,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
+        assert_eq!(download_connect_result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions() {
+        let adapter = RtcTransportAdapter::default();
+        let session_id = SessionId::Integer(17);
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
+        assert!(bootstrap_result.is_ok());
+        let first_connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
+        assert_eq!(first_connect_result, Ok(()));
+        let second_connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Download,
+                &sample_sha256_dtls_parameters_with_value(
+                    "client",
+                    "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00",
+                ),
+                None,
+            )
+            .await;
+        assert_eq!(
+            second_connect_result,
+            Err(TransportAdapterError::InvalidInput)
         );
     }
 

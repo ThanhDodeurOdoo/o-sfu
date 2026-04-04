@@ -62,7 +62,6 @@ pub(super) struct ParsedDtlsParameters {
     fingerprints: Vec<ParsedDtlsFingerprint>,
 }
 
-#[cfg(test)]
 impl ParsedDtlsParameters {
     #[must_use]
     pub(super) fn role(&self) -> ParsedDtlsRole {
@@ -72,6 +71,18 @@ impl ParsedDtlsParameters {
     #[must_use]
     pub(super) fn fingerprints(&self) -> &[ParsedDtlsFingerprint] {
         &self.fingerprints
+    }
+}
+
+impl ParsedDtlsFingerprint {
+    #[must_use]
+    pub(super) fn algorithm(&self) -> &str {
+        &self.algorithm
+    }
+
+    #[must_use]
+    pub(super) fn value(&self) -> &str {
+        &self.value
     }
 }
 
