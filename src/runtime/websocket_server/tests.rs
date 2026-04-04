@@ -3,7 +3,7 @@
     reason = "test assertions use panic for clear failure messages"
 )]
 mod websocket_server_tests {
-    use std::net::SocketAddr;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -20,7 +20,7 @@ mod websocket_server_tests {
 
     use super::super::*;
     use crate::{
-        config::{Config, TransportBackend},
+        config::{Config, RtcPortRange, TransportBackend},
         runtime::{
             channel::ChannelManager,
             http_server::app,
@@ -74,6 +74,8 @@ mod websocket_server_tests {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
             authentication_timeout_ms,
             channel_size,
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            rtc_port_range: RtcPortRange::new(40_000, 49_999),
             transport_backend: TransportBackend::Stub,
         }
     }

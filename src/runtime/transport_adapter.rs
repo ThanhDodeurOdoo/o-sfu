@@ -1,7 +1,8 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, net::IpAddr, sync::Arc};
 
 use super::{rtc_adapter::RtcTransportAdapter, stub_bus::StubWebRtcAdapter};
 
+use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload, shared::SessionId, webrtc::DtlsParameters,
 };
@@ -36,8 +37,11 @@ impl RuntimeTransportAdapter {
     }
 
     #[must_use]
-    pub(crate) fn rtc() -> Self {
-        Self::Rtc(Arc::new(RtcTransportAdapter::default()))
+    pub(crate) fn rtc(public_ip: IpAddr, rtc_port_range: RtcPortRange) -> Self {
+        Self::Rtc(Arc::new(RtcTransportAdapter::new(
+            public_ip,
+            rtc_port_range,
+        )))
     }
 
     #[cfg(test)]

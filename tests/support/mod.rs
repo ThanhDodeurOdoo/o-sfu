@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::StatusCode;
@@ -10,7 +10,7 @@ use tokio_tungstenite::{
 };
 
 use o_sfu::{
-    config::{Config, TransportBackend},
+    config::{Config, RtcPortRange, TransportBackend},
     runtime::testing::TestServer,
     signaling::{
         auth::{
@@ -39,6 +39,8 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
         bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         authentication_timeout_ms,
         channel_size,
+        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        rtc_port_range: RtcPortRange::new(40_000, 49_999),
         transport_backend: TransportBackend::Stub,
     }
 }

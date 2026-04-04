@@ -16,8 +16,8 @@ use o_sfu::{
     runtime::testing::spawn_test_server,
     signaling::{
         current_protocol::{
-            CurrentClientMessage, CurrentServerMessage, CurrentSessionInfoUpdatePayload,
-            CurrentWebSocketCredentials,
+            CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
+            CurrentSessionInfoUpdatePayload, CurrentWebSocketCredentials,
         },
         http::{STATS_PATH, StatsResponse},
         shared::{SessionId, SessionInfo, StreamType},
@@ -76,7 +76,7 @@ async fn websocket_startup_and_transport_bootstrap_work_from_integration_test() 
 }
 
 #[tokio::test]
-async fn websocket_startup_and_transport_bootstrap_work_with_rtc_backend_placeholder() {
+async fn websocket_startup_and_transport_bootstrap_exposes_real_rtc_bootstrap_payload() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
     let server = spawn_test_server(config).await;
@@ -117,6 +117,46 @@ async fn websocket_startup_and_transport_bootstrap_work_with_rtc_backend_placeho
 
     let batch = client.read_bus_batch().await;
     assert!(batch.is_some(), "bootstrap batch should be sent");
+    let Some(batch) = batch else {
+        return;
+    };
+    assert_eq!(batch.len(), 1);
+    let envelope = batch.first();
+    assert!(envelope.is_some());
+    let Some(envelope) = envelope else {
+        return;
+    };
+    let request = serde_json::from_value::<CurrentServerRequest>(envelope.message.clone());
+    assert!(request.is_ok());
+    let Some(CurrentServerRequest::BootstrapTransports(payload)) = request.ok() else {
+        panic!("expected INIT_TRANSPORTS request");
+    };
+    assert!(payload.download_transport.id.starts_with("stc-rtc-"));
+    assert!(payload.upload_transport.id.starts_with("cts-rtc-"));
+    assert_ne!(payload.download_transport.id, "stc-stub");
+    assert_ne!(payload.upload_transport.id, "cts-stub");
+    assert_eq!(
+        payload.download_transport.ice_parameters.0.get("iceLite"),
+        Some(&serde_json::json!(true))
+    );
+    let candidate = payload.download_transport.ice_candidates.first();
+    assert!(candidate.is_some());
+    let Some(candidate) = candidate else {
+        return;
+    };
+    assert_eq!(candidate.ip, "127.0.0.1");
+    assert!((40_000..=49_999).contains(&candidate.port));
+    let fingerprint = payload
+        .download_transport
+        .dtls_parameters
+        .fingerprints
+        .first();
+    assert!(fingerprint.is_some());
+    let Some(fingerprint) = fingerprint else {
+        return;
+    };
+    assert_eq!(fingerprint.algorithm, "sha-256");
+    assert_ne!(fingerprint.value, "AA:BB:CC");
 }
 
 #[tokio::test]

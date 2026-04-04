@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use axum::{
     body::{Body, to_bytes},
@@ -11,7 +15,7 @@ use tower::util::ServiceExt;
 
 use super::app;
 use crate::{
-    config::{Config, TransportBackend},
+    config::{Config, RtcPortRange, TransportBackend},
     runtime::{
         RuntimeState, channel::ChannelManager, metrics::RuntimeMetrics,
         transport_adapter::RuntimeTransportAdapter,
@@ -34,6 +38,8 @@ fn test_config() -> Config {
         bind_address: SocketAddr::from(([127, 0, 0, 1], 8080)),
         authentication_timeout_ms: 10_000,
         channel_size: 100,
+        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        rtc_port_range: RtcPortRange::new(40_000, 49_999),
         transport_backend: TransportBackend::Stub,
     }
 }

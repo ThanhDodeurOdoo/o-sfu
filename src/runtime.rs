@@ -18,6 +18,7 @@ mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
 mod transport_adapter;
+mod transport_bootstrap;
 mod websocket_server;
 
 use channel::ChannelManager;
@@ -45,7 +46,7 @@ pub(super) struct RuntimeState {
 impl Runtime {
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let transport_adapter = build_transport_adapter(config.transport_backend);
+        let transport_adapter = build_transport_adapter(&config);
         Self {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
@@ -91,9 +92,11 @@ pub fn run() -> Result<()> {
         .block_on(runtime.run_until_stopped())
 }
 
-fn build_transport_adapter(backend: TransportBackend) -> RuntimeTransportAdapter {
-    match backend {
+fn build_transport_adapter(config: &Config) -> RuntimeTransportAdapter {
+    match config.transport_backend {
         TransportBackend::Stub => RuntimeTransportAdapter::stub(),
-        TransportBackend::Rtc => RuntimeTransportAdapter::rtc(),
+        TransportBackend::Rtc => {
+            RuntimeTransportAdapter::rtc(config.public_ip, config.rtc_port_range)
+        }
     }
 }

@@ -1,18 +1,26 @@
 use std::{
     collections::BTreeMap,
+    fmt,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use super::{
     stub_bus::StubWebRtcAdapter,
     transport_adapter::{TransportAdapterError, TransportConnectDirection},
+    transport_bootstrap,
 };
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
-    webrtc::{DtlsParameters, IceCandidate},
+    webrtc::{DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, TransportBootstrap},
 };
+use crate::{config::RtcPortRange, rfc::webrtc};
 use o_sfu_router::ParseDiagnosticKind;
+use serde_json::json;
+use str0m::config::Fingerprint;
+use str0m::{Candidate, IceCreds, Rtc};
 use tracing::{debug, error, warn};
 
 mod dtls;
@@ -21,6 +29,10 @@ mod parse_diagnostic;
 mod sdp;
 
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
+const HOST_CANDIDATE_FOUNDATION: &str = "rtc-host";
+const ICE_LOCAL_PREFERENCE_MAX: u16 = u16::MAX;
+const SESSION_TRANSPORT_ID_UPLOAD_PREFIX: &str = "cts-rtc";
+const SESSION_TRANSPORT_ID_DOWNLOAD_PREFIX: &str = "stc-rtc";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransportLifecycleState {
@@ -34,27 +46,72 @@ struct TransportStateKey {
     direction: TransportConnectDirection,
 }
 
-/// Placeholder transport adapter for the selected phase-7 backend (`rtc`).
+struct SharedRtcSocket {
+    #[allow(
+        dead_code,
+        reason = "reserved now for the upcoming packet loop and kept alive for the advertised ICE port"
+    )]
+    socket: UdpSocket,
+    candidate_addr: SocketAddr,
+}
+
+struct RtcSessionState {
+    #[allow(
+        dead_code,
+        reason = "real rtc state is created now and will be driven by the packet loop in the next phase"
+    )]
+    rtc: Rtc,
+    local_ice_credentials: IceCreds,
+    local_dtls_fingerprint: Fingerprint,
+    transport_ids: SessionTransportIds,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionTransportIds {
+    upload: String,
+    download: String,
+}
+
+#[derive(Default)]
+struct RtcBootstrapState {
+    shared_socket: Option<SharedRtcSocket>,
+    sessions: BTreeMap<SessionId, RtcSessionState>,
+}
+
+/// Runtime transport adapter for the phase-7 `rtc` backend.
 ///
-/// During the library-selection phase this delegates to the deterministic stub
-/// transport behavior so signaling and channel lifecycle flows remain stable
-/// while SDP/ICE/DTLS integration is added incrementally.
-#[derive(Debug, Default)]
+/// The adapter now performs real ICE-lite bootstrap work with `str0m` while
+/// transport connect, packet-loop driving, and media forwarding remain staged
+/// behind the same boundary for later steps.
 pub(super) struct RtcTransportAdapter {
     fallback: StubWebRtcAdapter,
+    public_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+    bootstrap_state: Arc<Mutex<RtcBootstrapState>>,
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
 }
 
 impl RtcTransportAdapter {
+    pub(super) fn new(public_ip: IpAddr, rtc_port_range: RtcPortRange) -> Self {
+        Self {
+            fallback: StubWebRtcAdapter::default(),
+            public_ip,
+            rtc_port_range,
+            bootstrap_state: Arc::new(Mutex::new(RtcBootstrapState::default())),
+            transport_states: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async so packet-loop work can be added without changing runtime call sites"
+    )]
     pub(super) async fn transport_bootstrap_payload(
         &self,
         session_id: &SessionId,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
-        let payload = self
-            .fallback
-            .transport_bootstrap_payload(session_id, router_capabilities)
-            .await?;
+        let payload = self.bootstrap_transport_payload(session_id, router_capabilities)?;
         validate_bootstrap_payload(&payload)?;
         self.mark_bootstrap_sent(session_id)?;
         Ok(payload)
@@ -83,6 +140,181 @@ impl RtcTransportAdapter {
         self.mark_connected(session_id, direction)?;
         Ok(())
     }
+
+    fn bootstrap_transport_payload(
+        &self,
+        session_id: &SessionId,
+        router_capabilities: &o_sfu_router::RtpCapabilities,
+    ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let candidate_addr = if let Some(shared_socket) = bootstrap_state.shared_socket.as_ref() {
+            shared_socket.candidate_addr
+        } else {
+            let shared_socket = bind_shared_rtc_socket(self.public_ip, self.rtc_port_range)?;
+            let candidate_addr = shared_socket.candidate_addr;
+            bootstrap_state.shared_socket = Some(shared_socket);
+            candidate_addr
+        };
+        ensure_session_rtc_state(&mut bootstrap_state.sessions, session_id, candidate_addr)?;
+        let Some(session_state) = bootstrap_state.sessions.get(session_id) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        Ok(transport_bootstrap::transport_bootstrap_payload(
+            router_capabilities,
+            build_transport_bootstrap(
+                session_state.transport_ids.download.as_str(),
+                candidate_addr,
+                &session_state.local_ice_credentials,
+                &session_state.local_dtls_fingerprint,
+            ),
+            build_transport_bootstrap(
+                session_state.transport_ids.upload.as_str(),
+                candidate_addr,
+                &session_state.local_ice_credentials,
+                &session_state.local_dtls_fingerprint,
+            ),
+        ))
+    }
+}
+
+impl fmt::Debug for RtcTransportAdapter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RtcTransportAdapter")
+            .field("public_ip", &self.public_ip)
+            .field("rtc_port_range", &self.rtc_port_range)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+impl Default for RtcTransportAdapter {
+    fn default() -> Self {
+        Self::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            RtcPortRange::new(40_000, 49_999),
+        )
+    }
+}
+
+fn bind_shared_rtc_socket(
+    public_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+) -> Result<SharedRtcSocket, TransportAdapterError> {
+    let bind_ip = bind_ip_for_public_ip(public_ip);
+    for port in rtc_port_range.ports() {
+        let bind_addr = SocketAddr::new(bind_ip, port);
+        match UdpSocket::bind(bind_addr) {
+            Ok(socket) => {
+                return Ok(SharedRtcSocket {
+                    socket,
+                    candidate_addr: SocketAddr::new(public_ip, port),
+                });
+            }
+            Err(_error) => {}
+        }
+    }
+    Err(TransportAdapterError::TransportUnavailable)
+}
+
+fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
+    match public_ip {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+    }
+}
+
+fn ensure_session_rtc_state(
+    sessions: &mut BTreeMap<SessionId, RtcSessionState>,
+    session_id: &SessionId,
+    candidate_addr: SocketAddr,
+) -> Result<(), TransportAdapterError> {
+    if sessions.contains_key(session_id) {
+        return Ok(());
+    }
+    let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
+    let candidate = Candidate::host(candidate_addr, webrtc::ICE_TRANSPORT_UDP)
+        .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
+    if rtc.add_local_candidate(candidate).is_none() {
+        return Err(TransportAdapterError::TransportUnavailable);
+    }
+    let transport_ids = SessionTransportIds {
+        upload: format!(
+            "{SESSION_TRANSPORT_ID_UPLOAD_PREFIX}-{}",
+            uuid::Uuid::new_v4()
+        ),
+        download: format!(
+            "{SESSION_TRANSPORT_ID_DOWNLOAD_PREFIX}-{}",
+            uuid::Uuid::new_v4()
+        ),
+    };
+    let local_ice_credentials = rtc.direct_api().local_ice_credentials();
+    let local_dtls_fingerprint = rtc.direct_api().local_dtls_fingerprint().clone();
+    sessions.insert(
+        session_id.clone(),
+        RtcSessionState {
+            rtc,
+            local_ice_credentials,
+            local_dtls_fingerprint,
+            transport_ids,
+        },
+    );
+    Ok(())
+}
+
+fn build_transport_bootstrap(
+    id: &str,
+    candidate_addr: SocketAddr,
+    local_ice_credentials: &IceCreds,
+    local_dtls_fingerprint: &Fingerprint,
+) -> TransportBootstrap {
+    TransportBootstrap {
+        id: id.to_owned(),
+        ice_parameters: build_ice_parameters(local_ice_credentials),
+        ice_candidates: vec![build_host_candidate(candidate_addr)],
+        dtls_parameters: DtlsParameters {
+            role: String::from("auto"),
+            fingerprints: vec![wire_dtls_fingerprint(local_dtls_fingerprint)],
+        },
+        sctp_parameters: transport_bootstrap::default_sctp_parameters(),
+    }
+}
+
+fn build_ice_parameters(local_ice_credentials: &IceCreds) -> IceParameters {
+    IceParameters(json!({
+        "usernameFragment": local_ice_credentials.ufrag,
+        "password": local_ice_credentials.pass,
+        "iceLite": true
+    }))
+}
+
+fn build_host_candidate(candidate_addr: SocketAddr) -> IceCandidate {
+    IceCandidate {
+        foundation: String::from(HOST_CANDIDATE_FOUNDATION),
+        priority: host_candidate_priority(),
+        ip: candidate_addr.ip().to_string(),
+        protocol: String::from(webrtc::ICE_TRANSPORT_UDP),
+        port: u64::from(candidate_addr.port()),
+        candidate_type: String::from(webrtc::ICE_CANDIDATE_TYPE_HOST),
+    }
+}
+
+fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> DtlsFingerprint {
+    let rendered = fingerprint.to_string();
+    let (algorithm, value) = rendered.split_once(' ').unwrap_or(("sha-256", ""));
+    DtlsFingerprint {
+        algorithm: algorithm.to_owned(),
+        value: value.to_owned(),
+    }
+}
+
+fn host_candidate_priority() -> u64 {
+    // RFC 8445 section 5.1.2.1 computes candidate priority as
+    // (2^24 * type preference) + (2^8 * local preference) + (256 - component ID).
+    (u64::from(webrtc::ICE_TYPE_PREFERENCE_HOST) << 24)
+        + (u64::from(ICE_LOCAL_PREFERENCE_MAX) << 8)
+        + u64::from(256_u16 - webrtc::ICE_COMPONENT_RTP)
 }
 
 fn validate_sdp_offer(sdp_offer: &str) -> Result<(), TransportAdapterError> {
@@ -476,6 +708,55 @@ a=mid:0\r\n";
             )
             .await;
         assert_eq!(connect_result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
+        let adapter = RtcTransportAdapter::default();
+        let session_id = SessionId::Integer(13);
+        let payload = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
+        assert!(payload.is_ok());
+        let Some(payload) = payload.ok() else {
+            return;
+        };
+        assert!(payload.download_transport.id.starts_with("stc-rtc-"));
+        assert!(payload.upload_transport.id.starts_with("cts-rtc-"));
+        assert_ne!(payload.download_transport.id, payload.upload_transport.id);
+        assert_eq!(
+            payload.download_transport.ice_parameters.0.get("iceLite"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            payload.upload_transport.ice_parameters.0.get("iceLite"),
+            Some(&json!(true))
+        );
+        let download_candidate = payload.download_transport.ice_candidates.first();
+        let upload_candidate = payload.upload_transport.ice_candidates.first();
+        assert!(download_candidate.is_some());
+        assert!(upload_candidate.is_some());
+        let (Some(download_candidate), Some(upload_candidate)) =
+            (download_candidate, upload_candidate)
+        else {
+            return;
+        };
+        assert_eq!(download_candidate.ip, "127.0.0.1");
+        assert_eq!(upload_candidate.ip, "127.0.0.1");
+        assert_eq!(download_candidate.port, upload_candidate.port);
+        assert!((40_000..=49_999).contains(&download_candidate.port));
+        let fingerprint = payload
+            .download_transport
+            .dtls_parameters
+            .fingerprints
+            .first();
+        assert!(fingerprint.is_some());
+        let Some(fingerprint) = fingerprint else {
+            return;
+        };
+        assert_eq!(fingerprint.algorithm, "sha-256");
+        assert_ne!(fingerprint.value, "AA:BB:CC");
+        assert!(fingerprint.value.contains(':'));
     }
 
     #[tokio::test]
