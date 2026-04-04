@@ -14,9 +14,9 @@ use crate::runtime::{
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
     current_protocol::{
-        CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
-        CurrentServerRequest, CurrentTransportBootstrapPayload, CurrentTransportConnectPayload,
-        CurrentWebSocketCloseCode,
+        CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
+        CurrentPublishTrackResponse, CurrentServerRequest, CurrentTransportBootstrapPayload,
+        CurrentTransportConnectPayload, CurrentWebSocketCloseCode,
     },
     shared::SessionId,
     webrtc::{DtlsParameters, RtpCapabilities},
@@ -25,7 +25,7 @@ use crate::signaling::{
 mod bootstrap;
 mod codec;
 
-pub(crate) use codec::{WsWriter, send_server_message_batch};
+pub(crate) use codec::{WsWriter, send_server_message_batch, send_server_request_batch};
 
 const STUB_SERVER_BUS_ID: u64 = 0;
 
@@ -153,7 +153,6 @@ pub(super) struct StubBusSession {
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
     next_request_counter: u64,
-    next_producer_counter: u64,
     pending_transport_bootstrap_request_id: Option<CurrentBusRequestId>,
 }
 
@@ -171,7 +170,6 @@ impl StubBusSession {
             metrics,
             transport_adapter,
             next_request_counter: 0,
-            next_producer_counter: 0,
             pending_transport_bootstrap_request_id: None,
         }
     }
@@ -234,7 +232,7 @@ impl StubBusSession {
         true
     }
 
-    async fn dispatch_request(&mut self, message: Value) -> Value {
+    async fn dispatch_request(&self, message: Value) -> Value {
         let Ok(request) = serde_json::from_value::<CurrentClientRequest>(message) else {
             self.metrics.record_ws_bus_client_request_decode_failure();
             debug!("failed to decode client bus request, returning empty object");
@@ -370,7 +368,7 @@ impl StubBusSession {
     }
 
     async fn handle_client_request_frame(
-        &mut self,
+        &self,
         writer: &mut WsWriter,
         request_id: CurrentBusRequestId,
         message: Value,
@@ -390,7 +388,7 @@ impl StubBusSession {
         Ok(())
     }
 
-    async fn handle_request(&mut self, request: &CurrentClientRequest) -> Value {
+    async fn handle_request(&self, request: &CurrentClientRequest) -> Value {
         match request {
             CurrentClientRequest::ConnectUploadTransport(payload) => {
                 self.handle_transport_connect_request(payload, TransportConnectDirection::Upload)
@@ -400,7 +398,9 @@ impl StubBusSession {
                 self.handle_transport_connect_request(payload, TransportConnectDirection::Download)
                     .await
             }
-            CurrentClientRequest::PublishTrack(_) => self.handle_publish_request(),
+            CurrentClientRequest::PublishTrack(payload) => {
+                self.handle_publish_request(payload).await
+            }
             CurrentClientRequest::StartRecording(_) | CurrentClientRequest::StopRecording => {
                 debug!("handled stub recording request");
                 Value::Bool(false)
@@ -427,21 +427,39 @@ impl StubBusSession {
             debug!(?direction, "transport adapter failed to connect transport");
             return empty_object();
         }
+        if !self
+            .channel
+            .set_transport_connected(&self.session_id, direction)
+            .await
+        {
+            debug!(
+                ?direction,
+                "channel no longer tracks session during transport connect"
+            );
+            return empty_object();
+        }
         debug!(?direction, "handled transport connect request");
         empty_object()
     }
 
-    fn handle_publish_request(&mut self) -> Value {
-        self.next_producer_counter += 1;
+    async fn handle_publish_request(&self, payload: &CurrentPublishTrackPayload) -> Value {
         self.metrics.record_ws_bus_stub_publish_request();
-        debug!(
-            producer_id = self.next_producer_counter,
-            "handled stub publish request"
-        );
-        serde_json::to_value(CurrentPublishTrackResponse {
-            id: format!("stub-producer-{}", self.next_producer_counter),
-        })
-        .unwrap_or_else(|_error| empty_object())
+        let producer_id = self
+            .channel
+            .publish_track(
+                &self.session_id,
+                payload.stream_type,
+                payload.media_kind,
+                payload.rtp_parameters.clone(),
+            )
+            .await;
+        let Some(producer_id) = producer_id else {
+            debug!("channel rejected publish request");
+            return empty_object();
+        };
+        debug!(producer_id, "handled publish request");
+        serde_json::to_value(CurrentPublishTrackResponse { id: producer_id })
+            .unwrap_or_else(|_error| empty_object())
     }
 
     async fn handle_message(&self, message: CurrentClientMessage) {

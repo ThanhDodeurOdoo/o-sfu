@@ -7,10 +7,13 @@ use super::{WsReader, close_writer};
 use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
-    stub_bus::{StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch},
+    stub_bus::{
+        StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch,
+        send_server_request_batch,
+    },
 };
-use crate::signaling::{
-    current_protocol::CurrentServerMessage, current_protocol::CurrentWebSocketCloseCode,
+use crate::signaling::current_protocol::{
+    CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode,
 };
 
 pub(super) async fn run(
@@ -83,6 +86,9 @@ async fn handle_outbound_event(
         Some(SessionOutbound::Message(message)) => {
             handle_outbound_message(writer, message, metrics).await
         }
+        Some(SessionOutbound::Request(request)) => {
+            handle_outbound_request(writer, *request, metrics).await
+        }
         Some(SessionOutbound::Close(code)) => handle_outbound_close(writer, code).await,
         None => {
             info!("session outbound channel closed");
@@ -100,6 +106,21 @@ async fn handle_outbound_message(
     if send_server_message_batch(writer, &message).await.is_err() {
         metrics.record_ws_bus_send_failure();
         info!("failed to send outbound server message");
+        return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
+    }
+    metrics.record_ws_bus_batch_sent(1);
+    None
+}
+
+async fn handle_outbound_request(
+    writer: &mut WsWriter,
+    request: CurrentServerRequest,
+    metrics: &RuntimeMetrics,
+) -> Option<WsSessionLoopExitReason> {
+    debug!(server_request = ?request, "sending outbound server request");
+    if send_server_request_batch(writer, &request).await.is_err() {
+        metrics.record_ws_bus_send_failure();
+        info!("failed to send outbound server request");
         return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
     }
     metrics.record_ws_bus_batch_sent(1);

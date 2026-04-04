@@ -4,7 +4,7 @@ use tracing::trace;
 
 use crate::signaling::{
     current_bus::{CurrentBusBatch, CurrentBusEnvelope},
-    current_protocol::{CurrentServerMessage, CurrentWebSocketCloseCode},
+    current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
 };
 
 pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
@@ -15,6 +15,23 @@ pub(crate) async fn send_server_message_batch(
 ) -> Result<(), CurrentWebSocketCloseCode> {
     trace!(server_message = ?message, "encoding server message batch");
     let value = serde_json::to_value(message).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+    send_batch(
+        writer,
+        vec![CurrentBusEnvelope {
+            message: value,
+            need_response: None,
+            response_to: None,
+        }],
+    )
+    .await
+}
+
+pub(crate) async fn send_server_request_batch(
+    writer: &mut WsWriter,
+    request: &CurrentServerRequest,
+) -> Result<(), CurrentWebSocketCloseCode> {
+    trace!(server_request = ?request, "encoding server request batch");
+    let value = serde_json::to_value(request).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
     send_batch(
         writer,
         vec![CurrentBusEnvelope {
