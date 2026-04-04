@@ -256,6 +256,7 @@ async fn cleanup_failed_session(
         .channels
         .leave_session(channel.uuid(), session_id, connection_id)
         .await;
+    let _result = state.transport_adapter.close_session(session_id).await;
 }
 
 async fn reject_handshake<T>(

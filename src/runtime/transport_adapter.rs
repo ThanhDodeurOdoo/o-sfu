@@ -91,4 +91,15 @@ impl RuntimeTransportAdapter {
             }
         }
     }
+
+    /// Release transport-adapter state for a disconnected session.
+    pub(crate) async fn close_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => adapter.close_session(session_id).await,
+            Self::Rtc(adapter) => adapter.close_session(session_id).await,
+        }
+    }
 }

@@ -39,6 +39,9 @@ pub(super) enum StubBusOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum StubWebRtcEvent {
     BootstrapRequested,
+    SessionClosed {
+        session_id: SessionId,
+    },
     TransportConnectRequested {
         session_id: SessionId,
         direction: TransportConnectDirection,
@@ -124,6 +127,20 @@ impl StubWebRtcAdapter {
         self.record_event(StubWebRtcEvent::TransportConnected {
             session_id: session_id.clone(),
             direction,
+        });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn close_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::SessionClosed {
+            session_id: session_id.clone(),
         });
         Ok(())
     }

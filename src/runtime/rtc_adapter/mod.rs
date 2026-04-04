@@ -141,6 +141,30 @@ impl RtcTransportAdapter {
         Ok(())
     }
 
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async so packet-loop work can be added without changing runtime call sites"
+    )]
+    pub(super) async fn close_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(mut transport_states) = self.transport_states.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        transport_states.retain(|key, _| key.session_id != *session_id);
+        drop(transport_states);
+
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        bootstrap_state.sessions.remove(session_id);
+        if bootstrap_state.sessions.is_empty() {
+            bootstrap_state.shared_socket = None;
+        }
+        Ok(())
+    }
+
     fn bootstrap_transport_payload(
         &self,
         session_id: &SessionId,
@@ -757,6 +781,30 @@ a=mid:0\r\n";
         assert_eq!(fingerprint.algorithm, "sha-256");
         assert_ne!(fingerprint.value, "AA:BB:CC");
         assert!(fingerprint.value.contains(':'));
+    }
+
+    #[tokio::test]
+    async fn rtc_transport_close_session_cleans_bootstrap_state() {
+        let adapter = RtcTransportAdapter::default();
+        let session_id = SessionId::Integer(14);
+        let bootstrap_result = adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await;
+        assert!(bootstrap_result.is_ok());
+        let close_result = adapter.close_session(&session_id).await;
+        assert_eq!(close_result, Ok(()));
+        let connect_result = adapter
+            .connect_transport(
+                &session_id,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+            )
+            .await;
+        assert_eq!(
+            connect_result,
+            Err(TransportAdapterError::TransportUnavailable)
+        );
     }
 
     #[tokio::test]

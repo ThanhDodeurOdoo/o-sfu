@@ -71,6 +71,14 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 session.connection_id,
             )
             .await;
+        if state
+            .transport_adapter
+            .close_session(&session.session_id)
+            .await
+            .is_err()
+        {
+            info!("failed to cleanup transport-adapter session state");
+        }
     }
     .instrument(info_span!(
         "ws.connection",

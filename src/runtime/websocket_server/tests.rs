@@ -681,6 +681,46 @@ mod websocket_server_tests {
     }
 
     #[tokio::test]
+    async fn websocket_closure_emits_stub_webrtc_session_closed_event() {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        let transport_adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
+        let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let session_id = SessionId::Integer(213);
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        let batch = read_bus_batch(&mut websocket).await;
+        assert!(batch.is_some(), "transport bootstrap should be sent");
+        let close_result = websocket.close(None).await;
+        assert!(close_result.is_ok());
+
+        let events = wait_for_stub_webrtc_events(&adapter, 2).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        let expected = vec![
+            StubWebRtcEvent::BootstrapRequested,
+            StubWebRtcEvent::SessionClosed { session_id },
+        ];
+        assert_eq!(events, expected);
+    }
+
+    #[tokio::test]
     async fn websocket_emits_stub_webrtc_directional_connect_events() {
         let adapter = Arc::new(StubWebRtcAdapter::default());
         let transport_adapter =
