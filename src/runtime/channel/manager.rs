@@ -91,6 +91,17 @@ impl ChannelManager {
         state.channels_by_uuid.get(uuid).map(Arc::clone)
     }
 
+    pub async fn has_session(&self, channel_uuid: &str, session_id: &SessionId) -> bool {
+        let channel = {
+            let state = self.state.read().await;
+            state.channels_by_uuid.get(channel_uuid).map(Arc::clone)
+        };
+        let Some(channel) = channel else {
+            return false;
+        };
+        channel.has_session(session_id).await
+    }
+
     pub async fn stats(&self) -> StatsResponse {
         let channels = {
             let state = self.state.read().await;
@@ -143,13 +154,14 @@ impl ChannelManager {
         channel_uuid: &str,
         session_id: &SessionId,
         connection_id: u64,
-    ) {
+    ) -> bool {
         let mut state = self.state.write().await;
         let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
-            return;
+            return false;
         };
-        channel.leave_session(session_id, connection_id).await;
+        let did_remove_active_session = channel.leave_session(session_id, connection_id).await;
         remove_channel_if_empty(&mut state, &channel).await;
+        did_remove_active_session
     }
 
     #[allow(

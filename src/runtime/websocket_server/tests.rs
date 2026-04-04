@@ -721,6 +721,125 @@ mod websocket_server_tests {
     }
 
     #[tokio::test]
+    async fn stale_replaced_socket_close_does_not_cleanup_active_transport_session() {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        let transport_adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
+        let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+        let session_id = SessionId::Integer(260);
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+
+        let first_authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(first_authenticated.is_some());
+        let Some((mut first_socket, _first_startup)) = first_authenticated else {
+            return;
+        };
+        assert!(
+            read_bus_batch(&mut first_socket).await.is_some(),
+            "first session should receive transport bootstrap"
+        );
+
+        let second_authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(second_authenticated.is_some());
+        let Some((mut second_socket, _second_startup)) = second_authenticated else {
+            return;
+        };
+        assert!(
+            read_bus_batch(&mut second_socket).await.is_some(),
+            "replacement session should receive transport bootstrap"
+        );
+
+        assert_eq!(
+            read_close_code(&mut first_socket).await,
+            Some(CloseCode::Library(4108))
+        );
+
+        let events = wait_for_stub_webrtc_events(&adapter, 2).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        assert_eq!(
+            events,
+            vec![
+                StubWebRtcEvent::BootstrapRequested,
+                StubWebRtcEvent::BootstrapRequested
+            ]
+        );
+
+        let close_result = second_socket.close(None).await;
+        assert!(close_result.is_ok());
+        let events = wait_for_stub_webrtc_events(&adapter, 3).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        assert_eq!(
+            events.last(),
+            Some(&StubWebRtcEvent::SessionClosed { session_id })
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        let transport_adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
+        let server = spawn_test_server_with_adapter(1_000, 10, transport_adapter).await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+
+        let mut alice = setup_authenticated_session(&server, &channel, SessionId::Integer(1)).await;
+        let mut bob = setup_authenticated_session(&server, &channel, SessionId::Integer(2)).await;
+        assert!(alice.is_some());
+        assert!(bob.is_some());
+        let Some(ref mut alice) = alice else {
+            return;
+        };
+        let Some(ref mut bob) = bob else {
+            return;
+        };
+
+        server
+            .channels
+            .disconnect_sessions(channel.uuid(), &[SessionId::Integer(1)])
+            .await;
+
+        assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4108)));
+        let peer_message = read_server_message(bob).await;
+        assert!(
+            matches!(peer_message, Some(CurrentServerMessage::SessionDeparted(_))),
+            "remaining peer should receive session departure after disconnect: {peer_message:?}"
+        );
+
+        let events = wait_for_stub_webrtc_events(&adapter, 3).await;
+        assert!(events.is_some());
+        let Some(events) = events else {
+            return;
+        };
+        assert_eq!(
+            events.last(),
+            Some(&StubWebRtcEvent::SessionClosed {
+                session_id: SessionId::Integer(1)
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn websocket_emits_stub_webrtc_directional_connect_events() {
         let adapter = Arc::new(StubWebRtcAdapter::default());
         let transport_adapter =

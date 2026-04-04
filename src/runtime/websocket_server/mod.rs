@@ -63,7 +63,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         .await;
         state.metrics.record_ws_session_loop_exit(exit_reason);
         info!("closing websocket session");
-        state
+        let did_remove_active_session = state
             .channels
             .leave_session(
                 session.channel.uuid(),
@@ -71,11 +71,17 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 session.connection_id,
             )
             .await;
-        if state
-            .transport_adapter
-            .close_session(&session.session_id)
-            .await
-            .is_err()
+        let should_cleanup_transport_session = did_remove_active_session
+            || !state
+                .channels
+                .has_session(session.channel.uuid(), &session.session_id)
+                .await;
+        if should_cleanup_transport_session
+            && state
+                .transport_adapter
+                .close_session(&session.session_id)
+                .await
+                .is_err()
         {
             info!("failed to cleanup transport-adapter session state");
         }

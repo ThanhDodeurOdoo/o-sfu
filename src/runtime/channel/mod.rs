@@ -256,26 +256,31 @@ impl Channel {
 
     /// Remove a connection for the given session. When the last connection leaves,
     /// the session is fully removed and `SESSION_LEAVE` is sent to remaining peers.
-    pub async fn leave_session(&self, session_id: &SessionId, connection_id: u64) {
+    ///
+    /// Returns `true` only when the currently active connection for `session_id`
+    /// was removed. Returns `false` for stale/missing connections or router-sync
+    /// failures.
+    pub async fn leave_session(&self, session_id: &SessionId, connection_id: u64) -> bool {
         let mut state = self.state.write().await;
         let Some(session) = state.sessions.get_mut(session_id) else {
-            return;
+            return false;
         };
         if session.connection_id != connection_id {
-            return;
+            return false;
         }
         if state.router.remove_session(session_id).is_err() {
             error!(
                 ?session_id,
                 "failed to mirror session leave into channel router"
             );
-            return;
+            return false;
         }
         state.sessions.remove(session_id);
         let departure = CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
             session_id: session_id.clone(),
         });
         send_to_all(&state.sessions, &departure);
+        true
     }
 
     /// Relay a broadcast message from one session to all other sessions in the channel.
@@ -418,6 +423,10 @@ impl Channel {
             .sessions
             .get(session_id)
             .and_then(|session| session.client_rtp_capabilities.clone())
+    }
+
+    pub(super) async fn has_session(&self, session_id: &SessionId) -> bool {
+        self.state.read().await.sessions.contains_key(session_id)
     }
 
     pub(super) async fn is_empty(&self) -> bool {
