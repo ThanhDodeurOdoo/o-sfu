@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use str0m::media::MediaData;
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{
@@ -26,7 +27,6 @@ struct PendingTransmit {
     contents: Vec<u8>,
 }
 
-#[derive(Debug)]
 struct Snapshot {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
@@ -97,28 +97,77 @@ fn snapshot_and_pump(bootstrap_state: &Arc<Mutex<RtcBootstrapState>>) -> Option<
             shared_socket.candidate_addr,
         )
     };
-    let (pending_transmits, next_timeout) = pump_session_outputs(&mut state.sessions);
+    let (pending_transmits, pending_media, next_timeout) = {
+        let mut pending_transmits = Vec::new();
+        let mut pending_media = Vec::new();
+        let mut next_timeout: Option<Instant> = None;
+        for (session_id, session_state) in &mut state.sessions {
+            let session_timeout = drain_single_session(
+                session_id,
+                session_state,
+                &mut pending_transmits,
+                &mut pending_media,
+            );
+            if let Some(t) = session_timeout {
+                next_timeout = Some(next_timeout.map_or(t, |current| current.min(t)));
+            }
+        }
+        (pending_transmits, pending_media, next_timeout)
+    };
+
+    // Collect matching routes for each pending media item, then write.
+    // Two-pass avoids cloning media_routes and sidesteps the borrow conflict
+    // between &state.media_routes and &mut state.sessions.
+    let forwards: Vec<_> = pending_media
+        .iter()
+        .enumerate()
+        .flat_map(|(media_idx, (source_session, media))| {
+            state
+                .media_routes
+                .iter()
+                .filter(move |route| {
+                    route.source_session == *source_session && route.source_mid == media.mid
+                })
+                .map(move |route| (media_idx, route.dest_session.clone(), route.dest_mid))
+        })
+        .collect();
+    for (media_idx, dest_session, dest_mid) in forwards {
+        let Some((_source_session, media)) = pending_media.get(media_idx) else {
+            continue;
+        };
+        let Some(dest_session_state) = state.sessions.get_mut(&dest_session) else {
+            continue;
+        };
+        let Some(writer) = dest_session_state.rtc.writer(dest_mid) else {
+            continue;
+        };
+        let Some(pt) = writer.match_params(media.params) else {
+            continue;
+        };
+        let mut data_writer = writer;
+        if let Some(rid) = media.rid {
+            data_writer = data_writer.rid(rid);
+        }
+        if media.audio_start_of_talk_spurt {
+            data_writer = data_writer.start_of_talkspurt(true);
+        }
+        if let Err(error) =
+            data_writer.write(pt, media.network_time, media.time, media.data.clone())
+        {
+            warn!(
+                ?dest_session,
+                ?error,
+                "failed to write media to destination session"
+            );
+        }
+    }
+
     Some(Snapshot {
         socket,
         candidate_addr,
         pending_transmits,
         next_timeout,
     })
-}
-
-fn pump_session_outputs(
-    sessions: &mut BTreeMap<SessionId, RtcSessionState>,
-) -> (Vec<PendingTransmit>, Option<Instant>) {
-    let mut pending_transmits = Vec::new();
-    let mut next_timeout: Option<Instant> = None;
-    for (session_id, session_state) in sessions {
-        let session_timeout =
-            drain_single_session(session_id, session_state, &mut pending_transmits);
-        if let Some(t) = session_timeout {
-            next_timeout = Some(next_timeout.map_or(t, |current| current.min(t)));
-        }
-    }
-    (pending_transmits, next_timeout)
 }
 
 /// Drain all ready outputs from a single session's `Rtc` instance.
@@ -128,6 +177,7 @@ fn drain_single_session(
     session_id: &SessionId,
     session_state: &mut RtcSessionState,
     pending_transmits: &mut Vec<PendingTransmit>,
+    pending_media: &mut Vec<(SessionId, MediaData)>,
 ) -> Option<Instant> {
     loop {
         let now = Instant::now();
@@ -137,6 +187,9 @@ fn drain_single_session(
                     destination: transmit.destination,
                     contents: Vec::from(transmit.contents),
                 });
+            }
+            Ok(Output::Event(Event::MediaData(data))) => {
+                pending_media.push((session_id.clone(), data));
             }
             Ok(Output::Event(event)) => {
                 log_rtc_event(session_id, &event);

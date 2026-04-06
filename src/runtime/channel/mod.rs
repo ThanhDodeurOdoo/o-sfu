@@ -7,8 +7,10 @@ use o_sfu_router::{
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, mpsc};
-use tracing::error;
+use tracing::{error, warn};
 use uuid::Uuid;
+
+use super::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 
 use crate::signaling::{
     bundle_api::bundle_session_info_key,
@@ -134,6 +136,11 @@ struct PublishedProducer {
         reason = "router producer identity is required for future production change and teardown operations"
     )]
     router_producer_id: RouterProducerId,
+    #[allow(
+        dead_code,
+        reason = "transport media identity is required for consuming media and future modifications"
+    )]
+    transport_media_id: TransportMediaId,
 }
 
 impl Channel {
@@ -475,6 +482,8 @@ impl Channel {
 
     #[allow(
         clippy::significant_drop_tightening,
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
         reason = "publish/consumer bootstrap keeps one lock scope so peer snapshots and router updates remain coherent for this minimal path"
     )]
     pub async fn publish_track(
@@ -483,6 +492,7 @@ impl Channel {
         stream_type: StreamType,
         media_kind: SignalingMediaKind,
         rtp_parameters: RtpParameters,
+        transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
         let mut state = self.state.write().await;
         let can_publish = state
@@ -494,6 +504,19 @@ impl Channel {
         }
         let router_media_kind = to_router_media_kind(media_kind);
         let router_stream_type = to_router_stream_type(stream_type);
+        let transport_media_id = match transport_adapter
+            .publish_media(session_id, media_kind)
+            .await
+        {
+            Ok(id) => id,
+            Err(_error) => {
+                warn!(
+                    ?session_id,
+                    "transport adapter rejected publish media declaration"
+                );
+                return None;
+            }
+        };
         let router_producer_id =
             match state
                 .router
@@ -517,6 +540,7 @@ impl Channel {
                 media_kind,
                 rtp_parameters: rtp_parameters.clone(),
                 router_producer_id,
+                transport_media_id,
             },
         );
 
@@ -552,6 +576,17 @@ impl Channel {
                     ?peer_session_id,
                     producer_id = %producer_id,
                     "failed to mirror consumer bootstrap into channel router state"
+                );
+                continue;
+            }
+            if let Err(_error) = transport_adapter
+                .consume_media(&peer_session_id, media_kind, session_id, transport_media_id)
+                .await
+            {
+                warn!(
+                    consumer_session_id = ?peer_session_id,
+                    producer_session_id = ?session_id,
+                    "transport adapter rejected consume media declaration"
                 );
                 continue;
             }

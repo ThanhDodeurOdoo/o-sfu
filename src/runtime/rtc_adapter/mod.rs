@@ -28,9 +28,12 @@ use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload, shared::SessionId, webrtc::DtlsParameters,
 };
 use str0m::config::Fingerprint;
+use str0m::media::{MediaKind, Mid};
 use str0m::{IceCreds, Rtc};
 use tokio::{net::UdpSocket, runtime::Handle};
 use tracing::debug;
+
+use super::transport_adapter::TransportMediaId;
 
 mod bootstrap;
 mod dtls;
@@ -71,6 +74,8 @@ pub(super) struct RtcSessionState {
     pub(super) transport_ids: SessionTransportIds,
     pub(super) remote_dtls_fingerprint: Option<String>,
     pub(super) dtls_started: bool,
+    pub(super) recv_mids: Vec<Mid>,
+    pub(super) send_mids: Vec<Mid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,10 +84,34 @@ pub(super) struct SessionTransportIds {
     pub(super) download: String,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct MediaRoute {
+    pub(super) source_session: SessionId,
+    pub(super) source_mid: Mid,
+    pub(super) dest_session: SessionId,
+    pub(super) dest_mid: Mid,
+}
+
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<SessionId, RtcSessionState>,
+    pub(super) media_routes: Vec<MediaRoute>,
+    mid_registry: BTreeMap<u64, Mid>,
+    next_media_id: u64,
+}
+
+impl RtcBootstrapState {
+    fn register_mid(&mut self, mid: Mid) -> TransportMediaId {
+        let id = self.next_media_id;
+        self.next_media_id = self.next_media_id.saturating_add(1);
+        self.mid_registry.insert(id, mid);
+        TransportMediaId::new(id)
+    }
+
+    fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
+        self.mid_registry.get(&transport_media_id.as_u64()).copied()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +123,7 @@ pub(super) struct RtcBootstrapState {
 /// The adapter performs real ICE-lite bootstrap work with `str0m` while
 /// transport connect, packet-loop driving, and media forwarding remain staged
 /// behind the same boundary for later steps.
-pub(super) struct RtcTransportAdapter {
+pub(crate) struct RtcTransportAdapter {
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     bootstrap_state: Arc<Mutex<RtcBootstrapState>>,
@@ -172,11 +201,112 @@ impl RtcTransportAdapter {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        bootstrap_state.sessions.remove(session_id);
+        if let Some(session_state) = bootstrap_state.sessions.remove(session_id) {
+            let stale_mids: Vec<_> = session_state
+                .recv_mids
+                .iter()
+                .chain(session_state.send_mids.iter())
+                .copied()
+                .collect();
+            bootstrap_state
+                .mid_registry
+                .retain(|_id, mid| !stale_mids.contains(mid));
+        }
+        bootstrap_state.media_routes.retain(|route| {
+            route.source_session != *session_id && route.dest_session != *session_id
+        });
         if bootstrap_state.sessions.is_empty() {
             bootstrap_state.shared_socket = None;
         }
         Ok(())
+    }
+
+    /// Declare a receive-only media line on the producer's `Rtc` instance.
+    ///
+    /// str0m needs an explicit media declaration to accept incoming RTP for
+    /// the given media kind. `Mid` values are server-assigned random identifiers
+    /// for the direct-API path (no SDP offer/answer exchange). Returns the
+    /// opaque `TransportMediaId` wrapping the allocated `Mid`.
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async while runtime call sites and sibling adapters keep the same signature"
+    )]
+    pub(super) async fn add_recv_media(
+        &self,
+        session_id: &SessionId,
+        media_kind: MediaKind,
+    ) -> Result<TransportMediaId, TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(session_state) = bootstrap_state.sessions.get_mut(session_id) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let mid = Mid::new();
+        {
+            let mut api = session_state.rtc.direct_api();
+            api.declare_media(mid, media_kind);
+        }
+        session_state.recv_mids.push(mid);
+        let transport_media_id = bootstrap_state.register_mid(mid);
+        debug!(
+            session_id = ?session_id,
+            ?transport_media_id,
+            ?media_kind,
+            "declared recv-only media on rtc session for incoming producer RTP"
+        );
+        Ok(transport_media_id)
+    }
+
+    /// Declare a send-only media line on the consumer's `Rtc` instance and register
+    /// a media route from the source producer session/mid to this new destination.
+    ///
+    /// Returns the allocated `Mid` for the new send-only media line.
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async while runtime call sites and sibling adapters keep the same signature"
+    )]
+    pub(super) async fn add_send_media(
+        &self,
+        consumer_session_id: &SessionId,
+        media_kind: MediaKind,
+        source_session_id: &SessionId,
+        source_transport_media_id: TransportMediaId,
+    ) -> Result<TransportMediaId, TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let source_mid = bootstrap_state
+            .resolve_mid(source_transport_media_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let Some(session_state) = bootstrap_state.sessions.get_mut(consumer_session_id) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let mid = Mid::new();
+        {
+            let mut api = session_state.rtc.direct_api();
+            api.declare_media(mid, media_kind);
+            let ssrc = api.new_ssrc();
+            let rtx = media_kind.is_video().then(|| api.new_ssrc());
+            api.declare_stream_tx(ssrc, rtx, mid, None);
+        }
+        session_state.send_mids.push(mid);
+        let transport_media_id = bootstrap_state.register_mid(mid);
+        bootstrap_state.media_routes.push(MediaRoute {
+            source_session: source_session_id.clone(),
+            source_mid,
+            dest_session: consumer_session_id.clone(),
+            dest_mid: mid,
+        });
+        debug!(
+            consumer_session_id = ?consumer_session_id,
+            source_session_id = ?source_session_id,
+            ?source_mid,
+            ?transport_media_id,
+            ?media_kind,
+            "declared send-only media and registered media route for consumer"
+        );
+        Ok(transport_media_id)
     }
 }
 

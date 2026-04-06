@@ -8,7 +8,7 @@ use super::channel::Channel;
 use crate::runtime::{
     metrics::RuntimeMetrics,
     transport_adapter::{
-        RuntimeTransportAdapter, TransportAdapterError, TransportConnectDirection,
+        RuntimeTransportAdapter, TransportAdapterError, TransportConnectDirection, TransportMediaId,
     },
 };
 use crate::signaling::{
@@ -19,8 +19,9 @@ use crate::signaling::{
         CurrentTransportConnectPayload, CurrentWebSocketCloseCode,
     },
     shared::SessionId,
-    webrtc::{DtlsParameters, RtpCapabilities},
+    webrtc::{DtlsParameters, MediaKind, RtpCapabilities},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod bootstrap;
 mod codec;
@@ -58,8 +59,9 @@ pub(super) enum StubWebRtcEvent {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct StubWebRtcAdapter {
+pub(crate) struct StubWebRtcAdapter {
     events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
+    next_media_id: Arc<AtomicU64>,
 }
 
 #[allow(
@@ -143,6 +145,32 @@ impl StubWebRtcAdapter {
             session_id: session_id.clone(),
         });
         Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn publish_media(
+        &self,
+        _session_id: &SessionId,
+        _media_kind: MediaKind,
+    ) -> Result<TransportMediaId, TransportAdapterError> {
+        let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
+        Ok(TransportMediaId::new(id))
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn consume_media(
+        &self,
+        _consumer_session_id: &SessionId,
+        _media_kind: MediaKind,
+    ) -> Result<TransportMediaId, TransportAdapterError> {
+        let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
+        Ok(TransportMediaId::new(id))
     }
 }
 
@@ -451,6 +479,7 @@ impl StubBusSession {
                 payload.stream_type,
                 payload.media_kind,
                 payload.rtp_parameters.clone(),
+                &self.transport_adapter,
             )
             .await;
         let Some(producer_id) = producer_id else {
