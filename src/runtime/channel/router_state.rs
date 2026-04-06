@@ -229,6 +229,38 @@ impl ChannelRouterState {
             .update_session_info(router_session_id, router_info(info))
     }
 
+    /// Update the pause state of a producer in the pure router.
+    ///
+    /// When a producer is paused, the router propagates the pause state to all
+    /// dependent consumers (`producer_paused` shadow).
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`RouterError`] if the producer does not exist.
+    pub(super) fn set_producer_paused(
+        &mut self,
+        producer_id: RouterProducerId,
+        paused: bool,
+    ) -> Result<(), RouterError> {
+        self.router.set_producer_paused(producer_id, paused)
+    }
+
+    /// Update the local pause state of a consumer in the pure router.
+    ///
+    /// This controls the consumer's own pause flag independently of the
+    /// producer-side pause shadow.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`RouterError`] if the consumer does not exist.
+    pub(super) fn set_consumer_paused(
+        &mut self,
+        consumer_id: RouterConsumerId,
+        paused: bool,
+    ) -> Result<(), RouterError> {
+        self.router.set_consumer_paused(consumer_id, paused)
+    }
+
     /// Remove the pure-router session for the signaling-layer session if one exists.
     ///
     /// # Errors

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use o_sfu_router::{
-    MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
-    StreamType as RouterStreamType,
+    ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind, ProducerId as RouterProducerId,
+    RouterId, StreamType as RouterStreamType,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, mpsc};
@@ -21,7 +21,8 @@ use crate::signaling::{
     },
     http::{ChannelStats, CreateChannelQuery, IncomingBitRateStats, SessionsStats},
     shared::{
-        AvailableFeatures, RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType,
+        AvailableFeatures, DownloadStates, RecordingState, SessionId, SessionInfo,
+        SessionPermissions, StreamType,
     },
     webrtc::{
         MediaKind as SignalingMediaKind, RtpCapabilities as SignalingRtpCapabilities, RtpParameters,
@@ -84,12 +85,20 @@ struct ChannelState {
     next_producer_id: u64,
     next_consumer_id: u64,
     recording_state: RecordingState,
-    #[allow(
-        dead_code,
-        reason = "published producer metadata is retained for upcoming production/consumption change handling and teardown synchronization"
-    )]
     producers: BTreeMap<String, PublishedProducer>,
+    /// Maps `(consumer_session, producer_session, stream_type)` to router consumer ID.
+    /// Populated during `publish_track` and used by `CONSUMPTION_CHANGE` to pause/resume
+    /// individual consumers.
+    consumer_index: BTreeMap<ConsumerKey, RouterConsumerId>,
     router: ChannelRouterState,
+}
+
+/// Composite key for looking up a consumer by consuming session, source session, and stream type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ConsumerKey {
+    consumer_session_id: SessionId,
+    producer_session_id: SessionId,
+    stream_type: StreamType,
 }
 
 #[derive(Debug)]
@@ -111,19 +120,11 @@ struct ActiveSession {
 
 #[derive(Debug, Clone)]
 struct PublishedProducer {
-    #[allow(
-        dead_code,
-        reason = "producer ownership will be used by production state updates and cleanup paths"
-    )]
     owner_session_id: SessionId,
-    #[allow(
-        dead_code,
-        reason = "stream-type specific production updates are planned in the next phase"
-    )]
     stream_type: StreamType,
     #[allow(
         dead_code,
-        reason = "media-kind specific consumption behavior is planned in the next phase"
+        reason = "media-kind specific consumption behavior is planned for codec negotiation"
     )]
     media_kind: SignalingMediaKind,
     #[allow(
@@ -131,10 +132,6 @@ struct PublishedProducer {
         reason = "the wire payload is reused when bootstrapping new consumers after initial publish"
     )]
     rtp_parameters: RtpParameters,
-    #[allow(
-        dead_code,
-        reason = "router producer identity is required for future production change and teardown operations"
-    )]
     router_producer_id: RouterProducerId,
     #[allow(
         dead_code,
@@ -342,6 +339,7 @@ impl Channel {
             return false;
         }
         state.sessions.remove(session_id);
+        state.purge_session_media_state(session_id);
         let departure = CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
             session_id: session_id.clone(),
         });
@@ -428,6 +426,7 @@ impl Channel {
                 continue;
             }
             if let Some(session) = state.sessions.remove(session_id) {
+                state.purge_session_media_state(session_id);
                 let _ = session
                     .sender
                     .send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
@@ -561,24 +560,31 @@ impl Channel {
             .collect::<Vec<_>>();
         for (peer_session_id, peer_sender) in consumer_targets {
             let consumer_id = allocate_wire_consumer_id(&mut state.next_consumer_id);
-            if state
-                .router
-                .add_consumer(
-                    &peer_session_id,
-                    router_producer_id,
-                    router_media_kind,
-                    router_stream_type,
-                    true,
-                )
-                .is_err()
-            {
-                error!(
-                    ?peer_session_id,
-                    producer_id = %producer_id,
-                    "failed to mirror consumer bootstrap into channel router state"
-                );
-                continue;
-            }
+            let router_consumer_id = match state.router.add_consumer(
+                &peer_session_id,
+                router_producer_id,
+                router_media_kind,
+                router_stream_type,
+                true,
+            ) {
+                Ok(id) => id,
+                Err(_error) => {
+                    error!(
+                        ?peer_session_id,
+                        producer_id = %producer_id,
+                        "failed to mirror consumer bootstrap into channel router state"
+                    );
+                    continue;
+                }
+            };
+            state.consumer_index.insert(
+                ConsumerKey {
+                    consumer_session_id: peer_session_id.clone(),
+                    producer_session_id: session_id.clone(),
+                    stream_type,
+                },
+                router_consumer_id,
+            );
             if let Err(_error) = transport_adapter
                 .consume_media(&peer_session_id, media_kind, session_id, transport_media_id)
                 .await
@@ -603,6 +609,105 @@ impl Channel {
             let _ = peer_sender.send(SessionOutbound::Request(Box::new(request)));
         }
         Some(producer_id)
+    }
+
+    /// Handle a `PRODUCTION_CHANGE` message: pause or resume the session's producer
+    /// for the given stream type, update session info, and broadcast the change.
+    ///
+    /// Mirrors the current Node SFU behavior:
+    /// 1. Find the producer owned by this session for the stream type.
+    /// 2. Set the producer's pause state in the router (propagates to all consumers).
+    /// 3. Update session info flags (isCameraOn / isScreenSharingOn).
+    /// 4. Broadcast the updated info to all peers.
+    pub async fn update_upload_state(
+        &self,
+        session_id: &SessionId,
+        stream_type: StreamType,
+        active: bool,
+    ) {
+        let mut state = self.state.write().await;
+        let producer = state
+            .producers
+            .values()
+            .find(|p| p.owner_session_id == *session_id && p.stream_type == stream_type);
+        let Some(router_producer_id) = producer.map(|p| p.router_producer_id) else {
+            return;
+        };
+        let paused = !active;
+        if state
+            .router
+            .set_producer_paused(router_producer_id, paused)
+            .is_err()
+        {
+            error!(
+                ?session_id,
+                ?stream_type,
+                "failed to set producer pause state in channel router"
+            );
+            return;
+        }
+        let Some(session) = state.sessions.get_mut(session_id) else {
+            return;
+        };
+        match stream_type {
+            StreamType::Camera => session.info.is_camera_on = Some(active),
+            StreamType::Screen => session.info.is_screen_sharing_on = Some(active),
+            StreamType::Audio => {}
+        }
+        let updated_info = session.info.clone();
+        if state
+            .router
+            .update_session_info(session_id, &updated_info)
+            .is_err()
+        {
+            error!(
+                ?session_id,
+                "failed to mirror session info update into channel router after production change"
+            );
+        }
+        let snapshot: CurrentSessionInfoSnapshotById =
+            BTreeMap::from([(bundle_session_info_key(session_id), updated_info)]);
+        let msg = CurrentServerMessage::SessionInfoChanged(snapshot);
+        send_to_all(&state.sessions, &msg);
+    }
+
+    /// Handle a `CONSUMPTION_CHANGE` message: pause or resume specific consumers
+    /// that this session has for a remote session's streams.
+    ///
+    /// Mirrors the current Node SFU behavior:
+    /// for each (`stream_type`, `active`) pair in the states, find the consumer
+    /// created for (this session, target session, `stream_type`) and set its
+    /// local pause state in the router.
+    pub async fn update_download_state(
+        &self,
+        session_id: &SessionId,
+        target_session_id: &SessionId,
+        states: &DownloadStates,
+    ) {
+        let mut state = self.state.write().await;
+        for (stream_type, active) in states.iter() {
+            let key = ConsumerKey {
+                consumer_session_id: session_id.clone(),
+                producer_session_id: target_session_id.clone(),
+                stream_type,
+            };
+            let Some(router_consumer_id) = state.consumer_index.get(&key).copied() else {
+                continue;
+            };
+            let paused = !active;
+            if state
+                .router
+                .set_consumer_paused(router_consumer_id, paused)
+                .is_err()
+            {
+                error!(
+                    ?session_id,
+                    ?target_session_id,
+                    ?stream_type,
+                    "failed to set consumer pause state in channel router"
+                );
+            }
+        }
     }
 
     #[cfg(test)]
@@ -663,8 +768,23 @@ impl ChannelState {
                 video: Some(false),
             },
             producers: BTreeMap::new(),
+            consumer_index: BTreeMap::new(),
             router: ChannelRouterState::new(router_id),
         }
+    }
+
+    /// Remove all producer and consumer index entries associated with a departing session.
+    ///
+    /// This covers both directions: producers owned by the session and consumers
+    /// where the session appears as either consumer or producer source.
+    /// Must be called whenever a session is removed from `self.sessions` so the
+    /// channel-level indexes stay consistent with the router's cascade cleanup.
+    fn purge_session_media_state(&mut self, session_id: &SessionId) {
+        self.producers
+            .retain(|_wire_id, producer| producer.owner_session_id != *session_id);
+        self.consumer_index.retain(|key, _consumer_id| {
+            key.consumer_session_id != *session_id && key.producer_session_id != *session_id
+        });
     }
 }
 

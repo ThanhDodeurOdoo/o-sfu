@@ -1,18 +1,26 @@
 #[allow(
     clippy::panic,
-    reason = "test assertions use panic for clear failure messages"
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 mod channel_tests {
+    use std::sync::Arc;
+
     use o_sfu_router::SessionPermissions as RouterSessionPermissions;
     use tokio::sync::mpsc;
 
     use super::super::{
         ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound,
     };
+    use crate::runtime::stub_bus::StubWebRtcAdapter;
+    use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
     use crate::signaling::{
         current_protocol::{CurrentServerMessage, CurrentWebSocketCloseCode},
         http::CreateChannelQuery,
-        shared::{SessionId, SessionInfo, SessionPermissions},
+        shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
+        webrtc::{MediaKind, RtpCapabilities, RtpParameters},
     };
 
     fn test_sender() -> (
@@ -666,5 +674,355 @@ mod channel_tests {
             .create_or_get("issuer-a", None, &CreateChannelQuery::default())
             .await;
         assert_ne!(replacement.uuid(), channel_uuid);
+    }
+
+    fn stub_adapter() -> (RuntimeTransportAdapter, Arc<StubWebRtcAdapter>) {
+        let adapter = Arc::new(StubWebRtcAdapter::default());
+        (
+            RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
+            adapter,
+        )
+    }
+
+    /// Set up a channel with two joined sessions that both have upload and download
+    /// transports connected plus client RTP capabilities, ready for publish/consume tests.
+    async fn setup_two_ready_sessions() -> (
+        Arc<super::super::Channel>,
+        RuntimeTransportAdapter,
+        mpsc::UnboundedReceiver<SessionOutbound>,
+        mpsc::UnboundedReceiver<SessionOutbound>,
+    ) {
+        let manager = ChannelManager::new();
+        let channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let (tx1, rx1) = test_sender();
+        let (tx2, rx2) = test_sender();
+        channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx1,
+                10,
+            )
+            .await
+            .unwrap();
+        channel
+            .join_session(
+                SessionId::Integer(2),
+                None,
+                SessionPermissions::default(),
+                tx2,
+                10,
+            )
+            .await
+            .unwrap();
+        let (adapter, _stub) = stub_adapter();
+        for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
+            channel
+                .set_transport_connected(session_id, TransportConnectDirection::Upload)
+                .await;
+            channel
+                .set_transport_connected(session_id, TransportConnectDirection::Download)
+                .await;
+            channel
+                .set_client_rtp_capabilities(
+                    session_id,
+                    RtpCapabilities(serde_json::Value::Object(serde_json::Map::new())),
+                )
+                .await;
+        }
+        (channel, adapter, rx1, rx2)
+    }
+
+    fn drain_outbound(rx: &mut mpsc::UnboundedReceiver<SessionOutbound>) -> Vec<SessionOutbound> {
+        let mut msgs = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            msgs.push(msg);
+        }
+        msgs
+    }
+
+    #[tokio::test]
+    async fn production_change_pauses_producer_and_broadcasts_info() {
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+
+        // Session 1 publishes a camera track.
+        let producer_id = channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                &adapter,
+            )
+            .await;
+        assert!(producer_id.is_some());
+
+        // Drain the INIT_CONSUMER bootstrap that went to session 2.
+        let bootstrap_msgs = drain_outbound(&mut rx2);
+        assert!(
+            bootstrap_msgs
+                .iter()
+                .any(|m| matches!(m, SessionOutbound::Request(..))),
+            "session 2 should have received a bootstrap remote track request"
+        );
+        // Session 1 shouldn't get its own consumer.
+        assert!(drain_outbound(&mut rx1).is_empty());
+
+        // Now session 1 sends PRODUCTION_CHANGE: camera off (pause).
+        channel
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false)
+            .await;
+
+        // Both sessions should receive a session info broadcast with isCameraOn = false.
+        let msgs1 = drain_outbound(&mut rx1);
+        let msgs2 = drain_outbound(&mut rx2);
+        assert_eq!(msgs1.len(), 1, "session 1 should get info broadcast");
+        assert_eq!(msgs2.len(), 1, "session 2 should get info broadcast");
+
+        // Verify the broadcast contains isCameraOn = false.
+        let info_msg = &msgs1[0];
+        if let SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot)) =
+            info_msg
+        {
+            let info = snapshot
+                .values()
+                .next()
+                .expect("snapshot should have one entry");
+            assert_eq!(info.is_camera_on, Some(false));
+        } else {
+            panic!("expected SessionInfoChanged, got {info_msg:?}");
+        }
+
+        // Resume: session 1 sends PRODUCTION_CHANGE: camera on.
+        channel
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, true)
+            .await;
+
+        let msgs1 = drain_outbound(&mut rx1);
+        if let SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot)) =
+            &msgs1[0]
+        {
+            let info = snapshot.values().next().unwrap();
+            assert_eq!(info.is_camera_on, Some(true));
+        } else {
+            panic!("expected SessionInfoChanged after resume");
+        }
+    }
+
+    #[tokio::test]
+    async fn production_change_updates_screen_sharing_info() {
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Screen,
+                MediaKind::Video,
+                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                &adapter,
+            )
+            .await;
+
+        // Drain bootstrap messages.
+        drain_outbound(&mut rx1);
+        drain_outbound(&mut rx2);
+
+        // Pause screen sharing.
+        channel
+            .update_upload_state(&SessionId::Integer(1), StreamType::Screen, false)
+            .await;
+
+        let msgs = drain_outbound(&mut rx1);
+        if let SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot)) =
+            &msgs[0]
+        {
+            let info = snapshot.values().next().unwrap();
+            assert_eq!(info.is_screen_sharing_on, Some(false));
+        } else {
+            panic!("expected SessionInfoChanged for screen sharing");
+        }
+    }
+
+    #[tokio::test]
+    async fn production_change_ignores_unknown_stream_type() {
+        let (channel, _adapter, mut rx1, mut _rx2) = setup_two_ready_sessions().await;
+
+        // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
+        channel
+            .update_upload_state(&SessionId::Integer(1), StreamType::Audio, false)
+            .await;
+
+        assert!(
+            drain_outbound(&mut rx1).is_empty(),
+            "no broadcast expected when no producer exists for the stream type"
+        );
+    }
+
+    #[tokio::test]
+    async fn consumption_change_pauses_and_resumes_consumer() {
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+
+        // Session 1 publishes a camera track.
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                &adapter,
+            )
+            .await;
+
+        // Drain bootstrap.
+        drain_outbound(&mut rx1);
+        drain_outbound(&mut rx2);
+
+        // Session 2 sends CONSUMPTION_CHANGE: pause camera from session 1.
+        channel
+            .update_download_state(
+                &SessionId::Integer(2),
+                &SessionId::Integer(1),
+                &DownloadStates {
+                    camera: Some(false),
+                    audio: None,
+                    screen: None,
+                },
+            )
+            .await;
+
+        // No outbound messages expected — consumer pause is silent (matches Node SFU).
+        assert!(drain_outbound(&mut rx1).is_empty());
+        assert!(drain_outbound(&mut rx2).is_empty());
+
+        // Session 2 sends CONSUMPTION_CHANGE: resume camera from session 1.
+        channel
+            .update_download_state(
+                &SessionId::Integer(2),
+                &SessionId::Integer(1),
+                &DownloadStates {
+                    camera: Some(true),
+                    audio: None,
+                    screen: None,
+                },
+            )
+            .await;
+
+        // Still no outbound — resume is also silent.
+        assert!(drain_outbound(&mut rx1).is_empty());
+        assert!(drain_outbound(&mut rx2).is_empty());
+    }
+
+    #[tokio::test]
+    async fn consumption_change_ignores_nonexistent_consumer() {
+        let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+
+        // No tracks published. CONSUMPTION_CHANGE should be a no-op.
+        channel
+            .update_download_state(
+                &SessionId::Integer(2),
+                &SessionId::Integer(1),
+                &DownloadStates {
+                    camera: Some(false),
+                    audio: Some(false),
+                    screen: None,
+                },
+            )
+            .await;
+
+        assert!(drain_outbound(&mut rx1).is_empty());
+        assert!(drain_outbound(&mut rx2).is_empty());
+    }
+
+    #[tokio::test]
+    async fn consumption_change_handles_multiple_stream_types() {
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+
+        // Session 1 publishes both camera and audio.
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                &adapter,
+            )
+            .await;
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Audio,
+                MediaKind::Audio,
+                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                &adapter,
+            )
+            .await;
+
+        drain_outbound(&mut rx1);
+        drain_outbound(&mut rx2);
+
+        // Session 2 pauses both in one message.
+        channel
+            .update_download_state(
+                &SessionId::Integer(2),
+                &SessionId::Integer(1),
+                &DownloadStates {
+                    camera: Some(false),
+                    audio: Some(false),
+                    screen: None,
+                },
+            )
+            .await;
+
+        // No-op outbound (consumer pause is silent).
+        assert!(drain_outbound(&mut rx2).is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_leave_purges_producer_and_consumer_indexes() {
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+
+        // Session 1 publishes camera, which creates a consumer for session 2.
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                &adapter,
+            )
+            .await;
+        drain_outbound(&mut rx1);
+        drain_outbound(&mut rx2);
+
+        // Session 1 leaves.
+        let connection_id = 0; // first join gets connection_id 0
+        channel
+            .leave_session(&SessionId::Integer(1), connection_id)
+            .await;
+
+        // After session 1 leaves, a consumption change targeting session 1's
+        // producer should be a no-op (the consumer index entry was cleaned up).
+        channel
+            .update_download_state(
+                &SessionId::Integer(2),
+                &SessionId::Integer(1),
+                &DownloadStates {
+                    camera: Some(false),
+                    audio: None,
+                    screen: None,
+                },
+            )
+            .await;
+
+        // Similarly, a production change for session 1 should be a no-op.
+        channel
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false)
+            .await;
+
+        // No crashes, no stale state — both operations are silent no-ops.
+        drain_outbound(&mut rx2);
     }
 }

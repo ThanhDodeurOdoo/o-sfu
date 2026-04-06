@@ -113,7 +113,20 @@ pub struct DownloadStates {
     pub screen: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl DownloadStates {
+    /// Iterate over the present (`stream_type`, `active`) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (StreamType, bool)> + '_ {
+        [
+            self.audio.map(|v| (StreamType::Audio, v)),
+            self.camera.map(|v| (StreamType::Camera, v)),
+            self.screen.map(|v| (StreamType::Screen, v)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum StreamType {
     #[serde(rename = "audio")]
     Audio,

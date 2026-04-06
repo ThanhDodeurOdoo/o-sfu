@@ -491,6 +491,10 @@ impl StubBusSession {
             .unwrap_or_else(|_error| empty_object())
     }
 
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "message dispatch is a flat match over client message variants, each delegating to channel"
+    )]
     async fn handle_message(&self, message: CurrentClientMessage) {
         match message {
             CurrentClientMessage::Broadcast(payload) => {
@@ -507,9 +511,24 @@ impl StubBusSession {
                     )
                     .await;
             }
-            CurrentClientMessage::UpdateUploadState(_)
-            | CurrentClientMessage::UpdateDownloadState(_) => {
-                debug!("ignoring stub upload/download state update");
+            CurrentClientMessage::UpdateUploadState(payload) => {
+                debug!(
+                    stream_type = ?payload.stream_type,
+                    active = payload.active,
+                    "relaying production change to channel"
+                );
+                self.channel
+                    .update_upload_state(&self.session_id, payload.stream_type, payload.active)
+                    .await;
+            }
+            CurrentClientMessage::UpdateDownloadState(payload) => {
+                debug!(
+                    target_session = ?payload.session_id,
+                    "relaying consumption change to channel"
+                );
+                self.channel
+                    .update_download_state(&self.session_id, &payload.session_id, &payload.states)
+                    .await;
             }
         }
     }
