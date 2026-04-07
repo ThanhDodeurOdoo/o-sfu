@@ -124,22 +124,11 @@ struct ActiveSession {
 struct PublishedProducer {
     owner_session_id: SessionId,
     stream_type: StreamType,
-    #[allow(
-        dead_code,
-        reason = "stored for late-join consumer bootstrap when new peers connect after publish"
-    )]
     media_kind: SignalingMediaKind,
-    #[allow(
-        dead_code,
-        reason = "stored for late-join consumer negotiation when new peers connect after publish"
-    )]
     consumable_rtp_parameters: RouterRtpParameters,
     router_producer_id: RouterProducerId,
-    #[allow(
-        dead_code,
-        reason = "transport media identity is required for late-join consuming and future modifications"
-    )]
     transport_media_id: TransportMediaId,
+    active: bool,
 }
 
 impl Channel {
@@ -481,6 +470,124 @@ impl Channel {
         true
     }
 
+    /// Bootstrap consumers for all existing producers from other sessions onto a
+    /// newly consumer-ready session.
+    ///
+    /// Precondiions: the session must have both download transport connected and
+    /// RTP capabilities stored. If either is missing, this is a no-op.
+    #[allow(
+        clippy::significant_drop_tightening,
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        reason = "late-join consumer bootstrap keeps one lock scope so peer snapshots and router updates remain coherent"
+    )]
+    pub async fn bootstrap_late_join_consumers(
+        &self,
+        session_id: &SessionId,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let mut state = self.state.write().await;
+        let Some(session) = state.sessions.get(session_id) else {
+            return;
+        };
+        if !session.download_transport_connected {
+            return;
+        }
+        let Some(client_capabilities) = session.client_rtp_capabilities.clone() else {
+            return;
+        };
+        let sender = session.sender.clone();
+
+        let parsed_capabilities = rtp_conversion::parse_rtp_capabilities(&client_capabilities.0);
+
+        // Destructure the channel state to split borrows: iterate `producers`
+        // immutably while mutating `router`, `consumer_index`, and counters.
+        let ChannelState {
+            ref producers,
+            ref mut next_consumer_id,
+            ref mut router,
+            ref mut consumer_index,
+            ..
+        } = *state;
+
+        for (producer_wire_id, producer) in producers {
+            if producer.owner_session_id == *session_id {
+                continue;
+            }
+            let capable = parsed_capabilities
+                .as_ref()
+                .is_some_and(|caps| can_consume(&producer.consumable_rtp_parameters, caps));
+            let negotiated_wire_params = parsed_capabilities
+                .as_ref()
+                .and_then(|caps| {
+                    negotiate_consumer_rtp_parameters(&producer.consumable_rtp_parameters, caps)
+                        .ok()
+                })
+                .map(|negotiated| {
+                    RtpParameters(rtp_conversion::serialize_rtp_parameters(&negotiated))
+                });
+            let consumer_rtp_parameters = negotiated_wire_params.unwrap_or_else(|| {
+                RtpParameters(rtp_conversion::serialize_rtp_parameters(
+                    &producer.consumable_rtp_parameters,
+                ))
+            });
+            if let Err(_error) = transport_adapter
+                .consume_media(
+                    session_id,
+                    producer.media_kind,
+                    &producer.owner_session_id,
+                    producer.transport_media_id,
+                )
+                .await
+            {
+                warn!(
+                    consumer_session_id = ?session_id,
+                    producer_session_id = ?producer.owner_session_id,
+                    "transport adapter rejected late-join consume media declaration"
+                );
+                continue;
+            }
+            let consumer_id = allocate_wire_consumer_id(next_consumer_id);
+            let router_consumer_id = match router.add_consumer(
+                session_id,
+                producer.router_producer_id,
+                to_router_media_kind(producer.media_kind),
+                to_router_stream_type(producer.stream_type),
+                capable,
+            ) {
+                Ok(id) => id,
+                Err(_error) => {
+                    warn!(
+                        ?session_id,
+                        producer_id = %producer_wire_id,
+                        ?capable,
+                        "router rejected late-join consumer creation"
+                    );
+                    continue;
+                }
+            };
+            consumer_index.insert(
+                ConsumerKey {
+                    consumer_session_id: session_id.clone(),
+                    producer_session_id: producer.owner_session_id.clone(),
+                    stream_type: producer.stream_type,
+                },
+                router_consumer_id,
+            );
+            let request =
+                CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
+                    id: consumer_id,
+                    media_kind: producer.media_kind,
+                    source_id: producer_wire_id.clone(),
+                    rtp_parameters: consumer_rtp_parameters,
+                    session_id: producer.owner_session_id.clone(),
+                    active: producer.active,
+                    stream_type: producer.stream_type,
+                });
+            let _ = sender.send(SessionOutbound::Request(Box::new(request)));
+        }
+    }
+
     #[allow(
         clippy::significant_drop_tightening,
         clippy::cognitive_complexity,
@@ -563,6 +670,7 @@ impl Channel {
                 consumable_rtp_parameters: consumable_rtp_parameters.clone(),
                 router_producer_id,
                 transport_media_id,
+                active: true,
             },
         );
 
@@ -599,6 +707,17 @@ impl Channel {
                 });
             let consumer_rtp_parameters =
                 negotiated_wire_params.unwrap_or_else(|| rtp_parameters.clone());
+            if let Err(_error) = transport_adapter
+                .consume_media(&peer_session_id, media_kind, session_id, transport_media_id)
+                .await
+            {
+                warn!(
+                    consumer_session_id = ?peer_session_id,
+                    producer_session_id = ?session_id,
+                    "transport adapter rejected consume media declaration"
+                );
+                continue;
+            }
             let consumer_id = allocate_wire_consumer_id(&mut state.next_consumer_id);
             let router_consumer_id = match state.router.add_consumer(
                 &peer_session_id,
@@ -626,17 +745,6 @@ impl Channel {
                 },
                 router_consumer_id,
             );
-            if let Err(_error) = transport_adapter
-                .consume_media(&peer_session_id, media_kind, session_id, transport_media_id)
-                .await
-            {
-                warn!(
-                    consumer_session_id = ?peer_session_id,
-                    producer_session_id = ?session_id,
-                    "transport adapter rejected consume media declaration"
-                );
-                continue;
-            }
             let request =
                 CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
                     id: consumer_id,
@@ -669,11 +777,13 @@ impl Channel {
         let mut state = self.state.write().await;
         let producer = state
             .producers
-            .values()
+            .values_mut()
             .find(|p| p.owner_session_id == *session_id && p.stream_type == stream_type);
-        let Some(router_producer_id) = producer.map(|p| p.router_producer_id) else {
+        let Some(producer) = producer else {
             return;
         };
+        producer.active = active;
+        let router_producer_id = producer.router_producer_id;
         let paused = !active;
         if state
             .router

@@ -436,6 +436,10 @@ impl StubBusSession {
         }
     }
 
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "transport connect + late-join bootstrap is a linear sequence that reads better in one method"
+    )]
     async fn handle_transport_connect_request(
         &self,
         payload: &CurrentTransportConnectPayload,
@@ -465,6 +469,11 @@ impl StubBusSession {
                 "channel no longer tracks session during transport connect"
             );
             return empty_object();
+        }
+        if direction == TransportConnectDirection::Download {
+            self.channel
+                .bootstrap_late_join_consumers(&self.session_id, &self.transport_adapter)
+                .await;
         }
         debug!(?direction, "handled transport connect request");
         empty_object()
