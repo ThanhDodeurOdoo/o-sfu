@@ -84,19 +84,21 @@ pub(super) struct SessionTransportIds {
     pub(super) download: String,
 }
 
+/// A single forwarding destination within the media route index.
 #[derive(Debug, Clone)]
-pub(super) struct MediaRoute {
-    pub(super) source_session: SessionId,
-    pub(super) source_mid: Mid,
+pub(super) struct MediaRouteDestination {
     pub(super) dest_session: SessionId,
     pub(super) dest_mid: Mid,
 }
+
+/// Media route source key: `(producer session, producer mid)`.
+pub(super) type MediaRouteKey = (SessionId, Mid);
 
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<SessionId, RtcSessionState>,
-    pub(super) media_routes: Vec<MediaRoute>,
+    pub(super) media_route_index: BTreeMap<MediaRouteKey, Vec<MediaRouteDestination>>,
     mid_registry: BTreeMap<u64, Mid>,
     next_media_id: u64,
 }
@@ -212,9 +214,14 @@ impl RtcTransportAdapter {
                 .mid_registry
                 .retain(|_id, mid| !stale_mids.contains(mid));
         }
-        bootstrap_state.media_routes.retain(|route| {
-            route.source_session != *session_id && route.dest_session != *session_id
-        });
+        // Remove all routes where this session is the source.
+        bootstrap_state
+            .media_route_index
+            .retain(|(source_session, _), _| source_session != session_id);
+        // Remove destination entries where this session is the consumer.
+        for destinations in bootstrap_state.media_route_index.values_mut() {
+            destinations.retain(|dest| dest.dest_session != *session_id);
+        }
         if bootstrap_state.sessions.is_empty() {
             bootstrap_state.shared_socket = None;
         }
@@ -292,12 +299,14 @@ impl RtcTransportAdapter {
         }
         session_state.send_mids.push(mid);
         let transport_media_id = bootstrap_state.register_mid(mid);
-        bootstrap_state.media_routes.push(MediaRoute {
-            source_session: source_session_id.clone(),
-            source_mid,
-            dest_session: consumer_session_id.clone(),
-            dest_mid: mid,
-        });
+        bootstrap_state
+            .media_route_index
+            .entry((source_session_id.clone(), source_mid))
+            .or_default()
+            .push(MediaRouteDestination {
+                dest_session: consumer_session_id.clone(),
+                dest_mid: mid,
+            });
         debug!(
             consumer_session_id = ?consumer_session_id,
             source_session_id = ?source_session_id,

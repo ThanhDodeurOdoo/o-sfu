@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use str0m::media::MediaData;
+use str0m::media::{MediaData, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{
@@ -27,22 +27,46 @@ struct PendingTransmit {
     contents: Vec<u8>,
 }
 
-struct Snapshot {
+/// Reusable buffers for the packet loop, allocated once and cleared per iteration
+/// to avoids steady-state heap allocations
+struct PacketLoopBuffers {
+    pending_transmits: Vec<PendingTransmit>,
+    pending_media: Vec<(SessionId, MediaData)>,
+    forwards: Vec<(usize, SessionId, Mid)>,
+}
+
+impl PacketLoopBuffers {
+    fn new() -> Self {
+        Self {
+            pending_transmits: Vec::with_capacity(64),
+            pending_media: Vec::with_capacity(32),
+            forwards: Vec::with_capacity(64),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pending_transmits.clear();
+        self.pending_media.clear();
+        self.forwards.clear();
+    }
+}
+
+struct SnapshotInfo {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
-    pending_transmits: Vec<PendingTransmit>,
     next_timeout: Option<Instant>,
 }
 
 pub(super) async fn run_packet_loop(bootstrap_state: Arc<Mutex<RtcBootstrapState>>) {
     let mut receive_buffer = vec![0_u8; RECEIVE_BUFFER_LEN];
+    let mut buffers = PacketLoopBuffers::new();
     loop {
-        let Some(snapshot) = snapshot_and_pump(&bootstrap_state) else {
+        let Some(info) = snapshot_and_pump(&bootstrap_state, &mut buffers) else {
             sleep(IDLE_SLEEP).await;
             continue;
         };
-        for pending_transmit in &snapshot.pending_transmits {
-            if snapshot
+        for pending_transmit in &buffers.pending_transmits {
+            if info
                 .socket
                 .send_to(
                     pending_transmit.contents.as_slice(),
@@ -57,13 +81,8 @@ pub(super) async fn run_packet_loop(bootstrap_state: Arc<Mutex<RtcBootstrapState
                 );
             }
         }
-        let wait_duration = socket_wait_duration(snapshot.next_timeout);
-        match timeout(
-            wait_duration,
-            snapshot.socket.recv_from(&mut receive_buffer),
-        )
-        .await
-        {
+        let wait_duration = socket_wait_duration(info.next_timeout);
+        match timeout(wait_duration, info.socket.recv_from(&mut receive_buffer)).await {
             Ok(Ok((received_size, source_addr))) => {
                 if received_size == 0 {
                     continue;
@@ -71,12 +90,7 @@ pub(super) async fn run_packet_loop(bootstrap_state: Arc<Mutex<RtcBootstrapState
                 let Some(packet) = receive_buffer.get(..received_size) else {
                     continue;
                 };
-                route_incoming_packet(
-                    &bootstrap_state,
-                    source_addr,
-                    snapshot.candidate_addr,
-                    packet,
-                );
+                route_incoming_packet(&bootstrap_state, source_addr, info.candidate_addr, packet);
             }
             Ok(Err(_error)) => {
                 warn!("rtc packet loop failed to receive datagram");
@@ -86,7 +100,11 @@ pub(super) async fn run_packet_loop(bootstrap_state: Arc<Mutex<RtcBootstrapState
     }
 }
 
-fn snapshot_and_pump(bootstrap_state: &Arc<Mutex<RtcBootstrapState>>) -> Option<Snapshot> {
+fn snapshot_and_pump(
+    bootstrap_state: &Arc<Mutex<RtcBootstrapState>>,
+    buffers: &mut PacketLoopBuffers,
+) -> Option<SnapshotInfo> {
+    buffers.clear();
     let Ok(mut state) = bootstrap_state.lock() else {
         return None;
     };
@@ -97,45 +115,39 @@ fn snapshot_and_pump(bootstrap_state: &Arc<Mutex<RtcBootstrapState>>) -> Option<
             shared_socket.candidate_addr,
         )
     };
-    let (pending_transmits, pending_media, next_timeout) = {
-        let mut pending_transmits = Vec::new();
-        let mut pending_media = Vec::new();
-        let mut next_timeout: Option<Instant> = None;
-        for (session_id, session_state) in &mut state.sessions {
-            let session_timeout = drain_single_session(
-                session_id,
-                session_state,
-                &mut pending_transmits,
-                &mut pending_media,
-            );
-            if let Some(t) = session_timeout {
-                next_timeout = Some(next_timeout.map_or(t, |current| current.min(t)));
+    let mut next_timeout: Option<Instant> = None;
+    for (session_id, session_state) in &mut state.sessions {
+        let session_timeout = drain_single_session(
+            session_id,
+            session_state,
+            &mut buffers.pending_transmits,
+            &mut buffers.pending_media,
+        );
+        if let Some(t) = session_timeout {
+            next_timeout = Some(next_timeout.map_or(t, |current| current.min(t)));
+        }
+    }
+
+    // Two-pass: collect matching routes, then write to destination sessions.
+    // Separating the read of the route index from the mutable session access
+    // avoids a borrow conflict on `state`.
+    for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
+        if let Some(destinations) = state
+            .media_route_index
+            .get(&(source_session.clone(), media.mid))
+        {
+            for dest in destinations {
+                buffers
+                    .forwards
+                    .push((media_idx, dest.dest_session.clone(), dest.dest_mid));
             }
         }
-        (pending_transmits, pending_media, next_timeout)
-    };
-
-    // Collect matching routes for each pending media item, then write.
-    // Two-pass avoids cloning media_routes and sidesteps the borrow conflict
-    // between &state.media_routes and &mut state.sessions.
-    let forwards: Vec<_> = pending_media
-        .iter()
-        .enumerate()
-        .flat_map(|(media_idx, (source_session, media))| {
-            state
-                .media_routes
-                .iter()
-                .filter(move |route| {
-                    route.source_session == *source_session && route.source_mid == media.mid
-                })
-                .map(move |route| (media_idx, route.dest_session.clone(), route.dest_mid))
-        })
-        .collect();
-    for (media_idx, dest_session, dest_mid) in forwards {
-        let Some((_source_session, media)) = pending_media.get(media_idx) else {
+    }
+    for &(media_idx, ref dest_session, dest_mid) in &buffers.forwards {
+        let Some((_source_session, media)) = buffers.pending_media.get(media_idx) else {
             continue;
         };
-        let Some(dest_session_state) = state.sessions.get_mut(&dest_session) else {
+        let Some(dest_session_state) = state.sessions.get_mut(dest_session) else {
             continue;
         };
         let Some(writer) = dest_session_state.rtc.writer(dest_mid) else {
@@ -162,10 +174,9 @@ fn snapshot_and_pump(bootstrap_state: &Arc<Mutex<RtcBootstrapState>>) -> Option<
         }
     }
 
-    Some(Snapshot {
+    Some(SnapshotInfo {
         socket,
         candidate_addr,
-        pending_transmits,
         next_timeout,
     })
 }
