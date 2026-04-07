@@ -22,6 +22,127 @@ mod channel_tests {
         shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
         webrtc::{MediaKind, RtpCapabilities, RtpParameters},
     };
+    use serde_json::json;
+
+    /// Realistic client RTP capabilities (default codecs)
+    fn test_client_rtp_capabilities() -> RtpCapabilities {
+        RtpCapabilities(json!({
+            "codecs": [
+                {
+                    "mimeType": "audio/opus",
+                    "kind": "audio",
+                    "preferredPayloadType": 111,
+                    "clockRate": 48000,
+                    "channels": 2,
+                    "parameters": { "useinbandfec": "1" },
+                    "rtcpFeedback": [{ "type": "transport-cc" }]
+                },
+                {
+                    "mimeType": "video/VP8",
+                    "kind": "video",
+                    "preferredPayloadType": 96,
+                    "clockRate": 90000,
+                    "parameters": {},
+                    "rtcpFeedback": [
+                        { "type": "nack" },
+                        { "type": "nack", "parameter": "pli" },
+                        { "type": "ccm", "parameter": "fir" },
+                        { "type": "goog-remb" },
+                        { "type": "transport-cc" }
+                    ]
+                },
+                {
+                    "mimeType": "video/rtx",
+                    "kind": "video",
+                    "preferredPayloadType": 97,
+                    "clockRate": 90000,
+                    "parameters": { "apt": "96" },
+                    "rtcpFeedback": []
+                }
+            ],
+            "headerExtensions": [
+                {
+                    "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                    "preferredId": 1,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                },
+                {
+                    "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+                    "preferredId": 4,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                },
+                {
+                    "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+                    "preferredId": 5,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                },
+                {
+                    "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+                    "preferredId": 10,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                }
+            ]
+        }))
+    }
+
+    fn test_audio_rtp_parameters() -> RtpParameters {
+        RtpParameters(json!({
+            "codecs": [{
+                "mimeType": "audio/opus",
+                "payloadType": 111,
+                "clockRate": 48000,
+                "channels": 2,
+                "parameters": { "useinbandfec": "1" },
+                "rtcpFeedback": [{ "type": "transport-cc" }]
+            }],
+            "headerExtensions": [
+                { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
+                { "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level", "id": 10, "encrypt": false }
+            ],
+            "encodings": [{ "ssrc": 11111 }]
+        }))
+    }
+
+    fn test_video_rtp_parameters() -> RtpParameters {
+        RtpParameters(json!({
+            "codecs": [
+                {
+                    "mimeType": "video/VP8",
+                    "payloadType": 96,
+                    "clockRate": 90000,
+                    "parameters": {},
+                    "rtcpFeedback": [
+                        { "type": "nack" },
+                        { "type": "nack", "parameter": "pli" },
+                        { "type": "ccm", "parameter": "fir" },
+                        { "type": "goog-remb" },
+                        { "type": "transport-cc" }
+                    ]
+                },
+                {
+                    "mimeType": "video/rtx",
+                    "payloadType": 97,
+                    "clockRate": 90000,
+                    "parameters": { "apt": "96" },
+                    "rtcpFeedback": []
+                }
+            ],
+            "headerExtensions": [
+                { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
+                { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
+                { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
+            ],
+            "encodings": [{ "ssrc": 22222 }]
+        }))
+    }
 
     fn test_sender() -> (
         mpsc::UnboundedSender<SessionOutbound>,
@@ -727,10 +848,7 @@ mod channel_tests {
                 .set_transport_connected(session_id, TransportConnectDirection::Download)
                 .await;
             channel
-                .set_client_rtp_capabilities(
-                    session_id,
-                    RtpCapabilities(serde_json::Value::Object(serde_json::Map::new())),
-                )
+                .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
                 .await;
         }
         (channel, adapter, rx1, rx2)
@@ -754,7 +872,7 @@ mod channel_tests {
                 &SessionId::Integer(1),
                 StreamType::Camera,
                 MediaKind::Video,
-                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                test_video_rtp_parameters(),
                 &adapter,
             )
             .await;
@@ -821,7 +939,7 @@ mod channel_tests {
                 &SessionId::Integer(1),
                 StreamType::Screen,
                 MediaKind::Video,
-                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                test_video_rtp_parameters(),
                 &adapter,
             )
             .await;
@@ -871,7 +989,7 @@ mod channel_tests {
                 &SessionId::Integer(1),
                 StreamType::Camera,
                 MediaKind::Video,
-                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                test_video_rtp_parameters(),
                 &adapter,
             )
             .await;
@@ -946,7 +1064,7 @@ mod channel_tests {
                 &SessionId::Integer(1),
                 StreamType::Camera,
                 MediaKind::Video,
-                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                test_video_rtp_parameters(),
                 &adapter,
             )
             .await;
@@ -955,7 +1073,7 @@ mod channel_tests {
                 &SessionId::Integer(1),
                 StreamType::Audio,
                 MediaKind::Audio,
-                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                test_audio_rtp_parameters(),
                 &adapter,
             )
             .await;
@@ -990,7 +1108,7 @@ mod channel_tests {
                 &SessionId::Integer(1),
                 StreamType::Camera,
                 MediaKind::Video,
-                RtpParameters(serde_json::Value::Object(serde_json::Map::new())),
+                test_video_rtp_parameters(),
                 &adapter,
             )
             .await;

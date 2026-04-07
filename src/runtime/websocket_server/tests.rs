@@ -215,10 +215,7 @@ mod websocket_server_tests {
         let batch = read_bus_batch(websocket).await?;
         let envelope = batch.first()?;
         let response = serde_json::to_string(&vec![CurrentBusEnvelope {
-            message: serde_json::json!({
-                "codecs": [],
-                "headerExtensions": []
-            }),
+            message: test_client_rtp_capabilities(),
             need_response: None,
             response_to: envelope.need_response.clone(),
         }])
@@ -228,6 +225,74 @@ mod websocket_server_tests {
             .await
             .ok()?;
         Some(())
+    }
+
+    fn test_client_rtp_capabilities() -> serde_json::Value {
+        serde_json::json!({
+            "codecs": [
+                {
+                    "mimeType": "audio/opus",
+                    "kind": "audio",
+                    "preferredPayloadType": 111,
+                    "clockRate": 48000,
+                    "channels": 2,
+                    "parameters": { "useinbandfec": "1" },
+                    "rtcpFeedback": [{ "type": "transport-cc" }]
+                },
+                {
+                    "mimeType": "video/VP8",
+                    "kind": "video",
+                    "preferredPayloadType": 96,
+                    "clockRate": 90000,
+                    "parameters": {},
+                    "rtcpFeedback": [
+                        { "type": "nack" },
+                        { "type": "nack", "parameter": "pli" },
+                        { "type": "ccm", "parameter": "fir" },
+                        { "type": "goog-remb" },
+                        { "type": "transport-cc" }
+                    ]
+                },
+                {
+                    "mimeType": "video/rtx",
+                    "kind": "video",
+                    "preferredPayloadType": 97,
+                    "clockRate": 90000,
+                    "parameters": { "apt": "96" },
+                    "rtcpFeedback": []
+                }
+            ],
+            "headerExtensions": [
+                {
+                    "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                    "preferredId": 1,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                },
+                {
+                    "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+                    "preferredId": 4,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                },
+                {
+                    "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+                    "preferredId": 5,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                },
+                {
+                    "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+                    "preferredId": 10,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                }
+            ]
+        })
     }
 
     async fn send_bus_request_and_read_response(
@@ -639,10 +704,7 @@ mod websocket_server_tests {
         assert!(stored_capabilities.is_some());
         assert_eq!(
             stored_capabilities.map(|capabilities| capabilities.0),
-            Some(serde_json::json!({
-                "codecs": [],
-                "headerExtensions": []
-            }))
+            Some(test_client_rtp_capabilities())
         );
     }
 
@@ -1025,8 +1087,18 @@ mod websocket_server_tests {
                 stream_type: StreamType::Audio,
                 media_kind: MediaKind::Audio,
                 rtp_parameters: RtpParameters(serde_json::json!({
-                    "codecs": [],
-                    "encodings": []
+                    "codecs": [{
+                        "mimeType": "audio/opus",
+                        "payloadType": 111,
+                        "clockRate": 48000,
+                        "channels": 2,
+                        "parameters": { "useinbandfec": "1" },
+                        "rtcpFeedback": [{ "type": "transport-cc" }]
+                    }],
+                    "headerExtensions": [
+                        { "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level", "id": 10, "encrypt": false }
+                    ],
+                    "encodings": [{ "ssrc": 11111 }]
                 })),
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 1),
@@ -1135,8 +1207,18 @@ mod websocket_server_tests {
                 stream_type: StreamType::Audio,
                 media_kind: MediaKind::Audio,
                 rtp_parameters: RtpParameters(serde_json::json!({
-                    "codecs": [],
-                    "encodings": []
+                    "codecs": [{
+                        "mimeType": "audio/opus",
+                        "payloadType": 111,
+                        "clockRate": 48000,
+                        "channels": 2,
+                        "parameters": { "useinbandfec": "1" },
+                        "rtcpFeedback": [{ "type": "transport-cc" }]
+                    }],
+                    "headerExtensions": [
+                        { "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level", "id": 10, "encrypt": false }
+                    ],
+                    "encodings": [{ "ssrc": 11111 }]
                 })),
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 12),

@@ -3,7 +3,8 @@ use std::fmt;
 
 use o_sfu_router::{
     ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind, ProducerId as RouterProducerId,
-    RouterId, StreamType as RouterStreamType,
+    RouterId, RtpParameters as RouterRtpParameters, StreamType as RouterStreamType, can_consume,
+    derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, mpsc};
@@ -32,6 +33,7 @@ use crate::signaling::{
 mod manager;
 mod router_state;
 mod rtp_capabilities;
+mod rtp_conversion;
 #[cfg(test)]
 mod tests;
 
@@ -124,18 +126,18 @@ struct PublishedProducer {
     stream_type: StreamType,
     #[allow(
         dead_code,
-        reason = "media-kind specific consumption behavior is planned for codec negotiation"
+        reason = "stored for late-join consumer bootstrap when new peers connect after publish"
     )]
     media_kind: SignalingMediaKind,
     #[allow(
         dead_code,
-        reason = "the wire payload is reused when bootstrapping new consumers after initial publish"
+        reason = "stored for late-join consumer negotiation when new peers connect after publish"
     )]
-    rtp_parameters: RtpParameters,
+    consumable_rtp_parameters: RouterRtpParameters,
     router_producer_id: RouterProducerId,
     #[allow(
         dead_code,
-        reason = "transport media identity is required for consuming media and future modifications"
+        reason = "transport media identity is required for late-join consuming and future modifications"
     )]
     transport_media_id: TransportMediaId,
 }
@@ -503,6 +505,27 @@ impl Channel {
         }
         let router_media_kind = to_router_media_kind(media_kind);
         let router_stream_type = to_router_stream_type(stream_type);
+
+        let parsed_rtp_parameters = rtp_conversion::parse_rtp_parameters(&rtp_parameters.0)
+            .or_else(|| {
+                warn!(
+                    ?session_id,
+                    "failed to parse producer RTP parameters from wire format"
+                );
+                None
+            })?;
+        let router_capabilities = state.router.rtp_capabilities().clone();
+        let consumable_rtp_parameters =
+            derive_consumable_rtp_parameters(&parsed_rtp_parameters, &router_capabilities)
+                .map_err(|error| {
+                    warn!(
+                        ?session_id,
+                        ?error,
+                        "failed to derive consumable RTP parameters for producer"
+                    );
+                })
+                .ok()?;
+
         let transport_media_id = match transport_adapter
             .publish_media(session_id, media_kind)
             .await
@@ -537,7 +560,7 @@ impl Channel {
                 owner_session_id: session_id.clone(),
                 stream_type,
                 media_kind,
-                rtp_parameters: rtp_parameters.clone(),
+                consumable_rtp_parameters: consumable_rtp_parameters.clone(),
                 router_producer_id,
                 transport_media_id,
             },
@@ -550,29 +573,47 @@ impl Channel {
                 if peer_session_id == session_id {
                     return None;
                 }
-                if !peer_session.download_transport_connected
-                    || peer_session.client_rtp_capabilities.is_none()
-                {
+                if !peer_session.download_transport_connected {
                     return None;
                 }
-                Some((peer_session_id.clone(), peer_session.sender.clone()))
+                let client_capabilities = peer_session.client_rtp_capabilities.as_ref()?;
+                Some((
+                    peer_session_id.clone(),
+                    peer_session.sender.clone(),
+                    client_capabilities.clone(),
+                ))
             })
             .collect::<Vec<_>>();
-        for (peer_session_id, peer_sender) in consumer_targets {
+        for (peer_session_id, peer_sender, client_capabilities) in consumer_targets {
+            let parsed_capabilities =
+                rtp_conversion::parse_rtp_capabilities(&client_capabilities.0);
+            let capable = parsed_capabilities
+                .as_ref()
+                .is_some_and(|caps| can_consume(&consumable_rtp_parameters, caps));
+            let negotiated_wire_params = parsed_capabilities
+                .and_then(|caps| {
+                    negotiate_consumer_rtp_parameters(&consumable_rtp_parameters, &caps).ok()
+                })
+                .map(|negotiated| {
+                    RtpParameters(rtp_conversion::serialize_rtp_parameters(&negotiated))
+                });
+            let consumer_rtp_parameters =
+                negotiated_wire_params.unwrap_or_else(|| rtp_parameters.clone());
             let consumer_id = allocate_wire_consumer_id(&mut state.next_consumer_id);
             let router_consumer_id = match state.router.add_consumer(
                 &peer_session_id,
                 router_producer_id,
                 router_media_kind,
                 router_stream_type,
-                true,
+                capable,
             ) {
                 Ok(id) => id,
                 Err(_error) => {
-                    error!(
+                    warn!(
                         ?peer_session_id,
                         producer_id = %producer_id,
-                        "failed to mirror consumer bootstrap into channel router state"
+                        ?capable,
+                        "router rejected consumer creation"
                     );
                     continue;
                 }
@@ -601,7 +642,7 @@ impl Channel {
                     id: consumer_id,
                     media_kind,
                     source_id: producer_id.clone(),
-                    rtp_parameters: rtp_parameters.clone(),
+                    rtp_parameters: consumer_rtp_parameters,
                     session_id: session_id.clone(),
                     active: true,
                     stream_type,

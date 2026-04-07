@@ -224,10 +224,7 @@ pub async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> O
     let batch = read_bus_batch(websocket).await?;
     let envelope = batch.first()?;
     let response = serde_json::to_string(&vec![CurrentBusEnvelope {
-        message: serde_json::json!({
-            "codecs": [],
-            "headerExtensions": []
-        }),
+        message: test_client_rtp_capabilities(),
         need_response: None,
         response_to: envelope.need_response.clone(),
     }])
@@ -237,6 +234,75 @@ pub async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> O
         .await
         .ok()?;
     Some(())
+}
+
+/// Realistc client RTP capabilities (corespond to router default)
+fn test_client_rtp_capabilities() -> serde_json::Value {
+    serde_json::json!({
+        "codecs": [
+            {
+                "mimeType": "audio/opus",
+                "kind": "audio",
+                "preferredPayloadType": 111,
+                "clockRate": 48000,
+                "channels": 2,
+                "parameters": { "useinbandfec": "1" },
+                "rtcpFeedback": [{ "type": "transport-cc" }]
+            },
+            {
+                "mimeType": "video/VP8",
+                "kind": "video",
+                "preferredPayloadType": 96,
+                "clockRate": 90000,
+                "parameters": {},
+                "rtcpFeedback": [
+                    { "type": "nack" },
+                    { "type": "nack", "parameter": "pli" },
+                    { "type": "ccm", "parameter": "fir" },
+                    { "type": "goog-remb" },
+                    { "type": "transport-cc" }
+                ]
+            },
+            {
+                "mimeType": "video/rtx",
+                "kind": "video",
+                "preferredPayloadType": 97,
+                "clockRate": 90000,
+                "parameters": { "apt": "96" },
+                "rtcpFeedback": []
+            }
+        ],
+        "headerExtensions": [
+            {
+                "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                "preferredId": 1,
+                "preferredEncrypt": false,
+                "kind": "audio",
+                "direction": "sendrecv"
+            },
+            {
+                "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+                "preferredId": 4,
+                "preferredEncrypt": false,
+                "kind": "audio",
+                "direction": "sendrecv"
+            },
+            {
+                "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+                "preferredId": 5,
+                "preferredEncrypt": false,
+                "kind": "audio",
+                "direction": "sendrecv"
+            },
+            {
+                "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+                "preferredId": 10,
+                "preferredEncrypt": false,
+                "kind": "audio",
+                "direction": "sendrecv"
+            }
+        ]
+    })
 }
 
 pub async fn send_bus_message(
