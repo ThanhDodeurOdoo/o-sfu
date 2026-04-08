@@ -39,6 +39,8 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
         bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         authentication_timeout_ms,
         channel_size,
+        session_timeout_ms: 10_000,
+        ping_interval_ms: 60_000,
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         transport_backend: TransportBackend::Stub,

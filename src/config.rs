@@ -9,6 +9,8 @@ use anyhow::{Context, Result, anyhow, ensure};
 use crate::signaling::DEFAULT_AUTHENTICATION_TIMEOUT_MS;
 
 const DEFAULT_CHANNEL_SIZE: usize = 100;
+const DEFAULT_SESSION_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const TRANSPORT_BACKEND_STUB: &str = "stub";
@@ -68,6 +70,8 @@ pub struct Config {
     pub bind_address: SocketAddr,
     pub authentication_timeout_ms: u64,
     pub channel_size: usize,
+    pub session_timeout_ms: u64,
+    pub ping_interval_ms: u64,
     pub public_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
     pub transport_backend: TransportBackend,
@@ -78,6 +82,7 @@ impl Config {
     ///
     /// Returns an error when `AUTH_KEY` is missing, `BIND_ADDRESS` is invalid,
     /// `AUTHENTICATION_TIMEOUT_MS` is invalid, `CHANNEL_SIZE` is zero,
+    /// `SESSION_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid,
     /// `PUBLIC_IP` is invalid, `RTC_MIN_PORT`/`RTC_MAX_PORT` are invalid,
     /// or `TRANSPORT_BACKEND` is invalid.
     pub fn from_env() -> Result<Self> {
@@ -102,6 +107,18 @@ impl Config {
             "CHANNEL_SIZE must be a valid usize",
         )?
         .unwrap_or(DEFAULT_CHANNEL_SIZE);
+        let session_timeout_ms = parse_optional_env(
+            &mut get_var,
+            "SESSION_TIMEOUT_MS",
+            "SESSION_TIMEOUT_MS must be a valid u64",
+        )?
+        .unwrap_or(DEFAULT_SESSION_TIMEOUT_MS);
+        let ping_interval_ms = parse_optional_env(
+            &mut get_var,
+            "PING_INTERVAL_MS",
+            "PING_INTERVAL_MS must be a valid u64",
+        )?
+        .unwrap_or(DEFAULT_PING_INTERVAL_MS);
         let public_ip = parse_optional_env(
             &mut get_var,
             "PUBLIC_IP",
@@ -127,6 +144,14 @@ impl Config {
         .unwrap_or(TransportBackend::Stub);
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
         ensure!(
+            session_timeout_ms > 0,
+            "SESSION_TIMEOUT_MS must be greater than zero"
+        );
+        ensure!(
+            ping_interval_ms > 0,
+            "PING_INTERVAL_MS must be greater than zero"
+        );
+        ensure!(
             rtc_min_port <= rtc_max_port,
             "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
         );
@@ -144,6 +169,8 @@ impl Config {
             bind_address,
             authentication_timeout_ms,
             channel_size,
+            session_timeout_ms,
+            ping_interval_ms,
             public_ip,
             rtc_port_range: RtcPortRange::new(rtc_min_port, rtc_max_port),
             transport_backend,
@@ -196,6 +223,8 @@ mod tests {
         assert_eq!(config.auth_key, "dGVzdC1rZXk=");
         assert_eq!(config.authentication_timeout_ms, 10_000);
         assert_eq!(config.channel_size, 100);
+        assert_eq!(config.session_timeout_ms, 10_000);
+        assert_eq!(config.ping_interval_ms, 60_000);
         assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.transport_backend, TransportBackend::Stub);
@@ -206,6 +235,26 @@ mod tests {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "CHANNEL_SIZE" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_session_timeout() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "SESSION_TIMEOUT_MS" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_ping_interval() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PING_INTERVAL_MS" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

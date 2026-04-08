@@ -1,6 +1,8 @@
 use axum::{Error as AxumError, extract::ws::Message};
 use futures_util::StreamExt;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info};
 
 use super::{WsReader, close_writer};
@@ -21,13 +23,45 @@ pub(super) async fn run(
     reader: &mut WsReader,
     outbound_rx: &mut mpsc::UnboundedReceiver<SessionOutbound>,
     stub_bus: &mut StubBusSession,
+    session_timeout_ms: u64,
+    ping_interval_ms: u64,
     metrics: &RuntimeMetrics,
 ) -> WsSessionLoopExitReason {
+    let ping_interval = Duration::from_millis(ping_interval_ms);
+    let ping_timeout = Duration::from_millis(session_timeout_ms);
+    let mut next_ping_at = Instant::now() + ping_interval;
+    let mut ping_response_deadline: Option<Instant> = None;
     loop {
+        let ping_tick = sleep_until(next_ping_at);
+        tokio::pin!(ping_tick);
         tokio::select! {
+            () = &mut ping_tick, if ping_response_deadline.is_none() => {
+                if let Some(reason) = handle_ping_tick(
+                    writer,
+                    stub_bus,
+                    ping_interval,
+                    ping_timeout,
+                    &mut next_ping_at,
+                    &mut ping_response_deadline,
+                ).await {
+                    return reason;
+                }
+            }
+            () = async {
+                if let Some(deadline) = ping_response_deadline {
+                    sleep_until(deadline).await;
+                }
+            }, if ping_response_deadline.is_some() => {
+                info!("timed out waiting for websocket bus ping response");
+                close_writer(writer, CurrentWebSocketCloseCode::Error).await;
+                return WsSessionLoopExitReason::PingTimeout;
+            }
             message = reader.next() => {
                 if let Some(reason) = handle_incoming_socket_event(writer, stub_bus, message).await {
                     return reason;
+                }
+                if !stub_bus.awaiting_ping_response() {
+                    ping_response_deadline = None;
                 }
             }
             outbound = outbound_rx.recv() => {
@@ -37,6 +71,24 @@ pub(super) async fn run(
             }
         }
     }
+}
+
+async fn handle_ping_tick(
+    writer: &mut WsWriter,
+    stub_bus: &mut StubBusSession,
+    ping_interval: Duration,
+    ping_timeout: Duration,
+    next_ping_at: &mut Instant,
+    ping_response_deadline: &mut Option<Instant>,
+) -> Option<WsSessionLoopExitReason> {
+    if stub_bus.send_ping(writer).await.is_err() {
+        info!("failed to send websocket bus ping request");
+        return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
+    }
+    let now = Instant::now();
+    *next_ping_at = now + ping_interval;
+    *ping_response_deadline = Some(now + ping_timeout);
+    None
 }
 
 async fn handle_incoming_socket_event(

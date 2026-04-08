@@ -68,12 +68,19 @@ mod websocket_server_tests {
         }
     }
 
-    fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
+    fn test_config(
+        authentication_timeout_ms: u64,
+        session_timeout_ms: u64,
+        ping_interval_ms: u64,
+        channel_size: usize,
+    ) -> Config {
         Config {
             auth_key: TEST_AUTH_KEY.to_owned(),
             bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
             authentication_timeout_ms,
             channel_size,
+            session_timeout_ms,
+            ping_interval_ms,
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
             transport_backend: TransportBackend::Stub,
@@ -84,22 +91,31 @@ mod websocket_server_tests {
         authentication_timeout_ms: u64,
         channel_size: usize,
     ) -> Option<TestServer> {
-        spawn_test_server_with_adapter(
+        spawn_test_server_with_timeouts(
             authentication_timeout_ms,
+            10_000,
+            60_000,
             channel_size,
             RuntimeTransportAdapter::stub(),
         )
         .await
     }
 
-    async fn spawn_test_server_with_adapter(
+    async fn spawn_test_server_with_timeouts(
         authentication_timeout_ms: u64,
+        session_timeout_ms: u64,
+        ping_interval_ms: u64,
         channel_size: usize,
         transport_adapter: RuntimeTransportAdapter,
     ) -> Option<TestServer> {
         let channels = Arc::new(ChannelManager::new());
         let state = RuntimeState {
-            config: test_config(authentication_timeout_ms, channel_size),
+            config: test_config(
+                authentication_timeout_ms,
+                session_timeout_ms,
+                ping_interval_ms,
+                channel_size,
+            ),
             channels: Arc::clone(&channels),
             metrics: Arc::new(RuntimeMetrics::default()),
             transport_adapter,
@@ -120,6 +136,21 @@ mod websocket_server_tests {
             channels,
             state,
         })
+    }
+
+    async fn spawn_test_server_with_adapter(
+        authentication_timeout_ms: u64,
+        channel_size: usize,
+        transport_adapter: RuntimeTransportAdapter,
+    ) -> Option<TestServer> {
+        spawn_test_server_with_timeouts(
+            authentication_timeout_ms,
+            10_000,
+            60_000,
+            channel_size,
+            transport_adapter,
+        )
+        .await
     }
 
     async fn wait_for_stub_webrtc_events(
@@ -211,6 +242,16 @@ mod websocket_server_tests {
         serde_json::from_str(&payload).ok()
     }
 
+    async fn read_server_request(
+        websocket: &mut TestWebSocket,
+    ) -> Option<(CurrentBusEnvelope, CurrentServerRequest)> {
+        let batch = read_bus_batch(websocket).await?;
+        let envelope = batch.first()?.clone();
+        let request =
+            serde_json::from_value::<CurrentServerRequest>(envelope.message.clone()).ok()?;
+        Some((envelope, request))
+    }
+
     async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> Option<()> {
         let batch = read_bus_batch(websocket).await?;
         let envelope = batch.first()?;
@@ -218,6 +259,24 @@ mod websocket_server_tests {
             message: test_client_rtp_capabilities(),
             need_response: None,
             response_to: envelope.need_response.clone(),
+        }])
+        .ok()?;
+        websocket
+            .send(tungstenite::Message::Text(response.into()))
+            .await
+            .ok()?;
+        Some(())
+    }
+
+    async fn respond_to_server_request(
+        websocket: &mut TestWebSocket,
+        request_id: CurrentBusRequestId,
+        message: serde_json::Value,
+    ) -> Option<()> {
+        let response = serde_json::to_string(&vec![CurrentBusEnvelope {
+            message,
+            need_response: None,
+            response_to: Some(request_id),
         }])
         .ok()?;
         websocket
@@ -705,6 +764,122 @@ mod websocket_server_tests {
         assert_eq!(
             stored_capabilities.map(|capabilities| capabilities.0),
             Some(test_client_rtp_capabilities())
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_sends_ping_requests_and_accepts_responses() {
+        let server =
+            spawn_test_server_with_timeouts(1_000, 200, 20, 100, RuntimeTransportAdapter::stub())
+                .await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel =
+            create_channel(&server, "issuer-ping", None, CreateChannelQuery::default()).await;
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(410));
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        assert!(
+            acknowledge_transport_bootstrap(&mut websocket)
+                .await
+                .is_some()
+        );
+
+        let server_request =
+            timeout(Duration::from_secs(1), read_server_request(&mut websocket)).await;
+        assert!(
+            server_request.is_ok(),
+            "server should send ping request promptly: {server_request:?}"
+        );
+        let Some((envelope, CurrentServerRequest::Ping)) = server_request.ok().flatten() else {
+            panic!("expected PING server request");
+        };
+        let request_id = envelope.need_response.clone();
+        assert!(request_id.is_some(), "PING should expect a response");
+        let Some(request_id) = request_id else {
+            return;
+        };
+        assert!(
+            respond_to_server_request(&mut websocket, request_id, serde_json::json!({}))
+                .await
+                .is_some(),
+            "client should be able to answer server ping"
+        );
+
+        let no_close = timeout(Duration::from_millis(80), read_close_code(&mut websocket)).await;
+        assert!(
+            no_close.is_err(),
+            "session should remain open after answering ping"
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_closes_when_ping_response_times_out() {
+        let server =
+            spawn_test_server_with_timeouts(1_000, 30, 15, 100, RuntimeTransportAdapter::stub())
+                .await;
+        assert!(server.is_some());
+        let Some(server) = server else {
+            return;
+        };
+        let channel = create_channel(
+            &server,
+            "issuer-ping-timeout",
+            None,
+            CreateChannelQuery::default(),
+        )
+        .await;
+        let session_id = SessionId::Integer(411);
+        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let authenticated = authenticate_and_read_startup(&server, &token).await;
+        assert!(authenticated.is_some());
+        let Some((mut websocket, _startup)) = authenticated else {
+            return;
+        };
+        assert!(
+            acknowledge_transport_bootstrap(&mut websocket)
+                .await
+                .is_some()
+        );
+
+        let server_request =
+            timeout(Duration::from_secs(1), read_server_request(&mut websocket)).await;
+        assert!(
+            server_request.is_ok(),
+            "server should send ping request promptly: {server_request:?}"
+        );
+        let Some((_envelope, CurrentServerRequest::Ping)) = server_request.ok().flatten() else {
+            panic!("expected PING server request");
+        };
+
+        let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
+        assert!(
+            close_code.is_ok(),
+            "server should close after ping timeout: {close_code:?}"
+        );
+        assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
+
+        sleep(Duration::from_millis(20)).await;
+        let metrics = server.state.metrics.snapshot();
+        assert_eq!(metrics.ws_session_loop_exits_ping_timeout, 1);
+        assert!(
+            !server
+                .channels
+                .has_session(channel.uuid(), &session_id)
+                .await
         );
     }
 

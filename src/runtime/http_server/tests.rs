@@ -38,6 +38,8 @@ fn test_config() -> Config {
         bind_address: SocketAddr::from(([127, 0, 0, 1], 8080)),
         authentication_timeout_ms: 10_000,
         channel_size: 100,
+        session_timeout_ms: 10_000,
+        ping_interval_ms: 60_000,
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         transport_backend: TransportBackend::Stub,

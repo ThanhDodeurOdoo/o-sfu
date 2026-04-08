@@ -58,6 +58,8 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
             &mut ws_reader,
             &mut session.outbound_rx,
             &mut session.stub_bus,
+            state.config.session_timeout_ms,
+            state.config.ping_interval_ms,
             &state.metrics,
         )
         .await;

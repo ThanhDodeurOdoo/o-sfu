@@ -262,6 +262,7 @@ pub(super) struct StubBusSession {
     transport_adapter: RuntimeTransportAdapter,
     next_request_counter: u64,
     pending_transport_bootstrap_request_id: Option<CurrentBusRequestId>,
+    pending_ping_request_id: Option<CurrentBusRequestId>,
 }
 
 impl StubBusSession {
@@ -279,6 +280,7 @@ impl StubBusSession {
             transport_adapter,
             next_request_counter: 0,
             pending_transport_bootstrap_request_id: None,
+            pending_ping_request_id: None,
         }
     }
 
@@ -307,10 +309,43 @@ impl StubBusSession {
     }
 
     async fn handle_response(&mut self, response_to: CurrentBusRequestId, message: Value) -> bool {
+        if self
+            .handle_transport_bootstrap_response(&response_to, message.clone())
+            .await
+        {
+            return true;
+        }
+        self.handle_ping_response(&response_to)
+    }
+
+    pub(super) fn awaiting_ping_response(&self) -> bool {
+        self.pending_ping_request_id.is_some()
+    }
+
+    pub(super) async fn send_ping(
+        &mut self,
+        writer: &mut WsWriter,
+    ) -> Result<(), CurrentWebSocketCloseCode> {
+        if self.pending_ping_request_id.is_some() {
+            return Ok(());
+        }
+        let request_id = self
+            .send_request(writer, CurrentServerRequest::Ping)
+            .await?;
+        self.pending_ping_request_id = Some(request_id);
+        debug!("sent websocket bus ping request");
+        Ok(())
+    }
+
+    async fn handle_transport_bootstrap_response(
+        &mut self,
+        response_to: &CurrentBusRequestId,
+        message: Value,
+    ) -> bool {
         let is_transport_bootstrap_response = self
             .pending_transport_bootstrap_request_id
             .as_ref()
-            .is_some_and(|request_id| request_id == &response_to);
+            .is_some_and(|request_id| request_id == response_to);
         if !is_transport_bootstrap_response {
             return false;
         }
@@ -337,6 +372,22 @@ impl StubBusSession {
                 "ignored bootstrap response because session is no longer active"
             );
         }
+        true
+    }
+
+    fn handle_ping_response(&mut self, response_to: &CurrentBusRequestId) -> bool {
+        let is_ping_response = self
+            .pending_ping_request_id
+            .as_ref()
+            .is_some_and(|request_id| request_id == response_to);
+        if !is_ping_response {
+            return false;
+        }
+        self.pending_ping_request_id = None;
+        debug!(
+            response_to = %response_to.as_str(),
+            "received websocket bus ping response"
+        );
         true
     }
 
