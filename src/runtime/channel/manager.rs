@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use o_sfu_router::RouterId;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
@@ -21,9 +21,15 @@ pub struct ChannelManager {
 
 #[derive(Debug, Default)]
 struct ChannelManagerState {
-    channels_by_uuid: BTreeMap<String, Arc<Channel>>,
+    channels_by_uuid: BTreeMap<String, ChannelEntry>,
     next_router_id: u64,
     uuids_by_issuer: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelEntry {
+    channel: Arc<Channel>,
+    op_lock: Arc<Mutex<()>>,
 }
 
 impl ChannelManager {
@@ -57,16 +63,16 @@ impl ChannelManager {
         {
             let state = self.state.read().await;
             if let Some(uuid) = state.uuids_by_issuer.get(issuer)
-                && let Some(channel) = state.channels_by_uuid.get(uuid)
+                && let Some(entry) = state.channels_by_uuid.get(uuid)
             {
-                return Arc::clone(channel);
+                return Arc::clone(&entry.channel);
             }
         }
         let mut state = self.state.write().await;
         if let Some(uuid) = state.uuids_by_issuer.get(issuer)
-            && let Some(channel) = state.channels_by_uuid.get(uuid)
+            && let Some(entry) = state.channels_by_uuid.get(uuid)
         {
-            return Arc::clone(channel);
+            return Arc::clone(&entry.channel);
         }
         let router_id = RouterId(state.next_router_id);
         state.next_router_id = state.next_router_id.saturating_add(1);
@@ -81,26 +87,29 @@ impl ChannelManager {
         state
             .uuids_by_issuer
             .insert(issuer.to_owned(), channel_uuid.clone());
-        state
-            .channels_by_uuid
-            .insert(channel_uuid, Arc::clone(&channel));
+        state.channels_by_uuid.insert(
+            channel_uuid,
+            ChannelEntry {
+                channel: Arc::clone(&channel),
+                op_lock: Arc::new(Mutex::new(())),
+            },
+        );
         channel
     }
 
     pub async fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Channel>> {
         let state = self.state.read().await;
-        state.channels_by_uuid.get(uuid).map(Arc::clone)
+        state
+            .channels_by_uuid
+            .get(uuid)
+            .map(|entry| Arc::clone(&entry.channel))
     }
 
     pub async fn has_session(&self, channel_uuid: &str, session_id: &SessionId) -> bool {
-        let channel = {
-            let state = self.state.read().await;
-            state.channels_by_uuid.get(channel_uuid).map(Arc::clone)
-        };
-        let Some(channel) = channel else {
+        let Some(entry) = self.entry(channel_uuid).await else {
             return false;
         };
-        channel.has_session(session_id).await
+        entry.channel.has_session(session_id).await
     }
 
     pub async fn stats(&self, transport_adapter: &RuntimeTransportAdapter) -> StatsResponse {
@@ -109,7 +118,7 @@ impl ChannelManager {
             state
                 .channels_by_uuid
                 .values()
-                .map(Arc::clone)
+                .map(|entry| Arc::clone(&entry.channel))
                 .collect::<Vec<_>>()
         };
         let mut stats = Vec::with_capacity(channels.len());
@@ -119,10 +128,6 @@ impl ChannelManager {
         stats
     }
 
-    #[allow(
-        clippy::significant_drop_tightening,
-        reason = "join must stay serialized with manager cleanup so an empty channel cannot be removed while a concurrent join is being committed"
-    )]
     pub async fn join_session(
         &self,
         channel_uuid: &str,
@@ -132,57 +137,83 @@ impl ChannelManager {
         sender: mpsc::UnboundedSender<SessionOutbound>,
         max_sessions: usize,
     ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
-        let state = self.state.write().await;
-        let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
+        let Some(entry) = self.entry(channel_uuid).await else {
             return Err(ChannelManagerJoinError::MissingChannel);
         };
-        let connection_id = channel
+        let _op_guard = entry.op_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+            return Err(ChannelManagerJoinError::MissingChannel);
+        }
+        let connection_id = entry
+            .channel
             .join_session(session_id, label, permissions, sender, max_sessions)
             .await
             .map_err(|error| match error {
                 ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
                 ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
             })?;
-        Ok((channel, connection_id))
+        Ok((Arc::clone(&entry.channel), connection_id))
     }
 
-    #[allow(
-        clippy::significant_drop_tightening,
-        reason = "teardown must keep the manager lock until cleanup decides whether the channel entry should be pruned"
-    )]
     pub async fn leave_session(
         &self,
         channel_uuid: &str,
         session_id: &SessionId,
         connection_id: u64,
     ) -> bool {
-        let mut state = self.state.write().await;
-        let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
+        let Some(entry) = self.entry(channel_uuid).await else {
             return false;
         };
-        let did_remove_active_session = channel.leave_session(session_id, connection_id).await;
-        remove_channel_if_empty(&mut state, &channel).await;
+        let _op_guard = entry.op_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+            return false;
+        }
+        let did_remove_active_session =
+            entry.channel.leave_session(session_id, connection_id).await;
+        if did_remove_active_session && entry.channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, &entry.channel)
+                .await;
+        }
         did_remove_active_session
     }
 
-    #[allow(
-        clippy::significant_drop_tightening,
-        reason = "bulk disconnect and empty-channel pruning must observe one manager-coordinated critical section"
-    )]
     pub async fn disconnect_sessions(&self, channel_uuid: &str, session_ids: &[SessionId]) {
-        let mut state = self.state.write().await;
-        let Some(channel) = state.channels_by_uuid.get(channel_uuid).map(Arc::clone) else {
+        let Some(entry) = self.entry(channel_uuid).await else {
             return;
         };
-        channel.disconnect_sessions(session_ids).await;
-        remove_channel_if_empty(&mut state, &channel).await;
+        let _op_guard = entry.op_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+            return;
+        }
+        entry.channel.disconnect_sessions(session_ids).await;
+        if entry.channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, &entry.channel)
+                .await;
+        }
     }
-}
 
-async fn remove_channel_if_empty(state: &mut ChannelManagerState, channel: &Channel) {
-    if !channel.is_empty().await {
-        return;
+    async fn entry(&self, channel_uuid: &str) -> Option<ChannelEntry> {
+        let state = self.state.read().await;
+        state.channels_by_uuid.get(channel_uuid).cloned()
     }
-    state.channels_by_uuid.remove(channel.uuid());
-    state.uuids_by_issuer.remove(channel.issuer());
+
+    async fn is_current_entry(&self, channel_uuid: &str, channel: &Arc<Channel>) -> bool {
+        let state = self.state.read().await;
+        state
+            .channels_by_uuid
+            .get(channel_uuid)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.channel, channel))
+    }
+
+    async fn remove_entry_if_current(&self, channel_uuid: &str, channel: &Arc<Channel>) {
+        let mut state = self.state.write().await;
+        let Some(entry) = state.channels_by_uuid.get(channel_uuid) else {
+            return;
+        };
+        if !Arc::ptr_eq(&entry.channel, channel) {
+            return;
+        }
+        state.channels_by_uuid.remove(channel_uuid);
+        state.uuids_by_issuer.remove(channel.issuer());
+    }
 }
