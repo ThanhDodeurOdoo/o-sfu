@@ -1,7 +1,11 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
-use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
+use o_sfu_router::{
+    RtpCapabilities as RouterRtpCapabilities, RtpEncoding as RouterRtpEncoding,
+    RtpParameters as RouterRtpParameters,
+};
 use serde_json::json;
+use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 use tokio::time::sleep;
 
 use super::{RtcTransportAdapter, validation};
@@ -91,6 +95,15 @@ fn sample_transport_bootstrap(id: &str, candidate: IceCandidate) -> TransportBoo
             "maxMessageSize": 262_144
         })),
     }
+}
+
+fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {
+    RouterRtpParameters::new(
+        vec![],
+        vec![],
+        vec![RouterRtpEncoding::new().with_ssrc(ssrc)],
+    )
+    .with_mid(mid.to_owned())
 }
 
 #[test]
@@ -410,4 +423,132 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
     assert!(bootstrap_result.is_ok());
     sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+}
+
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "the test intentionally inspects the guarded rtc state in one contiguous scope"
+)]
+#[tokio::test]
+async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
+    let adapter = RtcTransportAdapter::default();
+    let session_id = SessionId::Integer(18);
+    let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
+    let bootstrap_result = adapter
+        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .await;
+    assert!(bootstrap_result.is_ok());
+
+    let transport_media_id = adapter
+        .add_recv_media(&session_id, Str0mMediaKind::Audio, &rtp_parameters)
+        .await;
+    assert!(transport_media_id.is_ok());
+    let Some(transport_media_id) = transport_media_id.ok() else {
+        return;
+    };
+
+    let expected_mid: Mid = "aud-up".into();
+    {
+        assert!(!adapter.bootstrap_state.is_poisoned());
+        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
+            return;
+        };
+        assert_eq!(
+            bootstrap_state.resolve_mid(transport_media_id),
+            Some(expected_mid)
+        );
+        let session_state = bootstrap_state.sessions.get_mut(&session_id);
+        assert!(session_state.is_some());
+        let Some(session_state) = session_state else {
+            return;
+        };
+        assert!(session_state.rtc.media(expected_mid).is_some());
+        let mut direct_api = session_state.rtc.direct_api();
+        let stream_rx = direct_api.stream_rx_by_mid(expected_mid, None);
+        assert!(stream_rx.is_some());
+        let Some(stream_rx) = stream_rx else {
+            return;
+        };
+        assert_eq!(*stream_rx.ssrc(), 42_424);
+    }
+}
+
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "the test intentionally inspects the guarded rtc state in one contiguous scope"
+)]
+#[tokio::test]
+async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
+    let adapter = RtcTransportAdapter::default();
+    let producer_session_id = SessionId::Integer(19);
+    let consumer_session_id = SessionId::Integer(20);
+    let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_000);
+    let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_000);
+
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&producer_session_id, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&consumer_session_id, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    let source_media_id = adapter
+        .add_recv_media(
+            &producer_session_id,
+            Str0mMediaKind::Audio,
+            &producer_rtp_parameters,
+        )
+        .await;
+    assert!(source_media_id.is_ok());
+    let Some(source_media_id) = source_media_id.ok() else {
+        return;
+    };
+
+    let result = adapter
+        .add_send_media(
+            &consumer_session_id,
+            Str0mMediaKind::Audio,
+            &producer_session_id,
+            source_media_id,
+            &consumer_rtp_parameters,
+        )
+        .await;
+    assert!(result.is_ok());
+
+    let expected_source_mid: Mid = "aud-up".into();
+    let expected_dest_mid: Mid = "aud-down".into();
+    {
+        assert!(!adapter.bootstrap_state.is_poisoned());
+        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
+            return;
+        };
+        let destinations = bootstrap_state
+            .media_route_index
+            .get(&(producer_session_id.clone(), expected_source_mid));
+        assert!(destinations.is_some());
+        let Some(destinations) = destinations else {
+            return;
+        };
+        assert!(destinations.iter().any(|dest| {
+            dest.dest_session == consumer_session_id && dest.dest_mid == expected_dest_mid
+        }));
+        let session_state = bootstrap_state.sessions.get_mut(&consumer_session_id);
+        assert!(session_state.is_some());
+        let Some(session_state) = session_state else {
+            return;
+        };
+        let mut direct_api = session_state.rtc.direct_api();
+        let stream_tx = direct_api.stream_tx_by_mid(expected_dest_mid, None);
+        assert!(stream_tx.is_some());
+        let Some(stream_tx) = stream_tx else {
+            return;
+        };
+        assert_eq!(*stream_tx.ssrc(), 61_000);
+    }
 }

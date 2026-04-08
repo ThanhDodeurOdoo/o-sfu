@@ -8,6 +8,7 @@ use crate::signaling::{
     shared::SessionId,
     webrtc::{DtlsParameters, MediaKind as SignalingMediaKind},
 };
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind as Str0mMediaKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -128,12 +129,21 @@ impl RuntimeTransportAdapter {
         &self,
         session_id: &SessionId,
         media_kind: SignalingMediaKind,
+        rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.publish_media(session_id, media_kind).await,
+            Self::Stub(adapter) => {
+                adapter
+                    .publish_media(session_id, media_kind, rtp_parameters)
+                    .await
+            }
             Self::Rtc(adapter) => {
                 adapter
-                    .add_recv_media(session_id, signaling_to_str0m_media_kind(media_kind))
+                    .add_recv_media(
+                        session_id,
+                        signaling_to_str0m_media_kind(media_kind),
+                        rtp_parameters,
+                    )
                     .await
             }
         }
@@ -146,11 +156,17 @@ impl RuntimeTransportAdapter {
         media_kind: SignalingMediaKind,
         source_session_id: &SessionId,
         source_media_id: TransportMediaId,
+        consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .consume_media(consumer_session_id, media_kind, source_session_id)
+                    .consume_media(
+                        consumer_session_id,
+                        media_kind,
+                        source_session_id,
+                        consumer_rtp_parameters,
+                    )
                     .await
             }
             Self::Rtc(adapter) => {
@@ -160,6 +176,7 @@ impl RuntimeTransportAdapter {
                         signaling_to_str0m_media_kind(media_kind),
                         source_session_id,
                         source_media_id,
+                        consumer_rtp_parameters,
                     )
                     .await
             }

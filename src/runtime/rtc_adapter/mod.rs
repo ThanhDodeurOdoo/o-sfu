@@ -27,8 +27,10 @@ use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload, shared::SessionId, webrtc::DtlsParameters,
 };
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::config::Fingerprint;
-use str0m::media::{MediaKind, Mid};
+use str0m::media::{MediaKind, Mid, Rid};
+use str0m::rtp::Ssrc;
 use str0m::{IceCreds, Rtc};
 use tokio::{net::UdpSocket, runtime::Handle};
 use tracing::debug;
@@ -242,6 +244,7 @@ impl RtcTransportAdapter {
         &self,
         session_id: &SessionId,
         media_kind: MediaKind,
+        rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -249,10 +252,16 @@ impl RtcTransportAdapter {
         let Some(session_state) = bootstrap_state.sessions.get_mut(session_id) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        let mid = Mid::new();
+        let mid = transport_mid(rtp_parameters).unwrap_or_default();
+        let has_media = session_state.rtc.media(mid).is_some();
         {
             let mut api = session_state.rtc.direct_api();
-            api.declare_media(mid, media_kind);
+            if !has_media {
+                api.declare_media(mid, media_kind);
+            }
+            if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
+                api.expect_stream_rx(ssrc, None, mid, rid);
+            }
         }
         session_state.recv_mids.push(mid);
         let transport_media_id = bootstrap_state.register_mid(mid);
@@ -279,6 +288,7 @@ impl RtcTransportAdapter {
         media_kind: MediaKind,
         source_session_id: &SessionId,
         source_transport_media_id: TransportMediaId,
+        consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -289,13 +299,16 @@ impl RtcTransportAdapter {
         let Some(session_state) = bootstrap_state.sessions.get_mut(consumer_session_id) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        let mid = Mid::new();
+        let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
+        let has_media = session_state.rtc.media(mid).is_some();
         {
             let mut api = session_state.rtc.direct_api();
-            api.declare_media(mid, media_kind);
-            let ssrc = api.new_ssrc();
-            let rtx = media_kind.is_video().then(|| api.new_ssrc());
-            api.declare_stream_tx(ssrc, rtx, mid, None);
+            if !has_media {
+                api.declare_media(mid, media_kind);
+            }
+            let (ssrc, rid) = primary_encoding_identity(consumer_rtp_parameters)
+                .unwrap_or_else(|| (api.new_ssrc(), None));
+            api.declare_stream_tx(ssrc, None, mid, rid);
         }
         session_state.send_mids.push(mid);
         let transport_media_id = bootstrap_state.register_mid(mid);
@@ -503,6 +516,19 @@ impl fmt::Debug for RtcTransportAdapter {
             .field("rtc_port_range", &self.rtc_port_range)
             .finish_non_exhaustive()
     }
+}
+
+fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
+    rtp_parameters.mid().map(Into::into)
+}
+
+fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ssrc, Option<Rid>)> {
+    let encoding = rtp_parameters
+        .encodings()
+        .find(|encoding| encoding.ssrc().is_some() || encoding.rid().is_some())?;
+    let ssrc = encoding.ssrc().map(Ssrc::from)?;
+    let rid = encoding.rid().map(Into::into);
+    Some((ssrc, rid))
 }
 
 #[cfg(test)]

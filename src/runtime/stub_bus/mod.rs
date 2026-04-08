@@ -25,6 +25,7 @@ use crate::signaling::{
     shared::SessionId,
     webrtc::{DtlsParameters, MediaKind, RtpCapabilities},
 };
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod bootstrap;
@@ -213,6 +214,7 @@ impl StubWebRtcAdapter {
         &self,
         session_id: &SessionId,
         media_kind: MediaKind,
+        _rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::PublishMediaRequested {
             session_id: session_id.clone(),
@@ -234,6 +236,7 @@ impl StubWebRtcAdapter {
         consumer_session_id: &SessionId,
         media_kind: MediaKind,
         source_session_id: &SessionId,
+        _consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::ConsumeMediaRequested {
             consumer_session_id: consumer_session_id.clone(),

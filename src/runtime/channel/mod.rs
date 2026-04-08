@@ -142,6 +142,20 @@ struct PendingConsumerBootstrapTarget {
     transport_media_id: TransportMediaId,
 }
 
+#[derive(Debug, Clone)]
+struct PreparedConsumerBootstrap {
+    consumer_rtp_parameters: RouterRtpParameters,
+    consumer_wire_rtp_parameters: RtpParameters,
+    sender: mpsc::UnboundedSender<SessionOutbound>,
+    producer_owner_session_id: SessionId,
+    producer_stream_type: StreamType,
+    producer_media_kind: SignalingMediaKind,
+    producer_router_producer_id: RouterProducerId,
+    producer_wire_id: String,
+    producer_active: bool,
+    capable: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ConsumerBootstrapOrigin {
     LateJoin,
@@ -553,7 +567,7 @@ impl Channel {
                 .ok()?;
 
         let transport_media_id = match transport_adapter
-            .publish_media(session_id, media_kind)
+            .publish_media(session_id, media_kind, &parsed_rtp_parameters)
             .await
         {
             Ok(id) => id,
@@ -598,12 +612,19 @@ impl Channel {
         transport_adapter: &RuntimeTransportAdapter,
         origin: ConsumerBootstrapOrigin,
     ) {
+        let Some(prepared) = ({
+            let state = self.state.read().await;
+            state.prepare_consumer_bootstrap(target, source_rtp_fallback)
+        }) else {
+            return;
+        };
         if let Err(_error) = transport_adapter
             .consume_media(
                 &target.consumer_session_id,
                 target.media_kind,
                 &target.producer_session_id,
                 target.transport_media_id,
+                &prepared.consumer_rtp_parameters,
             )
             .await
         {
@@ -617,7 +638,7 @@ impl Channel {
         }
         let outbound = {
             let mut state = self.state.write().await;
-            state.commit_consumer_bootstrap(target, source_rtp_fallback)
+            state.commit_prepared_consumer_bootstrap(target, &prepared)
         };
         let Some((sender, request)) = outbound else {
             return;
@@ -913,11 +934,11 @@ impl ChannelState {
         Some((producer_id, consumer_targets))
     }
 
-    fn commit_consumer_bootstrap(
-        &mut self,
+    fn prepare_consumer_bootstrap(
+        &self,
         target: &PendingConsumerBootstrapTarget,
         source_rtp_fallback: Option<&RtpParameters>,
-    ) -> Option<(mpsc::UnboundedSender<SessionOutbound>, CurrentServerRequest)> {
+    ) -> Option<PreparedConsumerBootstrap> {
         let (sender, client_capabilities) = {
             let session = self.sessions.get(&target.consumer_session_id)?;
             if session.connection_id != target.consumer_connection_id
@@ -949,33 +970,67 @@ impl ChannelState {
         let capable = parsed_capabilities
             .as_ref()
             .is_some_and(|caps| can_consume(&producer_consumable_rtp_parameters, caps));
-        let negotiated_wire_params = parsed_capabilities
+        let negotiated_rtp_parameters = parsed_capabilities
             .as_ref()
             .and_then(|caps| {
                 negotiate_consumer_rtp_parameters(&producer_consumable_rtp_parameters, caps).ok()
             })
-            .map(|negotiated| RtpParameters(rtp_conversion::serialize_rtp_parameters(&negotiated)));
-        let consumer_rtp_parameters = negotiated_wire_params.unwrap_or_else(|| {
-            source_rtp_fallback.cloned().unwrap_or_else(|| {
-                RtpParameters(rtp_conversion::serialize_rtp_parameters(
-                    &producer_consumable_rtp_parameters,
-                ))
-            })
-        });
+            .unwrap_or_else(|| producer_consumable_rtp_parameters.clone());
+        let consumer_rtp_parameters = source_rtp_fallback
+            .and_then(|fallback| rtp_conversion::parse_rtp_parameters(&fallback.0))
+            .unwrap_or_else(|| negotiated_rtp_parameters.clone());
+        let consumer_wire_rtp_parameters = RtpParameters(rtp_conversion::serialize_rtp_parameters(
+            &consumer_rtp_parameters,
+        ));
+        Some(PreparedConsumerBootstrap {
+            consumer_rtp_parameters,
+            consumer_wire_rtp_parameters,
+            sender,
+            producer_owner_session_id,
+            producer_stream_type,
+            producer_media_kind,
+            producer_router_producer_id,
+            producer_wire_id: target.producer_wire_id.clone(),
+            producer_active,
+            capable,
+        })
+    }
+
+    fn commit_prepared_consumer_bootstrap(
+        &mut self,
+        target: &PendingConsumerBootstrapTarget,
+        prepared: &PreparedConsumerBootstrap,
+    ) -> Option<(mpsc::UnboundedSender<SessionOutbound>, CurrentServerRequest)> {
+        let session = self.sessions.get(&target.consumer_session_id)?;
+        if session.connection_id != target.consumer_connection_id
+            || !session.download_transport_connected
+        {
+            return None;
+        }
+        let producer = self.producers.get(&prepared.producer_wire_id)?;
+        if producer.owner_session_id != prepared.producer_owner_session_id
+            || producer.stream_type != prepared.producer_stream_type
+            || producer.media_kind != prepared.producer_media_kind
+            || producer.transport_media_id != target.transport_media_id
+            || producer.router_producer_id != prepared.producer_router_producer_id
+            || producer.active != prepared.producer_active
+        {
+            return None;
+        }
         let consumer_id = allocate_wire_consumer_id(&mut self.next_consumer_id);
         let router_consumer_id = match self.router.add_consumer(
             &target.consumer_session_id,
-            producer_router_producer_id,
-            to_router_media_kind(producer_media_kind),
-            to_router_stream_type(producer_stream_type),
-            capable,
+            prepared.producer_router_producer_id,
+            to_router_media_kind(prepared.producer_media_kind),
+            to_router_stream_type(prepared.producer_stream_type),
+            prepared.capable,
         ) {
             Ok(id) => id,
             Err(_error) => {
                 warn!(
                     consumer_session_id = ?target.consumer_session_id,
-                    producer_id = %target.producer_wire_id,
-                    ?capable,
+                    producer_id = %prepared.producer_wire_id,
+                    capable = prepared.capable,
                     "router rejected consumer creation"
                 );
                 return None;
@@ -984,21 +1039,21 @@ impl ChannelState {
         self.consumer_index.insert(
             ConsumerKey {
                 consumer_session_id: target.consumer_session_id.clone(),
-                producer_session_id: producer_owner_session_id.clone(),
-                stream_type: producer_stream_type,
+                producer_session_id: prepared.producer_owner_session_id.clone(),
+                stream_type: prepared.producer_stream_type,
             },
             router_consumer_id,
         );
         Some((
-            sender,
+            prepared.sender.clone(),
             CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
                 id: consumer_id,
-                media_kind: producer_media_kind,
-                source_id: target.producer_wire_id.clone(),
-                rtp_parameters: consumer_rtp_parameters,
-                session_id: producer_owner_session_id,
-                active: producer_active,
-                stream_type: producer_stream_type,
+                media_kind: prepared.producer_media_kind,
+                source_id: prepared.producer_wire_id.clone(),
+                rtp_parameters: prepared.consumer_wire_rtp_parameters.clone(),
+                session_id: prepared.producer_owner_session_id.clone(),
+                active: prepared.producer_active,
+                stream_type: prepared.producer_stream_type,
             }),
         ))
     }
