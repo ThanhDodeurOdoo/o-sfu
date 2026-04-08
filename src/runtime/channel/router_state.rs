@@ -261,6 +261,26 @@ impl ChannelRouterState {
         self.router.set_consumer_paused(consumer_id, paused)
     }
 
+    /// # Errors
+    ///
+    /// Returns the underlying [`RouterError`] if the producer does not exist.
+    pub(super) fn remove_producer(
+        &mut self,
+        producer_id: RouterProducerId,
+    ) -> Result<(), RouterError> {
+        self.router.remove_producer(producer_id)
+    }
+
+    /// # Errors
+    ///
+    /// Returns the underlying [`RouterError`] if the consumer does not exist.
+    pub(super) fn remove_consumer(
+        &mut self,
+        consumer_id: RouterConsumerId,
+    ) -> Result<(), RouterError> {
+        self.router.remove_consumer(consumer_id)
+    }
+
     /// Remove the pure-router session for the signaling-layer session if one exists.
     ///
     /// # Errors

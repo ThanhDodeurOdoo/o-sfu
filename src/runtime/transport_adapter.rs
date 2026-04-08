@@ -133,6 +133,18 @@ impl RuntimeTransportAdapter {
         }
     }
 
+    /// Remove a previously declared media line owned by `session_id`.
+    pub(crate) async fn remove_media(
+        &self,
+        session_id: &SessionId,
+        transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => adapter.remove_media(session_id, transport_media_id).await,
+            Self::Rtc(adapter) => adapter.remove_media(session_id, transport_media_id).await,
+        }
+    }
+
     /// Declare a media line for receiving RTP from a producer session.
     pub(crate) async fn publish_media(
         &self,

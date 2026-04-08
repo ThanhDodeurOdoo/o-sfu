@@ -58,6 +58,10 @@ pub(super) enum StubWebRtcEvent {
         source_session_id: SessionId,
         media_kind: MediaKind,
     },
+    MediaRemoved {
+        session_id: SessionId,
+        transport_media_id: TransportMediaId,
+    },
     ProducerActivityUpdated {
         session_id: SessionId,
         active: bool,
@@ -212,6 +216,22 @@ impl StubWebRtcAdapter {
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::SessionClosed {
             session_id: session_id.clone(),
+        });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn remove_media(
+        &self,
+        session_id: &SessionId,
+        transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::MediaRemoved {
+            session_id: session_id.clone(),
+            transport_media_id,
         });
         Ok(())
     }

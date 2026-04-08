@@ -110,6 +110,44 @@ pub(super) struct MediaRouteEntry {
 /// Media route source key: `(producer session, producer mid)`.
 pub(super) type MediaRouteKey = (SessionId, Mid);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RegisteredMediaHandle {
+    Producer {
+        session_id: SessionId,
+        mid: Mid,
+    },
+    Consumer {
+        session_id: SessionId,
+        mid: Mid,
+        source_session_id: SessionId,
+        source_mid: Mid,
+    },
+}
+
+impl RegisteredMediaHandle {
+    fn session_id(&self) -> &SessionId {
+        match self {
+            Self::Producer { session_id, .. } | Self::Consumer { session_id, .. } => session_id,
+        }
+    }
+
+    fn mid(&self) -> Mid {
+        match self {
+            Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
+        }
+    }
+
+    fn is_producer_for(&self, session_id: &SessionId, mid: Mid) -> bool {
+        matches!(
+            self,
+            Self::Producer {
+                session_id: owner_session_id,
+                mid: owner_mid,
+            } if owner_session_id == session_id && *owner_mid == mid
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 struct SessionIncomingBitrates {
     audio: RecentBitrate,
@@ -181,20 +219,41 @@ pub(super) struct RtcBootstrapState {
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
     incoming_bitrates_by_session: BTreeMap<SessionId, SessionIncomingBitrates>,
-    mid_registry: BTreeMap<u64, Mid>,
+    mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     next_media_id: u64,
 }
 
 impl RtcBootstrapState {
-    fn register_mid(&mut self, mid: Mid) -> TransportMediaId {
+    fn register_media_handle(&mut self, handle: RegisteredMediaHandle) -> TransportMediaId {
         let id = self.next_media_id;
         self.next_media_id = self.next_media_id.saturating_add(1);
-        self.mid_registry.insert(id, mid);
+        self.mid_registry.insert(id, handle);
         TransportMediaId::new(id)
     }
 
     fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
-        self.mid_registry.get(&transport_media_id.as_u64()).copied()
+        self.mid_registry
+            .get(&transport_media_id.as_u64())
+            .map(RegisteredMediaHandle::mid)
+    }
+
+    fn remove_media_handle(
+        &mut self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<RegisteredMediaHandle> {
+        self.mid_registry.remove(&transport_media_id.as_u64())
+    }
+
+    fn session_has_mid(&self, session_id: &SessionId, mid: Mid) -> bool {
+        self.mid_registry
+            .values()
+            .any(|handle| handle.session_id() == session_id && handle.mid() == mid)
+    }
+
+    fn session_has_producer_mid(&self, session_id: &SessionId, mid: Mid) -> bool {
+        self.mid_registry
+            .values()
+            .any(|handle| handle.is_producer_for(session_id, mid))
     }
 
     fn record_incoming_media(
@@ -324,17 +383,10 @@ impl RtcTransportAdapter {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        if let Some(session_state) = bootstrap_state.sessions.remove(session_id) {
-            let stale_mids: Vec<_> = session_state
-                .recv_mids
-                .iter()
-                .chain(session_state.send_mids.iter())
-                .copied()
-                .collect();
-            bootstrap_state
-                .mid_registry
-                .retain(|_id, mid| !stale_mids.contains(mid));
-        }
+        bootstrap_state.sessions.remove(session_id);
+        bootstrap_state
+            .mid_registry
+            .retain(|_id, handle| handle.session_id() != session_id);
         bootstrap_state
             .recv_stream_types
             .retain(|(source_session, _), _| source_session != session_id);
@@ -354,6 +406,77 @@ impl RtcTransportAdapter {
         });
         if bootstrap_state.sessions.is_empty() {
             bootstrap_state.shared_socket = None;
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async while runtime call sites and sibling adapters keep the same signature"
+    )]
+    pub(super) async fn remove_media(
+        &self,
+        session_id: &SessionId,
+        transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(handle) = bootstrap_state.remove_media_handle(transport_media_id) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        if handle.session_id() != session_id {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        match handle {
+            RegisteredMediaHandle::Producer { session_id, mid } => {
+                let should_remove_media = !bootstrap_state.session_has_mid(&session_id, mid);
+                let should_remove_stream_type =
+                    !bootstrap_state.session_has_producer_mid(&session_id, mid);
+                if let Some(session_state) = bootstrap_state.sessions.get_mut(&session_id) {
+                    remove_mid_once(&mut session_state.recv_mids, mid);
+                    if should_remove_media {
+                        session_state.rtc.direct_api().remove_media(mid);
+                    }
+                }
+                if should_remove_stream_type {
+                    bootstrap_state
+                        .recv_stream_types
+                        .remove(&(session_id.clone(), mid));
+                    bootstrap_state.media_route_index.remove(&(session_id, mid));
+                }
+            }
+            RegisteredMediaHandle::Consumer {
+                session_id,
+                mid,
+                source_session_id,
+                source_mid,
+            } => {
+                let should_remove_media = !bootstrap_state.session_has_mid(&session_id, mid);
+                if let Some(session_state) = bootstrap_state.sessions.get_mut(&session_id) {
+                    remove_mid_once(&mut session_state.send_mids, mid);
+                    if should_remove_media {
+                        session_state.rtc.direct_api().remove_media(mid);
+                    }
+                }
+                if let Some(route_entry) = bootstrap_state
+                    .media_route_index
+                    .get_mut(&(source_session_id.clone(), source_mid))
+                {
+                    if let Some(position) =
+                        route_entry.destinations.iter().position(|destination| {
+                            destination.dest_session == session_id && destination.dest_mid == mid
+                        })
+                    {
+                        route_entry.destinations.remove(position);
+                    }
+                    if route_entry.destinations.is_empty() {
+                        bootstrap_state
+                            .media_route_index
+                            .remove(&(source_session_id, source_mid));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -396,7 +519,11 @@ impl RtcTransportAdapter {
         bootstrap_state
             .recv_stream_types
             .insert((session_id.clone(), mid), stream_type);
-        let transport_media_id = bootstrap_state.register_mid(mid);
+        let transport_media_id =
+            bootstrap_state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_id: session_id.clone(),
+                mid,
+            });
         debug!(
             session_id = ?session_id,
             ?transport_media_id,
@@ -444,7 +571,13 @@ impl RtcTransportAdapter {
             api.declare_stream_tx(ssrc, None, mid, rid);
         }
         session_state.send_mids.push(mid);
-        let transport_media_id = bootstrap_state.register_mid(mid);
+        let transport_media_id =
+            bootstrap_state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_id: consumer_session_id.clone(),
+                mid,
+                source_session_id: source_session_id.clone(),
+                source_mid,
+            });
         bootstrap_state
             .media_route_index
             .entry((source_session_id.clone(), source_mid))
@@ -738,6 +871,12 @@ fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ss
     let ssrc = encoding.ssrc().map(Ssrc::from)?;
     let rid = encoding.rid().map(Into::into);
     Some((ssrc, rid))
+}
+
+fn remove_mid_once(mids: &mut Vec<Mid>, mid: Mid) {
+    if let Some(position) = mids.iter().position(|current_mid| *current_mid == mid) {
+        mids.remove(position);
+    }
 }
 
 #[cfg(test)]

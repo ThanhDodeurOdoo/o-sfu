@@ -267,6 +267,32 @@ impl<O: RouterObserver> Router<O> {
 
     /// # Errors
     ///
+    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    pub fn remove_producer(&mut self, producer_id: ProducerId) -> Result<(), RouterError> {
+        let Some(producer) = self.producers.get(&producer_id).copied() else {
+            return Err(RouterError::MissingProducer(producer_id));
+        };
+        let session_id = self
+            .transports
+            .get(&producer.transport_id())
+            .map_or(SessionId(0), Transport::session_id);
+        self.detach_producer(producer_id, session_id);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
+    pub fn remove_consumer(&mut self, consumer_id: ConsumerId) -> Result<(), RouterError> {
+        if !self.consumers.contains_key(&consumer_id) {
+            return Err(RouterError::MissingConsumer(consumer_id));
+        }
+        self.detach_consumer(consumer_id);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
     pub fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
         let Some(mut session) = self.sessions.remove(&session_id) else {
@@ -297,16 +323,16 @@ impl<O: RouterObserver> Router<O> {
 
         let consumer_ids = Self::take_ids(&mut self.transport_consumers, &transport_id);
         for consumer_id in consumer_ids {
-            self.remove_consumer(consumer_id);
+            self.detach_consumer(consumer_id);
         }
 
         let producer_ids = Self::take_ids(&mut self.transport_producers, &transport_id);
         for producer_id in producer_ids {
-            self.remove_producer(producer_id, transport.session_id());
+            self.detach_producer(producer_id, transport.session_id());
         }
     }
 
-    fn remove_producer(&mut self, producer_id: ProducerId, session_id: SessionId) {
+    fn detach_producer(&mut self, producer_id: ProducerId, session_id: SessionId) {
         let Some(producer) = self.producers.remove(&producer_id) else {
             return;
         };
@@ -316,7 +342,7 @@ impl<O: RouterObserver> Router<O> {
 
         let consumer_ids = Self::take_ids(&mut self.producer_consumers, &producer_id);
         for consumer_id in consumer_ids {
-            self.remove_consumer(consumer_id);
+            self.detach_consumer(consumer_id);
         }
         self.observer.on_event(RouterEvent::ProducerRemoved {
             session_id,
@@ -327,7 +353,7 @@ impl<O: RouterObserver> Router<O> {
         });
     }
 
-    fn remove_consumer(&mut self, consumer_id: ConsumerId) {
+    fn detach_consumer(&mut self, consumer_id: ConsumerId) {
         let Some(consumer) = self.consumers.remove(&consumer_id) else {
             return;
         };

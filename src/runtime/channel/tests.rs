@@ -18,7 +18,7 @@ mod channel_tests {
     use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
     use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
     use crate::signaling::{
-        current_protocol::{CurrentServerMessage, CurrentWebSocketCloseCode},
+        current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
         http::CreateChannelQuery,
         shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
         webrtc::{MediaKind, RtpCapabilities, RtpParameters},
@@ -109,6 +109,44 @@ mod channel_tests {
                 { "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level", "id": 10, "encrypt": false }
             ],
             "encodings": [{ "ssrc": 11111 }]
+        }))
+    }
+
+    fn test_client_rtp_capabilities_without_video_rtx() -> RtpCapabilities {
+        RtpCapabilities(json!({
+            "codecs": [
+                {
+                    "mimeType": "audio/opus",
+                    "kind": "audio",
+                    "preferredPayloadType": 111,
+                    "clockRate": 48000,
+                    "channels": 2,
+                    "parameters": { "useinbandfec": "1" },
+                    "rtcpFeedback": [{ "type": "transport-cc" }]
+                },
+                {
+                    "mimeType": "video/VP8",
+                    "kind": "video",
+                    "preferredPayloadType": 96,
+                    "clockRate": 90000,
+                    "parameters": {},
+                    "rtcpFeedback": [
+                        { "type": "nack" },
+                        { "type": "nack", "parameter": "pli" },
+                        { "type": "ccm", "parameter": "fir" },
+                        { "type": "goog-remb" }
+                    ]
+                }
+            ],
+            "headerExtensions": [
+                {
+                    "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                    "preferredId": 1,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                }
+            ]
         }))
     }
 
@@ -1062,6 +1100,50 @@ mod channel_tests {
     }
 
     #[tokio::test]
+    async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+        assert!(
+            channel
+                .set_client_rtp_capabilities(
+                    &SessionId::Integer(2),
+                    test_client_rtp_capabilities_without_video_rtx(),
+                )
+                .await
+        );
+
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await;
+
+        assert!(drain_outbound(&mut rx1).is_empty());
+        let request = drain_outbound(&mut rx2)
+            .into_iter()
+            .find_map(|message| match message {
+                SessionOutbound::Request(request) => Some(*request),
+                SessionOutbound::Message(_) | SessionOutbound::Close(_) => None,
+            })
+            .expect("subscriber should receive INIT_CONSUMER");
+        let CurrentServerRequest::BootstrapRemoteTrack(payload) = request else {
+            panic!("expected INIT_CONSUMER request");
+        };
+        let codecs = payload
+            .rtp_parameters
+            .0
+            .get("codecs")
+            .and_then(serde_json::Value::as_array)
+            .expect("consumer bootstrap should include codecs");
+        assert_eq!(codecs.len(), 1);
+        assert_eq!(codecs[0].get("mimeType"), Some(&json!("video/VP8")));
+        assert_eq!(codecs[0].get("payloadType"), Some(&json!(96)));
+    }
+
+    #[tokio::test]
     async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
         let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
         let (stub_adapter, _) = stub_adapter();
@@ -1131,6 +1213,54 @@ mod channel_tests {
             )),
             "peer should still receive the concurrent info broadcast"
         );
+    }
+
+    #[tokio::test]
+    async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish() {
+        let (channel, adapter, stub, _rx1, _rx2) = setup_two_ready_sessions_with_stub().await;
+        stub.set_publish_media_delay(Some(Duration::from_millis(200)));
+
+        let publish_task = tokio::spawn({
+            let channel = Arc::clone(&channel);
+            let adapter = adapter.clone();
+            async move {
+                channel
+                    .publish_track(
+                        &SessionId::Integer(1),
+                        StreamType::Camera,
+                        MediaKind::Video,
+                        test_video_rtp_parameters(),
+                        &adapter,
+                    )
+                    .await
+            }
+        });
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::PublishMediaRequested {
+                    session_id: SessionId::Integer(1),
+                    stream_type: StreamType::Camera,
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .await;
+
+        assert!(channel.leave_session(&SessionId::Integer(1), 0).await);
+        assert!(publish_task.await.unwrap().is_none());
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::MediaRemoved {
+                    session_id: SessionId::Integer(1),
+                    ..
+                }
+            )
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1272,6 +1402,58 @@ mod channel_tests {
                 )),
             "late joiner should receive outbound traffic while bootstrap is running"
         );
+    }
+
+    #[tokio::test]
+    async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_consume() {
+        let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+            setup_late_join_bootstrap_scenario().await;
+        drain_outbound(&mut publisher_rx);
+        drain_outbound(&mut subscriber_rx);
+
+        channel
+            .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+            .await;
+        channel
+            .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
+            .await;
+        stub.set_consume_media_delay(Some(Duration::from_millis(200)));
+
+        let bootstrap_task = tokio::spawn({
+            let channel = Arc::clone(&channel);
+            let adapter = transport_adapter.clone();
+            async move {
+                channel
+                    .bootstrap_late_join_consumers(&SessionId::Integer(2), &adapter)
+                    .await;
+            }
+        });
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::ConsumeMediaRequested {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .await;
+
+        assert!(channel.leave_session(&SessionId::Integer(2), 1).await);
+        bootstrap_task.await.unwrap();
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::MediaRemoved {
+                    session_id: SessionId::Integer(2),
+                    ..
+                }
+            )
+        })
+        .await;
     }
 
     #[tokio::test]
