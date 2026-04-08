@@ -87,7 +87,7 @@ async fn channel(
     );
     let channel = state
         .channels
-        .create_or_get_with_remote_address(issuer, claims.key.as_deref(), &remote_address, &query)
+        .create_or_get(issuer, claims.key.as_deref(), &query, Some(&remote_address))
         .await;
     state.metrics.record_http_channel_success();
     (

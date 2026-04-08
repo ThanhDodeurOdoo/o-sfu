@@ -11,8 +11,6 @@ use crate::signaling::{
     shared::{SessionId, SessionPermissions},
 };
 
-const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
-
 /// Manages all active channels with idempotent creation by issuer.
 #[derive(Debug, Default)]
 pub struct ChannelManager {
@@ -40,25 +38,15 @@ impl ChannelManager {
 
     /// Create a channel for the given issuer, or return the existing one.
     /// Channel creation is idempotent: repeated calls with the same issuer
-    /// return the same channel regardless of key or query differences.
+    /// return the same channel regardless of key, query, or remote-address differences.
+    ///
+    /// `remote_address` is observability metadata used for stats surfaces only.
     pub async fn create_or_get(
         &self,
         issuer: &str,
         key: Option<&str>,
         query: &CreateChannelQuery,
-    ) -> Arc<Channel> {
-        self.create_or_get_with_remote_address(issuer, key, UNKNOWN_REMOTE_ADDRESS, query)
-            .await
-    }
-
-    /// Create a channel for the given issuer, preserving the remote address that
-    /// originally provisioned it for observability surfaces such as `/v1/stats`.
-    pub async fn create_or_get_with_remote_address(
-        &self,
-        issuer: &str,
-        key: Option<&str>,
-        remote_address: &str,
-        query: &CreateChannelQuery,
+        remote_address: Option<&str>,
     ) -> Arc<Channel> {
         {
             let state = self.state.read().await;
@@ -80,7 +68,7 @@ impl ChannelManager {
             router_id,
             issuer.to_owned(),
             key.map(str::to_owned),
-            remote_address.to_owned(),
+            remote_address.unwrap_or("unknown").to_owned(),
             query,
         ));
         let channel_uuid = channel.uuid().to_owned();

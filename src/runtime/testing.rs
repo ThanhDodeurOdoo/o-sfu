@@ -38,7 +38,7 @@ impl TestServer {
         query: &CreateChannelQuery,
     ) -> String {
         self.channels
-            .create_or_get(issuer, key, query)
+            .create_or_get(issuer, key, query, None)
             .await
             .uuid()
             .to_owned()

@@ -124,7 +124,7 @@ async fn stats_returns_live_channel_data() {
     let query = CreateChannelQuery::default();
     let channel = state
         .channels
-        .create_or_get_with_remote_address("issuer-a", None, "203.0.113.10", &query)
+        .create_or_get("issuer-a", None, &query, Some("203.0.113.10"))
         .await;
     let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
     let (bob_tx, _bob_rx) = mpsc::unbounded_channel();

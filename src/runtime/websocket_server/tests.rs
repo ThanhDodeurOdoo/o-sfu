@@ -199,7 +199,10 @@ mod websocket_server_tests {
         key: Option<&str>,
         query: CreateChannelQuery,
     ) -> Arc<Channel> {
-        server.channels.create_or_get(issuer, key, &query).await
+        server
+            .channels
+            .create_or_get(issuer, key, &query, None)
+            .await
     }
 
     async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<TestWebSocket> {
