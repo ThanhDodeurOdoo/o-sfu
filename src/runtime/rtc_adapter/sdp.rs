@@ -441,6 +441,10 @@ mod tests {
 
     use super::{ParsedMediaKind, ParsedTransportProtocol, SdpParseDiagnostic, parse_offer_sdp};
 
+    const FIREFOX_OFFER_AUDIO_ONLY: &str = include_str!("testdata/firefox_offer_audio_only.sdp");
+    const CHROME_OFFER_AUDIO_ONLY: &str = include_str!("testdata/chrome_offer_audio_only.sdp");
+    const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("testdata/safari_datachannel_offer.sdp");
+
     const VALID_OFFER_SDP: &str = "v=0\r\n\
 o=- 0 0 IN IP4 127.0.0.1\r\n\
 s=-\r\n\
@@ -474,6 +478,76 @@ a=mid:1\r\n";
             return;
         };
         assert_eq!(second_media_section.media_kind(), ParsedMediaKind::Video);
+    }
+
+    #[test]
+    fn parse_offer_sdp_accepts_firefox_offer_fixture() {
+        let result = parse_offer_sdp(FIREFOX_OFFER_AUDIO_ONLY);
+        assert!(result.is_ok());
+        let Some(parsed) = result.ok() else {
+            return;
+        };
+        assert_eq!(parsed.media_sections().len(), 1);
+        let Some(media_section) = parsed.media_sections().first() else {
+            return;
+        };
+        assert_eq!(media_section.media_kind(), ParsedMediaKind::Audio);
+        assert_eq!(media_section.port(), 9);
+        assert_eq!(
+            media_section.transport_protocol(),
+            ParsedTransportProtocol::UdpTlsRtpSavpf
+        );
+        assert_eq!(
+            media_section.formats(),
+            [
+                "109".to_owned(),
+                "9".to_owned(),
+                "0".to_owned(),
+                "8".to_owned(),
+                "101".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_offer_sdp_accepts_chrome_offer_fixture() {
+        let result = parse_offer_sdp(CHROME_OFFER_AUDIO_ONLY);
+        assert!(result.is_ok());
+        let Some(parsed) = result.ok() else {
+            return;
+        };
+        assert_eq!(parsed.media_sections().len(), 1);
+        let Some(media_section) = parsed.media_sections().first() else {
+            return;
+        };
+        assert_eq!(media_section.media_kind(), ParsedMediaKind::Audio);
+        assert_eq!(media_section.port(), 9);
+        assert_eq!(
+            media_section.transport_protocol(),
+            ParsedTransportProtocol::UdpTlsRtpSavpf
+        );
+        assert_eq!(media_section.formats().first(), Some(&"111".to_owned()));
+        assert_eq!(media_section.formats().last(), Some(&"126".to_owned()));
+    }
+
+    #[test]
+    fn parse_offer_sdp_marks_safari_datachannel_offer_as_unsupported_fixture() {
+        let result = parse_offer_sdp(SAFARI_DATA_CHANNEL_OFFER);
+        assert!(result.is_err());
+        let Some(diagnostic) = result.err() else {
+            return;
+        };
+        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
+        assert_eq!(
+            diagnostic.summary(),
+            "SDP transport protocol is valid but not supported yet"
+        );
+        let SdpParseDiagnostic::UnsupportedFeature { context, .. } = diagnostic.as_ref() else {
+            return;
+        };
+        assert_eq!(context.got(), "UDP/DTLS/SCTP");
+        assert_eq!(context.line_number(), 8);
+        assert!(context.line().contains("webrtc-datachannel"));
     }
 
     #[test]

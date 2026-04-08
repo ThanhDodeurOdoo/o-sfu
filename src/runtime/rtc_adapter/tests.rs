@@ -24,6 +24,8 @@ s=-\r\n\
 t=0 0\r\n\
 m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n\
 a=mid:0\r\n";
+const FIREFOX_OFFER_AUDIO_ONLY: &str = include_str!("testdata/firefox_offer_audio_only.sdp");
+const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("testdata/safari_datachannel_offer.sdp");
 
 fn empty_router_capabilities() -> RouterRtpCapabilities {
     RouterRtpCapabilities::new(vec![], vec![])
@@ -95,6 +97,18 @@ fn sample_transport_bootstrap(id: &str, candidate: IceCandidate) -> TransportBoo
 fn validate_dtls_parameters_accepts_client_sha256_payload() {
     let result = validation::validate_dtls_parameters(&sample_sha256_dtls_parameters("client"));
     assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn validate_sdp_offer_accepts_firefox_offer_fixture() {
+    let result = validation::validate_sdp_offer(FIREFOX_OFFER_AUDIO_ONLY);
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn validate_sdp_offer_maps_safari_datachannel_fixture_to_unsupported_feature() {
+    let result = validation::validate_sdp_offer(SAFARI_DATA_CHANNEL_OFFER);
+    assert_eq!(result, Err(TransportAdapterError::UnsupportedFeature));
 }
 
 #[test]
