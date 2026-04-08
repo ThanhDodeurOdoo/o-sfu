@@ -4,12 +4,24 @@ use std::sync::Arc;
 use o_sfu_router::RouterId;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
-use super::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
-use crate::signaling::{
-    http::{CreateChannelQuery, StatsResponse},
-    shared::{SessionId, SessionPermissions},
+use super::{
+    Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelSessionStatsSnapshot,
+    SessionOutbound,
 };
+use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::signaling::shared::{SessionId, SessionPermissions};
+use crate::utils::rfc3339_now;
+
+const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeChannelStatsSnapshot {
+    pub(crate) create_date: String,
+    pub(crate) uuid: String,
+    pub(crate) remote_address: String,
+    pub(crate) sessions_stats: ChannelSessionStatsSnapshot,
+    pub(crate) web_rtc_enabled: bool,
+}
 
 /// Manages all active channels with idempotent creation by issuer.
 #[derive(Debug, Default)]
@@ -28,6 +40,8 @@ struct ChannelManagerState {
 struct ChannelEntry {
     channel: Arc<Channel>,
     op_lock: Arc<Mutex<()>>,
+    create_date: String,
+    remote_address: String,
 }
 
 impl ChannelManager {
@@ -38,14 +52,14 @@ impl ChannelManager {
 
     /// Create a channel for the given issuer, or return the existing one.
     /// Channel creation is idempotent: repeated calls with the same issuer
-    /// return the same channel regardless of key, query, or remote-address differences.
+    /// return the same channel regardless of key, config, or remote-address differences.
     ///
     /// `remote_address` is observability metadata used for stats surfaces only.
     pub async fn create_or_get(
         &self,
         issuer: &str,
         key: Option<&str>,
-        query: &CreateChannelQuery,
+        config: &ChannelConfig,
         remote_address: Option<&str>,
     ) -> Arc<Channel> {
         {
@@ -68,8 +82,7 @@ impl ChannelManager {
             router_id,
             issuer.to_owned(),
             key.map(str::to_owned),
-            remote_address.unwrap_or("unknown").to_owned(),
-            query,
+            config.clone(),
         ));
         let channel_uuid = channel.uuid().to_owned();
         state
@@ -80,6 +93,8 @@ impl ChannelManager {
             ChannelEntry {
                 channel: Arc::clone(&channel),
                 op_lock: Arc::new(Mutex::new(())),
+                create_date: rfc3339_now(),
+                remote_address: remote_address.unwrap_or(UNKNOWN_REMOTE_ADDRESS).to_owned(),
             },
         );
         channel
@@ -100,20 +115,19 @@ impl ChannelManager {
         entry.channel.has_session(session_id).await
     }
 
-    pub async fn stats(&self, transport_adapter: &RuntimeTransportAdapter) -> StatsResponse {
-        let channels = {
+    pub async fn stats_snapshots(
+        &self,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Vec<RuntimeChannelStatsSnapshot> {
+        let entries = {
             let state = self.state.read().await;
-            state
-                .channels_by_uuid
-                .values()
-                .map(|entry| Arc::clone(&entry.channel))
-                .collect::<Vec<_>>()
+            state.channels_by_uuid.values().cloned().collect::<Vec<_>>()
         };
-        let mut stats = Vec::with_capacity(channels.len());
-        for channel in channels {
-            stats.push(channel.stats(transport_adapter).await);
+        let mut snapshots = Vec::with_capacity(entries.len());
+        for entry in entries {
+            snapshots.push(self.entry_stats_snapshot(entry, transport_adapter).await);
         }
-        stats
+        snapshots
     }
 
     pub async fn join_session(
@@ -183,6 +197,24 @@ impl ChannelManager {
     async fn entry(&self, channel_uuid: &str) -> Option<ChannelEntry> {
         let state = self.state.read().await;
         state.channels_by_uuid.get(channel_uuid).cloned()
+    }
+
+    async fn entry_stats_snapshot(
+        &self,
+        entry: ChannelEntry,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> RuntimeChannelStatsSnapshot {
+        let sessions_stats = entry
+            .channel
+            .session_stats_snapshot(transport_adapter)
+            .await;
+        RuntimeChannelStatsSnapshot {
+            create_date: entry.create_date,
+            uuid: entry.channel.uuid().to_owned(),
+            remote_address: entry.remote_address,
+            sessions_stats,
+            web_rtc_enabled: entry.channel.web_rtc_enabled(),
+        }
     }
 
     async fn is_current_entry(&self, channel_uuid: &str, channel: &Arc<Channel>) -> bool {

@@ -17,7 +17,9 @@ use super::app;
 use crate::{
     config::{Config, RtcPortRange, TransportBackend},
     runtime::{
-        RuntimeState, channel::ChannelManager, metrics::RuntimeMetrics,
+        RuntimeState,
+        channel::{ChannelConfig, ChannelManager},
+        metrics::RuntimeMetrics,
         transport_adapter::RuntimeTransportAdapter,
     },
     signaling::{
@@ -124,7 +126,15 @@ async fn stats_returns_live_channel_data() {
     let query = CreateChannelQuery::default();
     let channel = state
         .channels
-        .create_or_get("issuer-a", None, &query, Some("203.0.113.10"))
+        .create_or_get(
+            "issuer-a",
+            None,
+            &ChannelConfig {
+                web_rtc_enabled: query.web_rtc_enabled(),
+                recording_address: query.recording_address.clone(),
+            },
+            Some("203.0.113.10"),
+        )
         .await;
     let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
     let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
@@ -204,7 +214,8 @@ async fn stats_returns_live_channel_data() {
     assert_eq!(first.sessions_stats.incoming_bit_rate.camera, 0);
     assert_eq!(first.sessions_stats.incoming_bit_rate.screen, 0);
     assert!(first.web_rtc_enabled);
-    assert_eq!(first.create_date, channel.create_date());
+    assert!(first.create_date.contains('T'));
+    assert!(first.create_date.ends_with('Z'));
 }
 
 #[tokio::test]

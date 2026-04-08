@@ -22,7 +22,7 @@ mod websocket_server_tests {
     use crate::{
         config::{Config, RtcPortRange, TransportBackend},
         runtime::{
-            channel::ChannelManager,
+            channel::{ChannelConfig, ChannelManager},
             http_server::app,
             metrics::RuntimeMetrics,
             stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
@@ -38,7 +38,6 @@ mod websocket_server_tests {
                 CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
                 CurrentStartupPayload, CurrentTransportConnectPayload, CurrentWebSocketCredentials,
             },
-            http::CreateChannelQuery,
             shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
             webrtc::{DtlsFingerprint, DtlsParameters, MediaKind, RtpParameters},
         },
@@ -48,6 +47,7 @@ mod websocket_server_tests {
     const TEST_CHANNEL_KEY: &str = "Y2hhbm5lbC1rZXk=";
     type TestWebSocket =
         tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+    type CreateChannelQuery = ChannelConfig;
 
     struct TestServer {
         addr: SocketAddr,
@@ -197,11 +197,11 @@ mod websocket_server_tests {
         server: &TestServer,
         issuer: &str,
         key: Option<&str>,
-        query: CreateChannelQuery,
+        config: ChannelConfig,
     ) -> Arc<Channel> {
         server
             .channels
-            .create_or_get(issuer, key, &query, None)
+            .create_or_get(issuer, key, &config, None)
             .await
     }
 
@@ -256,10 +256,18 @@ mod websocket_server_tests {
     }
 
     async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> Option<()> {
+        acknowledge_transport_bootstrap_with_capabilities(websocket, test_client_rtp_capabilities())
+            .await
+    }
+
+    async fn acknowledge_transport_bootstrap_with_capabilities(
+        websocket: &mut TestWebSocket,
+        capabilities: serde_json::Value,
+    ) -> Option<()> {
         let batch = read_bus_batch(websocket).await?;
         let envelope = batch.first()?;
         let response = serde_json::to_string(&vec![CurrentBusEnvelope {
-            message: test_client_rtp_capabilities(),
+            message: capabilities,
             need_response: None,
             response_to: envelope.need_response.clone(),
         }])
@@ -349,6 +357,44 @@ mod websocket_server_tests {
                 {
                     "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
                     "preferredId": 10,
+                    "preferredEncrypt": false,
+                    "kind": "audio",
+                    "direction": "sendrecv"
+                }
+            ]
+        })
+    }
+
+    fn test_client_rtp_capabilities_without_video_rtx() -> serde_json::Value {
+        serde_json::json!({
+            "codecs": [
+                {
+                    "mimeType": "audio/opus",
+                    "kind": "audio",
+                    "preferredPayloadType": 111,
+                    "clockRate": 48000,
+                    "channels": 2,
+                    "parameters": { "useinbandfec": "1" },
+                    "rtcpFeedback": [{ "type": "transport-cc" }]
+                },
+                {
+                    "mimeType": "video/VP8",
+                    "kind": "video",
+                    "preferredPayloadType": 96,
+                    "clockRate": 90000,
+                    "parameters": {},
+                    "rtcpFeedback": [
+                        { "type": "nack" },
+                        { "type": "nack", "parameter": "pli" },
+                        { "type": "ccm", "parameter": "fir" },
+                        { "type": "goog-remb" }
+                    ]
+                }
+            ],
+            "headerExtensions": [
+                {
+                    "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                    "preferredId": 1,
                     "preferredEncrypt": false,
                     "kind": "audio",
                     "direction": "sendrecv"
@@ -725,48 +771,153 @@ mod websocket_server_tests {
         );
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "integration test keeps the negotiated-consumer flow explicit in one place"
+    )]
     #[tokio::test]
-    async fn websocket_persists_client_capabilities_from_transport_bootstrap_response() {
+    async fn websocket_uses_stored_client_capabilities_for_consumer_negotiation() {
         let server = spawn_test_server(1_000, 100).await;
         assert!(server.is_some());
         let Some(server) = server else {
             return;
         };
-        let channel =
-            create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-        let session_id = SessionId::Integer(110);
-        let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
-        assert!(token.is_some());
-        let Some(token) = token else {
+        let channel = create_channel(&server, "issuer-a", None, ChannelConfig::default()).await;
+        let publisher_token =
+            signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(110));
+        let subscriber_token =
+            signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(111));
+        assert!(publisher_token.is_some());
+        assert!(subscriber_token.is_some());
+        let Some(publisher_token) = publisher_token else {
             return;
         };
-        let authenticated = authenticate_and_read_startup(&server, &token).await;
-        assert!(authenticated.is_some());
-        let Some((mut websocket, _startup)) = authenticated else {
+        let Some(subscriber_token) = subscriber_token else {
             return;
         };
 
-        let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
-        assert!(
-            acknowledged.is_some(),
-            "transport bootstrap should round-trip"
+        let publisher_auth = authenticate_and_read_startup(&server, &publisher_token).await;
+        let subscriber_auth = authenticate_and_read_startup(&server, &subscriber_token).await;
+        assert!(publisher_auth.is_some());
+        assert!(subscriber_auth.is_some());
+        let Some((mut publisher_socket, _publisher_startup)) = publisher_auth else {
+            return;
+        };
+        let Some((mut subscriber_socket, _subscriber_startup)) = subscriber_auth else {
+            return;
+        };
+
+        assert_eq!(
+            acknowledge_transport_bootstrap(&mut publisher_socket).await,
+            Some(())
+        );
+        assert_eq!(
+            acknowledge_transport_bootstrap_with_capabilities(
+                &mut subscriber_socket,
+                test_client_rtp_capabilities_without_video_rtx(),
+            )
+            .await,
+            Some(())
         );
 
-        let stored_capabilities = timeout(Duration::from_secs(1), async {
-            loop {
-                if let Some(capabilities) = channel.client_rtp_capabilities(&session_id).await {
-                    return Some(capabilities);
-                }
-                sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .ok()
-        .flatten();
-        assert!(stored_capabilities.is_some());
-        assert_eq!(
-            stored_capabilities.map(|capabilities| capabilities.0),
-            Some(test_client_rtp_capabilities())
+        let publisher_upload_connect = send_bus_request_and_read_response(
+            &mut publisher_socket,
+            CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: sample_client_dtls_parameters(),
+                sdp_offer: None,
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 20),
+        )
+        .await;
+        assert!(publisher_upload_connect.is_some());
+
+        let subscriber_download_connect = send_bus_request_and_read_response(
+            &mut subscriber_socket,
+            CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
+                dtls_parameters: sample_client_dtls_parameters(),
+                sdp_offer: None,
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 21),
+        )
+        .await;
+        assert!(subscriber_download_connect.is_some());
+
+        let publish_response = send_bus_request_and_read_response(
+            &mut publisher_socket,
+            CurrentClientRequest::PublishTrack(CurrentPublishTrackPayload {
+                stream_type: StreamType::Camera,
+                media_kind: MediaKind::Video,
+                rtp_parameters: RtpParameters(serde_json::json!({
+                    "codecs": [
+                        {
+                            "mimeType": "video/VP8",
+                            "payloadType": 96,
+                            "clockRate": 90000,
+                            "parameters": {},
+                            "rtcpFeedback": [
+                                { "type": "nack" },
+                                { "type": "nack", "parameter": "pli" },
+                                { "type": "ccm", "parameter": "fir" },
+                                { "type": "goog-remb" },
+                                { "type": "transport-cc" }
+                            ]
+                        },
+                        {
+                            "mimeType": "video/rtx",
+                            "payloadType": 97,
+                            "clockRate": 90000,
+                            "parameters": { "apt": "96" },
+                            "rtcpFeedback": []
+                        }
+                    ],
+                    "headerExtensions": [
+                        { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
+                        { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
+                        { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
+                    ],
+                    "encodings": [{ "ssrc": 22222 }]
+                })),
+            }),
+            CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 22),
+        )
+        .await;
+        assert!(publish_response.is_some());
+
+        let subscriber_batch = read_bus_batch(&mut subscriber_socket).await;
+        assert!(subscriber_batch.is_some());
+        let Some(subscriber_batch) = subscriber_batch else {
+            return;
+        };
+        let Some(subscriber_envelope) = subscriber_batch.first() else {
+            return;
+        };
+        let server_request =
+            serde_json::from_value::<CurrentServerRequest>(subscriber_envelope.message.clone());
+        assert!(server_request.is_ok());
+        let Some(server_request) = server_request.ok() else {
+            return;
+        };
+        let CurrentServerRequest::BootstrapRemoteTrack(track) = server_request else {
+            panic!("expected INIT_CONSUMER server request");
+        };
+        let codecs = track
+            .rtp_parameters
+            .0
+            .get("codecs")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            codecs
+                .iter()
+                .any(|codec| codec.get("mimeType") == Some(&serde_json::json!("video/VP8"))),
+            "negotiated consumer parameters should retain VP8"
+        );
+        assert!(
+            codecs
+                .iter()
+                .all(|codec| codec.get("mimeType") != Some(&serde_json::json!("video/rtx"))),
+            "negotiated consumer parameters should drop unsupported RTX"
         );
     }
 

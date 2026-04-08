@@ -13,13 +13,12 @@ mod channel_tests {
     use tokio::{task::yield_now, time::timeout};
 
     use super::super::{
-        ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound,
+        ChannelConfig, ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound,
     };
     use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
     use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
     use crate::signaling::{
         current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
-        http::CreateChannelQuery,
         shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
         webrtc::{MediaKind, RtpCapabilities, RtpParameters},
     };
@@ -193,12 +192,12 @@ mod channel_tests {
     #[tokio::test]
     async fn channel_manager_is_idempotent_by_issuer() {
         let manager = ChannelManager::new();
-        let query = CreateChannelQuery::default();
-        let first = manager.create_or_get("issuer-a", None, &query, None).await;
+        let config = ChannelConfig::default();
+        let first = manager.create_or_get("issuer-a", None, &config, None).await;
         let second = manager
-            .create_or_get("issuer-a", Some("ignored"), &query, None)
+            .create_or_get("issuer-a", Some("ignored"), &config, None)
             .await;
-        let third = manager.create_or_get("issuer-b", None, &query, None).await;
+        let third = manager.create_or_get("issuer-b", None, &config, None).await;
         assert_eq!(first.uuid(), second.uuid());
         assert_ne!(first.uuid(), third.uuid());
     }
@@ -207,7 +206,7 @@ mod channel_tests {
     async fn channel_manager_lookup_by_uuid() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let fetched = manager.get_by_uuid(channel.uuid()).await;
         assert!(fetched.is_some());
@@ -242,7 +241,7 @@ mod channel_tests {
     async fn join_session_enforces_capacity() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, _rx1) = test_sender();
         let result = channel
@@ -273,7 +272,7 @@ mod channel_tests {
     async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let first_connection = channel
@@ -335,7 +334,7 @@ mod channel_tests {
     async fn leave_session_sends_departure_to_remaining_peers() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, _rx2) = test_sender();
@@ -381,7 +380,7 @@ mod channel_tests {
     async fn replacing_a_session_notifies_remaining_peers() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut alice_rx) = test_sender();
         let (tx2, mut bob_old_rx) = test_sender();
@@ -432,7 +431,7 @@ mod channel_tests {
     async fn broadcast_reaches_all_except_sender() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, mut rx2) = test_sender();
@@ -481,7 +480,7 @@ mod channel_tests {
     async fn update_session_info_broadcasts_to_all() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, mut rx2) = test_sender();
@@ -533,7 +532,7 @@ mod channel_tests {
     async fn update_session_info_with_refresh_sends_full_snapshot() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, _rx2) = test_sender();
@@ -585,7 +584,7 @@ mod channel_tests {
     async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, mut rx2) = test_sender();
@@ -647,7 +646,7 @@ mod channel_tests {
     async fn disconnect_sessions_target_only_the_active_replaced_session() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, mut rx1) = test_sender();
         let (tx2, mut rx2) = test_sender();
@@ -691,7 +690,7 @@ mod channel_tests {
     async fn channel_maps_string_session_ids_into_router_sessions() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx, _rx) = test_sender();
         let joined = channel
@@ -722,7 +721,7 @@ mod channel_tests {
     async fn channel_keeps_router_session_permissions_in_sync() {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let permissions = SessionPermissions {
             transcription: Some(true),
@@ -775,7 +774,7 @@ mod channel_tests {
     async fn manager_leave_session_removes_empty_channel() {
         let manager = ChannelManager::new();
         let first_channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let channel_uuid = first_channel.uuid().to_owned();
         let (tx, _rx) = test_sender();
@@ -800,7 +799,7 @@ mod channel_tests {
 
         assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
         let replacement = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         assert_ne!(replacement.uuid(), channel_uuid);
     }
@@ -809,7 +808,7 @@ mod channel_tests {
     async fn manager_disconnect_sessions_removes_empty_channel() {
         let manager = ChannelManager::new();
         let first_channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let channel_uuid = first_channel.uuid().to_owned();
         let (tx, _rx) = test_sender();
@@ -831,7 +830,7 @@ mod channel_tests {
 
         assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
         let replacement = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         assert_ne!(replacement.uuid(), channel_uuid);
     }
@@ -854,7 +853,7 @@ mod channel_tests {
     ) {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, rx1) = test_sender();
         let (tx2, rx2) = test_sender();
@@ -902,7 +901,7 @@ mod channel_tests {
     ) {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (tx1, rx1) = test_sender();
         let (tx2, rx2) = test_sender();
@@ -950,7 +949,7 @@ mod channel_tests {
     ) {
         let manager = ChannelManager::new();
         let channel = manager
-            .create_or_get("issuer-a", None, &CreateChannelQuery::default(), None)
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
             .await;
         let (publisher_tx, publisher_rx) = test_sender();
         let (subscriber_tx, subscriber_rx) = test_sender();

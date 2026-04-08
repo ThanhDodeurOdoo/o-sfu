@@ -5,7 +5,6 @@ use super::{rtc_adapter::RtcTransportAdapter, stub_bus::StubWebRtcAdapter};
 use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
-    http::IncomingBitRateStats,
     shared::SessionId,
     shared::StreamType as SignalingStreamType,
     webrtc::{DtlsParameters, MediaKind as SignalingMediaKind},
@@ -32,18 +31,6 @@ pub(crate) struct IncomingBitrateSnapshot {
     pub(crate) audio: u64,
     pub(crate) camera: u64,
     pub(crate) screen: u64,
-}
-
-impl IncomingBitrateSnapshot {
-    #[must_use]
-    pub(crate) fn to_stats(self) -> IncomingBitRateStats {
-        IncomingBitRateStats {
-            total: self.total,
-            screen: self.screen,
-            audio: self.audio,
-            camera: self.camera,
-        }
-    }
 }
 
 /// Opaque identifier for a media line allocated by the transport adapter.

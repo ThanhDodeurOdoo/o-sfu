@@ -8,14 +8,13 @@ use super::{
     RuntimeState, build_transport_adapter, channel::ChannelManager, http_server::app,
     metrics::RuntimeMetrics,
 };
-use crate::{config::Config, signaling::http::CreateChannelQuery};
+use crate::config::Config;
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
 pub struct TestServer {
     addr: SocketAddr,
     handle: JoinHandle<()>,
-    channels: Arc<ChannelManager>,
 }
 
 impl TestServer {
@@ -27,21 +26,6 @@ impl TestServer {
     #[must_use]
     pub fn http_base_url(&self) -> String {
         format!("http://{}", self.addr)
-    }
-
-    /// Create a channel directly through the runtime manager so integration tests can focus on
-    /// WebSocket and control-plane behavior without hand-crafting HTTP requests first.
-    pub async fn create_channel(
-        &self,
-        issuer: &str,
-        key: Option<&str>,
-        query: &CreateChannelQuery,
-    ) -> String {
-        self.channels
-            .create_or_get(issuer, key, query, None)
-            .await
-            .uuid()
-            .to_owned()
     }
 }
 
@@ -76,9 +60,5 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
             "test server should stop cleanly: {result:?}"
         );
     });
-    Ok(TestServer {
-        addr,
-        handle,
-        channels,
-    })
+    Ok(TestServer { addr, handle })
 }

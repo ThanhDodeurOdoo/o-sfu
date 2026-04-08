@@ -12,14 +12,18 @@ use axum::{
 use tokio::net::TcpListener;
 use tracing::info;
 
-use super::{RuntimeState, websocket_server};
+use super::{
+    RuntimeState,
+    channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
+    websocket_server,
+};
 use crate::{
     config::Config,
     signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims},
         http::{
-            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, NOOP_PATH,
-            NoopResponse, STATS_PATH,
+            CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery, DISCONNECT_PATH,
+            IncomingBitRateStats, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
     },
 };
@@ -55,7 +59,15 @@ async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
 
 async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     state.metrics.record_http_stats_request();
-    axum::Json(state.channels.stats(&state.transport_adapter).await)
+    axum::Json(
+        state
+            .channels
+            .stats_snapshots(&state.transport_adapter)
+            .await
+            .into_iter()
+            .map(http_channel_stats)
+            .collect::<Vec<_>>(),
+    )
 }
 
 async fn channel(
@@ -87,7 +99,15 @@ async fn channel(
     );
     let channel = state
         .channels
-        .create_or_get(issuer, claims.key.as_deref(), &query, Some(&remote_address))
+        .create_or_get(
+            issuer,
+            claims.key.as_deref(),
+            &ChannelConfig {
+                web_rtc_enabled: query.web_rtc_enabled(),
+                recording_address: query.recording_address.clone(),
+            },
+            Some(&remote_address),
+        )
         .await;
     state.metrics.record_http_channel_success();
     (
@@ -146,6 +166,26 @@ fn request_remote_address(headers: &HeaderMap, connect_info: Option<SocketAddr>)
         .map(str::to_owned)
         .or_else(|| connect_info.map(|addr| addr.ip().to_string()))
         .unwrap_or_else(|| String::from("unknown"))
+}
+
+fn http_channel_stats(snapshot: RuntimeChannelStatsSnapshot) -> ChannelStats {
+    ChannelStats {
+        create_date: snapshot.create_date,
+        uuid: snapshot.uuid,
+        remote_address: snapshot.remote_address,
+        sessions_stats: SessionsStats {
+            incoming_bit_rate: IncomingBitRateStats {
+                total: snapshot.sessions_stats.incoming_bitrate.total,
+                audio: snapshot.sessions_stats.incoming_bitrate.audio,
+                camera: snapshot.sessions_stats.incoming_bitrate.camera,
+                screen: snapshot.sessions_stats.incoming_bitrate.screen,
+            },
+            count: snapshot.sessions_stats.count,
+            camera_count: snapshot.sessions_stats.camera_count,
+            screen_count: snapshot.sessions_stats.screen_count,
+        },
+        web_rtc_enabled: snapshot.web_rtc_enabled,
+    }
 }
 
 fn forwarded_header<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'headers str> {

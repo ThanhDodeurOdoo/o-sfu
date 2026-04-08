@@ -16,13 +16,11 @@ use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::transport_adapter::RuntimeTransportAdapter;
+use super::transport_adapter::{IncomingBitrateSnapshot, RuntimeTransportAdapter};
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
-    http::{ChannelStats, CreateChannelQuery, SessionsStats},
     shared::{AvailableFeatures, RecordingState},
 };
-use crate::utils::rfc3339_now;
 
 mod manager;
 mod media;
@@ -36,6 +34,7 @@ mod state;
 mod tests;
 
 pub use manager::ChannelManager;
+pub(crate) use manager::RuntimeChannelStatsSnapshot;
 use state::ChannelState;
 
 /// A message the server pushes to a connected session's WebSocket handler.
@@ -62,16 +61,37 @@ pub enum ChannelManagerJoinError {
     RouterState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChannelConfig {
+    pub(crate) web_rtc_enabled: bool,
+    pub(crate) recording_address: Option<String>,
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            web_rtc_enabled: true,
+            recording_address: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChannelSessionStatsSnapshot {
+    pub(crate) incoming_bitrate: IncomingBitrateSnapshot,
+    pub(crate) count: u64,
+    pub(crate) camera_count: u64,
+    pub(crate) screen_count: u64,
+}
+
 /// A single discussion channel owning sessions, features, and recording state.
 ///
 /// Identity fields (uuid, issuer, key, features) are immutable after creation.
 /// Mutable state (sessions, recording, routing) is behind an interior lock.
 pub struct Channel {
-    create_date: String,
     uuid: String,
     issuer: String,
     key: Option<String>,
-    remote_address: String,
     web_rtc_enabled: bool,
     #[allow(dead_code, reason = "stored for future recording pipeline integration")]
     recording_address: Option<String>,
@@ -83,17 +103,14 @@ impl Channel {
         router_id: RouterId,
         issuer: String,
         key: Option<String>,
-        remote_address: String,
-        query: &CreateChannelQuery,
+        config: ChannelConfig,
     ) -> Self {
         Self {
-            create_date: rfc3339_now(),
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
-            remote_address,
-            web_rtc_enabled: query.web_rtc_enabled(),
-            recording_address: query.recording_address.clone(),
+            web_rtc_enabled: config.web_rtc_enabled,
+            recording_address: config.recording_address,
             state: RwLock::new(ChannelState::new(router_id)),
         }
     }
@@ -111,12 +128,6 @@ impl Channel {
     #[must_use]
     pub fn key(&self) -> Option<&str> {
         self.key.as_deref()
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn create_date(&self) -> &str {
-        &self.create_date
     }
 
     #[must_use]
@@ -137,22 +148,23 @@ impl Channel {
         self.state.read().await.router.rtp_capabilities().clone()
     }
 
-    pub async fn stats(&self, transport_adapter: &RuntimeTransportAdapter) -> ChannelStats {
+    pub(super) async fn session_stats_snapshot(
+        &self,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> ChannelSessionStatsSnapshot {
         let state = self.state.read().await;
         let session_ids = state.sessions.keys().cloned().collect::<Vec<_>>();
-        let incoming_bitrate = transport_adapter.incoming_bitrate_snapshot(&session_ids);
-        ChannelStats {
-            create_date: self.create_date.clone(),
-            uuid: self.uuid.clone(),
-            remote_address: self.remote_address.clone(),
-            sessions_stats: SessionsStats {
-                incoming_bit_rate: incoming_bitrate.to_stats(),
-                count: state.router.session_count(),
-                camera_count: state.router.camera_count(),
-                screen_count: state.router.screen_count(),
-            },
-            web_rtc_enabled: self.web_rtc_enabled,
+        ChannelSessionStatsSnapshot {
+            incoming_bitrate: transport_adapter.incoming_bitrate_snapshot(&session_ids),
+            count: state.router.session_count(),
+            camera_count: state.router.camera_count(),
+            screen_count: state.router.screen_count(),
         }
+    }
+
+    #[must_use]
+    pub(super) fn web_rtc_enabled(&self) -> bool {
+        self.web_rtc_enabled
     }
 }
 
@@ -160,10 +172,8 @@ impl fmt::Debug for Channel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Channel")
-            .field("create_date", &self.create_date)
             .field("uuid", &self.uuid)
             .field("issuer", &self.issuer)
-            .field("remote_address", &self.remote_address)
             .field("web_rtc_enabled", &self.web_rtc_enabled)
             .finish_non_exhaustive()
     }
