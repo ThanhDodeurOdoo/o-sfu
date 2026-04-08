@@ -131,6 +131,23 @@ struct PublishedProducer {
     active: bool,
 }
 
+#[derive(Debug, Clone)]
+struct PendingConsumerBootstrapTarget {
+    consumer_session_id: SessionId,
+    consumer_connection_id: u64,
+    producer_session_id: SessionId,
+    producer_wire_id: String,
+    stream_type: StreamType,
+    media_kind: SignalingMediaKind,
+    transport_media_id: TransportMediaId,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ConsumerBootstrapOrigin {
+    LateJoin,
+    Publish,
+}
+
 impl Channel {
     pub(super) fn new(
         router_id: RouterId,
@@ -475,125 +492,27 @@ impl Channel {
     ///
     /// Precondiions: the session must have both download transport connected and
     /// RTP capabilities stored. If either is missing, this is a no-op.
-    #[allow(
-        clippy::significant_drop_tightening,
-        clippy::cognitive_complexity,
-        clippy::too_many_lines,
-        reason = "late-join consumer bootstrap keeps one lock scope so peer snapshots and router updates remain coherent"
-    )]
     pub async fn bootstrap_late_join_consumers(
         &self,
         session_id: &SessionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let mut state = self.state.write().await;
-        let Some(session) = state.sessions.get(session_id) else {
-            return;
+        let targets = {
+            let state = self.state.read().await;
+            state.late_join_consumer_targets(session_id)
         };
-        if !session.download_transport_connected {
-            return;
-        }
-        let Some(client_capabilities) = session.client_rtp_capabilities.clone() else {
-            return;
-        };
-        let sender = session.sender.clone();
 
-        let parsed_capabilities = rtp_conversion::parse_rtp_capabilities(&client_capabilities.0);
-
-        // Destructure the channel state to split borrows: iterate `producers`
-        // immutably while mutating `router`, `consumer_index`, and counters.
-        let ChannelState {
-            ref producers,
-            ref mut next_consumer_id,
-            ref mut router,
-            ref mut consumer_index,
-            ..
-        } = *state;
-
-        for (producer_wire_id, producer) in producers {
-            if producer.owner_session_id == *session_id {
-                continue;
-            }
-            let capable = parsed_capabilities
-                .as_ref()
-                .is_some_and(|caps| can_consume(&producer.consumable_rtp_parameters, caps));
-            let negotiated_wire_params = parsed_capabilities
-                .as_ref()
-                .and_then(|caps| {
-                    negotiate_consumer_rtp_parameters(&producer.consumable_rtp_parameters, caps)
-                        .ok()
-                })
-                .map(|negotiated| {
-                    RtpParameters(rtp_conversion::serialize_rtp_parameters(&negotiated))
-                });
-            let consumer_rtp_parameters = negotiated_wire_params.unwrap_or_else(|| {
-                RtpParameters(rtp_conversion::serialize_rtp_parameters(
-                    &producer.consumable_rtp_parameters,
-                ))
-            });
-            if let Err(_error) = transport_adapter
-                .consume_media(
-                    session_id,
-                    producer.media_kind,
-                    &producer.owner_session_id,
-                    producer.transport_media_id,
-                )
-                .await
-            {
-                warn!(
-                    consumer_session_id = ?session_id,
-                    producer_session_id = ?producer.owner_session_id,
-                    "transport adapter rejected late-join consume media declaration"
-                );
-                continue;
-            }
-            let consumer_id = allocate_wire_consumer_id(next_consumer_id);
-            let router_consumer_id = match router.add_consumer(
-                session_id,
-                producer.router_producer_id,
-                to_router_media_kind(producer.media_kind),
-                to_router_stream_type(producer.stream_type),
-                capable,
-            ) {
-                Ok(id) => id,
-                Err(_error) => {
-                    warn!(
-                        ?session_id,
-                        producer_id = %producer_wire_id,
-                        ?capable,
-                        "router rejected late-join consumer creation"
-                    );
-                    continue;
-                }
-            };
-            consumer_index.insert(
-                ConsumerKey {
-                    consumer_session_id: session_id.clone(),
-                    producer_session_id: producer.owner_session_id.clone(),
-                    stream_type: producer.stream_type,
-                },
-                router_consumer_id,
-            );
-            let request =
-                CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
-                    id: consumer_id,
-                    media_kind: producer.media_kind,
-                    source_id: producer_wire_id.clone(),
-                    rtp_parameters: consumer_rtp_parameters,
-                    session_id: producer.owner_session_id.clone(),
-                    active: producer.active,
-                    stream_type: producer.stream_type,
-                });
-            let _ = sender.send(SessionOutbound::Request(Box::new(request)));
+        for target in targets {
+            self.bootstrap_consumer_target(
+                &target,
+                None,
+                transport_adapter,
+                ConsumerBootstrapOrigin::LateJoin,
+            )
+            .await;
         }
     }
 
-    #[allow(
-        clippy::significant_drop_tightening,
-        clippy::cognitive_complexity,
-        clippy::too_many_lines,
-        reason = "publish/consumer bootstrap keeps one lock scope so peer snapshots and router updates remain coherent for this minimal path"
-    )]
     pub async fn publish_track(
         &self,
         session_id: &SessionId,
@@ -602,16 +521,17 @@ impl Channel {
         rtp_parameters: RtpParameters,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
-        let mut state = self.state.write().await;
-        let can_publish = state
-            .sessions
-            .get(session_id)
-            .is_some_and(|session| session.upload_transport_connected);
-        if !can_publish {
-            return None;
-        }
-        let router_media_kind = to_router_media_kind(media_kind);
-        let router_stream_type = to_router_stream_type(stream_type);
+        let (publisher_connection_id, router_capabilities) = {
+            let state = self.state.read().await;
+            let session = state.sessions.get(session_id)?;
+            if !session.upload_transport_connected {
+                return None;
+            }
+            (
+                session.connection_id,
+                state.router.rtp_capabilities().clone(),
+            )
+        };
 
         let parsed_rtp_parameters = rtp_conversion::parse_rtp_parameters(&rtp_parameters.0)
             .or_else(|| {
@@ -621,7 +541,6 @@ impl Channel {
                 );
                 None
             })?;
-        let router_capabilities = state.router.rtp_capabilities().clone();
         let consumable_rtp_parameters =
             derive_consumable_rtp_parameters(&parsed_rtp_parameters, &router_capabilities)
                 .map_err(|error| {
@@ -646,118 +565,64 @@ impl Channel {
                 return None;
             }
         };
-        let router_producer_id =
-            match state
-                .router
-                .add_producer(session_id, router_media_kind, router_stream_type)
-            {
-                Ok(producer_id) => producer_id,
-                Err(_error) => {
-                    error!(
-                        ?session_id,
-                        "failed to mirror publish request into channel router producer state"
-                    );
-                    return None;
-                }
-            };
-        let producer_id = allocate_wire_producer_id(&mut state.next_producer_id);
-        state.producers.insert(
-            producer_id.clone(),
-            PublishedProducer {
-                owner_session_id: session_id.clone(),
+        let (producer_id, consumer_targets) = {
+            let mut state = self.state.write().await;
+            let result = state.commit_published_track(
+                session_id,
+                publisher_connection_id,
                 stream_type,
                 media_kind,
-                consumable_rtp_parameters: consumable_rtp_parameters.clone(),
-                router_producer_id,
                 transport_media_id,
-                active: true,
-            },
-        );
-
-        let consumer_targets = state
-            .sessions
-            .iter()
-            .filter_map(|(peer_session_id, peer_session)| {
-                if peer_session_id == session_id {
-                    return None;
-                }
-                if !peer_session.download_transport_connected {
-                    return None;
-                }
-                let client_capabilities = peer_session.client_rtp_capabilities.as_ref()?;
-                Some((
-                    peer_session_id.clone(),
-                    peer_session.sender.clone(),
-                    client_capabilities.clone(),
-                ))
-            })
-            .collect::<Vec<_>>();
-        for (peer_session_id, peer_sender, client_capabilities) in consumer_targets {
-            let parsed_capabilities =
-                rtp_conversion::parse_rtp_capabilities(&client_capabilities.0);
-            let capable = parsed_capabilities
-                .as_ref()
-                .is_some_and(|caps| can_consume(&consumable_rtp_parameters, caps));
-            let negotiated_wire_params = parsed_capabilities
-                .and_then(|caps| {
-                    negotiate_consumer_rtp_parameters(&consumable_rtp_parameters, &caps).ok()
-                })
-                .map(|negotiated| {
-                    RtpParameters(rtp_conversion::serialize_rtp_parameters(&negotiated))
-                });
-            let consumer_rtp_parameters =
-                negotiated_wire_params.unwrap_or_else(|| rtp_parameters.clone());
-            if let Err(_error) = transport_adapter
-                .consume_media(&peer_session_id, media_kind, session_id, transport_media_id)
-                .await
-            {
-                warn!(
-                    consumer_session_id = ?peer_session_id,
-                    producer_session_id = ?session_id,
-                    "transport adapter rejected consume media declaration"
-                );
-                continue;
-            }
-            let consumer_id = allocate_wire_consumer_id(&mut state.next_consumer_id);
-            let router_consumer_id = match state.router.add_consumer(
-                &peer_session_id,
-                router_producer_id,
-                router_media_kind,
-                router_stream_type,
-                capable,
-            ) {
-                Ok(id) => id,
-                Err(_error) => {
-                    warn!(
-                        ?peer_session_id,
-                        producer_id = %producer_id,
-                        ?capable,
-                        "router rejected consumer creation"
-                    );
-                    continue;
-                }
-            };
-            state.consumer_index.insert(
-                ConsumerKey {
-                    consumer_session_id: peer_session_id.clone(),
-                    producer_session_id: session_id.clone(),
-                    stream_type,
-                },
-                router_consumer_id,
+                consumable_rtp_parameters,
             );
-            let request =
-                CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
-                    id: consumer_id,
-                    media_kind,
-                    source_id: producer_id.clone(),
-                    rtp_parameters: consumer_rtp_parameters,
-                    session_id: session_id.clone(),
-                    active: true,
-                    stream_type,
-                });
-            let _ = peer_sender.send(SessionOutbound::Request(Box::new(request)));
+            drop(state);
+            result?
+        };
+
+        for target in consumer_targets {
+            self.bootstrap_consumer_target(
+                &target,
+                Some(&rtp_parameters),
+                transport_adapter,
+                ConsumerBootstrapOrigin::Publish,
+            )
+            .await;
         }
         Some(producer_id)
+    }
+
+    async fn bootstrap_consumer_target(
+        &self,
+        target: &PendingConsumerBootstrapTarget,
+        source_rtp_fallback: Option<&RtpParameters>,
+        transport_adapter: &RuntimeTransportAdapter,
+        origin: ConsumerBootstrapOrigin,
+    ) {
+        if let Err(_error) = transport_adapter
+            .consume_media(
+                &target.consumer_session_id,
+                target.media_kind,
+                &target.producer_session_id,
+                target.transport_media_id,
+            )
+            .await
+        {
+            warn!(
+                consumer_session_id = ?target.consumer_session_id,
+                producer_session_id = ?target.producer_session_id,
+                ?origin,
+                "transport adapter rejected consume media declaration"
+            );
+            return;
+        }
+        let outbound = {
+            let mut state = self.state.write().await;
+            state.commit_consumer_bootstrap(target, source_rtp_fallback)
+        };
+        let Some((sender, request)) = outbound else {
+            return;
+        };
+        let _ = sender.send(SessionOutbound::Request(Box::new(request)));
     }
 
     /// Handle a `PRODUCTION_CHANGE` message: pause or resume the session's producer
@@ -936,6 +801,206 @@ impl ChannelState {
         self.consumer_index.retain(|key, _consumer_id| {
             key.consumer_session_id != *session_id && key.producer_session_id != *session_id
         });
+    }
+
+    fn late_join_consumer_targets(
+        &self,
+        session_id: &SessionId,
+    ) -> Vec<PendingConsumerBootstrapTarget> {
+        let Some(session) = self.sessions.get(session_id) else {
+            return Vec::new();
+        };
+        if !session.download_transport_connected || session.client_rtp_capabilities.is_none() {
+            return Vec::new();
+        }
+
+        self.producers
+            .iter()
+            .filter_map(|(producer_wire_id, producer)| {
+                if producer.owner_session_id == *session_id {
+                    return None;
+                }
+                Some(PendingConsumerBootstrapTarget {
+                    consumer_session_id: session_id.clone(),
+                    consumer_connection_id: session.connection_id,
+                    producer_session_id: producer.owner_session_id.clone(),
+                    producer_wire_id: producer_wire_id.clone(),
+                    stream_type: producer.stream_type,
+                    media_kind: producer.media_kind,
+                    transport_media_id: producer.transport_media_id,
+                })
+            })
+            .collect()
+    }
+
+    fn publish_consumer_targets(
+        &self,
+        producer_session_id: &SessionId,
+        producer_wire_id: &str,
+        stream_type: StreamType,
+        media_kind: SignalingMediaKind,
+        transport_media_id: TransportMediaId,
+    ) -> Vec<PendingConsumerBootstrapTarget> {
+        self.sessions
+            .iter()
+            .filter_map(|(peer_session_id, peer_session)| {
+                if peer_session_id == producer_session_id
+                    || !peer_session.download_transport_connected
+                    || peer_session.client_rtp_capabilities.is_none()
+                {
+                    return None;
+                }
+                Some(PendingConsumerBootstrapTarget {
+                    consumer_session_id: peer_session_id.clone(),
+                    consumer_connection_id: peer_session.connection_id,
+                    producer_session_id: producer_session_id.clone(),
+                    producer_wire_id: producer_wire_id.to_owned(),
+                    stream_type,
+                    media_kind,
+                    transport_media_id,
+                })
+            })
+            .collect()
+    }
+
+    fn commit_published_track(
+        &mut self,
+        session_id: &SessionId,
+        publisher_connection_id: u64,
+        stream_type: StreamType,
+        media_kind: SignalingMediaKind,
+        transport_media_id: TransportMediaId,
+        consumable_rtp_parameters: RouterRtpParameters,
+    ) -> Option<(String, Vec<PendingConsumerBootstrapTarget>)> {
+        let session = self.sessions.get(session_id)?;
+        if session.connection_id != publisher_connection_id || !session.upload_transport_connected {
+            return None;
+        }
+        let router_producer_id = match self.router.add_producer(
+            session_id,
+            to_router_media_kind(media_kind),
+            to_router_stream_type(stream_type),
+        ) {
+            Ok(producer_id) => producer_id,
+            Err(_error) => {
+                error!(
+                    ?session_id,
+                    "failed to mirror publish request into channel router producer state"
+                );
+                return None;
+            }
+        };
+        let producer_id = allocate_wire_producer_id(&mut self.next_producer_id);
+        self.producers.insert(
+            producer_id.clone(),
+            PublishedProducer {
+                owner_session_id: session_id.clone(),
+                stream_type,
+                media_kind,
+                consumable_rtp_parameters,
+                router_producer_id,
+                transport_media_id,
+                active: true,
+            },
+        );
+        let consumer_targets = self.publish_consumer_targets(
+            session_id,
+            &producer_id,
+            stream_type,
+            media_kind,
+            transport_media_id,
+        );
+        Some((producer_id, consumer_targets))
+    }
+
+    fn commit_consumer_bootstrap(
+        &mut self,
+        target: &PendingConsumerBootstrapTarget,
+        source_rtp_fallback: Option<&RtpParameters>,
+    ) -> Option<(mpsc::UnboundedSender<SessionOutbound>, CurrentServerRequest)> {
+        let (sender, client_capabilities) = {
+            let session = self.sessions.get(&target.consumer_session_id)?;
+            if session.connection_id != target.consumer_connection_id
+                || !session.download_transport_connected
+            {
+                return None;
+            }
+            (
+                session.sender.clone(),
+                session.client_rtp_capabilities.clone()?,
+            )
+        };
+        let producer = self.producers.get(&target.producer_wire_id)?;
+        if producer.owner_session_id != target.producer_session_id
+            || producer.stream_type != target.stream_type
+            || producer.media_kind != target.media_kind
+            || producer.transport_media_id != target.transport_media_id
+        {
+            return None;
+        }
+        let producer_owner_session_id = producer.owner_session_id.clone();
+        let producer_stream_type = producer.stream_type;
+        let producer_media_kind = producer.media_kind;
+        let producer_router_producer_id = producer.router_producer_id;
+        let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
+        let producer_active = producer.active;
+
+        let parsed_capabilities = rtp_conversion::parse_rtp_capabilities(&client_capabilities.0);
+        let capable = parsed_capabilities
+            .as_ref()
+            .is_some_and(|caps| can_consume(&producer_consumable_rtp_parameters, caps));
+        let negotiated_wire_params = parsed_capabilities
+            .as_ref()
+            .and_then(|caps| {
+                negotiate_consumer_rtp_parameters(&producer_consumable_rtp_parameters, caps).ok()
+            })
+            .map(|negotiated| RtpParameters(rtp_conversion::serialize_rtp_parameters(&negotiated)));
+        let consumer_rtp_parameters = negotiated_wire_params.unwrap_or_else(|| {
+            source_rtp_fallback.cloned().unwrap_or_else(|| {
+                RtpParameters(rtp_conversion::serialize_rtp_parameters(
+                    &producer_consumable_rtp_parameters,
+                ))
+            })
+        });
+        let consumer_id = allocate_wire_consumer_id(&mut self.next_consumer_id);
+        let router_consumer_id = match self.router.add_consumer(
+            &target.consumer_session_id,
+            producer_router_producer_id,
+            to_router_media_kind(producer_media_kind),
+            to_router_stream_type(producer_stream_type),
+            capable,
+        ) {
+            Ok(id) => id,
+            Err(_error) => {
+                warn!(
+                    consumer_session_id = ?target.consumer_session_id,
+                    producer_id = %target.producer_wire_id,
+                    ?capable,
+                    "router rejected consumer creation"
+                );
+                return None;
+            }
+        };
+        self.consumer_index.insert(
+            ConsumerKey {
+                consumer_session_id: target.consumer_session_id.clone(),
+                producer_session_id: producer_owner_session_id.clone(),
+                stream_type: producer_stream_type,
+            },
+            router_consumer_id,
+        );
+        Some((
+            sender,
+            CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
+                id: consumer_id,
+                media_kind: producer_media_kind,
+                source_id: target.producer_wire_id.clone(),
+                rtp_parameters: consumer_rtp_parameters,
+                session_id: producer_owner_session_id,
+                active: producer_active,
+                stream_type: producer_stream_type,
+            }),
+        ))
     }
 }
 

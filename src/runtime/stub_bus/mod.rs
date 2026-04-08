@@ -1,7 +1,11 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::extract::ws::Message;
 use serde_json::Value;
+use tokio::time::sleep;
 use tracing::{debug, trace};
 
 use super::channel::Channel;
@@ -43,6 +47,15 @@ pub(super) enum StubWebRtcEvent {
     SessionClosed {
         session_id: SessionId,
     },
+    PublishMediaRequested {
+        session_id: SessionId,
+        media_kind: MediaKind,
+    },
+    ConsumeMediaRequested {
+        consumer_session_id: SessionId,
+        source_session_id: SessionId,
+        media_kind: MediaKind,
+    },
     TransportConnectRequested {
         session_id: SessionId,
         direction: TransportConnectDirection,
@@ -62,6 +75,13 @@ pub(super) enum StubWebRtcEvent {
 pub(crate) struct StubWebRtcAdapter {
     events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
     next_media_id: Arc<AtomicU64>,
+    delays: Arc<Mutex<StubWebRtcAdapterDelays>>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct StubWebRtcAdapterDelays {
+    publish_media: Option<Duration>,
+    consume_media: Option<Duration>,
 }
 
 #[allow(
@@ -80,11 +100,49 @@ impl StubWebRtcAdapter {
         }
     }
 
+    fn delay_for_publish_media(&self) -> Option<Duration> {
+        match self.delays.lock() {
+            Ok(delays) => delays.publish_media,
+            Err(poisoned) => poisoned.into_inner().publish_media,
+        }
+    }
+
+    fn delay_for_consume_media(&self) -> Option<Duration> {
+        match self.delays.lock() {
+            Ok(delays) => delays.consume_media,
+            Err(poisoned) => poisoned.into_inner().consume_media,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn snapshot_events(&self) -> Vec<StubWebRtcEvent> {
         match self.events.lock() {
             Ok(events) => events.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_publish_media_delay(&self, delay: Option<Duration>) {
+        match self.delays.lock() {
+            Ok(mut delays) => {
+                delays.publish_media = delay;
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().publish_media = delay;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_consume_media_delay(&self, delay: Option<Duration>) {
+        match self.delays.lock() {
+            Ok(mut delays) => {
+                delays.consume_media = delay;
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().consume_media = delay;
+            }
         }
     }
 }
@@ -153,9 +211,16 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn publish_media(
         &self,
-        _session_id: &SessionId,
-        _media_kind: MediaKind,
+        session_id: &SessionId,
+        media_kind: MediaKind,
     ) -> Result<TransportMediaId, TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::PublishMediaRequested {
+            session_id: session_id.clone(),
+            media_kind,
+        });
+        if let Some(delay) = self.delay_for_publish_media() {
+            sleep(delay).await;
+        }
         let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
         Ok(TransportMediaId::new(id))
     }
@@ -166,9 +231,18 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn consume_media(
         &self,
-        _consumer_session_id: &SessionId,
-        _media_kind: MediaKind,
+        consumer_session_id: &SessionId,
+        media_kind: MediaKind,
+        source_session_id: &SessionId,
     ) -> Result<TransportMediaId, TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::ConsumeMediaRequested {
+            consumer_session_id: consumer_session_id.clone(),
+            source_session_id: source_session_id.clone(),
+            media_kind,
+        });
+        if let Some(delay) = self.delay_for_consume_media() {
+            sleep(delay).await;
+        }
         let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
         Ok(TransportMediaId::new(id))
     }

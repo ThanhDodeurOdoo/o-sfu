@@ -6,15 +6,16 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 mod channel_tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use o_sfu_router::SessionPermissions as RouterSessionPermissions;
     use tokio::sync::mpsc;
+    use tokio::{task::yield_now, time::timeout};
 
     use super::super::{
         ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound,
     };
-    use crate::runtime::stub_bus::StubWebRtcAdapter;
+    use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
     use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
     use crate::signaling::{
         current_protocol::{CurrentServerMessage, CurrentWebSocketCloseCode},
@@ -854,12 +855,94 @@ mod channel_tests {
         (channel, adapter, rx1, rx2)
     }
 
+    async fn setup_late_join_bootstrap_scenario() -> (
+        Arc<super::super::Channel>,
+        RuntimeTransportAdapter,
+        Arc<StubWebRtcAdapter>,
+        mpsc::UnboundedReceiver<SessionOutbound>,
+        mpsc::UnboundedReceiver<SessionOutbound>,
+    ) {
+        let manager = ChannelManager::new();
+        let channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let (publisher_tx, publisher_rx) = test_sender();
+        let (subscriber_tx, subscriber_rx) = test_sender();
+        channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                publisher_tx,
+                10,
+            )
+            .await
+            .unwrap();
+        channel
+            .join_session(
+                SessionId::Integer(2),
+                None,
+                SessionPermissions::default(),
+                subscriber_tx,
+                10,
+            )
+            .await
+            .unwrap();
+
+        let (transport_adapter, stub) = stub_adapter();
+        channel
+            .set_transport_connected(&SessionId::Integer(1), TransportConnectDirection::Upload)
+            .await;
+        channel
+            .set_transport_connected(&SessionId::Integer(1), TransportConnectDirection::Download)
+            .await;
+        channel
+            .set_client_rtp_capabilities(&SessionId::Integer(1), test_client_rtp_capabilities())
+            .await;
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await;
+
+        (
+            channel,
+            transport_adapter,
+            stub,
+            publisher_rx,
+            subscriber_rx,
+        )
+    }
+
     fn drain_outbound(rx: &mut mpsc::UnboundedReceiver<SessionOutbound>) -> Vec<SessionOutbound> {
         let mut msgs = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             msgs.push(msg);
         }
         msgs
+    }
+
+    async fn wait_for_stub_event(
+        adapter: &StubWebRtcAdapter,
+        predicate: impl Fn(&StubWebRtcEvent) -> bool,
+    ) {
+        let wait_result = timeout(Duration::from_secs(1), async {
+            loop {
+                if adapter.snapshot_events().iter().any(&predicate) {
+                    break;
+                }
+                yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            wait_result.is_ok(),
+            "timed out waiting for stub transport event"
+        );
     }
 
     #[tokio::test]
@@ -931,6 +1014,77 @@ mod channel_tests {
     }
 
     #[tokio::test]
+    async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
+        let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+        let (stub_adapter, _) = stub_adapter();
+        let RuntimeTransportAdapter::Stub(stub) = &stub_adapter else {
+            panic!("expected stub transport adapter");
+        };
+        stub.set_publish_media_delay(Some(Duration::from_millis(200)));
+
+        let publish_task = tokio::spawn({
+            let channel = Arc::clone(&channel);
+            let adapter = stub_adapter.clone();
+            async move {
+                channel
+                    .publish_track(
+                        &SessionId::Integer(1),
+                        StreamType::Camera,
+                        MediaKind::Video,
+                        test_video_rtp_parameters(),
+                        &adapter,
+                    )
+                    .await
+            }
+        });
+
+        wait_for_stub_event(stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::PublishMediaRequested {
+                    session_id: SessionId::Integer(1),
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .await;
+
+        let update_result = timeout(Duration::from_millis(50), async {
+            channel
+                .update_session_info(
+                    &SessionId::Integer(2),
+                    SessionInfo {
+                        is_talking: Some(true),
+                        ..SessionInfo::default()
+                    },
+                    false,
+                )
+                .await;
+        })
+        .await;
+        assert!(
+            update_result.is_ok(),
+            "session info update should not wait for publish transport declaration"
+        );
+
+        assert!(publish_task.await.unwrap().is_some());
+        assert!(
+            drain_outbound(&mut rx1).iter().any(|msg| matches!(
+                msg,
+                SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+            )),
+            "publisher should still receive the concurrent info broadcast"
+        );
+        assert!(
+            drain_outbound(&mut rx2).iter().any(|msg| matches!(
+                msg,
+                SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+            )),
+            "peer should still receive the concurrent info broadcast"
+        );
+    }
+
+    #[tokio::test]
     async fn production_change_updates_screen_sharing_info() {
         let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
 
@@ -962,6 +1116,81 @@ mod channel_tests {
         } else {
             panic!("expected SessionInfoChanged for screen sharing");
         }
+    }
+
+    #[tokio::test]
+    async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_adapter() {
+        let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+            setup_late_join_bootstrap_scenario().await;
+        drain_outbound(&mut publisher_rx);
+        drain_outbound(&mut subscriber_rx);
+
+        channel
+            .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+            .await;
+        channel
+            .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
+            .await;
+        stub.set_consume_media_delay(Some(Duration::from_millis(200)));
+
+        let bootstrap_task = tokio::spawn({
+            let channel = Arc::clone(&channel);
+            let adapter = transport_adapter.clone();
+            async move {
+                channel
+                    .bootstrap_late_join_consumers(&SessionId::Integer(2), &adapter)
+                    .await;
+            }
+        });
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::ConsumeMediaRequested {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .await;
+
+        let update_result = timeout(Duration::from_millis(50), async {
+            channel
+                .update_session_info(
+                    &SessionId::Integer(1),
+                    SessionInfo {
+                        is_talking: Some(true),
+                        ..SessionInfo::default()
+                    },
+                    false,
+                )
+                .await;
+        })
+        .await;
+        assert!(
+            update_result.is_ok(),
+            "session info update should not wait for late-join consumer declaration"
+        );
+
+        bootstrap_task.await.unwrap();
+        assert!(
+            drain_outbound(&mut publisher_rx).iter().any(|msg| matches!(
+                msg,
+                SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+            )),
+            "publisher should still receive the concurrent info broadcast"
+        );
+        assert!(
+            drain_outbound(&mut subscriber_rx)
+                .iter()
+                .any(|msg| matches!(
+                    msg,
+                    SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+                        | SessionOutbound::Request(_)
+                )),
+            "late joiner should receive outbound traffic while bootstrap is running"
+        );
     }
 
     #[tokio::test]

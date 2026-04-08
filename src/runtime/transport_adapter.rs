@@ -148,7 +148,11 @@ impl RuntimeTransportAdapter {
         source_media_id: TransportMediaId,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.consume_media(consumer_session_id, media_kind).await,
+            Self::Stub(adapter) => {
+                adapter
+                    .consume_media(consumer_session_id, media_kind, source_session_id)
+                    .await
+            }
             Self::Rtc(adapter) => {
                 adapter
                     .add_send_media(
