@@ -132,7 +132,9 @@ fn snapshot_and_pump(
     // Two-pass: collect matching routes, then write to destination sessions.
     // Separating the read of the route index from the mutable session access
     // avoids a borrow conflict on `state`.
+    let media_stats_now = Instant::now();
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
+        state.record_incoming_media(source_session, media.mid, media.data.len(), media_stats_now);
         if let Some(destinations) = state
             .media_route_index
             .get(&(source_session.clone(), media.mid))

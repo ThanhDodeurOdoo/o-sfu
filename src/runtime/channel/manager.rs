@@ -5,6 +5,7 @@ use o_sfu_router::RouterId;
 use tokio::sync::{RwLock, mpsc};
 
 use super::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
+use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::{
     http::{CreateChannelQuery, StatsResponse},
     shared::{SessionId, SessionPermissions},
@@ -102,7 +103,7 @@ impl ChannelManager {
         channel.has_session(session_id).await
     }
 
-    pub async fn stats(&self) -> StatsResponse {
+    pub async fn stats(&self, transport_adapter: &RuntimeTransportAdapter) -> StatsResponse {
         let channels = {
             let state = self.state.read().await;
             state
@@ -113,7 +114,7 @@ impl ChannelManager {
         };
         let mut stats = Vec::with_capacity(channels.len());
         for channel in channels {
-            stats.push(channel.stats().await);
+            stats.push(channel.stats(transport_adapter).await);
         }
         stats
     }

@@ -6,6 +6,7 @@ use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
+    shared::StreamType as SignalingStreamType,
     webrtc::{DtlsParameters, MediaKind as SignalingMediaKind},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
@@ -22,6 +23,14 @@ pub(crate) enum TransportAdapterError {
     TransportUnavailable,
     InvalidInput,
     UnsupportedFeature,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct IncomingBitrateSnapshot {
+    pub(crate) total: u64,
+    pub(crate) audio: u64,
+    pub(crate) camera: u64,
+    pub(crate) screen: u64,
 }
 
 /// Opaque identifier for a media line allocated by the transport adapter.
@@ -128,19 +137,21 @@ impl RuntimeTransportAdapter {
     pub(crate) async fn publish_media(
         &self,
         session_id: &SessionId,
+        stream_type: SignalingStreamType,
         media_kind: SignalingMediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .publish_media(session_id, media_kind, rtp_parameters)
+                    .publish_media(session_id, stream_type, media_kind, rtp_parameters)
                     .await
             }
             Self::Rtc(adapter) => {
                 adapter
                     .add_recv_media(
                         session_id,
+                        stream_type,
                         signaling_to_str0m_media_kind(media_kind),
                         rtp_parameters,
                     )
@@ -180,6 +191,16 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
+        }
+    }
+
+    pub(crate) fn incoming_bitrate_snapshot(
+        &self,
+        session_ids: &[SessionId],
+    ) -> IncomingBitrateSnapshot {
+        match self {
+            Self::Stub(_adapter) => IncomingBitrateSnapshot::default(),
+            Self::Rtc(adapter) => adapter.incoming_bitrate_snapshot(session_ids),
         }
     }
 }

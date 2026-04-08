@@ -1,4 +1,8 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{
+    slice,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 use o_sfu_router::{
     RtpCapabilities as RouterRtpCapabilities, RtpEncoding as RouterRtpEncoding,
@@ -13,7 +17,7 @@ use crate::{
     runtime::transport_adapter::{TransportAdapterError, TransportConnectDirection},
     signaling::{
         current_protocol::CurrentTransportBootstrapPayload,
-        shared::SessionId,
+        shared::{SessionId, StreamType},
         webrtc::{
             DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
             PublishOptionsByMediaKind, RtpCapabilities as WireRtpCapabilities, SctpParameters,
@@ -456,7 +460,12 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
-        .add_recv_media(&session_id, Str0mMediaKind::Audio, &rtp_parameters)
+        .add_recv_media(
+            &session_id,
+            StreamType::Audio,
+            Str0mMediaKind::Audio,
+            &rtp_parameters,
+        )
         .await;
     assert!(transport_media_id.is_ok());
     let Some(transport_media_id) = transport_media_id.ok() else {
@@ -517,6 +526,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let source_media_id = adapter
         .add_recv_media(
             &producer_session_id,
+            StreamType::Audio,
             Str0mMediaKind::Audio,
             &producer_rtp_parameters,
         )
@@ -567,4 +577,98 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
         };
         assert_eq!(*stream_tx.ssrc(), 61_000);
     }
+}
+
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "the test intentionally inspects and seeds the guarded rtc state in one contiguous scope"
+)]
+#[tokio::test]
+async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
+    let adapter = RtcTransportAdapter::default();
+    let session_id = SessionId::Integer(21);
+    let rtp_parameters = sample_router_rtp_parameters("cam-up", 77_777);
+
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    assert!(
+        adapter
+            .add_recv_media(
+                &session_id,
+                StreamType::Camera,
+                Str0mMediaKind::Video,
+                &rtp_parameters,
+            )
+            .await
+            .is_ok()
+    );
+
+    {
+        assert!(!adapter.bootstrap_state.is_poisoned());
+        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
+            return;
+        };
+        bootstrap_state.record_incoming_media(
+            &session_id,
+            Mid::from("cam-up"),
+            120,
+            Instant::now(),
+        );
+    }
+
+    let snapshot = adapter.incoming_bitrate_snapshot(slice::from_ref(&session_id));
+    assert_eq!(snapshot.total, 960);
+    assert_eq!(snapshot.audio, 0);
+    assert_eq!(snapshot.camera, 960);
+    assert_eq!(snapshot.screen, 0);
+}
+
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "the test intentionally inspects and seeds the guarded rtc state in one contiguous scope"
+)]
+#[tokio::test]
+async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
+    let adapter = RtcTransportAdapter::default();
+    let session_id = SessionId::Integer(22);
+    let rtp_parameters = sample_router_rtp_parameters("aud-up", 88_888);
+
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    assert!(
+        adapter
+            .add_recv_media(
+                &session_id,
+                StreamType::Audio,
+                Str0mMediaKind::Audio,
+                &rtp_parameters,
+            )
+            .await
+            .is_ok()
+    );
+
+    let now = Instant::now();
+    let snapshot = {
+        assert!(!adapter.bootstrap_state.is_poisoned());
+        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
+            return;
+        };
+        bootstrap_state.record_incoming_media(&session_id, Mid::from("aud-up"), 64, now);
+        bootstrap_state.incoming_bitrate_snapshot_at(
+            slice::from_ref(&session_id),
+            now + Duration::from_secs(2),
+        )
+    };
+    assert_eq!(snapshot.total, 0);
+    assert_eq!(snapshot.audio, 0);
+    assert_eq!(snapshot.camera, 0);
+    assert_eq!(snapshot.screen, 0);
 }

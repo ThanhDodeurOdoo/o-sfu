@@ -17,15 +17,20 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use super::{
-    transport_adapter::{TransportAdapterError, TransportConnectDirection},
+    transport_adapter::{
+        IncomingBitrateSnapshot, TransportAdapterError, TransportConnectDirection,
+    },
     transport_bootstrap,
 };
 use crate::config::RtcPortRange;
 use crate::signaling::{
-    current_protocol::CurrentTransportBootstrapPayload, shared::SessionId, webrtc::DtlsParameters,
+    current_protocol::CurrentTransportBootstrapPayload,
+    shared::{SessionId, StreamType},
+    webrtc::DtlsParameters,
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::config::Fingerprint;
@@ -47,6 +52,8 @@ mod validation;
 
 #[cfg(test)]
 mod tests;
+
+const BITRATE_WINDOW: Duration = Duration::from_secs(1);
 
 // ---------------------------------------------------------------------------
 // Internal types shared across submodules
@@ -96,11 +103,77 @@ pub(super) struct MediaRouteDestination {
 /// Media route source key: `(producer session, producer mid)`.
 pub(super) type MediaRouteKey = (SessionId, Mid);
 
+#[derive(Debug, Default)]
+struct SessionIncomingBitrates {
+    audio: RecentBitrate,
+    camera: RecentBitrate,
+    screen: RecentBitrate,
+}
+
+impl SessionIncomingBitrates {
+    fn record(&mut self, stream_type: StreamType, now: Instant, payload_bytes: usize) {
+        match stream_type {
+            StreamType::Audio => self.audio.record(now, payload_bytes),
+            StreamType::Camera => self.camera.record(now, payload_bytes),
+            StreamType::Screen => self.screen.record(now, payload_bytes),
+        }
+    }
+
+    fn snapshot(&self, now: Instant) -> IncomingBitrateSnapshot {
+        let audio = self.audio.snapshot(now);
+        let camera = self.camera.snapshot(now);
+        let screen = self.screen.snapshot(now);
+        IncomingBitrateSnapshot {
+            total: audio.saturating_add(camera).saturating_add(screen),
+            audio,
+            camera,
+            screen,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecentBitrate {
+    window_start: Instant,
+    bytes_in_window: u64,
+}
+
+impl Default for RecentBitrate {
+    fn default() -> Self {
+        Self {
+            window_start: Instant::now(),
+            bytes_in_window: 0,
+        }
+    }
+}
+
+impl RecentBitrate {
+    fn record(&mut self, now: Instant, payload_bytes: usize) {
+        if now.duration_since(self.window_start) >= BITRATE_WINDOW {
+            self.window_start = now;
+            self.bytes_in_window = 0;
+        }
+        self.bytes_in_window = self
+            .bytes_in_window
+            .saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
+    }
+
+    fn snapshot(&self, now: Instant) -> u64 {
+        if now.duration_since(self.window_start) >= BITRATE_WINDOW {
+            0
+        } else {
+            self.bytes_in_window.saturating_mul(8)
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<SessionId, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, Vec<MediaRouteDestination>>,
+    recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
+    incoming_bitrates_by_session: BTreeMap<SessionId, SessionIncomingBitrates>,
     mid_registry: BTreeMap<u64, Mid>,
     next_media_id: u64,
 }
@@ -115,6 +188,45 @@ impl RtcBootstrapState {
 
     fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
         self.mid_registry.get(&transport_media_id.as_u64()).copied()
+    }
+
+    fn record_incoming_media(
+        &mut self,
+        source_session_id: &SessionId,
+        source_mid: Mid,
+        payload_bytes: usize,
+        now: Instant,
+    ) {
+        let Some(stream_type) = self
+            .recv_stream_types
+            .get(&(source_session_id.clone(), source_mid))
+            .copied()
+        else {
+            return;
+        };
+        self.incoming_bitrates_by_session
+            .entry(source_session_id.clone())
+            .or_default()
+            .record(stream_type, now, payload_bytes);
+    }
+
+    fn incoming_bitrate_snapshot_at(
+        &self,
+        session_ids: &[SessionId],
+        now: Instant,
+    ) -> IncomingBitrateSnapshot {
+        let mut snapshot = IncomingBitrateSnapshot::default();
+        for session_id in session_ids {
+            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_id) else {
+                continue;
+            };
+            let session_snapshot = session_bitrates.snapshot(now);
+            snapshot.total = snapshot.total.saturating_add(session_snapshot.total);
+            snapshot.audio = snapshot.audio.saturating_add(session_snapshot.audio);
+            snapshot.camera = snapshot.camera.saturating_add(session_snapshot.camera);
+            snapshot.screen = snapshot.screen.saturating_add(session_snapshot.screen);
+        }
+        snapshot
     }
 }
 
@@ -216,6 +328,12 @@ impl RtcTransportAdapter {
                 .mid_registry
                 .retain(|_id, mid| !stale_mids.contains(mid));
         }
+        bootstrap_state
+            .recv_stream_types
+            .retain(|(source_session, _), _| source_session != session_id);
+        bootstrap_state
+            .incoming_bitrates_by_session
+            .remove(session_id);
         // Remove all routes where this session is the source.
         bootstrap_state
             .media_route_index
@@ -243,6 +361,7 @@ impl RtcTransportAdapter {
     pub(super) async fn add_recv_media(
         &self,
         session_id: &SessionId,
+        stream_type: StreamType,
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
@@ -264,10 +383,14 @@ impl RtcTransportAdapter {
             }
         }
         session_state.recv_mids.push(mid);
+        bootstrap_state
+            .recv_stream_types
+            .insert((session_id.clone(), mid), stream_type);
         let transport_media_id = bootstrap_state.register_mid(mid);
         debug!(
             session_id = ?session_id,
             ?transport_media_id,
+            ?stream_type,
             ?media_kind,
             "declared recv-only media on rtc session for incoming producer RTP"
         );
@@ -502,6 +625,16 @@ impl RtcTransportAdapter {
         };
         *state = TransportLifecycleState::Connected;
         Ok(())
+    }
+
+    pub(super) fn incoming_bitrate_snapshot(
+        &self,
+        session_ids: &[SessionId],
+    ) -> IncomingBitrateSnapshot {
+        let Ok(bootstrap_state) = self.bootstrap_state.lock() else {
+            return IncomingBitrateSnapshot::default();
+        };
+        bootstrap_state.incoming_bitrate_snapshot_at(session_ids, Instant::now())
     }
 }
 

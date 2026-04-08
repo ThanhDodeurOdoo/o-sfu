@@ -11,7 +11,9 @@ use tokio::sync::{RwLock, mpsc};
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use super::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
+use super::transport_adapter::{
+    IncomingBitrateSnapshot, RuntimeTransportAdapter, TransportMediaId,
+};
 
 use crate::signaling::{
     bundle_api::bundle_session_info_key,
@@ -221,19 +223,16 @@ impl Channel {
         self.state.read().await.router.rtp_capabilities().clone()
     }
 
-    pub async fn stats(&self) -> ChannelStats {
+    pub async fn stats(&self, transport_adapter: &RuntimeTransportAdapter) -> ChannelStats {
         let state = self.state.read().await;
+        let session_ids = state.sessions.keys().cloned().collect::<Vec<_>>();
+        let incoming_bitrate = transport_adapter.incoming_bitrate_snapshot(&session_ids);
         ChannelStats {
             create_date: self.create_date.clone(),
             uuid: self.uuid.clone(),
             remote_address: self.remote_address.clone(),
             sessions_stats: SessionsStats {
-                incoming_bit_rate: IncomingBitRateStats {
-                    total: 0,
-                    screen: 0,
-                    audio: 0,
-                    camera: 0,
-                },
+                incoming_bit_rate: incoming_bitrate_stats(incoming_bitrate),
                 count: state.router.session_count(),
                 camera_count: state.router.camera_count(),
                 screen_count: state.router.screen_count(),
@@ -567,7 +566,7 @@ impl Channel {
                 .ok()?;
 
         let transport_media_id = match transport_adapter
-            .publish_media(session_id, media_kind, &parsed_rtp_parameters)
+            .publish_media(session_id, stream_type, media_kind, &parsed_rtp_parameters)
             .await
         {
             Ok(id) => id,
@@ -788,6 +787,15 @@ impl Channel {
 
     pub(super) async fn is_empty(&self) -> bool {
         self.state.read().await.sessions.is_empty()
+    }
+}
+
+fn incoming_bitrate_stats(snapshot: IncomingBitrateSnapshot) -> IncomingBitRateStats {
+    IncomingBitRateStats {
+        total: snapshot.total,
+        screen: snapshot.screen,
+        audio: snapshot.audio,
+        camera: snapshot.camera,
     }
 }
 

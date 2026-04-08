@@ -55,7 +55,7 @@ async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
 
 async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     state.metrics.record_http_stats_request();
-    axum::Json(state.channels.stats().await)
+    axum::Json(state.channels.stats(&state.transport_adapter).await)
 }
 
 async fn channel(

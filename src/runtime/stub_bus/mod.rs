@@ -5,6 +5,7 @@ use std::{
 
 use axum::extract::ws::Message;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 use tracing::{debug, trace};
 
@@ -22,11 +23,10 @@ use crate::signaling::{
         CurrentPublishTrackResponse, CurrentServerRequest, CurrentTransportBootstrapPayload,
         CurrentTransportConnectPayload, CurrentWebSocketCloseCode,
     },
-    shared::SessionId,
+    shared::{SessionId, StreamType},
     webrtc::{DtlsParameters, MediaKind, RtpCapabilities},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 mod bootstrap;
 mod codec;
@@ -50,6 +50,7 @@ pub(super) enum StubWebRtcEvent {
     },
     PublishMediaRequested {
         session_id: SessionId,
+        stream_type: StreamType,
         media_kind: MediaKind,
     },
     ConsumeMediaRequested {
@@ -213,11 +214,13 @@ impl StubWebRtcAdapter {
     pub(super) async fn publish_media(
         &self,
         session_id: &SessionId,
+        stream_type: StreamType,
         media_kind: MediaKind,
         _rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::PublishMediaRequested {
             session_id: session_id.clone(),
+            stream_type,
             media_kind,
         });
         if let Some(delay) = self.delay_for_publish_media() {
