@@ -8,7 +8,7 @@ use serde_json::json;
 use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 use tokio::time::sleep;
 
-use super::{RtcTransportAdapter, validation};
+use super::{RtcTransportAdapter, packet_loop::take_write_payload, validation};
 use crate::{
     runtime::transport_adapter::{TransportAdapterError, TransportConnectDirection},
     signaling::{
@@ -104,6 +104,22 @@ fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {
         vec![RouterRtpEncoding::new().with_ssrc(ssrc)],
     )
     .with_mid(mid.to_owned())
+}
+
+#[test]
+fn take_write_payload_clones_for_non_final_destination() {
+    let mut data = vec![1, 2, 3, 4];
+    let payload = take_write_payload(&mut data, false);
+    assert_eq!(payload, vec![1, 2, 3, 4]);
+    assert_eq!(data, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn take_write_payload_moves_for_final_destination() {
+    let mut data = vec![5, 6, 7, 8];
+    let payload = take_write_payload(&mut data, true);
+    assert_eq!(payload, vec![5, 6, 7, 8]);
+    assert!(data.is_empty());
 }
 
 #[test]

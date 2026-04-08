@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    mem::take,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -143,11 +144,25 @@ fn snapshot_and_pump(
             }
         }
     }
-    for &(media_idx, ref dest_session, dest_mid) in &buffers.forwards {
-        let Some((_source_session, media)) = buffers.pending_media.get(media_idx) else {
+    for forward_idx in 0..buffers.forwards.len() {
+        let Some((media_idx, dest_session, dest_mid)) =
+            buffers
+                .forwards
+                .get(forward_idx)
+                .map(|(media_idx, dest_session, dest_mid)| {
+                    (*media_idx, dest_session.clone(), *dest_mid)
+                })
+        else {
             continue;
         };
-        let Some(dest_session_state) = state.sessions.get_mut(dest_session) else {
+        let is_last_destination = buffers
+            .forwards
+            .get(forward_idx + 1)
+            .is_none_or(|(next_media_idx, _, _)| *next_media_idx != media_idx);
+        let Some((_source_session, media)) = buffers.pending_media.get_mut(media_idx) else {
+            continue;
+        };
+        let Some(dest_session_state) = state.sessions.get_mut(&dest_session) else {
             continue;
         };
         let Some(writer) = dest_session_state.rtc.writer(dest_mid) else {
@@ -163,9 +178,12 @@ fn snapshot_and_pump(
         if media.audio_start_of_talk_spurt {
             data_writer = data_writer.start_of_talkspurt(true);
         }
-        if let Err(error) =
-            data_writer.write(pt, media.network_time, media.time, media.data.clone())
-        {
+        if let Err(error) = data_writer.write(
+            pt,
+            media.network_time,
+            media.time,
+            take_write_payload(&mut media.data, is_last_destination),
+        ) {
             warn!(
                 ?dest_session,
                 ?error,
@@ -227,6 +245,14 @@ fn drain_single_session(
                 return None;
             }
         }
+    }
+}
+
+pub(super) fn take_write_payload(data: &mut Vec<u8>, is_last_destination: bool) -> Vec<u8> {
+    if is_last_destination {
+        take(data)
+    } else {
+        data.clone()
     }
 }
 
