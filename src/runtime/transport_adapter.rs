@@ -203,6 +203,62 @@ impl RuntimeTransportAdapter {
             Self::Rtc(adapter) => adapter.incoming_bitrate_snapshot(session_ids),
         }
     }
+
+    /// Update whether a producer media line is allowed to forward packets.
+    pub(crate) async fn set_producer_active(
+        &self,
+        session_id: &SessionId,
+        transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .set_producer_active(session_id, transport_media_id, active)
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .set_producer_active(session_id, transport_media_id, active)
+                    .await
+            }
+        }
+    }
+
+    /// Update whether one consumer route is allowed to forward packets.
+    pub(crate) async fn set_consumer_active(
+        &self,
+        consumer_session_id: &SessionId,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_id: &SessionId,
+        source_transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .set_consumer_active(
+                        consumer_session_id,
+                        consumer_transport_media_id,
+                        source_session_id,
+                        source_transport_media_id,
+                        active,
+                    )
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .set_consumer_active(
+                        consumer_session_id,
+                        consumer_transport_media_id,
+                        source_session_id,
+                        source_transport_media_id,
+                        active,
+                    )
+                    .await
+            }
+        }
+    }
 }
 
 fn signaling_to_str0m_media_kind(kind: SignalingMediaKind) -> Str0mMediaKind {

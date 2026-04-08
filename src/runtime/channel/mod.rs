@@ -90,10 +90,11 @@ struct ChannelState {
     next_consumer_id: u64,
     recording_state: RecordingState,
     producers: BTreeMap<String, PublishedProducer>,
-    /// Maps `(consumer_session, producer_session, stream_type)` to router consumer ID.
+    /// Maps `(consumer_session, producer_session, stream_type)` to the combined
+    /// router and transport handles for that consumer route.
     /// Populated during `publish_track` and used by `CONSUMPTION_CHANGE` to pause/resume
-    /// individual consumers.
-    consumer_index: BTreeMap<ConsumerKey, RouterConsumerId>,
+    /// individual consumers in both the router model and the live transport route table.
+    consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     router: ChannelRouterState,
 }
 
@@ -131,6 +132,13 @@ struct PublishedProducer {
     router_producer_id: RouterProducerId,
     transport_media_id: TransportMediaId,
     active: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConsumerState {
+    router_consumer: RouterConsumerId,
+    source_media: TransportMediaId,
+    consumer_media: TransportMediaId,
 }
 
 #[derive(Debug, Clone)]
@@ -617,7 +625,7 @@ impl Channel {
         }) else {
             return;
         };
-        if let Err(_error) = transport_adapter
+        let consumer_transport_media_id = match transport_adapter
             .consume_media(
                 &target.consumer_session_id,
                 target.media_kind,
@@ -627,17 +635,20 @@ impl Channel {
             )
             .await
         {
-            warn!(
-                consumer_session_id = ?target.consumer_session_id,
-                producer_session_id = ?target.producer_session_id,
-                ?origin,
-                "transport adapter rejected consume media declaration"
-            );
-            return;
-        }
+            Ok(transport_media_id) => transport_media_id,
+            Err(_error) => {
+                warn!(
+                    consumer_session_id = ?target.consumer_session_id,
+                    producer_session_id = ?target.producer_session_id,
+                    ?origin,
+                    "transport adapter rejected consume media declaration"
+                );
+                return;
+            }
+        };
         let outbound = {
             let mut state = self.state.write().await;
-            state.commit_prepared_consumer_bootstrap(target, &prepared)
+            state.commit_prepared_consumer_bootstrap(target, &prepared, consumer_transport_media_id)
         };
         let Some((sender, request)) = outbound else {
             return;
@@ -653,58 +664,79 @@ impl Channel {
     /// 2. Set the producer's pause state in the router (propagates to all consumers).
     /// 3. Update session info flags (isCameraOn / isScreenSharingOn).
     /// 4. Broadcast the updated info to all peers.
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "the production-change transition intentionally keeps router updates, session-info sync, broadcast, and transport activity in one explicit sequence"
+    )]
     pub async fn update_upload_state(
         &self,
         session_id: &SessionId,
         stream_type: StreamType,
         active: bool,
+        transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let mut state = self.state.write().await;
-        let producer = state
-            .producers
-            .values_mut()
-            .find(|p| p.owner_session_id == *session_id && p.stream_type == stream_type);
-        let Some(producer) = producer else {
-            return;
+        let transport_media_id = {
+            let mut state = self.state.write().await;
+            let producer = state
+                .producers
+                .values_mut()
+                .find(|p| p.owner_session_id == *session_id && p.stream_type == stream_type);
+            let Some(producer) = producer else {
+                return;
+            };
+            producer.active = active;
+            let router_producer_id = producer.router_producer_id;
+            let transport_media_id = producer.transport_media_id;
+            let paused = !active;
+            if state
+                .router
+                .set_producer_paused(router_producer_id, paused)
+                .is_err()
+            {
+                error!(
+                    ?session_id,
+                    ?stream_type,
+                    "failed to set producer pause state in channel router"
+                );
+                return;
+            }
+            let Some(session) = state.sessions.get_mut(session_id) else {
+                return;
+            };
+            match stream_type {
+                StreamType::Camera => session.info.is_camera_on = Some(active),
+                StreamType::Screen => session.info.is_screen_sharing_on = Some(active),
+                StreamType::Audio => {}
+            }
+            let updated_info = session.info.clone();
+            if state
+                .router
+                .update_session_info(session_id, &updated_info)
+                .is_err()
+            {
+                error!(
+                    ?session_id,
+                    "failed to mirror session info update into channel router after production change"
+                );
+            }
+            let snapshot: CurrentSessionInfoSnapshotById =
+                BTreeMap::from([(bundle_session_info_key(session_id), updated_info)]);
+            let msg = CurrentServerMessage::SessionInfoChanged(snapshot);
+            send_to_all(&state.sessions, &msg);
+            transport_media_id
         };
-        producer.active = active;
-        let router_producer_id = producer.router_producer_id;
-        let paused = !active;
-        if state
-            .router
-            .set_producer_paused(router_producer_id, paused)
+        if transport_adapter
+            .set_producer_active(session_id, transport_media_id, active)
+            .await
             .is_err()
         {
-            error!(
+            warn!(
                 ?session_id,
                 ?stream_type,
-                "failed to set producer pause state in channel router"
-            );
-            return;
-        }
-        let Some(session) = state.sessions.get_mut(session_id) else {
-            return;
-        };
-        match stream_type {
-            StreamType::Camera => session.info.is_camera_on = Some(active),
-            StreamType::Screen => session.info.is_screen_sharing_on = Some(active),
-            StreamType::Audio => {}
-        }
-        let updated_info = session.info.clone();
-        if state
-            .router
-            .update_session_info(session_id, &updated_info)
-            .is_err()
-        {
-            error!(
-                ?session_id,
-                "failed to mirror session info update into channel router after production change"
+                active,
+                "transport adapter failed to update producer route activity"
             );
         }
-        let snapshot: CurrentSessionInfoSnapshotById =
-            BTreeMap::from([(bundle_session_info_key(session_id), updated_info)]);
-        let msg = CurrentServerMessage::SessionInfoChanged(snapshot);
-        send_to_all(&state.sessions, &msg);
     }
 
     /// Handle a `CONSUMPTION_CHANGE` message: pause or resume specific consumers
@@ -719,7 +751,9 @@ impl Channel {
         session_id: &SessionId,
         target_session_id: &SessionId,
         states: &DownloadStates,
+        transport_adapter: &RuntimeTransportAdapter,
     ) {
+        let mut route_updates = Vec::new();
         let mut state = self.state.write().await;
         for (stream_type, active) in states.iter() {
             let key = ConsumerKey {
@@ -727,13 +761,13 @@ impl Channel {
                 producer_session_id: target_session_id.clone(),
                 stream_type,
             };
-            let Some(router_consumer_id) = state.consumer_index.get(&key).copied() else {
+            let Some(consumer_state) = state.consumer_index.get(&key).copied() else {
                 continue;
             };
             let paused = !active;
             if state
                 .router
-                .set_consumer_paused(router_consumer_id, paused)
+                .set_consumer_paused(consumer_state.router_consumer, paused)
                 .is_err()
             {
                 error!(
@@ -741,6 +775,30 @@ impl Channel {
                     ?target_session_id,
                     ?stream_type,
                     "failed to set consumer pause state in channel router"
+                );
+                continue;
+            }
+            route_updates.push((consumer_state, stream_type, active));
+        }
+        drop(state);
+        for (consumer_state, stream_type, active) in route_updates {
+            if transport_adapter
+                .set_consumer_active(
+                    session_id,
+                    consumer_state.consumer_media,
+                    target_session_id,
+                    consumer_state.source_media,
+                    active,
+                )
+                .await
+                .is_err()
+            {
+                warn!(
+                    ?session_id,
+                    ?target_session_id,
+                    ?stream_type,
+                    active,
+                    "transport adapter failed to update consumer route activity"
                 );
             }
         }
@@ -1008,6 +1066,7 @@ impl ChannelState {
         &mut self,
         target: &PendingConsumerBootstrapTarget,
         prepared: &PreparedConsumerBootstrap,
+        consumer_transport_media_id: TransportMediaId,
     ) -> Option<(mpsc::UnboundedSender<SessionOutbound>, CurrentServerRequest)> {
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
@@ -1050,7 +1109,11 @@ impl ChannelState {
                 producer_session_id: prepared.producer_owner_session_id.clone(),
                 stream_type: prepared.producer_stream_type,
             },
-            router_consumer_id,
+            ConsumerState {
+                router_consumer: router_consumer_id,
+                source_media: target.transport_media_id,
+                consumer_media: consumer_transport_media_id,
+            },
         );
         Some((
             prepared.sender.clone(),

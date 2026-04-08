@@ -58,6 +58,15 @@ pub(super) enum StubWebRtcEvent {
         source_session_id: SessionId,
         media_kind: MediaKind,
     },
+    ProducerActivityUpdated {
+        session_id: SessionId,
+        active: bool,
+    },
+    ConsumerActivityUpdated {
+        consumer_session_id: SessionId,
+        source_session_id: SessionId,
+        active: bool,
+    },
     TransportConnectRequested {
         session_id: SessionId,
         direction: TransportConnectDirection,
@@ -251,6 +260,43 @@ impl StubWebRtcAdapter {
         }
         let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
         Ok(TransportMediaId::new(id))
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn set_producer_active(
+        &self,
+        session_id: &SessionId,
+        _transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::ProducerActivityUpdated {
+            session_id: session_id.clone(),
+            active,
+        });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(super) async fn set_consumer_active(
+        &self,
+        consumer_session_id: &SessionId,
+        _consumer_transport_media_id: TransportMediaId,
+        source_session_id: &SessionId,
+        _source_transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::ConsumerActivityUpdated {
+            consumer_session_id: consumer_session_id.clone(),
+            source_session_id: source_session_id.clone(),
+            active,
+        });
+        Ok(())
     }
 }
 
@@ -658,7 +704,12 @@ impl StubBusSession {
                     "relaying production change to channel"
                 );
                 self.channel
-                    .update_upload_state(&self.session_id, payload.stream_type, payload.active)
+                    .update_upload_state(
+                        &self.session_id,
+                        payload.stream_type,
+                        payload.active,
+                        &self.transport_adapter,
+                    )
                     .await;
             }
             CurrentClientMessage::UpdateDownloadState(payload) => {
@@ -667,7 +718,12 @@ impl StubBusSession {
                     "relaying consumption change to channel"
                 );
                 self.channel
-                    .update_download_state(&self.session_id, &payload.session_id, &payload.states)
+                    .update_download_state(
+                        &self.session_id,
+                        &payload.session_id,
+                        &payload.states,
+                        &self.transport_adapter,
+                    )
                     .await;
             }
         }

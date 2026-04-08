@@ -855,6 +855,54 @@ mod channel_tests {
         (channel, adapter, rx1, rx2)
     }
 
+    async fn setup_two_ready_sessions_with_stub() -> (
+        Arc<super::super::Channel>,
+        RuntimeTransportAdapter,
+        Arc<StubWebRtcAdapter>,
+        mpsc::UnboundedReceiver<SessionOutbound>,
+        mpsc::UnboundedReceiver<SessionOutbound>,
+    ) {
+        let manager = ChannelManager::new();
+        let channel = manager
+            .create_or_get("issuer-a", None, &CreateChannelQuery::default())
+            .await;
+        let (tx1, rx1) = test_sender();
+        let (tx2, rx2) = test_sender();
+        channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx1,
+                10,
+            )
+            .await
+            .unwrap();
+        channel
+            .join_session(
+                SessionId::Integer(2),
+                None,
+                SessionPermissions::default(),
+                tx2,
+                10,
+            )
+            .await
+            .unwrap();
+        let (adapter, stub) = stub_adapter();
+        for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
+            channel
+                .set_transport_connected(session_id, TransportConnectDirection::Upload)
+                .await;
+            channel
+                .set_transport_connected(session_id, TransportConnectDirection::Download)
+                .await;
+            channel
+                .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
+                .await;
+        }
+        (channel, adapter, stub, rx1, rx2)
+    }
+
     async fn setup_late_join_bootstrap_scenario() -> (
         Arc<super::super::Channel>,
         RuntimeTransportAdapter,
@@ -974,7 +1022,7 @@ mod channel_tests {
 
         // Now session 1 sends PRODUCTION_CHANGE: camera off (pause).
         channel
-            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false)
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
             .await;
 
         // Both sessions should receive a session info broadcast with isCameraOn = false.
@@ -999,7 +1047,7 @@ mod channel_tests {
 
         // Resume: session 1 sends PRODUCTION_CHANGE: camera on.
         channel
-            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, true)
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, true, &adapter)
             .await;
 
         let msgs1 = drain_outbound(&mut rx1);
@@ -1105,7 +1153,7 @@ mod channel_tests {
 
         // Pause screen sharing.
         channel
-            .update_upload_state(&SessionId::Integer(1), StreamType::Screen, false)
+            .update_upload_state(&SessionId::Integer(1), StreamType::Screen, false, &adapter)
             .await;
 
         let msgs = drain_outbound(&mut rx1);
@@ -1117,6 +1165,38 @@ mod channel_tests {
         } else {
             panic!("expected SessionInfoChanged for screen sharing");
         }
+    }
+
+    #[tokio::test]
+    async fn production_change_updates_transport_route_activity() {
+        let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await;
+        drain_outbound(&mut rx1);
+        drain_outbound(&mut rx2);
+
+        channel
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
+            .await;
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::ProducerActivityUpdated {
+                    session_id: SessionId::Integer(1),
+                    active: false,
+                }
+            )
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1196,11 +1276,11 @@ mod channel_tests {
 
     #[tokio::test]
     async fn production_change_ignores_unknown_stream_type() {
-        let (channel, _adapter, mut rx1, mut _rx2) = setup_two_ready_sessions().await;
+        let (channel, adapter, mut rx1, mut _rx2) = setup_two_ready_sessions().await;
 
         // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
         channel
-            .update_upload_state(&SessionId::Integer(1), StreamType::Audio, false)
+            .update_upload_state(&SessionId::Integer(1), StreamType::Audio, false, &adapter)
             .await;
 
         assert!(
@@ -1238,6 +1318,7 @@ mod channel_tests {
                     audio: None,
                     screen: None,
                 },
+                &adapter,
             )
             .await;
 
@@ -1255,6 +1336,7 @@ mod channel_tests {
                     audio: None,
                     screen: None,
                 },
+                &adapter,
             )
             .await;
 
@@ -1264,8 +1346,50 @@ mod channel_tests {
     }
 
     #[tokio::test]
+    async fn consumption_change_updates_transport_route_activity() {
+        let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await;
+        drain_outbound(&mut rx1);
+        drain_outbound(&mut rx2);
+
+        channel
+            .update_download_state(
+                &SessionId::Integer(2),
+                &SessionId::Integer(1),
+                &DownloadStates {
+                    camera: Some(false),
+                    audio: None,
+                    screen: None,
+                },
+                &adapter,
+            )
+            .await;
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::ConsumerActivityUpdated {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                    active: false,
+                }
+            )
+        })
+        .await;
+    }
+
+    #[tokio::test]
     async fn consumption_change_ignores_nonexistent_consumer() {
-        let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
+        let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
 
         // No tracks published. CONSUMPTION_CHANGE should be a no-op.
         channel
@@ -1277,6 +1401,7 @@ mod channel_tests {
                     audio: Some(false),
                     screen: None,
                 },
+                &adapter,
             )
             .await;
 
@@ -1321,6 +1446,7 @@ mod channel_tests {
                     audio: Some(false),
                     screen: None,
                 },
+                &adapter,
             )
             .await;
 
@@ -1362,12 +1488,13 @@ mod channel_tests {
                     audio: None,
                     screen: None,
                 },
+                &adapter,
             )
             .await;
 
         // Similarly, a production change for session 1 should be a no-op.
         channel
-            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false)
+            .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
             .await;
 
         // No crashes, no stale state — both operations are silent no-ops.

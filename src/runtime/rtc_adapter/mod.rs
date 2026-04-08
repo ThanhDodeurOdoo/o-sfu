@@ -98,6 +98,13 @@ pub(super) struct SessionTransportIds {
 pub(super) struct MediaRouteDestination {
     pub(super) dest_session: SessionId,
     pub(super) dest_mid: Mid,
+    pub(super) active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MediaRouteEntry {
+    pub(super) source_active: bool,
+    pub(super) destinations: Vec<MediaRouteDestination>,
 }
 
 /// Media route source key: `(producer session, producer mid)`.
@@ -171,7 +178,7 @@ impl RecentBitrate {
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<SessionId, RtcSessionState>,
-    pub(super) media_route_index: BTreeMap<MediaRouteKey, Vec<MediaRouteDestination>>,
+    pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
     incoming_bitrates_by_session: BTreeMap<SessionId, SessionIncomingBitrates>,
     mid_registry: BTreeMap<u64, Mid>,
@@ -339,9 +346,12 @@ impl RtcTransportAdapter {
             .media_route_index
             .retain(|(source_session, _), _| source_session != session_id);
         // Remove destination entries where this session is the consumer.
-        for destinations in bootstrap_state.media_route_index.values_mut() {
-            destinations.retain(|dest| dest.dest_session != *session_id);
-        }
+        bootstrap_state.media_route_index.retain(|_source, entry| {
+            entry
+                .destinations
+                .retain(|dest| dest.dest_session != *session_id);
+            !entry.destinations.is_empty()
+        });
         if bootstrap_state.sessions.is_empty() {
             bootstrap_state.shared_socket = None;
         }
@@ -438,10 +448,15 @@ impl RtcTransportAdapter {
         bootstrap_state
             .media_route_index
             .entry((source_session_id.clone(), source_mid))
-            .or_default()
+            .or_insert_with(|| MediaRouteEntry {
+                source_active: true,
+                destinations: Vec::new(),
+            })
+            .destinations
             .push(MediaRouteDestination {
                 dest_session: consumer_session_id.clone(),
                 dest_mid: mid,
+                active: true,
             });
         debug!(
             consumer_session_id = ?consumer_session_id,
@@ -452,6 +467,67 @@ impl RtcTransportAdapter {
             "declared send-only media and registered media route for consumer"
         );
         Ok(transport_media_id)
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async while runtime call sites and sibling adapters keep the same signature"
+    )]
+    pub(super) async fn set_producer_active(
+        &self,
+        session_id: &SessionId,
+        transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let source_mid = bootstrap_state
+            .resolve_mid(transport_media_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let route_entry = bootstrap_state
+            .media_route_index
+            .get_mut(&(session_id.clone(), source_mid))
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        route_entry.source_active = active;
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "the transport-adapter boundary stays async while runtime call sites and sibling adapters keep the same signature"
+    )]
+    pub(super) async fn set_consumer_active(
+        &self,
+        consumer_session_id: &SessionId,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_id: &SessionId,
+        source_transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let source_mid = bootstrap_state
+            .resolve_mid(source_transport_media_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let consumer_mid = bootstrap_state
+            .resolve_mid(consumer_transport_media_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let route_entry = bootstrap_state
+            .media_route_index
+            .get_mut(&(source_session_id.clone(), source_mid))
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let destination = route_entry
+            .destinations
+            .iter_mut()
+            .find(|destination| {
+                destination.dest_session == *consumer_session_id
+                    && destination.dest_mid == consumer_mid
+            })
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        destination.active = active;
+        Ok(())
     }
 }
 

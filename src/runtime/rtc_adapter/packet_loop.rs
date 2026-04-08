@@ -135,11 +135,17 @@ fn snapshot_and_pump(
     let media_stats_now = Instant::now();
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
         state.record_incoming_media(source_session, media.mid, media.data.len(), media_stats_now);
-        if let Some(destinations) = state
+        if let Some(route_entry) = state
             .media_route_index
             .get(&(source_session.clone(), media.mid))
         {
-            for dest in destinations {
+            if !route_entry.source_active {
+                continue;
+            }
+            for dest in &route_entry.destinations {
+                if !dest.active {
+                    continue;
+                }
                 buffers
                     .forwards
                     .push((media_idx, dest.dest_session.clone(), dest.dest_mid));
