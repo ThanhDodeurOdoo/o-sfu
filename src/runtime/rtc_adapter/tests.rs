@@ -1,4 +1,5 @@
 use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     slice,
     sync::atomic::Ordering,
     time::{Duration, Instant},
@@ -318,6 +319,46 @@ async fn rtc_transport_close_session_cleans_bootstrap_state() {
 }
 
 #[tokio::test]
+async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 140, SessionId::Integer(140));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_000);
+    {
+        assert!(!adapter.bootstrap_state.is_poisoned());
+        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
+            return;
+        };
+        bootstrap_state.remember_remote_addr(source_addr, &session_key);
+        assert_eq!(
+            bootstrap_state.session_key_for_remote_addr(source_addr),
+            Some(&session_key)
+        );
+    }
+
+    assert_eq!(adapter.close_session(&session_key).await, Ok(()));
+
+    {
+        assert!(!adapter.bootstrap_state.is_poisoned());
+        let Ok(bootstrap_state) = adapter.bootstrap_state.lock() else {
+            return;
+        };
+        assert!(
+            bootstrap_state
+                .session_key_for_remote_addr(source_addr)
+                .is_none()
+        );
+        assert!(bootstrap_state.remote_addrs_by_session.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     let adapter = RtcTransportAdapter::default();
     let first_session_key = transport_key(1, 30, SessionId::Integer(30));
@@ -358,6 +399,38 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
             )
             .await,
         Ok(())
+    );
+}
+
+#[test]
+fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
+    let mut bootstrap_state = super::RtcBootstrapState::default();
+    let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_001);
+    let first_session_key = transport_key(1, 30, SessionId::Integer(30));
+    let second_session_key = transport_key(2, 30, SessionId::Integer(30));
+
+    bootstrap_state.remember_remote_addr(source_addr, &first_session_key);
+    assert_eq!(
+        bootstrap_state.session_key_for_remote_addr(source_addr),
+        Some(&first_session_key)
+    );
+
+    bootstrap_state.remember_remote_addr(source_addr, &second_session_key);
+
+    assert_eq!(
+        bootstrap_state.session_key_for_remote_addr(source_addr),
+        Some(&second_session_key)
+    );
+    assert!(
+        !bootstrap_state
+            .remote_addrs_by_session
+            .contains_key(&first_session_key)
+    );
+    assert_eq!(
+        bootstrap_state
+            .remote_addrs_by_session
+            .get(&second_session_key),
+        Some(&vec![source_addr])
     );
 }
 

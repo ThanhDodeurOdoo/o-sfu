@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     mem::take,
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -316,38 +315,134 @@ fn route_incoming_packet(
     let Ok(mut state) = bootstrap_state.lock() else {
         return;
     };
-    route_packet_to_matching_session(&mut state.sessions, source_addr, candidate_addr, packet);
+    route_packet_to_matching_session(&mut state, source_addr, candidate_addr, packet);
 }
 
 fn route_packet_to_matching_session(
-    sessions: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
+    state: &mut RtcBootstrapState,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) {
+    if route_packet_with_cached_session(state, source_addr, candidate_addr, packet) {
+        return;
+    }
+    route_packet_by_scan(state, source_addr, candidate_addr, packet);
+}
+
+fn route_packet_with_cached_session(
+    state: &mut RtcBootstrapState,
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+    packet: &[u8],
+) -> bool {
+    let Some(session_key) = state.session_key_for_remote_addr(source_addr).cloned() else {
+        return false;
+    };
+    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+        state.forget_remote_addr(source_addr);
+        return false;
+    };
     let Ok(receive) = Receive::new(Protocol::Udp, source_addr, candidate_addr, packet) else {
         trace!(
             source = %source_addr,
             "ignoring malformed UDP datagram in rtc packet loop"
         );
-        return;
+        return true;
     };
     let now = Instant::now();
     let input = Input::Receive(now, receive);
-    for (session_key, session_state) in sessions {
+    let accepts_input = session_state.rtc.accepts(&input);
+    if !accepts_input {
+        let _ = session_state;
+        state.forget_remote_addr(source_addr);
+        return false;
+    }
+    let handle_result = session_state.rtc.handle_input(input);
+    let _ = session_state;
+    if handle_result.is_err() {
+        warn!(
+            session_id = ?session_key.session_id(),
+            channel_runtime_id = session_key.channel_runtime_id(),
+            "failed to feed indexed UDP datagram into rtc session state"
+        );
+    }
+    state.remember_remote_addr(source_addr, &session_key);
+    true
+}
+
+fn matching_session_key_for_packet(
+    state: &RtcBootstrapState,
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+    packet: &[u8],
+    now: Instant,
+) -> Result<Option<TransportSessionKey>, ()> {
+    for (session_key, session_state) in &state.sessions {
+        let Some(input) = receive_input(now, source_addr, candidate_addr, packet) else {
+            return Err(());
+        };
         if session_state.rtc.accepts(&input) {
-            if session_state.rtc.handle_input(input).is_err() {
-                warn!(
-                    session_id = ?session_key.session_id(),
-                    channel_runtime_id = session_key.channel_runtime_id(),
-                    "failed to feed incoming UDP datagram into rtc session state"
-                );
-            }
-            return;
+            return Ok(Some(session_key.clone()));
         }
     }
+    Ok(None)
+}
+
+fn receive_input(
+    now: Instant,
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+    packet: &[u8],
+) -> Option<Input<'_>> {
+    let receive = Receive::new(Protocol::Udp, source_addr, candidate_addr, packet).ok()?;
+    Some(Input::Receive(now, receive))
+}
+
+fn log_malformed_datagram(source_addr: SocketAddr) {
     trace!(
         source = %source_addr,
-        "dropping UDP datagram because no rtc session accepted it"
+        "ignoring malformed UDP datagram in rtc packet loop"
     );
+}
+
+fn route_packet_by_scan(
+    state: &mut RtcBootstrapState,
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+    packet: &[u8],
+) {
+    let now = Instant::now();
+    let session_key =
+        match matching_session_key_for_packet(state, source_addr, candidate_addr, packet, now) {
+            Ok(Some(session_key)) => session_key,
+            Ok(None) => {
+                trace!(
+                    source = %source_addr,
+                    "dropping UDP datagram because no rtc session accepted it"
+                );
+                return;
+            }
+            Err(()) => {
+                log_malformed_datagram(source_addr);
+                return;
+            }
+        };
+    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+        return;
+    };
+    let Some(input) = receive_input(now, source_addr, candidate_addr, packet) else {
+        log_malformed_datagram(source_addr);
+        return;
+    };
+    let handle_result = session_state.rtc.handle_input(input);
+    let _ = session_state;
+    if handle_result.is_err() {
+        warn!(
+            session_id = ?session_key.session_id(),
+            channel_runtime_id = session_key.channel_runtime_id(),
+            "failed to feed incoming UDP datagram into rtc session state"
+        );
+    }
+    state.remember_remote_addr(source_addr, &session_key);
 }

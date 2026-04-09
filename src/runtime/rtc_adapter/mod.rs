@@ -220,6 +220,8 @@ pub(super) struct RtcBootstrapState {
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
     incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
+    remote_addr_index: BTreeMap<SocketAddr, TransportSessionKey>,
+    remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
     mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     next_media_id: u64,
 }
@@ -275,6 +277,61 @@ impl RtcBootstrapState {
             .entry(source_session_key.clone())
             .or_default()
             .record(stream_type, now, payload_bytes);
+    }
+
+    fn session_key_for_remote_addr(&self, source_addr: SocketAddr) -> Option<&TransportSessionKey> {
+        self.remote_addr_index.get(&source_addr)
+    }
+
+    fn remember_remote_addr(&mut self, source_addr: SocketAddr, session_key: &TransportSessionKey) {
+        let previous_session = self
+            .remote_addr_index
+            .insert(source_addr, session_key.clone());
+        if let Some(previous_session) = previous_session {
+            self.remove_remote_addr_from_session(&previous_session, source_addr);
+        }
+        let session_addrs = self
+            .remote_addrs_by_session
+            .entry(session_key.clone())
+            .or_default();
+        if !session_addrs.contains(&source_addr) {
+            session_addrs.push(source_addr);
+        }
+    }
+
+    fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
+        let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
+            return;
+        };
+        self.remove_remote_addr_from_session(&session_key, source_addr);
+    }
+
+    fn forget_session_remote_addrs(&mut self, session_key: &TransportSessionKey) {
+        let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
+            return;
+        };
+        for source_addr in session_addrs {
+            self.remote_addr_index.remove(&source_addr);
+        }
+    }
+
+    fn remove_remote_addr_from_session(
+        &mut self,
+        session_key: &TransportSessionKey,
+        source_addr: SocketAddr,
+    ) {
+        let should_remove_session_entry = self
+            .remote_addrs_by_session
+            .get_mut(session_key)
+            .is_some_and(|session_addrs| {
+                if let Some(position) = session_addrs.iter().position(|addr| *addr == source_addr) {
+                    session_addrs.swap_remove(position);
+                }
+                session_addrs.is_empty()
+            });
+        if should_remove_session_entry {
+            self.remote_addrs_by_session.remove(session_key);
+        }
     }
 
     fn incoming_bitrate_snapshot_at(
@@ -393,6 +450,7 @@ impl RtcTransportAdapter {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         bootstrap_state.sessions.remove(session_key);
+        bootstrap_state.forget_session_remote_addrs(session_key);
         bootstrap_state
             .mid_registry
             .retain(|_id, handle| handle.session_key() != session_key);

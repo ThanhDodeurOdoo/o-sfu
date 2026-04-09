@@ -20,7 +20,7 @@ use str0m::media::MediaKind as Str0mMediaKind;
 pub(crate) struct TransportSessionKey {
     channel_runtime: u64,
     connection: u64,
-    session: SessionId,
+    session: Arc<SessionId>,
 }
 
 impl TransportSessionKey {
@@ -29,7 +29,7 @@ impl TransportSessionKey {
         Self {
             channel_runtime: channel_runtime_id,
             connection: connection_id,
-            session: session_id,
+            session: Arc::new(session_id),
         }
     }
 
@@ -40,7 +40,7 @@ impl TransportSessionKey {
 
     #[must_use]
     pub(crate) fn session_id(&self) -> &SessionId {
-        &self.session
+        self.session.as_ref()
     }
 }
 
