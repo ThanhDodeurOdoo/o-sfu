@@ -23,13 +23,14 @@ use std::{
 use super::{
     transport_adapter::{
         IncomingBitrateSnapshot, TransportAdapterError, TransportConnectDirection,
+        TransportSessionKey,
     },
     transport_bootstrap,
 };
 use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
-    shared::{SessionId, StreamType},
+    shared::StreamType,
     webrtc::{DtlsParameters, IceParameters},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
@@ -67,7 +68,7 @@ enum TransportLifecycleState {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct TransportStateKey {
-    session_id: SessionId,
+    session_key: TransportSessionKey,
     direction: TransportConnectDirection,
 }
 
@@ -96,7 +97,7 @@ pub(super) struct SessionTransportIds {
 /// A single forwarding destination within the media route index.
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteDestination {
-    pub(super) dest_session: SessionId,
+    pub(super) dest_session: TransportSessionKey,
     pub(super) dest_mid: Mid,
     pub(super) active: bool,
 }
@@ -108,26 +109,26 @@ pub(super) struct MediaRouteEntry {
 }
 
 /// Media route source key: `(producer session, producer mid)`.
-pub(super) type MediaRouteKey = (SessionId, Mid);
+pub(super) type MediaRouteKey = (TransportSessionKey, Mid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RegisteredMediaHandle {
     Producer {
-        session_id: SessionId,
+        session_key: TransportSessionKey,
         mid: Mid,
     },
     Consumer {
-        session_id: SessionId,
+        session_key: TransportSessionKey,
         mid: Mid,
-        source_session_id: SessionId,
+        source_session_key: TransportSessionKey,
         source_mid: Mid,
     },
 }
 
 impl RegisteredMediaHandle {
-    fn session_id(&self) -> &SessionId {
+    fn session_key(&self) -> &TransportSessionKey {
         match self {
-            Self::Producer { session_id, .. } | Self::Consumer { session_id, .. } => session_id,
+            Self::Producer { session_key, .. } | Self::Consumer { session_key, .. } => session_key,
         }
     }
 
@@ -137,13 +138,13 @@ impl RegisteredMediaHandle {
         }
     }
 
-    fn is_producer_for(&self, session_id: &SessionId, mid: Mid) -> bool {
+    fn is_producer_for(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
         matches!(
             self,
             Self::Producer {
-                session_id: owner_session_id,
+                session_key: owner_session_key,
                 mid: owner_mid,
-            } if owner_session_id == session_id && *owner_mid == mid
+            } if owner_session_key == session_key && *owner_mid == mid
         )
     }
 }
@@ -215,10 +216,10 @@ impl RecentBitrate {
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
-    pub(super) sessions: BTreeMap<SessionId, RtcSessionState>,
+    pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
-    incoming_bitrates_by_session: BTreeMap<SessionId, SessionIncomingBitrates>,
+    incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
     mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     next_media_id: u64,
 }
@@ -244,46 +245,46 @@ impl RtcBootstrapState {
         self.mid_registry.remove(&transport_media_id.as_u64())
     }
 
-    fn session_has_mid(&self, session_id: &SessionId, mid: Mid) -> bool {
+    fn session_has_mid(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
         self.mid_registry
             .values()
-            .any(|handle| handle.session_id() == session_id && handle.mid() == mid)
+            .any(|handle| handle.session_key() == session_key && handle.mid() == mid)
     }
 
-    fn session_has_producer_mid(&self, session_id: &SessionId, mid: Mid) -> bool {
+    fn session_has_producer_mid(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
         self.mid_registry
             .values()
-            .any(|handle| handle.is_producer_for(session_id, mid))
+            .any(|handle| handle.is_producer_for(session_key, mid))
     }
 
     fn record_incoming_media(
         &mut self,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         source_mid: Mid,
         payload_bytes: usize,
         now: Instant,
     ) {
         let Some(stream_type) = self
             .recv_stream_types
-            .get(&(source_session_id.clone(), source_mid))
+            .get(&(source_session_key.clone(), source_mid))
             .copied()
         else {
             return;
         };
         self.incoming_bitrates_by_session
-            .entry(source_session_id.clone())
+            .entry(source_session_key.clone())
             .or_default()
             .record(stream_type, now, payload_bytes);
     }
 
     fn incoming_bitrate_snapshot_at(
         &self,
-        session_ids: &[SessionId],
+        session_keys: &[TransportSessionKey],
         now: Instant,
     ) -> IncomingBitrateSnapshot {
         let mut snapshot = IncomingBitrateSnapshot::default();
-        for session_id in session_ids {
-            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_id) else {
+        for session_key in session_keys {
+            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_key) else {
                 continue;
             };
             let session_snapshot = session_bitrates.snapshot(now);
@@ -330,13 +331,13 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn transport_bootstrap_payload(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
-        let payload = self.build_bootstrap_payload(session_id, router_capabilities)?;
+        let payload = self.build_bootstrap_payload(session_key, router_capabilities)?;
         self.ensure_packet_loop_started()?;
         validation::validate_bootstrap_payload(&payload)?;
-        self.mark_bootstrap_sent(session_id)?;
+        self.mark_bootstrap_sent(session_key)?;
         Ok(payload)
     }
 
@@ -346,7 +347,7 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn connect_transport(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
         ice_parameters: Option<&IceParameters>,
@@ -357,19 +358,20 @@ impl RtcTransportAdapter {
         }
         let parsed_dtls_parameters = validation::parse_dtls_parameters(dtls_parameters)?;
         let remote_ice_credentials = validation::parse_remote_ice_credentials(ice_parameters)?;
-        self.ensure_connect_transition(session_id, direction)?;
+        self.ensure_connect_transition(session_key, direction)?;
         debug!(
             ?direction,
-            session_id = ?session_id,
+            session_id = ?session_key.session_id(),
+            channel_runtime_id = session_key.channel_runtime_id(),
             "validated DTLS parameters and transport lifecycle state before rtc transport connect"
         );
         self.apply_transport_connect(
-            session_id,
+            session_key,
             direction,
             &parsed_dtls_parameters,
             remote_ice_credentials,
         )?;
-        self.mark_connected(session_id, direction)?;
+        self.mark_connected(session_key, direction)?;
         Ok(())
     }
 
@@ -379,36 +381,36 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn close_session(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         let Ok(mut transport_states) = self.transport_states.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        transport_states.retain(|key, _| key.session_id != *session_id);
+        transport_states.retain(|key, _| key.session_key != *session_key);
         drop(transport_states);
 
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        bootstrap_state.sessions.remove(session_id);
+        bootstrap_state.sessions.remove(session_key);
         bootstrap_state
             .mid_registry
-            .retain(|_id, handle| handle.session_id() != session_id);
+            .retain(|_id, handle| handle.session_key() != session_key);
         bootstrap_state
             .recv_stream_types
-            .retain(|(source_session, _), _| source_session != session_id);
+            .retain(|(source_session, _), _| source_session != session_key);
         bootstrap_state
             .incoming_bitrates_by_session
-            .remove(session_id);
+            .remove(session_key);
         // Remove all routes where this session is the source.
         bootstrap_state
             .media_route_index
-            .retain(|(source_session, _), _| source_session != session_id);
+            .retain(|(source_session, _), _| source_session != session_key);
         // Remove destination entries where this session is the consumer.
         bootstrap_state.media_route_index.retain(|_source, entry| {
             entry
                 .destinations
-                .retain(|dest| dest.dest_session != *session_id);
+                .retain(|dest| dest.dest_session != *session_key);
             !entry.destinations.is_empty()
         });
         if bootstrap_state.sessions.is_empty() {
@@ -423,7 +425,7 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn remove_media(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
@@ -432,15 +434,15 @@ impl RtcTransportAdapter {
         let Some(handle) = bootstrap_state.remove_media_handle(transport_media_id) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        if handle.session_id() != session_id {
+        if handle.session_key() != session_key {
             return Err(TransportAdapterError::InvalidInput);
         }
         match handle {
-            RegisteredMediaHandle::Producer { session_id, mid } => {
-                let should_remove_media = !bootstrap_state.session_has_mid(&session_id, mid);
+            RegisteredMediaHandle::Producer { session_key, mid } => {
+                let should_remove_media = !bootstrap_state.session_has_mid(&session_key, mid);
                 let should_remove_stream_type =
-                    !bootstrap_state.session_has_producer_mid(&session_id, mid);
-                if let Some(session_state) = bootstrap_state.sessions.get_mut(&session_id) {
+                    !bootstrap_state.session_has_producer_mid(&session_key, mid);
+                if let Some(session_state) = bootstrap_state.sessions.get_mut(&session_key) {
                     remove_mid_once(&mut session_state.recv_mids, mid);
                     if should_remove_media {
                         session_state.rtc.direct_api().remove_media(mid);
@@ -449,18 +451,20 @@ impl RtcTransportAdapter {
                 if should_remove_stream_type {
                     bootstrap_state
                         .recv_stream_types
-                        .remove(&(session_id.clone(), mid));
-                    bootstrap_state.media_route_index.remove(&(session_id, mid));
+                        .remove(&(session_key.clone(), mid));
+                    bootstrap_state
+                        .media_route_index
+                        .remove(&(session_key, mid));
                 }
             }
             RegisteredMediaHandle::Consumer {
-                session_id,
+                session_key,
                 mid,
-                source_session_id,
+                source_session_key,
                 source_mid,
             } => {
-                let should_remove_media = !bootstrap_state.session_has_mid(&session_id, mid);
-                if let Some(session_state) = bootstrap_state.sessions.get_mut(&session_id) {
+                let should_remove_media = !bootstrap_state.session_has_mid(&session_key, mid);
+                if let Some(session_state) = bootstrap_state.sessions.get_mut(&session_key) {
                     remove_mid_once(&mut session_state.send_mids, mid);
                     if should_remove_media {
                         session_state.rtc.direct_api().remove_media(mid);
@@ -468,11 +472,11 @@ impl RtcTransportAdapter {
                 }
                 if let Some(route_entry) = bootstrap_state
                     .media_route_index
-                    .get_mut(&(source_session_id.clone(), source_mid))
+                    .get_mut(&(source_session_key.clone(), source_mid))
                 {
                     if let Some(position) =
                         route_entry.destinations.iter().position(|destination| {
-                            destination.dest_session == session_id && destination.dest_mid == mid
+                            destination.dest_session == session_key && destination.dest_mid == mid
                         })
                     {
                         route_entry.destinations.remove(position);
@@ -480,7 +484,7 @@ impl RtcTransportAdapter {
                     if route_entry.destinations.is_empty() {
                         bootstrap_state
                             .media_route_index
-                            .remove(&(source_session_id, source_mid));
+                            .remove(&(source_session_key, source_mid));
                     }
                 }
             }
@@ -500,7 +504,7 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn add_recv_media(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         stream_type: StreamType,
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
@@ -508,7 +512,7 @@ impl RtcTransportAdapter {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        let Some(session_state) = bootstrap_state.sessions.get_mut(session_id) else {
+        let Some(session_state) = bootstrap_state.sessions.get_mut(session_key) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         let mid = transport_mid(rtp_parameters).unwrap_or_default();
@@ -525,14 +529,15 @@ impl RtcTransportAdapter {
         session_state.recv_mids.push(mid);
         bootstrap_state
             .recv_stream_types
-            .insert((session_id.clone(), mid), stream_type);
+            .insert((session_key.clone(), mid), stream_type);
         let transport_media_id =
             bootstrap_state.register_media_handle(RegisteredMediaHandle::Producer {
-                session_id: session_id.clone(),
+                session_key: session_key.clone(),
                 mid,
             });
         debug!(
-            session_id = ?session_id,
+            session_id = ?session_key.session_id(),
+            channel_runtime_id = session_key.channel_runtime_id(),
             ?transport_media_id,
             ?stream_type,
             ?media_kind,
@@ -551,9 +556,9 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn add_send_media(
         &self,
-        consumer_session_id: &SessionId,
+        consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
@@ -563,7 +568,7 @@ impl RtcTransportAdapter {
         let source_mid = bootstrap_state
             .resolve_mid(source_transport_media_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?;
-        let Some(session_state) = bootstrap_state.sessions.get_mut(consumer_session_id) else {
+        let Some(session_state) = bootstrap_state.sessions.get_mut(consumer_session_key) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
@@ -580,27 +585,29 @@ impl RtcTransportAdapter {
         session_state.send_mids.push(mid);
         let transport_media_id =
             bootstrap_state.register_media_handle(RegisteredMediaHandle::Consumer {
-                session_id: consumer_session_id.clone(),
+                session_key: consumer_session_key.clone(),
                 mid,
-                source_session_id: source_session_id.clone(),
+                source_session_key: source_session_key.clone(),
                 source_mid,
             });
         bootstrap_state
             .media_route_index
-            .entry((source_session_id.clone(), source_mid))
+            .entry((source_session_key.clone(), source_mid))
             .or_insert_with(|| MediaRouteEntry {
                 source_active: true,
                 destinations: Vec::new(),
             })
             .destinations
             .push(MediaRouteDestination {
-                dest_session: consumer_session_id.clone(),
+                dest_session: consumer_session_key.clone(),
                 dest_mid: mid,
                 active: true,
             });
         debug!(
-            consumer_session_id = ?consumer_session_id,
-            source_session_id = ?source_session_id,
+            consumer_session_id = ?consumer_session_key.session_id(),
+            consumer_channel_runtime_id = consumer_session_key.channel_runtime_id(),
+            source_session_id = ?source_session_key.session_id(),
+            source_channel_runtime_id = source_session_key.channel_runtime_id(),
             ?source_mid,
             ?transport_media_id,
             ?media_kind,
@@ -615,7 +622,7 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn set_producer_active(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
@@ -627,7 +634,7 @@ impl RtcTransportAdapter {
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         let route_entry = bootstrap_state
             .media_route_index
-            .get_mut(&(session_id.clone(), source_mid))
+            .get_mut(&(session_key.clone(), source_mid))
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         route_entry.source_active = active;
         Ok(())
@@ -639,9 +646,9 @@ impl RtcTransportAdapter {
     )]
     pub(super) async fn set_consumer_active(
         &self,
-        consumer_session_id: &SessionId,
+        consumer_session_key: &TransportSessionKey,
         consumer_transport_media_id: TransportMediaId,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
@@ -656,13 +663,13 @@ impl RtcTransportAdapter {
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         let route_entry = bootstrap_state
             .media_route_index
-            .get_mut(&(source_session_id.clone(), source_mid))
+            .get_mut(&(source_session_key.clone(), source_mid))
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         let destination = route_entry
             .destinations
             .iter_mut()
             .find(|destination| {
-                destination.dest_session == *consumer_session_id
+                destination.dest_session == *consumer_session_key
                     && destination.dest_mid == consumer_mid
             })
             .ok_or(TransportAdapterError::TransportUnavailable)?;
@@ -678,7 +685,7 @@ impl RtcTransportAdapter {
 impl RtcTransportAdapter {
     fn build_bootstrap_payload(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
@@ -695,10 +702,10 @@ impl RtcTransportAdapter {
         };
         bootstrap::ensure_session_rtc_state(
             &mut bootstrap_state.sessions,
-            session_id,
+            session_key,
             candidate_addr,
         )?;
-        let Some(session_state) = bootstrap_state.sessions.get(session_id) else {
+        let Some(session_state) = bootstrap_state.sessions.get(session_key) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         Ok(transport_bootstrap::transport_bootstrap_payload(
@@ -735,7 +742,7 @@ impl RtcTransportAdapter {
 
     fn apply_transport_connect(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
         parsed_dtls_parameters: &dtls::ParsedDtlsParameters,
         remote_ice_credentials: Option<IceCreds>,
@@ -743,7 +750,7 @@ impl RtcTransportAdapter {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        let Some(session_state) = bootstrap_state.sessions.get_mut(session_id) else {
+        let Some(session_state) = bootstrap_state.sessions.get_mut(session_key) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         let Some(primary_fingerprint) = parsed_dtls_parameters.fingerprints().first() else {
@@ -775,14 +782,16 @@ impl RtcTransportAdapter {
                 session_state.dtls_started = true;
                 debug!(
                     ?direction,
-                    session_id = ?session_id,
+                    session_id = ?session_key.session_id(),
+                    channel_runtime_id = session_key.channel_runtime_id(),
                     local_active_role,
                     "started rtc DTLS handshake after transport connect"
                 );
             } else {
                 debug!(
                     ?direction,
-                    session_id = ?session_id,
+                    session_id = ?session_key.session_id(),
+                    channel_runtime_id = session_key.channel_runtime_id(),
                     "rtc DTLS handshake already started for session"
                 );
             }
@@ -790,7 +799,10 @@ impl RtcTransportAdapter {
         Ok(())
     }
 
-    fn mark_bootstrap_sent(&self, session_id: &SessionId) -> Result<(), TransportAdapterError> {
+    fn mark_bootstrap_sent(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<(), TransportAdapterError> {
         let Ok(mut states) = self.transport_states.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
@@ -800,7 +812,7 @@ impl RtcTransportAdapter {
         ] {
             states.insert(
                 TransportStateKey {
-                    session_id: session_id.clone(),
+                    session_key: session_key.clone(),
                     direction,
                 },
                 TransportLifecycleState::BootstrapSent,
@@ -811,11 +823,11 @@ impl RtcTransportAdapter {
 
     fn ensure_connect_transition(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
     ) -> Result<(), TransportAdapterError> {
         let key = TransportStateKey {
-            session_id: session_id.clone(),
+            session_key: session_key.clone(),
             direction,
         };
         let Ok(states) = self.transport_states.lock() else {
@@ -830,11 +842,11 @@ impl RtcTransportAdapter {
 
     fn mark_connected(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
     ) -> Result<(), TransportAdapterError> {
         let key = TransportStateKey {
-            session_id: session_id.clone(),
+            session_key: session_key.clone(),
             direction,
         };
         let Ok(mut states) = self.transport_states.lock() else {
@@ -849,12 +861,12 @@ impl RtcTransportAdapter {
 
     pub(super) fn incoming_bitrate_snapshot(
         &self,
-        session_ids: &[SessionId],
+        session_keys: &[TransportSessionKey],
     ) -> IncomingBitrateSnapshot {
         let Ok(bootstrap_state) = self.bootstrap_state.lock() else {
             return IncomingBitrateSnapshot::default();
         };
-        bootstrap_state.incoming_bitrate_snapshot_at(session_ids, Instant::now())
+        bootstrap_state.incoming_bitrate_snapshot_at(session_keys, Instant::now())
     }
 }
 

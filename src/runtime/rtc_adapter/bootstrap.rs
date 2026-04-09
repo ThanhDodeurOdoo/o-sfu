@@ -13,8 +13,7 @@ use tokio::net::UdpSocket;
 use super::{RtcSessionState, SessionTransportIds, SharedRtcSocket};
 use crate::config::RtcPortRange;
 use crate::rfc::webrtc;
-use crate::runtime::transport_adapter::TransportAdapterError;
-use crate::signaling::shared::SessionId;
+use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
 use crate::signaling::webrtc::{
     DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, TransportBootstrap,
 };
@@ -60,11 +59,11 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
 }
 
 pub(super) fn ensure_session_rtc_state(
-    sessions: &mut BTreeMap<SessionId, RtcSessionState>,
-    session_id: &SessionId,
+    sessions: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
+    session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
 ) -> Result<(), TransportAdapterError> {
-    if sessions.contains_key(session_id) {
+    if sessions.contains_key(session_key) {
         return Ok(());
     }
     let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
@@ -86,7 +85,7 @@ pub(super) fn ensure_session_rtc_state(
     let local_ice_credentials = rtc.direct_api().local_ice_credentials();
     let local_dtls_fingerprint = rtc.direct_api().local_dtls_fingerprint().clone();
     sessions.insert(
-        session_id.clone(),
+        session_key.clone(),
         RtcSessionState {
             rtc,
             local_ice_credentials,

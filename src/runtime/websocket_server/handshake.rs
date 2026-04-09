@@ -42,6 +42,7 @@ pub(super) async fn establish_session(
     record_session_span(&channel, &session_id);
     let mut stub_bus = StubBusSession::new(
         session_id.clone(),
+        connection_id,
         Arc::clone(&channel),
         Arc::clone(&state.metrics),
         state.transport_adapter.clone(),
@@ -252,15 +253,14 @@ async fn cleanup_failed_session(
     session_id: &SessionId,
     connection_id: u64,
 ) {
-    let did_remove_active_session = state
+    let _ = state
         .channels
         .leave_session(channel.uuid(), session_id, connection_id)
         .await;
-    let should_cleanup_transport_session =
-        did_remove_active_session || !state.channels.has_session(channel.uuid(), session_id).await;
-    if should_cleanup_transport_session {
-        let _result = state.transport_adapter.close_session(session_id).await;
-    }
+    let _result = state
+        .transport_adapter
+        .close_session(&channel.transport_session_key(session_id, connection_id))
+        .await;
 }
 
 async fn reject_handshake<T>(

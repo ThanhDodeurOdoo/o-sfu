@@ -89,7 +89,12 @@ impl Channel {
         };
 
         let transport_media_id = match transport_adapter
-            .publish_media(session_id, stream_type, media_kind, &parsed_rtp_parameters)
+            .publish_media(
+                &self.transport_session_key(session_id, publisher_connection_id),
+                stream_type,
+                media_kind,
+                &parsed_rtp_parameters,
+            )
             .await
         {
             Ok(id) => id,
@@ -117,7 +122,10 @@ impl Channel {
         };
         let Some(consumer_targets) = consumer_targets else {
             let _result = transport_adapter
-                .remove_media(session_id, transport_media_id)
+                .remove_media(
+                    &self.transport_session_key(session_id, publisher_connection_id),
+                    transport_media_id,
+                )
                 .await;
             self.state
                 .write()
@@ -157,9 +165,15 @@ impl Channel {
         };
         let consumer_transport_media_id = match transport_adapter
             .consume_media(
-                &target.consumer_session_id,
+                &self.transport_session_key(
+                    &target.consumer_session_id,
+                    target.consumer_connection_id,
+                ),
                 target.media_kind,
-                &target.producer_session_id,
+                &self.transport_session_key(
+                    &target.producer_session_id,
+                    target.producer_connection_id,
+                ),
                 target.transport_media_id,
                 &prepared.consumer_rtp_parameters,
             )
@@ -191,7 +205,13 @@ impl Channel {
         };
         let Some((sender, request)) = outbound else {
             let _result = transport_adapter
-                .remove_media(&target.consumer_session_id, consumer_transport_media_id)
+                .remove_media(
+                    &self.transport_session_key(
+                        &target.consumer_session_id,
+                        target.consumer_connection_id,
+                    ),
+                    consumer_transport_media_id,
+                )
                 .await;
             self.state
                 .write()
@@ -213,18 +233,34 @@ impl Channel {
         active: bool,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let transport_media_id = {
+        let (transport_media_id, transport_session_key) = {
             let mut state = self.state.write().await;
-            let producer = state.producers.values_mut().find(|producer| {
-                producer.owner_session_id == *session_id && producer.stream_type == stream_type
+            let current_connection_id = state
+                .sessions
+                .get(session_id)
+                .map(|session| session.connection_id);
+            let producer_id = state.producers.iter().find_map(|(producer_id, producer)| {
+                (producer.owner_session_id == *session_id
+                    && Some(producer.owner_connection_id) == current_connection_id
+                    && producer.stream_type == stream_type)
+                    .then(|| producer_id.clone())
             });
-            let Some(producer) = producer else {
+            let Some(producer_id) = producer_id else {
                 return;
             };
-            producer.active = active;
-            let router_producer_id = producer.router_producer_id;
-            let Some(transport_media_id) = producer.transport_media_id else {
-                return;
+            let (router_producer_id, transport_media_id, owner_connection_id) = {
+                let Some(producer) = state.producers.get_mut(&producer_id) else {
+                    return;
+                };
+                producer.active = active;
+                let Some(transport_media_id) = producer.transport_media_id else {
+                    return;
+                };
+                (
+                    producer.router_producer_id,
+                    transport_media_id,
+                    producer.owner_connection_id,
+                )
             };
             let paused = !active;
             if state
@@ -264,10 +300,14 @@ impl Channel {
                 &state.sessions,
                 &CurrentServerMessage::SessionInfoChanged(snapshot),
             );
-            transport_media_id
+            drop(state);
+            (
+                transport_media_id,
+                self.transport_session_key(session_id, owner_connection_id),
+            )
         };
         if transport_adapter
-            .set_producer_active(session_id, transport_media_id, active)
+            .set_producer_active(&transport_session_key, transport_media_id, active)
             .await
             .is_err()
         {
@@ -289,6 +329,10 @@ impl Channel {
     ) {
         let mut route_updates = Vec::new();
         let mut state = self.state.write().await;
+        let consumer_connection_id = state
+            .sessions
+            .get(session_id)
+            .map(|session| session.connection_id);
         for (stream_type, active) in states.iter() {
             let key = super::state::ConsumerKey {
                 consumer_session_id: session_id.clone(),
@@ -298,6 +342,9 @@ impl Channel {
             let Some(consumer_state) = state.consumer_index.get(&key).copied() else {
                 continue;
             };
+            if Some(consumer_state.consumer_connection_id) != consumer_connection_id {
+                continue;
+            }
             let paused = !active;
             if state
                 .router
@@ -318,9 +365,12 @@ impl Channel {
         for (consumer_state, stream_type, active) in route_updates {
             if transport_adapter
                 .set_consumer_active(
-                    session_id,
+                    &self.transport_session_key(session_id, consumer_state.consumer_connection_id),
                     consumer_state.consumer_media,
-                    target_session_id,
+                    &self.transport_session_key(
+                        target_session_id,
+                        consumer_state.source_connection_id,
+                    ),
                     consumer_state.source_media,
                     active,
                 )

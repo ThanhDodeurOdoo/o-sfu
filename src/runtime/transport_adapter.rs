@@ -12,6 +12,38 @@ use crate::signaling::{
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind as Str0mMediaKind;
 
+/// Channel-scoped transport-adapter session identity.
+///
+/// the transport boundary must distinguish identical session ids that are active in
+/// different channels at the same time.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TransportSessionKey {
+    channel_runtime: u64,
+    connection: u64,
+    session: SessionId,
+}
+
+impl TransportSessionKey {
+    #[must_use]
+    pub(crate) fn new(channel_runtime_id: u64, connection_id: u64, session_id: SessionId) -> Self {
+        Self {
+            channel_runtime: channel_runtime_id,
+            connection: connection_id,
+            session: session_id,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn channel_runtime_id(&self) -> u64 {
+        self.channel_runtime
+    }
+
+    #[must_use]
+    pub(crate) fn session_id(&self) -> &SessionId {
+        &self.session
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TransportConnectDirection {
     Upload,
@@ -83,18 +115,18 @@ impl RuntimeTransportAdapter {
     /// Build the `INIT_TRANSPORTS` payload for a newly authenticated session.
     pub(crate) async fn transport_bootstrap_payload(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .transport_bootstrap_payload(session_id, router_capabilities)
+                    .transport_bootstrap_payload(session_key, router_capabilities)
                     .await
             }
             Self::Rtc(adapter) => {
                 adapter
-                    .transport_bootstrap_payload(session_id, router_capabilities)
+                    .transport_bootstrap_payload(session_key, router_capabilities)
                     .await
             }
         }
@@ -103,7 +135,7 @@ impl RuntimeTransportAdapter {
     /// Connect one direction transport with client DTLS parameters.
     pub(crate) async fn connect_transport(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
         ice_parameters: Option<&IceParameters>,
@@ -113,7 +145,7 @@ impl RuntimeTransportAdapter {
             Self::Stub(adapter) => {
                 adapter
                     .connect_transport(
-                        session_id,
+                        session_key,
                         direction,
                         dtls_parameters,
                         ice_parameters,
@@ -124,7 +156,7 @@ impl RuntimeTransportAdapter {
             Self::Rtc(adapter) => {
                 adapter
                     .connect_transport(
-                        session_id,
+                        session_key,
                         direction,
                         dtls_parameters,
                         ice_parameters,
@@ -138,30 +170,30 @@ impl RuntimeTransportAdapter {
     /// Release transport-adapter state for a disconnected session.
     pub(crate) async fn close_session(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.close_session(session_id).await,
-            Self::Rtc(adapter) => adapter.close_session(session_id).await,
+            Self::Stub(adapter) => adapter.close_session(session_key).await,
+            Self::Rtc(adapter) => adapter.close_session(session_key).await,
         }
     }
 
     /// Remove a previously declared media line owned by `session_id`.
     pub(crate) async fn remove_media(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.remove_media(session_id, transport_media_id).await,
-            Self::Rtc(adapter) => adapter.remove_media(session_id, transport_media_id).await,
+            Self::Stub(adapter) => adapter.remove_media(session_key, transport_media_id).await,
+            Self::Rtc(adapter) => adapter.remove_media(session_key, transport_media_id).await,
         }
     }
 
     /// Declare a media line for receiving RTP from a producer session.
     pub(crate) async fn publish_media(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         stream_type: SignalingStreamType,
         media_kind: SignalingMediaKind,
         rtp_parameters: &RouterRtpParameters,
@@ -169,13 +201,13 @@ impl RuntimeTransportAdapter {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .publish_media(session_id, stream_type, media_kind, rtp_parameters)
+                    .publish_media(session_key, stream_type, media_kind, rtp_parameters)
                     .await
             }
             Self::Rtc(adapter) => {
                 adapter
                     .add_recv_media(
-                        session_id,
+                        session_key,
                         stream_type,
                         signaling_to_str0m_media_kind(media_kind),
                         rtp_parameters,
@@ -188,9 +220,9 @@ impl RuntimeTransportAdapter {
     /// Declare a media line for sending RTP to a consumer session, routed from a producer.
     pub(crate) async fn consume_media(
         &self,
-        consumer_session_id: &SessionId,
+        consumer_session_key: &TransportSessionKey,
         media_kind: SignalingMediaKind,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
@@ -198,9 +230,9 @@ impl RuntimeTransportAdapter {
             Self::Stub(adapter) => {
                 adapter
                     .consume_media(
-                        consumer_session_id,
+                        consumer_session_key,
                         media_kind,
-                        source_session_id,
+                        source_session_key,
                         consumer_rtp_parameters,
                     )
                     .await
@@ -208,9 +240,9 @@ impl RuntimeTransportAdapter {
             Self::Rtc(adapter) => {
                 adapter
                     .add_send_media(
-                        consumer_session_id,
+                        consumer_session_key,
                         signaling_to_str0m_media_kind(media_kind),
-                        source_session_id,
+                        source_session_key,
                         source_media_id,
                         consumer_rtp_parameters,
                     )
@@ -221,30 +253,30 @@ impl RuntimeTransportAdapter {
 
     pub(crate) fn incoming_bitrate_snapshot(
         &self,
-        session_ids: &[SessionId],
+        session_keys: &[TransportSessionKey],
     ) -> IncomingBitrateSnapshot {
         match self {
             Self::Stub(_adapter) => IncomingBitrateSnapshot::default(),
-            Self::Rtc(adapter) => adapter.incoming_bitrate_snapshot(session_ids),
+            Self::Rtc(adapter) => adapter.incoming_bitrate_snapshot(session_keys),
         }
     }
 
     /// Update whether a producer media line is allowed to forward packets.
     pub(crate) async fn set_producer_active(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .set_producer_active(session_id, transport_media_id, active)
+                    .set_producer_active(session_key, transport_media_id, active)
                     .await
             }
             Self::Rtc(adapter) => {
                 adapter
-                    .set_producer_active(session_id, transport_media_id, active)
+                    .set_producer_active(session_key, transport_media_id, active)
                     .await
             }
         }
@@ -253,9 +285,9 @@ impl RuntimeTransportAdapter {
     /// Update whether one consumer route is allowed to forward packets.
     pub(crate) async fn set_consumer_active(
         &self,
-        consumer_session_id: &SessionId,
+        consumer_session_key: &TransportSessionKey,
         consumer_transport_media_id: TransportMediaId,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
@@ -263,9 +295,9 @@ impl RuntimeTransportAdapter {
             Self::Stub(adapter) => {
                 adapter
                     .set_consumer_active(
-                        consumer_session_id,
+                        consumer_session_key,
                         consumer_transport_media_id,
-                        source_session_id,
+                        source_session_key,
                         source_transport_media_id,
                         active,
                     )
@@ -274,9 +306,9 @@ impl RuntimeTransportAdapter {
             Self::Rtc(adapter) => {
                 adapter
                     .set_consumer_active(
-                        consumer_session_id,
+                        consumer_session_key,
                         consumer_transport_media_id,
-                        source_session_id,
+                        source_session_key,
                         source_transport_media_id,
                         active,
                     )

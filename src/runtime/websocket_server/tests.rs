@@ -1114,7 +1114,7 @@ mod websocket_server_tests {
     }
 
     #[tokio::test]
-    async fn stale_replaced_socket_close_does_not_cleanup_active_transport_session() {
+    async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
         let adapter = Arc::new(StubWebRtcAdapter::default());
         let transport_adapter =
             RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
@@ -1157,7 +1157,7 @@ mod websocket_server_tests {
             Some(CloseCode::Library(4108))
         );
 
-        let events = wait_for_stub_webrtc_events(&adapter, 2).await;
+        let events = wait_for_stub_webrtc_events(&adapter, 3).await;
         assert!(events.is_some());
         let Some(events) = events else {
             return;
@@ -1166,13 +1166,16 @@ mod websocket_server_tests {
             events,
             vec![
                 StubWebRtcEvent::BootstrapRequested,
-                StubWebRtcEvent::BootstrapRequested
+                StubWebRtcEvent::BootstrapRequested,
+                StubWebRtcEvent::SessionClosed {
+                    session_id: session_id.clone(),
+                }
             ]
         );
 
         let close_result = second_socket.close(None).await;
         assert!(close_result.is_ok());
-        let events = wait_for_stub_webrtc_events(&adapter, 3).await;
+        let events = wait_for_stub_webrtc_events(&adapter, 4).await;
         assert!(events.is_some());
         let Some(events) = events else {
             return;

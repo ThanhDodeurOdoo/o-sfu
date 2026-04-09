@@ -16,10 +16,12 @@ use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::transport_adapter::{IncomingBitrateSnapshot, RuntimeTransportAdapter};
+use super::transport_adapter::{
+    IncomingBitrateSnapshot, RuntimeTransportAdapter, TransportSessionKey,
+};
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
-    shared::{AvailableFeatures, RecordingState},
+    shared::{AvailableFeatures, RecordingState, SessionId},
 };
 
 mod manager;
@@ -89,6 +91,7 @@ pub(crate) struct ChannelSessionStatsSnapshot {
 /// Identity fields (uuid, issuer, key, features) are immutable after creation.
 /// Mutable state (sessions, recording, routing) is behind an interior lock.
 pub struct Channel {
+    runtime_id: u64,
     uuid: String,
     issuer: String,
     key: Option<String>,
@@ -100,12 +103,14 @@ pub struct Channel {
 
 impl Channel {
     pub(super) fn new(
+        runtime_id: u64,
         router_id: RouterId,
         issuer: String,
         key: Option<String>,
         config: ChannelConfig,
     ) -> Self {
         Self {
+            runtime_id,
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
@@ -118,6 +123,15 @@ impl Channel {
     #[must_use]
     pub fn uuid(&self) -> &str {
         &self.uuid
+    }
+
+    #[must_use]
+    pub(super) fn transport_session_key(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> TransportSessionKey {
+        TransportSessionKey::new(self.runtime_id, connection_id, session_id.clone())
     }
 
     #[must_use]
@@ -153,9 +167,15 @@ impl Channel {
         transport_adapter: &RuntimeTransportAdapter,
     ) -> ChannelSessionStatsSnapshot {
         let state = self.state.read().await;
-        let session_ids = state.sessions.keys().cloned().collect::<Vec<_>>();
+        let session_keys = state
+            .sessions
+            .iter()
+            .map(|(session_id, session)| {
+                TransportSessionKey::new(self.runtime_id, session.connection_id, session_id.clone())
+            })
+            .collect::<Vec<_>>();
         ChannelSessionStatsSnapshot {
-            incoming_bitrate: transport_adapter.incoming_bitrate_snapshot(&session_ids),
+            incoming_bitrate: transport_adapter.incoming_bitrate_snapshot(&session_keys),
             count: state.router.session_count(),
             camera_count: state.router.camera_count(),
             screen_count: state.router.screen_count(),
@@ -172,6 +192,7 @@ impl fmt::Debug for Channel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Channel")
+            .field("runtime_id", &self.runtime_id)
             .field("uuid", &self.uuid)
             .field("issuer", &self.issuer)
             .field("web_rtc_enabled", &self.web_rtc_enabled)

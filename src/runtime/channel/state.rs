@@ -58,6 +58,7 @@ pub(super) struct ActiveSession {
 #[derive(Debug, Clone)]
 pub(super) struct PublishedProducer {
     pub(super) owner_session_id: SessionId,
+    pub(super) owner_connection_id: u64,
     pub(super) stream_type: StreamType,
     pub(super) media_kind: SignalingMediaKind,
     pub(super) consumable_rtp_parameters: RouterRtpParameters,
@@ -69,6 +70,8 @@ pub(super) struct PublishedProducer {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ConsumerState {
     pub(super) router_consumer: RouterConsumerId,
+    pub(super) consumer_connection_id: u64,
+    pub(super) source_connection_id: u64,
     pub(super) source_media: TransportMediaId,
     pub(super) consumer_media: TransportMediaId,
 }
@@ -78,6 +81,7 @@ pub(super) struct PendingConsumerBootstrapTarget {
     pub(super) consumer_session_id: SessionId,
     pub(super) consumer_connection_id: u64,
     pub(super) producer_session_id: SessionId,
+    pub(super) producer_connection_id: u64,
     pub(super) producer_wire_id: String,
     pub(super) stream_type: StreamType,
     pub(super) media_kind: SignalingMediaKind,
@@ -90,6 +94,7 @@ pub(super) struct PreparedConsumerBootstrap {
     pub(super) consumer_wire_rtp_parameters: RtpParameters,
     pub(super) sender: mpsc::UnboundedSender<SessionOutbound>,
     pub(super) producer_owner_session_id: SessionId,
+    pub(super) producer_connection_id: u64,
     pub(super) producer_stream_type: StreamType,
     pub(super) producer_media_kind: SignalingMediaKind,
     pub(super) producer_router_producer_id: RouterProducerId,
@@ -159,6 +164,7 @@ impl ChannelState {
                     consumer_session_id: session_id.clone(),
                     consumer_connection_id: session.connection_id,
                     producer_session_id: producer.owner_session_id.clone(),
+                    producer_connection_id: producer.owner_connection_id,
                     producer_wire_id: producer_wire_id.clone(),
                     stream_type: producer.stream_type,
                     media_kind: producer.media_kind,
@@ -171,6 +177,7 @@ impl ChannelState {
     pub(super) fn publish_consumer_targets(
         &self,
         producer_session_id: &SessionId,
+        producer_connection_id: u64,
         producer_wire_id: &str,
         stream_type: StreamType,
         media_kind: SignalingMediaKind,
@@ -189,6 +196,7 @@ impl ChannelState {
                     consumer_session_id: peer_session_id.clone(),
                     consumer_connection_id: peer_session.connection_id,
                     producer_session_id: producer_session_id.clone(),
+                    producer_connection_id,
                     producer_wire_id: producer_wire_id.to_owned(),
                     stream_type,
                     media_kind,
@@ -229,6 +237,7 @@ impl ChannelState {
             producer_id.clone(),
             PublishedProducer {
                 owner_session_id: session_id.clone(),
+                owner_connection_id: publisher_connection_id,
                 stream_type,
                 media_kind,
                 consumable_rtp_parameters,
@@ -252,7 +261,10 @@ impl ChannelState {
             return None;
         }
         let producer = self.producers.get_mut(producer_id)?;
-        if producer.owner_session_id != *session_id || producer.transport_media_id.is_some() {
+        if producer.owner_session_id != *session_id
+            || producer.owner_connection_id != publisher_connection_id
+            || producer.transport_media_id.is_some()
+        {
             return None;
         }
         let stream_type = producer.stream_type;
@@ -260,6 +272,7 @@ impl ChannelState {
         producer.transport_media_id = Some(transport_media_id);
         Some(self.publish_consumer_targets(
             session_id,
+            publisher_connection_id,
             producer_id,
             stream_type,
             media_kind,
@@ -301,6 +314,7 @@ impl ChannelState {
         };
         let producer = self.producers.get(&target.producer_wire_id)?;
         if producer.owner_session_id != target.producer_session_id
+            || producer.owner_connection_id != target.producer_connection_id
             || producer.stream_type != target.stream_type
             || producer.media_kind != target.media_kind
             || producer.transport_media_id != Some(target.transport_media_id)
@@ -331,6 +345,7 @@ impl ChannelState {
             consumer_wire_rtp_parameters,
             sender,
             producer_owner_session_id,
+            producer_connection_id: producer.owner_connection_id,
             producer_stream_type,
             producer_media_kind,
             producer_router_producer_id,
@@ -352,6 +367,7 @@ impl ChannelState {
         }
         let producer = self.producers.get(&prepared.producer_wire_id)?;
         if producer.owner_session_id != prepared.producer_owner_session_id
+            || producer.owner_connection_id != prepared.producer_connection_id
             || producer.stream_type != prepared.producer_stream_type
             || producer.media_kind != prepared.producer_media_kind
             || producer.transport_media_id != Some(target.transport_media_id)
@@ -410,6 +426,7 @@ impl ChannelState {
         }
         let producer = self.producers.get(&prepared.producer_wire_id)?;
         if producer.owner_session_id != prepared.producer_owner_session_id
+            || producer.owner_connection_id != prepared.producer_connection_id
             || producer.stream_type != prepared.producer_stream_type
             || producer.media_kind != prepared.producer_media_kind
             || producer.transport_media_id != Some(target.transport_media_id)
@@ -426,6 +443,8 @@ impl ChannelState {
             },
             ConsumerState {
                 router_consumer: reserved.router_consumer_id,
+                consumer_connection_id: target.consumer_connection_id,
+                source_connection_id: prepared.producer_connection_id,
                 source_media: target.transport_media_id,
                 consumer_media: consumer_transport_media_id,
             },

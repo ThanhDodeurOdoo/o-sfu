@@ -13,7 +13,8 @@ use super::channel::Channel;
 use crate::runtime::{
     metrics::RuntimeMetrics,
     transport_adapter::{
-        RuntimeTransportAdapter, TransportAdapterError, TransportConnectDirection, TransportMediaId,
+        RuntimeTransportAdapter, TransportAdapterError, TransportConnectDirection,
+        TransportMediaId, TransportSessionKey,
     },
 };
 use crate::signaling::{
@@ -169,7 +170,7 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn transport_bootstrap_payload(
         &self,
-        _session_id: &SessionId,
+        _session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::BootstrapRequested);
@@ -182,26 +183,26 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn connect_transport(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
         _ice_parameters: Option<&IceParameters>,
         _sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::TransportConnectRequested {
-            session_id: session_id.clone(),
+            session_id: session_key.session_id().clone(),
             direction,
             dtls_parameters: dtls_parameters.clone(),
         });
         if dtls_parameters.role.is_empty() || dtls_parameters.fingerprints.is_empty() {
             self.record_event(StubWebRtcEvent::TransportConnectRejected {
-                session_id: session_id.clone(),
+                session_id: session_key.session_id().clone(),
                 direction,
             });
             return Err(TransportAdapterError::TransportUnavailable);
         }
         self.record_event(StubWebRtcEvent::TransportConnected {
-            session_id: session_id.clone(),
+            session_id: session_key.session_id().clone(),
             direction,
         });
         Ok(())
@@ -213,10 +214,10 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn close_session(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::SessionClosed {
-            session_id: session_id.clone(),
+            session_id: session_key.session_id().clone(),
         });
         Ok(())
     }
@@ -227,11 +228,11 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn remove_media(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::MediaRemoved {
-            session_id: session_id.clone(),
+            session_id: session_key.session_id().clone(),
             transport_media_id,
         });
         Ok(())
@@ -243,13 +244,13 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn publish_media(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         stream_type: StreamType,
         media_kind: MediaKind,
         _rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::PublishMediaRequested {
-            session_id: session_id.clone(),
+            session_id: session_key.session_id().clone(),
             stream_type,
             media_kind,
         });
@@ -266,14 +267,14 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn consume_media(
         &self,
-        consumer_session_id: &SessionId,
+        consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         _consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::ConsumeMediaRequested {
-            consumer_session_id: consumer_session_id.clone(),
-            source_session_id: source_session_id.clone(),
+            consumer_session_id: consumer_session_key.session_id().clone(),
+            source_session_id: source_session_key.session_id().clone(),
             media_kind,
         });
         if let Some(delay) = self.delay_for_consume_media() {
@@ -289,12 +290,12 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn set_producer_active(
         &self,
-        session_id: &SessionId,
+        session_key: &TransportSessionKey,
         _transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::ProducerActivityUpdated {
-            session_id: session_id.clone(),
+            session_id: session_key.session_id().clone(),
             active,
         });
         Ok(())
@@ -306,15 +307,15 @@ impl StubWebRtcAdapter {
     )]
     pub(super) async fn set_consumer_active(
         &self,
-        consumer_session_id: &SessionId,
+        consumer_session_key: &TransportSessionKey,
         _consumer_transport_media_id: TransportMediaId,
-        source_session_id: &SessionId,
+        source_session_key: &TransportSessionKey,
         _source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::ConsumerActivityUpdated {
-            consumer_session_id: consumer_session_id.clone(),
-            source_session_id: source_session_id.clone(),
+            consumer_session_id: consumer_session_key.session_id().clone(),
+            source_session_id: source_session_key.session_id().clone(),
             active,
         });
         Ok(())
@@ -324,6 +325,7 @@ impl StubWebRtcAdapter {
 #[derive(Debug)]
 pub(super) struct StubBusSession {
     session_id: SessionId,
+    connection_id: u64,
     channel: Arc<Channel>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
@@ -336,12 +338,14 @@ impl StubBusSession {
     #[must_use]
     pub(super) fn new(
         session_id: SessionId,
+        connection_id: u64,
         channel: Arc<Channel>,
         metrics: Arc<RuntimeMetrics>,
         transport_adapter: RuntimeTransportAdapter,
     ) -> Self {
         Self {
             session_id,
+            connection_id,
             channel,
             metrics,
             transport_adapter,
@@ -356,9 +360,12 @@ impl StubBusSession {
         writer: &mut WsWriter,
     ) -> Result<(), ()> {
         let router_capabilities = self.channel.router_rtp_capabilities().await;
+        let transport_session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
         let Ok(bootstrap_payload) = self
             .transport_adapter
-            .transport_bootstrap_payload(&self.session_id, &router_capabilities)
+            .transport_bootstrap_payload(&transport_session_key, &router_capabilities)
             .await
         else {
             return Err(());
@@ -646,7 +653,9 @@ impl StubBusSession {
         if self
             .transport_adapter
             .connect_transport(
-                &self.session_id,
+                &self
+                    .channel
+                    .transport_session_key(&self.session_id, self.connection_id),
                 direction,
                 &payload.dtls_parameters,
                 payload.ice_parameters.as_ref(),

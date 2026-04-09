@@ -16,7 +16,7 @@ use tokio::{
 use tracing::{debug, trace, warn};
 
 use super::{RtcBootstrapState, RtcSessionState};
-use crate::signaling::shared::SessionId;
+use crate::runtime::transport_adapter::TransportSessionKey;
 
 const IDLE_SLEEP: Duration = Duration::from_millis(50);
 const MAX_SOCKET_WAIT: Duration = Duration::from_millis(100);
@@ -32,8 +32,8 @@ struct PendingTransmit {
 /// to avoids steady-state heap allocations
 struct PacketLoopBuffers {
     pending_transmits: Vec<PendingTransmit>,
-    pending_media: Vec<(SessionId, MediaData)>,
-    forwards: Vec<(usize, SessionId, Mid)>,
+    pending_media: Vec<(TransportSessionKey, MediaData)>,
+    forwards: Vec<(usize, TransportSessionKey, Mid)>,
 }
 
 impl PacketLoopBuffers {
@@ -211,10 +211,10 @@ fn snapshot_and_pump(
 ///
 /// Returns the next timeout requested by the session, if any.
 fn drain_single_session(
-    session_id: &SessionId,
+    session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
     pending_transmits: &mut Vec<PendingTransmit>,
-    pending_media: &mut Vec<(SessionId, MediaData)>,
+    pending_media: &mut Vec<(TransportSessionKey, MediaData)>,
 ) -> Option<Instant> {
     loop {
         let now = Instant::now();
@@ -226,16 +226,17 @@ fn drain_single_session(
                 });
             }
             Ok(Output::Event(Event::MediaData(data))) => {
-                pending_media.push((session_id.clone(), data));
+                pending_media.push((session_key.clone(), data));
             }
             Ok(Output::Event(event)) => {
-                log_rtc_event(session_id, &event);
+                log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {
                 if timeout_at <= now {
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(
-                            session_id = ?session_id,
+                            session_id = ?session_key.session_id(),
+                            channel_runtime_id = session_key.channel_runtime_id(),
                             "failed to apply immediate rtc packet-loop timeout input"
                         );
                         return None;
@@ -246,7 +247,8 @@ fn drain_single_session(
             }
             Err(error) => {
                 warn!(
-                    session_id = ?session_id,
+                    session_id = ?session_key.session_id(),
+                    channel_runtime_id = session_key.channel_runtime_id(),
                     ?error,
                     "rtc packet loop failed while polling output"
                 );
@@ -264,23 +266,30 @@ pub(super) fn take_write_payload(data: &mut Vec<u8>, is_last_destination: bool) 
     }
 }
 
-fn log_rtc_event(session_id: &SessionId, event: &Event) {
+fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     match event {
         Event::IceConnectionStateChange(state) => {
             debug!(
-                session_id = ?session_id,
+                session_id = ?session_key.session_id(),
+                channel_runtime_id = session_key.channel_runtime_id(),
                 ?state,
                 "rtc ICE connection state transition"
             );
         }
         Event::Connected => {
             debug!(
-                session_id = ?session_id,
+                session_id = ?session_key.session_id(),
+                channel_runtime_id = session_key.channel_runtime_id(),
                 "rtc DTLS transport reached connected state"
             );
         }
         _ => {
-            trace!(session_id = ?session_id, ?event, "rtc packet loop event");
+            trace!(
+                session_id = ?session_key.session_id(),
+                channel_runtime_id = session_key.channel_runtime_id(),
+                ?event,
+                "rtc packet loop event"
+            );
         }
     }
 }
@@ -311,7 +320,7 @@ fn route_incoming_packet(
 }
 
 fn route_packet_to_matching_session(
-    sessions: &mut BTreeMap<SessionId, RtcSessionState>,
+    sessions: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -325,11 +334,12 @@ fn route_packet_to_matching_session(
     };
     let now = Instant::now();
     let input = Input::Receive(now, receive);
-    for (session_id, session_state) in sessions {
+    for (session_key, session_state) in sessions {
         if session_state.rtc.accepts(&input) {
             if session_state.rtc.handle_input(input).is_err() {
                 warn!(
-                    session_id = ?session_id,
+                    session_id = ?session_key.session_id(),
+                    channel_runtime_id = session_key.channel_runtime_id(),
                     "failed to feed incoming UDP datagram into rtc session state"
                 );
             }

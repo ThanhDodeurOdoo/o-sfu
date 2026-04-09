@@ -14,7 +14,9 @@ use tokio::time::sleep;
 
 use super::{RtcTransportAdapter, packet_loop::take_write_payload, validation};
 use crate::{
-    runtime::transport_adapter::{TransportAdapterError, TransportConnectDirection},
+    runtime::transport_adapter::{
+        TransportAdapterError, TransportConnectDirection, TransportSessionKey,
+    },
     signaling::{
         current_protocol::CurrentTransportBootstrapPayload,
         shared::{SessionId, StreamType},
@@ -37,6 +39,14 @@ const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("testdata/safari_datachanne
 
 fn empty_router_capabilities() -> RouterRtpCapabilities {
     RouterRtpCapabilities::new(vec![], vec![])
+}
+
+fn transport_key(
+    channel_runtime_id: u64,
+    connection_id: u64,
+    session_id: SessionId,
+) -> TransportSessionKey {
+    TransportSessionKey::new(channel_runtime_id, connection_id, session_id)
 }
 
 fn sample_bootstrap_payload(candidate: IceCandidate) -> CurrentTransportBootstrapPayload {
@@ -182,9 +192,10 @@ fn validate_bootstrap_payload_rejects_unsupported_candidate_shape() {
 #[tokio::test]
 async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
     let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 7, SessionId::Integer(7));
     let result = adapter
         .connect_transport(
-            &SessionId::Integer(7),
+            &session_key,
             TransportConnectDirection::Upload,
             &DtlsParameters {
                 role: String::from("client"),
@@ -200,9 +211,10 @@ async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
 #[tokio::test]
 async fn rtc_transport_connect_requires_bootstrap_first() {
     let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 8, SessionId::Integer(8));
     let result = adapter
         .connect_transport(
-            &SessionId::Integer(8),
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -215,14 +227,14 @@ async fn rtc_transport_connect_requires_bootstrap_first() {
 #[tokio::test]
 async fn rtc_transport_connect_succeeds_after_bootstrap() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(9);
+    let session_key = transport_key(1, 9, SessionId::Integer(9));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     let connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -235,9 +247,9 @@ async fn rtc_transport_connect_succeeds_after_bootstrap() {
 #[tokio::test]
 async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(13);
+    let session_key = transport_key(1, 13, SessionId::Integer(13));
     let payload = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(payload.is_ok());
     let Some(payload) = payload.ok() else {
@@ -283,16 +295,16 @@ async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_bootstrap_state() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(14);
+    let session_key = transport_key(1, 14, SessionId::Integer(14));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
-    let close_result = adapter.close_session(&session_id).await;
+    let close_result = adapter.close_session(&session_key).await;
     assert_eq!(close_result, Ok(()));
     let connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -306,16 +318,60 @@ async fn rtc_transport_close_session_cleans_bootstrap_state() {
 }
 
 #[tokio::test]
+async fn rtc_transport_distinguishes_same_session_id_across_channels() {
+    let adapter = RtcTransportAdapter::default();
+    let first_session_key = transport_key(1, 30, SessionId::Integer(30));
+    let second_session_key = transport_key(2, 30, SessionId::Integer(30));
+
+    let first_payload = adapter
+        .transport_bootstrap_payload(&first_session_key, &empty_router_capabilities())
+        .await;
+    let second_payload = adapter
+        .transport_bootstrap_payload(&second_session_key, &empty_router_capabilities())
+        .await;
+    assert!(first_payload.is_ok());
+    assert!(second_payload.is_ok());
+    let Some(first_payload) = first_payload.ok() else {
+        return;
+    };
+    let Some(second_payload) = second_payload.ok() else {
+        return;
+    };
+    assert_ne!(
+        first_payload.upload_transport.id,
+        second_payload.upload_transport.id
+    );
+    assert_ne!(
+        first_payload.download_transport.id,
+        second_payload.download_transport.id
+    );
+
+    assert_eq!(adapter.close_session(&first_session_key).await, Ok(()));
+    assert_eq!(
+        adapter
+            .connect_transport(
+                &second_session_key,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+                None,
+            )
+            .await,
+        Ok(())
+    );
+}
+
+#[tokio::test]
 async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(10);
+    let session_key = transport_key(1, 10, SessionId::Integer(10));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     let first_connect = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -325,7 +381,7 @@ async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
     assert_eq!(first_connect, Ok(()));
     let second_connect = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -338,14 +394,14 @@ async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
 #[tokio::test]
 async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(11);
+    let session_key = transport_key(1, 11, SessionId::Integer(11));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     let connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -358,14 +414,14 @@ async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
 #[tokio::test]
 async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(12);
+    let session_key = transport_key(1, 12, SessionId::Integer(12));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     let connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -381,14 +437,14 @@ async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
 #[tokio::test]
 async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_context() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(16);
+    let session_key = transport_key(1, 16, SessionId::Integer(16));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     let upload_connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -398,7 +454,7 @@ async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_co
     assert_eq!(upload_connect_result, Ok(()));
     let download_connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Download,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -411,14 +467,14 @@ async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_co
 #[tokio::test]
 async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(17);
+    let session_key = transport_key(1, 17, SessionId::Integer(17));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     let first_connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
@@ -428,7 +484,7 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
     assert_eq!(first_connect_result, Ok(()));
     let second_connect_result = adapter
         .connect_transport(
-            &session_id,
+            &session_key,
             TransportConnectDirection::Download,
             &sample_sha256_dtls_parameters_with_value(
                 "client",
@@ -448,9 +504,9 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
 async fn rtc_transport_bootstrap_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
     assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
-    let session_id = SessionId::Integer(15);
+    let session_key = transport_key(1, 15, SessionId::Integer(15));
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
     sleep(Duration::from_millis(5)).await;
@@ -464,16 +520,16 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
 #[tokio::test]
 async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(18);
+    let session_key = transport_key(1, 18, SessionId::Integer(18));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
     let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
         .await;
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
         .add_recv_media(
-            &session_id,
+            &session_key,
             StreamType::Audio,
             Str0mMediaKind::Audio,
             &rtp_parameters,
@@ -494,7 +550,7 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
             bootstrap_state.resolve_mid(transport_media_id),
             Some(expected_mid)
         );
-        let session_state = bootstrap_state.sessions.get_mut(&session_id);
+        let session_state = bootstrap_state.sessions.get_mut(&session_key);
         assert!(session_state.is_some());
         let Some(session_state) = session_state else {
             return;
@@ -517,27 +573,27 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
 #[tokio::test]
 async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_id = SessionId::Integer(19);
-    let consumer_session_id = SessionId::Integer(20);
+    let producer_session_key = transport_key(1, 19, SessionId::Integer(19));
+    let consumer_session_key = transport_key(1, 20, SessionId::Integer(20));
     let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_000);
 
     assert!(
         adapter
-            .transport_bootstrap_payload(&producer_session_id, &empty_router_capabilities())
+            .transport_bootstrap_payload(&producer_session_key, &empty_router_capabilities())
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .transport_bootstrap_payload(&consumer_session_id, &empty_router_capabilities())
+            .transport_bootstrap_payload(&consumer_session_key, &empty_router_capabilities())
             .await
             .is_ok()
     );
 
     let source_media_id = adapter
         .add_recv_media(
-            &producer_session_id,
+            &producer_session_key,
             StreamType::Audio,
             Str0mMediaKind::Audio,
             &producer_rtp_parameters,
@@ -550,9 +606,9 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 
     let result = adapter
         .add_send_media(
-            &consumer_session_id,
+            &consumer_session_key,
             Str0mMediaKind::Audio,
-            &producer_session_id,
+            &producer_session_key,
             source_media_id,
             &consumer_rtp_parameters,
         )
@@ -568,16 +624,16 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
         };
         let destinations = bootstrap_state
             .media_route_index
-            .get(&(producer_session_id.clone(), expected_source_mid));
+            .get(&(producer_session_key.clone(), expected_source_mid));
         assert!(destinations.is_some());
         let Some(destinations) = destinations else {
             return;
         };
         assert!(destinations.source_active);
         assert!(destinations.destinations.iter().any(|dest| {
-            dest.dest_session == consumer_session_id && dest.dest_mid == expected_dest_mid
+            dest.dest_session == consumer_session_key && dest.dest_mid == expected_dest_mid
         }));
-        let session_state = bootstrap_state.sessions.get_mut(&consumer_session_id);
+        let session_state = bootstrap_state.sessions.get_mut(&consumer_session_key);
         assert!(session_state.is_some());
         let Some(session_state) = session_state else {
             return;
@@ -599,27 +655,27 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 #[tokio::test]
 async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_id = SessionId::Integer(23);
-    let consumer_session_id = SessionId::Integer(24);
+    let producer_session_key = transport_key(1, 23, SessionId::Integer(23));
+    let consumer_session_key = transport_key(1, 24, SessionId::Integer(24));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 91_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 92_000);
 
     assert!(
         adapter
-            .transport_bootstrap_payload(&producer_session_id, &empty_router_capabilities())
+            .transport_bootstrap_payload(&producer_session_key, &empty_router_capabilities())
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .transport_bootstrap_payload(&consumer_session_id, &empty_router_capabilities())
+            .transport_bootstrap_payload(&consumer_session_key, &empty_router_capabilities())
             .await
             .is_ok()
     );
 
     let source_media_id = adapter
         .add_recv_media(
-            &producer_session_id,
+            &producer_session_key,
             StreamType::Camera,
             Str0mMediaKind::Video,
             &producer_rtp_parameters,
@@ -632,9 +688,9 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_id,
+            &consumer_session_key,
             Str0mMediaKind::Video,
-            &producer_session_id,
+            &producer_session_key,
             source_media_id,
             &consumer_rtp_parameters,
         )
@@ -646,16 +702,16 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 
     assert!(
         adapter
-            .set_producer_active(&producer_session_id, source_media_id, false)
+            .set_producer_active(&producer_session_key, source_media_id, false)
             .await
             .is_ok()
     );
     assert!(
         adapter
             .set_consumer_active(
-                &consumer_session_id,
+                &consumer_session_key,
                 consumer_media_id,
-                &producer_session_id,
+                &producer_session_key,
                 source_media_id,
                 false,
             )
@@ -670,14 +726,14 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
         };
         let route_entry = bootstrap_state
             .media_route_index
-            .get(&(producer_session_id.clone(), Mid::from("vid-up")));
+            .get(&(producer_session_key.clone(), Mid::from("vid-up")));
         assert!(route_entry.is_some());
         let Some(route_entry) = route_entry else {
             return;
         };
         assert!(!route_entry.source_active);
         assert!(route_entry.destinations.iter().any(|destination| {
-            destination.dest_session == consumer_session_id
+            destination.dest_session == consumer_session_key
                 && destination.dest_mid == Mid::from("vid-down")
                 && !destination.active
         }));
@@ -691,19 +747,19 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(21);
+    let session_key = transport_key(1, 21, SessionId::Integer(21));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 77_777);
 
     assert!(
         adapter
-            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
             .await
             .is_ok()
     );
     assert!(
         adapter
             .add_recv_media(
-                &session_id,
+                &session_key,
                 StreamType::Camera,
                 Str0mMediaKind::Video,
                 &rtp_parameters,
@@ -718,14 +774,14 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
             return;
         };
         bootstrap_state.record_incoming_media(
-            &session_id,
+            &session_key,
             Mid::from("cam-up"),
             120,
             Instant::now(),
         );
     }
 
-    let snapshot = adapter.incoming_bitrate_snapshot(slice::from_ref(&session_id));
+    let snapshot = adapter.incoming_bitrate_snapshot(slice::from_ref(&session_key));
     assert_eq!(snapshot.total, 960);
     assert_eq!(snapshot.audio, 0);
     assert_eq!(snapshot.camera, 960);
@@ -739,19 +795,19 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     let adapter = RtcTransportAdapter::default();
-    let session_id = SessionId::Integer(22);
+    let session_key = transport_key(1, 22, SessionId::Integer(22));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 88_888);
 
     assert!(
         adapter
-            .transport_bootstrap_payload(&session_id, &empty_router_capabilities())
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
             .await
             .is_ok()
     );
     assert!(
         adapter
             .add_recv_media(
-                &session_id,
+                &session_key,
                 StreamType::Audio,
                 Str0mMediaKind::Audio,
                 &rtp_parameters,
@@ -766,9 +822,9 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
         let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
             return;
         };
-        bootstrap_state.record_incoming_media(&session_id, Mid::from("aud-up"), 64, now);
+        bootstrap_state.record_incoming_media(&session_key, Mid::from("aud-up"), 64, now);
         bootstrap_state.incoming_bitrate_snapshot_at(
-            slice::from_ref(&session_id),
+            slice::from_ref(&session_key),
             now + Duration::from_secs(2),
         )
     };

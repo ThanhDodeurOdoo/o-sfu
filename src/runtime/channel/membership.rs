@@ -278,6 +278,7 @@ impl Channel {
         self.state.read().await.session_permissions(session_id)
     }
 
+    #[cfg(test)]
     pub(super) async fn has_session(&self, session_id: &SessionId) -> bool {
         self.state.read().await.sessions.contains_key(session_id)
     }

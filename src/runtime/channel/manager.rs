@@ -32,6 +32,7 @@ pub struct ChannelManager {
 #[derive(Debug, Default)]
 struct ChannelManagerState {
     channels_by_uuid: BTreeMap<String, ChannelEntry>,
+    next_channel_runtime_id: u64,
     next_router_id: u64,
     uuids_by_issuer: BTreeMap<String, String>,
 }
@@ -76,9 +77,12 @@ impl ChannelManager {
         {
             return Arc::clone(&entry.channel);
         }
+        let channel_runtime_id = state.next_channel_runtime_id;
+        state.next_channel_runtime_id = state.next_channel_runtime_id.saturating_add(1);
         let router_id = RouterId(state.next_router_id);
         state.next_router_id = state.next_router_id.saturating_add(1);
         let channel = Arc::new(Channel::new(
+            channel_runtime_id,
             router_id,
             issuer.to_owned(),
             key.map(str::to_owned),
@@ -108,6 +112,7 @@ impl ChannelManager {
             .map(|entry| Arc::clone(&entry.channel))
     }
 
+    #[cfg(test)]
     pub async fn has_session(&self, channel_uuid: &str, session_id: &SessionId) -> bool {
         let Some(entry) = self.entry(channel_uuid).await else {
             return false;
