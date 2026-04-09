@@ -273,7 +273,8 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
 
     let mut source = FakeMediaSource::audio();
     let rtc_peer =
-        FakeRtcPeer::connect(&publisher.transport_bootstrap().upload_transport, &source).await;
+        FakeRtcPeer::connect_publisher(&publisher.transport_bootstrap().upload_transport, &source)
+            .await;
     assert!(rtc_peer.is_some());
     let Some(mut rtc_peer) = rtc_peer else {
         return;
@@ -328,6 +329,151 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
     };
     assert!(stats.audio > 0);
     assert!(stats.total >= stats.audio);
+}
+
+#[tokio::test]
+#[allow(
+    clippy::large_futures,
+    reason = "the integration test intentionally awaits a setup helper that returns owned fake peers and rtc handles"
+)]
+async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_browsers() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = LocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-e", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let setup = connect_audio_media_flow_peers(&network, &channel).await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber, mut publisher_rtc, mut subscriber_rtc)) = setup else {
+        return;
+    };
+
+    assert_audio_media_arrives_and_download_mute_stops_flow(
+        &mut publisher,
+        &mut subscriber,
+        &mut publisher_rtc,
+        &mut subscriber_rtc,
+    )
+    .await;
+}
+
+#[allow(
+    clippy::large_futures,
+    reason = "the integration-only setup helper returns owned fake peers and rtc handles for one scenario"
+)]
+async fn connect_audio_media_flow_peers(
+    network: &LocalNetwork,
+    channel: &str,
+) -> Option<(FakePeer, FakePeer, FakeRtcPeer, FakeRtcPeer)> {
+    let publisher = network
+        .connect_fake_peer(channel, SessionId::Integer(70), TEST_CHANNEL_KEY)
+        .await?;
+    let subscriber = network
+        .connect_fake_peer(channel, SessionId::Integer(71), TEST_CHANNEL_KEY)
+        .await?;
+    let mut publisher = publisher;
+    let mut subscriber = subscriber;
+
+    let source = FakeMediaSource::audio();
+    let mut publisher_rtc =
+        FakeRtcPeer::connect_publisher(&publisher.transport_bootstrap().upload_transport, &source)
+            .await?;
+    let mut subscriber_rtc =
+        FakeRtcPeer::connect_subscriber(&subscriber.transport_bootstrap().download_transport)
+            .await?;
+
+    publisher
+        .connect_transports_with_ice(
+            publisher_rtc.local_dtls_parameters(),
+            Some(publisher_rtc.local_ice_parameters().clone()),
+        )
+        .await?;
+    subscriber
+        .connect_transports_with_ice(
+            subscriber_rtc.local_dtls_parameters(),
+            Some(subscriber_rtc.local_ice_parameters().clone()),
+        )
+        .await?;
+    publisher_rtc
+        .wait_until_connected(Duration::from_secs(5))
+        .await?;
+    subscriber_rtc
+        .wait_until_connected(Duration::from_secs(5))
+        .await?;
+
+    Some((publisher, subscriber, publisher_rtc, subscriber_rtc))
+}
+
+async fn assert_audio_media_arrives_and_download_mute_stops_flow(
+    publisher: &mut FakePeer,
+    subscriber: &mut FakePeer,
+    publisher_rtc: &mut FakeRtcPeer,
+    subscriber_rtc: &mut FakeRtcPeer,
+) {
+    let mut source = FakeMediaSource::audio();
+    let producer_id = publisher.publish_track(&source).await;
+    assert!(producer_id.is_some());
+
+    let request = subscriber.read_next_server_request().await;
+    assert!(request.is_some());
+    let Some(CurrentServerRequest::BootstrapRemoteTrack(track)) = request else {
+        panic!("expected INIT_CONSUMER for browserless media-flow assertion");
+    };
+    assert_eq!(track.session_id, SessionId::Integer(70));
+    assert_eq!(track.stream_type, StreamType::Audio);
+    assert_eq!(track.media_kind, MediaKind::Audio);
+    assert!(subscriber_rtc.expect_remote_track(&track).is_some());
+
+    let mut clock = FakeClock::default();
+    let expected_payload = publisher_rtc.send_frame(&mut source, &mut clock).await;
+    assert!(expected_payload.is_some());
+    let Some(expected_payload) = expected_payload else {
+        return;
+    };
+
+    let received_frame = subscriber_rtc
+        .read_media_frame(Duration::from_secs(2))
+        .await;
+    assert!(received_frame.is_some());
+    let Some(received_frame) = received_frame else {
+        return;
+    };
+    assert!(!received_frame.mid.is_empty());
+    assert_eq!(received_frame.payload, expected_payload);
+
+    assert!(
+        subscriber
+            .set_download_state(
+                SessionId::Integer(70),
+                DownloadStates {
+                    audio: Some(false),
+                    ..DownloadStates::default()
+                },
+            )
+            .await
+            .is_some()
+    );
+
+    let next_payload = publisher_rtc.send_frame(&mut source, &mut clock).await;
+    assert!(next_payload.is_some());
+    assert!(
+        subscriber_rtc
+            .read_media_frame(Duration::from_millis(300))
+            .await
+            .is_none()
+    );
 }
 
 async fn connect_camera_flow_peers(
