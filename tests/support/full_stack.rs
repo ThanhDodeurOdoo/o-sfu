@@ -19,8 +19,9 @@ use o_sfu::{
             CurrentTransportConnectPayload, CurrentUploadStateChangePayload,
             CurrentWebSocketCredentials,
         },
+        http::{STATS_PATH, StatsResponse},
         shared::{DownloadStates, SessionId, StreamType},
-        webrtc::{DtlsFingerprint, DtlsParameters},
+        webrtc::{DtlsFingerprint, DtlsParameters, IceParameters},
     },
 };
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -55,6 +56,17 @@ impl LocalNetwork {
 
     pub async fn create_channel(&self, issuer: &str, key: Option<&str>) -> Option<String> {
         create_channel(&self.server, issuer, key).await
+    }
+
+    pub async fn stats(&self) -> Option<StatsResponse> {
+        reqwest::Client::new()
+            .get(format!("{}{STATS_PATH}", self.server.http_base_url()))
+            .send()
+            .await
+            .ok()?
+            .json::<StatsResponse>()
+            .await
+            .ok()
     }
 
     pub async fn connect_fake_peer(
@@ -117,8 +129,26 @@ impl FakePeer {
     }
 
     pub async fn connect_transports(&mut self) -> Option<()> {
+        self.connect_transports_with_dtls(&client_dtls_parameters())
+            .await
+    }
+
+    pub async fn connect_transports_with_dtls(
+        &mut self,
+        dtls_parameters: &DtlsParameters,
+    ) -> Option<()> {
+        self.connect_transports_with_ice(dtls_parameters, None)
+            .await
+    }
+
+    pub async fn connect_transports_with_ice(
+        &mut self,
+        dtls_parameters: &DtlsParameters,
+        ice_parameters: Option<IceParameters>,
+    ) -> Option<()> {
         let payload = CurrentTransportConnectPayload {
-            dtls_parameters: client_dtls_parameters(),
+            dtls_parameters: dtls_parameters.clone(),
+            ice_parameters,
             sdp_offer: None,
         };
         let upload_response: Value = self

@@ -191,6 +191,7 @@ async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
                 fingerprints: vec![],
             },
             None,
+            None,
         )
         .await;
     assert_eq!(result, Err(TransportAdapterError::InvalidInput));
@@ -204,6 +205,7 @@ async fn rtc_transport_connect_requires_bootstrap_first() {
             &SessionId::Integer(8),
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
             None,
         )
         .await;
@@ -223,6 +225,7 @@ async fn rtc_transport_connect_succeeds_after_bootstrap() {
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
             Some(VALID_SDP_OFFER),
         )
         .await;
@@ -293,6 +296,7 @@ async fn rtc_transport_close_session_cleans_bootstrap_state() {
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
+            None,
         )
         .await;
     assert_eq!(
@@ -315,6 +319,7 @@ async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
+            None,
         )
         .await;
     assert_eq!(first_connect, Ok(()));
@@ -323,6 +328,7 @@ async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
             None,
         )
         .await;
@@ -342,6 +348,7 @@ async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
             Some("v=0\r\ns=-\r\nt=0 0\r\n"),
         )
         .await;
@@ -361,6 +368,7 @@ async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
             &session_id,
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
+            None,
             Some("m=audio 9 RTP/SAVPF 111\r\n"),
         )
         .await;
@@ -384,6 +392,7 @@ async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_co
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
+            None,
         )
         .await;
     assert_eq!(upload_connect_result, Ok(()));
@@ -392,6 +401,7 @@ async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_co
             &session_id,
             TransportConnectDirection::Download,
             &sample_sha256_dtls_parameters("client"),
+            None,
             None,
         )
         .await;
@@ -412,6 +422,7 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
             TransportConnectDirection::Upload,
             &sample_sha256_dtls_parameters("client"),
             None,
+            None,
         )
         .await;
     assert_eq!(first_connect_result, Ok(()));
@@ -423,6 +434,7 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
                 "client",
                 "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00",
             ),
+            None,
             None,
         )
         .await;

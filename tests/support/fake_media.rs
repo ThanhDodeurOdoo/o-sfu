@@ -144,6 +144,27 @@ impl FakeMediaSource {
         }
     }
 
+    #[must_use]
+    pub fn media_kind(&self) -> MediaKind {
+        self.media_kind
+    }
+
+    #[must_use]
+    pub fn stream_type(&self) -> StreamType {
+        self.stream_type
+    }
+
+    pub fn primary_ssrc(&self) -> Option<u32> {
+        self.rtp_parameters
+            .0
+            .get("encodings")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|encodings| encodings.first())
+            .and_then(|encoding| encoding.get("ssrc"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|ssrc| u32::try_from(ssrc).ok())
+    }
+
     pub fn next_frame(&mut self, clock: &mut FakeClock) -> FakeMediaFrame {
         let emitted_at = clock.advance(self.frame_interval);
         let sequence_number = self.next_sequence_number;

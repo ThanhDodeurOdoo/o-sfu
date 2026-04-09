@@ -1,13 +1,14 @@
 use std::str::FromStr;
 
 use o_sfu_router::ParseDiagnosticKind;
+use str0m::IceCreds;
 use str0m::config::Fingerprint;
 use tracing::{debug, error, warn};
 
 use super::{RtcSessionState, dtls, ice, sdp};
 use crate::runtime::transport_adapter::TransportAdapterError;
 use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
-use crate::signaling::webrtc::{DtlsParameters, IceCandidate};
+use crate::signaling::webrtc::{DtlsParameters, IceCandidate, IceParameters};
 
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 
@@ -77,6 +78,32 @@ pub(super) fn parse_remote_fingerprint(
 ) -> Result<Fingerprint, TransportAdapterError> {
     let fingerprint_string = format!("{} {}", fingerprint.algorithm(), fingerprint.value());
     Fingerprint::from_str(&fingerprint_string).map_err(|_error| TransportAdapterError::InvalidInput)
+}
+
+pub(super) fn parse_remote_ice_credentials(
+    ice_parameters: Option<&IceParameters>,
+) -> Result<Option<IceCreds>, TransportAdapterError> {
+    let Some(ice_parameters) = ice_parameters else {
+        return Ok(None);
+    };
+    let Some(username_fragment) = ice_parameters
+        .0
+        .get("usernameFragment")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    let Some(password) = ice_parameters
+        .0
+        .get("password")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    Ok(Some(IceCreds {
+        ufrag: username_fragment.to_owned(),
+        pass: password.to_owned(),
+    }))
 }
 
 pub(super) fn ensure_remote_fingerprint_compatibility(

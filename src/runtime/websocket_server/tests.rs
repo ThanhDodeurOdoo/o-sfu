@@ -824,6 +824,7 @@ mod websocket_server_tests {
             &mut publisher_socket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 20),
@@ -835,6 +836,7 @@ mod websocket_server_tests {
             &mut subscriber_socket,
             CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 21),
@@ -1260,6 +1262,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 1),
@@ -1270,6 +1273,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 9, 2),
@@ -1336,6 +1340,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: invalid_dtls_parameters_for_stub_rejection(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 12, 1),
@@ -1392,6 +1397,7 @@ mod websocket_server_tests {
             &mut websocket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 0),
@@ -1504,6 +1510,7 @@ mod websocket_server_tests {
             &mut publisher_socket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 10),
@@ -1519,6 +1526,7 @@ mod websocket_server_tests {
             &mut subscriber_socket,
             CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 11),
@@ -1630,6 +1638,7 @@ mod websocket_server_tests {
             &mut publisher_socket,
             CurrentClientRequest::ConnectUploadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 10),
@@ -1689,6 +1698,7 @@ mod websocket_server_tests {
             &mut subscriber_socket,
             CurrentClientRequest::ConnectDownloadTransport(CurrentTransportConnectPayload {
                 dtls_parameters: sample_client_dtls_parameters(),
+                ice_parameters: None,
                 sdp_offer: None,
             }),
             CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 11),

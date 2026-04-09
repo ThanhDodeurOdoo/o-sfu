@@ -4,6 +4,7 @@
 )]
 
 pub mod fake_media;
+pub mod fake_rtc_peer;
 pub mod full_stack;
 
 use std::collections::BTreeMap;

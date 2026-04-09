@@ -7,7 +7,7 @@ use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
     shared::StreamType as SignalingStreamType,
-    webrtc::{DtlsParameters, MediaKind as SignalingMediaKind},
+    webrtc::{DtlsParameters, IceParameters, MediaKind as SignalingMediaKind},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind as Str0mMediaKind;
@@ -106,17 +106,30 @@ impl RuntimeTransportAdapter {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
+        ice_parameters: Option<&IceParameters>,
         sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .connect_transport(session_id, direction, dtls_parameters, sdp_offer)
+                    .connect_transport(
+                        session_id,
+                        direction,
+                        dtls_parameters,
+                        ice_parameters,
+                        sdp_offer,
+                    )
                     .await
             }
             Self::Rtc(adapter) => {
                 adapter
-                    .connect_transport(session_id, direction, dtls_parameters, sdp_offer)
+                    .connect_transport(
+                        session_id,
+                        direction,
+                        dtls_parameters,
+                        ice_parameters,
+                        sdp_offer,
+                    )
                     .await
             }
         }

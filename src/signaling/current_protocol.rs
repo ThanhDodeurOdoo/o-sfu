@@ -10,8 +10,8 @@ use crate::signaling::shared::{
     SessionId, SessionInfo, StreamType,
 };
 use crate::signaling::webrtc::{
-    DtlsParameters, MediaKind, PublishOptionsByMediaKind, RtpCapabilities, RtpParameters,
-    TransportBootstrap,
+    DtlsParameters, IceParameters, MediaKind, PublishOptionsByMediaKind, RtpCapabilities,
+    RtpParameters, TransportBootstrap,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +90,8 @@ pub struct CurrentUploadStateChangePayload {
 pub struct CurrentTransportConnectPayload {
     #[serde(rename = "dtlsParameters")]
     pub dtls_parameters: DtlsParameters,
+    #[serde(rename = "iceParameters", skip_serializing_if = "Option::is_none")]
+    pub ice_parameters: Option<IceParameters>,
     #[serde(rename = "sdpOffer", skip_serializing_if = "Option::is_none")]
     pub sdp_offer: Option<String>,
 }
@@ -432,6 +434,7 @@ mod tests {
                     value: String::from("AA:BB:CC"),
                 }],
             },
+            ice_parameters: None,
             sdp_offer: None,
         };
         assert_round_trip(
@@ -528,6 +531,10 @@ mod tests {
                         value: String::from("AA:BB:CC"),
                     }],
                 },
+                ice_parameters: Some(IceParameters(json!({
+                    "usernameFragment": "client-ufrag",
+                    "password": "client-password"
+                }))),
                 sdp_offer: Some(String::from(
                     "v=0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
                 )),
@@ -541,6 +548,10 @@ mod tests {
                             "algorithm": "sha-256",
                             "value": "AA:BB:CC"
                         }]
+                    },
+                    "iceParameters": {
+                        "usernameFragment": "client-ufrag",
+                        "password": "client-password"
                     },
                     "sdpOffer": "v=0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
                 }

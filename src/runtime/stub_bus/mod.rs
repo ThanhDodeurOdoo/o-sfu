@@ -24,7 +24,7 @@ use crate::signaling::{
         CurrentTransportConnectPayload, CurrentWebSocketCloseCode,
     },
     shared::{SessionId, StreamType},
-    webrtc::{DtlsParameters, MediaKind, RtpCapabilities},
+    webrtc::{DtlsParameters, IceParameters, MediaKind, RtpCapabilities},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
@@ -185,6 +185,7 @@ impl StubWebRtcAdapter {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
+        _ice_parameters: Option<&IceParameters>,
         _sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::TransportConnectRequested {
@@ -648,6 +649,7 @@ impl StubBusSession {
                 &self.session_id,
                 direction,
                 &payload.dtls_parameters,
+                payload.ice_parameters.as_ref(),
                 payload.sdp_offer.as_deref(),
             )
             .await

@@ -30,7 +30,7 @@ use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     shared::{SessionId, StreamType},
-    webrtc::DtlsParameters,
+    webrtc::{DtlsParameters, IceParameters},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::config::Fingerprint;
@@ -349,19 +349,26 @@ impl RtcTransportAdapter {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         dtls_parameters: &DtlsParameters,
+        ice_parameters: Option<&IceParameters>,
         sdp_offer: Option<&str>,
     ) -> Result<(), TransportAdapterError> {
         if let Some(sdp_offer) = sdp_offer {
             validation::validate_sdp_offer(sdp_offer)?;
         }
         let parsed_dtls_parameters = validation::parse_dtls_parameters(dtls_parameters)?;
+        let remote_ice_credentials = validation::parse_remote_ice_credentials(ice_parameters)?;
         self.ensure_connect_transition(session_id, direction)?;
         debug!(
             ?direction,
             session_id = ?session_id,
             "validated DTLS parameters and transport lifecycle state before rtc transport connect"
         );
-        self.apply_transport_connect(session_id, direction, &parsed_dtls_parameters)?;
+        self.apply_transport_connect(
+            session_id,
+            direction,
+            &parsed_dtls_parameters,
+            remote_ice_credentials,
+        )?;
         self.mark_connected(session_id, direction)?;
         Ok(())
     }
@@ -731,6 +738,7 @@ impl RtcTransportAdapter {
         session_id: &SessionId,
         direction: TransportConnectDirection,
         parsed_dtls_parameters: &dtls::ParsedDtlsParameters,
+        remote_ice_credentials: Option<IceCreds>,
     ) -> Result<(), TransportAdapterError> {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -751,6 +759,9 @@ impl RtcTransportAdapter {
         let should_start_dtls = !session_state.dtls_started;
         {
             let mut direct_api = session_state.rtc.direct_api();
+            if let Some(remote_ice_credentials) = remote_ice_credentials {
+                direct_api.set_remote_ice_credentials(remote_ice_credentials);
+            }
             if session_state.remote_dtls_fingerprint.is_none() {
                 direct_api.set_remote_fingerprint(remote_fingerprint);
                 session_state.remote_dtls_fingerprint = Some(fingerprint_literal);

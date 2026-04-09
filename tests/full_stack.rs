@@ -11,6 +11,7 @@ use o_sfu::{
     config::TransportBackend,
     signaling::{
         current_protocol::{CurrentServerMessage, CurrentServerRequest},
+        http::IncomingBitRateStats,
         shared::{DownloadStates, SessionId, StreamType},
         webrtc::MediaKind,
     },
@@ -19,9 +20,11 @@ use o_sfu::{
 use crate::support::{
     TEST_CHANNEL_KEY,
     fake_media::{FakeClock, FakeMediaSource},
+    fake_rtc_peer::FakeRtcPeer,
     full_stack::{FakePeer, LocalNetwork},
     test_config,
 };
+use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[test]
@@ -234,6 +237,99 @@ async fn fake_peers_cover_session_replacement_and_republish_deterministically() 
     assert!(payload.active);
 }
 
+#[tokio::test]
+async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = LocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-d", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let publisher = network
+        .connect_fake_peer(&channel, SessionId::Integer(60), TEST_CHANNEL_KEY)
+        .await;
+    let subscriber = network
+        .connect_fake_peer(&channel, SessionId::Integer(61), TEST_CHANNEL_KEY)
+        .await;
+    assert!(publisher.is_some());
+    assert!(subscriber.is_some());
+    let Some(mut publisher) = publisher else {
+        return;
+    };
+    let Some(mut subscriber) = subscriber else {
+        return;
+    };
+
+    let mut source = FakeMediaSource::audio();
+    let rtc_peer =
+        FakeRtcPeer::connect(&publisher.transport_bootstrap().upload_transport, &source).await;
+    assert!(rtc_peer.is_some());
+    let Some(mut rtc_peer) = rtc_peer else {
+        return;
+    };
+
+    assert!(
+        publisher
+            .connect_transports_with_ice(
+                rtc_peer.local_dtls_parameters(),
+                Some(rtc_peer.local_ice_parameters().clone()),
+            )
+            .await
+            .is_some()
+    );
+    assert!(subscriber.connect_transports().await.is_some());
+    assert!(
+        rtc_peer
+            .wait_until_connected(Duration::from_secs(5))
+            .await
+            .is_some()
+    );
+
+    let producer_id = publisher.publish_track(&source).await;
+    assert!(producer_id.is_some());
+    let Some(producer_id) = producer_id else {
+        return;
+    };
+
+    let request = subscriber.read_next_server_request().await;
+    assert!(request.is_some());
+    let Some(CurrentServerRequest::BootstrapRemoteTrack(payload)) = request else {
+        panic!("expected INIT_CONSUMER after real RTC publisher setup");
+    };
+    assert_eq!(payload.source_id, producer_id);
+    assert_eq!(payload.session_id, SessionId::Integer(60));
+    assert_eq!(payload.stream_type, StreamType::Audio);
+    assert_eq!(payload.media_kind, MediaKind::Audio);
+    assert!(payload.active);
+
+    let mut clock = FakeClock::default();
+    let stats = stream_until_audio_bitrate_is_observable(
+        &network,
+        &channel,
+        &mut rtc_peer,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+    assert!(stats.is_some());
+    let Some(stats) = stats else {
+        return;
+    };
+    assert!(stats.audio > 0);
+    assert!(stats.total >= stats.audio);
+}
+
 async fn connect_camera_flow_peers(
     network: &LocalNetwork,
     channel: &str,
@@ -344,4 +440,23 @@ async fn assert_departure_message(subscriber: &mut FakePeer, session_id: Session
         panic!("expected departure notification");
     };
     assert_eq!(departure.session_id, session_id);
+}
+
+async fn stream_until_audio_bitrate_is_observable(
+    network: &LocalNetwork,
+    channel: &str,
+    rtc_peer: &mut FakeRtcPeer,
+    source: &mut FakeMediaSource,
+    clock: &mut FakeClock,
+) -> Option<IncomingBitRateStats> {
+    for _ in 0..20 {
+        rtc_peer.send_frames(source, clock, 2).await?;
+        let stats = network.stats().await?;
+        let channel_stats = stats.into_iter().find(|entry| entry.uuid == channel)?;
+        if channel_stats.sessions_stats.incoming_bit_rate.audio > 0 {
+            return Some(channel_stats.sessions_stats.incoming_bit_rate);
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    None
 }
