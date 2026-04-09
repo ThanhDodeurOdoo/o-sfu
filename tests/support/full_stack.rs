@@ -13,11 +13,13 @@ use o_sfu::{
     signaling::{
         current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
         current_protocol::{
-            CurrentClientRequest, CurrentPublishTrackResponse, CurrentServerRequest,
+            CurrentClientMessage, CurrentClientRequest, CurrentDownloadStateChangePayload,
+            CurrentPublishTrackResponse, CurrentServerMessage, CurrentServerRequest,
             CurrentStartupPayload, CurrentTransportBootstrapPayload,
-            CurrentTransportConnectPayload, CurrentWebSocketCredentials,
+            CurrentTransportConnectPayload, CurrentUploadStateChangePayload,
+            CurrentWebSocketCredentials,
         },
-        shared::SessionId,
+        shared::{DownloadStates, SessionId, StreamType},
         webrtc::{DtlsFingerprint, DtlsParameters},
     },
 };
@@ -143,6 +145,38 @@ impl FakePeer {
         Some(response.id)
     }
 
+    pub async fn set_upload_active(&mut self, stream_type: StreamType, active: bool) -> Option<()> {
+        self.send_message(CurrentClientMessage::UpdateUploadState(
+            CurrentUploadStateChangePayload {
+                stream_type,
+                active,
+            },
+        ))
+        .await
+    }
+
+    pub async fn set_download_state(
+        &mut self,
+        target_session_id: SessionId,
+        states: DownloadStates,
+    ) -> Option<()> {
+        self.send_message(CurrentClientMessage::UpdateDownloadState(
+            CurrentDownloadStateChangePayload {
+                session_id: target_session_id,
+                states,
+            },
+        ))
+        .await
+    }
+
+    pub async fn read_next_server_message(&mut self) -> Option<CurrentServerMessage> {
+        self.client.read_server_message().await
+    }
+
+    pub async fn close(self) -> Option<()> {
+        self.client.close().await
+    }
+
     pub async fn read_next_server_request(&mut self) -> Option<CurrentServerRequest> {
         loop {
             let (request_id, request) = self.client.read_server_request().await?;
@@ -185,6 +219,10 @@ impl FakePeer {
             }
             self.handle_unsolicited_requests(batch).await?;
         }
+    }
+
+    async fn send_message(&mut self, message: CurrentClientMessage) -> Option<()> {
+        self.client.send_bus_message(message).await
     }
 
     async fn handle_unsolicited_requests(&mut self, batch: CurrentBusBatch) -> Option<()> {
