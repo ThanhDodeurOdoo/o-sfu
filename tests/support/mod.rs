@@ -1,8 +1,18 @@
+#![allow(
+    dead_code,
+    reason = "shared integration-test support is compiled by multiple test targets, each of which uses only a subset of the helpers"
+)]
+
+pub mod fake_media;
+pub mod full_stack;
+
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::StatusCode;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async,
@@ -17,10 +27,10 @@ use o_sfu::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
             sign,
         },
-        current_bus::{CurrentBusBatch, CurrentBusEnvelope},
+        current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
         current_protocol::{
-            CurrentClientMessage, CurrentServerMessage, CurrentStartupPayload,
-            CurrentWebSocketCredentials,
+            CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
+            CurrentStartupPayload, CurrentWebSocketCredentials,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
         shared::{SessionId, SessionPermissions},
@@ -197,6 +207,27 @@ impl FakeWebSocketClient {
     pub async fn read_bus_batch(&mut self) -> Option<CurrentBusBatch> {
         read_bus_batch(&mut self.websocket).await
     }
+
+    pub async fn send_bus_request<T>(&mut self, request: &T) -> Option<CurrentBusEnvelope>
+    where
+        T: serde::Serialize,
+    {
+        send_bus_request(&mut self.websocket, request).await
+    }
+
+    pub async fn respond_to_server_request(
+        &mut self,
+        request_id: &CurrentBusRequestId,
+        response: Value,
+    ) -> Option<()> {
+        respond_to_server_request(&mut self.websocket, request_id, response).await
+    }
+
+    pub async fn read_server_request(
+        &mut self,
+    ) -> Option<(Option<CurrentBusRequestId>, CurrentServerRequest)> {
+        read_server_request(&mut self.websocket).await
+    }
 }
 
 pub async fn authenticate_with_credentials(
@@ -324,6 +355,45 @@ pub async fn send_bus_message(
     Some(())
 }
 
+pub async fn send_bus_request<T>(
+    websocket: &mut TestWebSocket,
+    request: &T,
+) -> Option<CurrentBusEnvelope>
+where
+    T: serde::Serialize,
+{
+    let payload = serde_json::to_string(&vec![CurrentBusEnvelope {
+        message: serde_json::to_value(request).ok()?,
+        need_response: Some(CurrentBusRequestId::new(CurrentBusOrigin::Client, 0, 0)),
+        response_to: None,
+    }])
+    .ok()?;
+    websocket
+        .send(tungstenite::Message::Text(payload.into()))
+        .await
+        .ok()?;
+    let batch = read_bus_batch(websocket).await?;
+    batch.first().cloned()
+}
+
+pub async fn respond_to_server_request(
+    websocket: &mut TestWebSocket,
+    request_id: &CurrentBusRequestId,
+    response: Value,
+) -> Option<()> {
+    let payload = serde_json::to_string(&vec![CurrentBusEnvelope {
+        message: response,
+        need_response: None,
+        response_to: Some(request_id.clone()),
+    }])
+    .ok()?;
+    websocket
+        .send(tungstenite::Message::Text(payload.into()))
+        .await
+        .ok()?;
+    Some(())
+}
+
 pub async fn read_message(
     websocket: &mut TestWebSocket,
 ) -> Option<tungstenite::Result<tungstenite::Message>> {
@@ -350,6 +420,17 @@ pub async fn read_server_message(websocket: &mut TestWebSocket) -> Option<Curren
     serde_json::from_value(envelope.message.clone()).ok()
 }
 
+pub async fn read_server_request(
+    websocket: &mut TestWebSocket,
+) -> Option<(Option<CurrentBusRequestId>, CurrentServerRequest)> {
+    let batch = read_bus_batch(websocket).await?;
+    let envelope = batch.first()?;
+    Some((
+        envelope.need_response.clone(),
+        serde_json::from_value(envelope.message.clone()).ok()?,
+    ))
+}
+
 pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
     loop {
         let message = read_message(websocket).await?;
@@ -357,4 +438,19 @@ pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode>
             return frame.map(|frame| frame.code);
         }
     }
+}
+
+pub fn decode_bus_response<T>(envelope: &CurrentBusEnvelope) -> Option<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(envelope.message.clone()).ok()
+}
+
+pub fn is_empty_bus_response(envelope: &CurrentBusEnvelope) -> bool {
+    matches!(&envelope.message, Value::Object(object) if object.is_empty())
+}
+
+pub(crate) fn supported_client_rtp_capabilities() -> Value {
+    test_client_rtp_capabilities()
 }
