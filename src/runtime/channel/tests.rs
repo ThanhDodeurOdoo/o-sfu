@@ -8,12 +8,16 @@
 mod channel_tests {
     use std::{sync::Arc, time::Duration};
 
-    use o_sfu_router::SessionPermissions as RouterSessionPermissions;
+    use o_sfu_router::{
+        MediaKind as RouterMediaKind, RouterId, SessionPermissions as RouterSessionPermissions,
+        StreamType as RouterStreamType,
+    };
     use tokio::sync::mpsc;
     use tokio::{task::yield_now, time::timeout};
 
     use super::super::{
         ChannelConfig, ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound,
+        topology::ChannelTopology,
     };
     use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
     use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
@@ -187,6 +191,70 @@ mod channel_tests {
         mpsc::UnboundedReceiver<SessionOutbound>,
     ) {
         mpsc::unbounded_channel()
+    }
+
+    #[test]
+    fn topology_assigns_the_primary_router_to_joined_sessions() {
+        let mut topology = ChannelTopology::new(RouterId(7));
+        let session_id = SessionId::Integer(10);
+
+        assert!(
+            topology
+                .ensure_session(&session_id, 42, &SessionPermissions::default())
+                .is_ok()
+        );
+        assert!(topology.ensure_session_transports(&session_id).is_ok());
+
+        assert_eq!(
+            topology.home_router_id_for_session(&session_id),
+            Some(RouterId(7))
+        );
+        assert_eq!(topology.session_count(), 1);
+    }
+
+    #[test]
+    fn topology_returns_router_scoped_entity_handles() {
+        let mut topology = ChannelTopology::new(RouterId(9));
+        let producer_session_id = SessionId::Integer(10);
+        let consumer_session_id = SessionId::Integer(20);
+
+        for (seed, session_id) in [(10, &producer_session_id), (20, &consumer_session_id)] {
+            assert!(
+                topology
+                    .ensure_session(session_id, seed, &SessionPermissions::default())
+                    .is_ok()
+            );
+            assert!(topology.ensure_session_transports(session_id).is_ok());
+        }
+
+        let producer = topology
+            .add_producer(
+                &producer_session_id,
+                RouterMediaKind::Audio,
+                RouterStreamType::Audio,
+            )
+            .ok();
+        assert!(producer.is_some());
+        let Some(producer) = producer else {
+            return;
+        };
+
+        let consumer = topology
+            .add_consumer(
+                &consumer_session_id,
+                producer,
+                RouterMediaKind::Audio,
+                RouterStreamType::Audio,
+                true,
+            )
+            .ok();
+        assert!(consumer.is_some());
+        let Some(consumer) = consumer else {
+            return;
+        };
+
+        assert_eq!(producer.router_id(), RouterId(9));
+        assert_eq!(consumer.router_id(), RouterId(9));
     }
 
     #[tokio::test]

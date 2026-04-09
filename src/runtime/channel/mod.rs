@@ -7,6 +7,7 @@
 //! - `outbound`: shared outbound fan-out helpers for session handlers
 //! - `state`: channel-local mutable state and internal bootstrap bookkeeping
 //! - `router_state`: compatibility bridge from signaling session ids into the pure router
+//! - `topology`: channel-local routing placement boundary
 //! - `rtp_capabilities`: default router RTP capability surface
 //! - `rtp_conversion`: translation between wire RTP JSON and router-native RTP types
 
@@ -34,6 +35,7 @@ mod rtp_conversion;
 mod state;
 #[cfg(test)]
 mod tests;
+mod topology;
 
 pub use manager::ChannelManager;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
@@ -159,7 +161,7 @@ impl Channel {
     }
 
     pub async fn router_rtp_capabilities(&self) -> o_sfu_router::RtpCapabilities {
-        self.state.read().await.router.rtp_capabilities().clone()
+        self.state.read().await.topology.rtp_capabilities().clone()
     }
 
     pub(super) async fn session_stats_snapshot(
@@ -176,9 +178,9 @@ impl Channel {
             .collect::<Vec<_>>();
         ChannelSessionStatsSnapshot {
             incoming_bitrate: transport_adapter.incoming_bitrate_snapshot(&session_keys),
-            count: state.router.session_count(),
-            camera_count: state.router.camera_count(),
-            screen_count: state.router.screen_count(),
+            count: state.topology.session_count(),
+            camera_count: state.topology.camera_count(),
+            screen_count: state.topology.screen_count(),
         }
     }
 

@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::{
-    ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind, ProducerId as RouterProducerId,
-    RouterId, RtpParameters as RouterRtpParameters, StreamType as RouterStreamType, can_consume,
-    negotiate_consumer_rtp_parameters,
+    MediaKind as RouterMediaKind, RouterId, RtpParameters as RouterRtpParameters,
+    StreamType as RouterStreamType, can_consume, negotiate_consumer_rtp_parameters,
 };
 use tokio::sync::mpsc;
 use tracing::{error, warn};
@@ -16,7 +15,10 @@ use crate::signaling::{
     },
 };
 
-use super::{SessionOutbound, router_state::ChannelRouterState, rtp_conversion};
+use super::{
+    SessionOutbound, rtp_conversion,
+    topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
+};
 use crate::runtime::transport_adapter::TransportMediaId;
 
 #[derive(Debug)]
@@ -28,7 +30,7 @@ pub(super) struct ChannelState {
     pub(super) recording_state: RecordingState,
     pub(super) producers: BTreeMap<String, PublishedProducer>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
-    pub(super) router: ChannelRouterState,
+    pub(super) topology: ChannelTopology,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,14 +64,14 @@ pub(super) struct PublishedProducer {
     pub(super) stream_type: StreamType,
     pub(super) media_kind: SignalingMediaKind,
     pub(super) consumable_rtp_parameters: RouterRtpParameters,
-    pub(super) router_producer_id: RouterProducerId,
+    pub(super) routed_producer_id: RoutedProducerId,
     pub(super) transport_media_id: Option<TransportMediaId>,
     pub(super) active: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ConsumerState {
-    pub(super) router_consumer: RouterConsumerId,
+    pub(super) routed_consumer_id: RoutedConsumerId,
     pub(super) consumer_connection_id: u64,
     pub(super) source_connection_id: u64,
     pub(super) source_media: TransportMediaId,
@@ -97,7 +99,7 @@ pub(super) struct PreparedConsumerBootstrap {
     pub(super) producer_connection_id: u64,
     pub(super) producer_stream_type: StreamType,
     pub(super) producer_media_kind: SignalingMediaKind,
-    pub(super) producer_router_producer_id: RouterProducerId,
+    pub(super) producer_routed_id: RoutedProducerId,
     pub(super) producer_wire_id: String,
     pub(super) producer_active: bool,
 }
@@ -106,7 +108,7 @@ pub(super) struct PreparedConsumerBootstrap {
 pub(super) struct ReservedConsumerBootstrap {
     pub(super) sender: mpsc::UnboundedSender<SessionOutbound>,
     pub(super) request: CurrentServerRequest,
-    pub(super) router_consumer_id: RouterConsumerId,
+    pub(super) routed_consumer_id: RoutedConsumerId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,7 +132,7 @@ impl ChannelState {
             },
             producers: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
-            router: ChannelRouterState::new(router_id),
+            topology: ChannelTopology::new(router_id),
         }
     }
 
@@ -218,7 +220,7 @@ impl ChannelState {
         if session.connection_id != publisher_connection_id || !session.upload_transport_connected {
             return None;
         }
-        let router_producer_id = match self.router.add_producer(
+        let routed_producer_id = match self.topology.add_producer(
             session_id,
             to_router_media_kind(media_kind),
             to_router_stream_type(stream_type),
@@ -241,7 +243,7 @@ impl ChannelState {
                 stream_type,
                 media_kind,
                 consumable_rtp_parameters,
-                router_producer_id,
+                routed_producer_id,
                 transport_media_id: None,
                 active: true,
             },
@@ -285,8 +287,8 @@ impl ChannelState {
             return;
         };
         if self
-            .router
-            .remove_producer(producer.router_producer_id)
+            .topology
+            .remove_producer(producer.routed_producer_id)
             .is_err()
         {
             error!(
@@ -324,7 +326,7 @@ impl ChannelState {
         let producer_owner_session_id = producer.owner_session_id.clone();
         let producer_stream_type = producer.stream_type;
         let producer_media_kind = producer.media_kind;
-        let producer_router_producer_id = producer.router_producer_id;
+        let producer_routed_id = producer.routed_producer_id;
         let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
         let producer_active = producer.active;
 
@@ -348,7 +350,7 @@ impl ChannelState {
             producer_connection_id: producer.owner_connection_id,
             producer_stream_type,
             producer_media_kind,
-            producer_router_producer_id,
+            producer_routed_id,
             producer_wire_id: target.producer_wire_id.clone(),
             producer_active,
         })
@@ -371,15 +373,15 @@ impl ChannelState {
             || producer.stream_type != prepared.producer_stream_type
             || producer.media_kind != prepared.producer_media_kind
             || producer.transport_media_id != Some(target.transport_media_id)
-            || producer.router_producer_id != prepared.producer_router_producer_id
+            || producer.routed_producer_id != prepared.producer_routed_id
             || producer.active != prepared.producer_active
         {
             return None;
         }
         let consumer_id = allocate_wire_consumer_id(&mut self.next_consumer_id);
-        let router_consumer_id = match self.router.add_consumer(
+        let routed_consumer_id = match self.topology.add_consumer(
             &target.consumer_session_id,
-            prepared.producer_router_producer_id,
+            prepared.producer_routed_id,
             to_router_media_kind(prepared.producer_media_kind),
             to_router_stream_type(prepared.producer_stream_type),
             true,
@@ -407,7 +409,7 @@ impl ChannelState {
                     stream_type: prepared.producer_stream_type,
                 },
             ),
-            router_consumer_id,
+            routed_consumer_id,
         })
     }
 
@@ -430,7 +432,7 @@ impl ChannelState {
             || producer.stream_type != prepared.producer_stream_type
             || producer.media_kind != prepared.producer_media_kind
             || producer.transport_media_id != Some(target.transport_media_id)
-            || producer.router_producer_id != prepared.producer_router_producer_id
+            || producer.routed_producer_id != prepared.producer_routed_id
             || producer.active != prepared.producer_active
         {
             return None;
@@ -442,7 +444,7 @@ impl ChannelState {
                 stream_type: prepared.producer_stream_type,
             },
             ConsumerState {
-                router_consumer: reserved.router_consumer_id,
+                routed_consumer_id: reserved.routed_consumer_id,
                 consumer_connection_id: target.consumer_connection_id,
                 source_connection_id: prepared.producer_connection_id,
                 source_media: target.transport_media_id,
@@ -457,12 +459,12 @@ impl ChannelState {
         reserved: &ReservedConsumerBootstrap,
     ) {
         if self
-            .router
-            .remove_consumer(reserved.router_consumer_id)
+            .topology
+            .remove_consumer(reserved.routed_consumer_id)
             .is_err()
         {
             error!(
-                router_consumer_id = ?reserved.router_consumer_id,
+                routed_consumer_id = ?reserved.routed_consumer_id,
                 "failed to roll back reserved consumer from channel router"
             );
         }
@@ -473,7 +475,7 @@ impl ChannelState {
         &self,
         session_id: &SessionId,
     ) -> Option<o_sfu_router::SessionPermissions> {
-        self.router.session_permissions(session_id)
+        self.topology.session_permissions(session_id)
     }
 }
 

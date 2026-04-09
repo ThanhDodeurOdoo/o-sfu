@@ -54,7 +54,7 @@ impl Channel {
             }
             (
                 session.connection_id,
-                state.router.rtp_capabilities().clone(),
+                state.topology.rtp_capabilities().clone(),
             )
         };
 
@@ -248,7 +248,7 @@ impl Channel {
             let Some(producer_id) = producer_id else {
                 return;
             };
-            let (router_producer_id, transport_media_id, owner_connection_id) = {
+            let (routed_producer_id, transport_media_id, owner_connection_id) = {
                 let Some(producer) = state.producers.get_mut(&producer_id) else {
                     return;
                 };
@@ -257,15 +257,15 @@ impl Channel {
                     return;
                 };
                 (
-                    producer.router_producer_id,
+                    producer.routed_producer_id,
                     transport_media_id,
                     producer.owner_connection_id,
                 )
             };
             let paused = !active;
             if state
-                .router
-                .set_producer_paused(router_producer_id, paused)
+                .topology
+                .set_producer_paused(routed_producer_id, paused)
                 .is_err()
             {
                 error!(
@@ -285,7 +285,7 @@ impl Channel {
             }
             let updated_info = session.info.clone();
             if state
-                .router
+                .topology
                 .update_session_info(session_id, &updated_info)
                 .is_err()
             {
@@ -347,8 +347,8 @@ impl Channel {
             }
             let paused = !active;
             if state
-                .router
-                .set_consumer_paused(consumer_state.router_consumer, paused)
+                .topology
+                .set_consumer_paused(consumer_state.routed_consumer_id, paused)
                 .is_err()
             {
                 error!(

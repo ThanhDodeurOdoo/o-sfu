@@ -37,7 +37,7 @@ impl Channel {
         state.next_connection_id = state.next_connection_id.saturating_add(1);
         if is_new
             && state
-                .router
+                .topology
                 .ensure_session(&session_id, connection_id, &permissions)
                 .is_err()
         {
@@ -47,7 +47,12 @@ impl Channel {
             );
             return Err(ChannelJoinError::RouterState);
         }
-        if is_new && state.router.ensure_session_transports(&session_id).is_err() {
+        if is_new
+            && state
+                .topology
+                .ensure_session_transports(&session_id)
+                .is_err()
+        {
             error!(
                 ?session_id,
                 "failed to open default transports for joined session in channel router"
@@ -83,11 +88,11 @@ impl Channel {
         };
         if previous_sender.is_some()
             && state
-                .router
+                .topology
                 .update_session_permissions(&session_id, &permissions)
                 .and_then(|()| {
                     state
-                        .router
+                        .topology
                         .update_session_info(&session_id, &SessionInfo::default())
                 })
                 .is_err()
@@ -117,7 +122,7 @@ impl Channel {
         if session.connection_id != connection_id {
             return false;
         }
-        if state.router.remove_session(session_id).is_err() {
+        if state.topology.remove_session(session_id).is_err() {
             error!(
                 ?session_id,
                 "failed to mirror session leave into channel router"
@@ -157,7 +162,7 @@ impl Channel {
             session.info.clone()
         };
         if state
-            .router
+            .topology
             .update_session_info(session_id, &updated_info)
             .is_err()
         {
@@ -195,7 +200,7 @@ impl Channel {
             if !state.sessions.contains_key(session_id) {
                 continue;
             }
-            if state.router.remove_session(session_id).is_err() {
+            if state.topology.remove_session(session_id).is_err() {
                 error!(
                     ?session_id,
                     "failed to mirror bulk disconnect into channel router"
@@ -267,7 +272,7 @@ impl Channel {
 
     #[cfg(test)]
     pub(super) async fn router_session_count(&self) -> usize {
-        usize::try_from(self.state.read().await.router.session_count()).unwrap_or(usize::MAX)
+        usize::try_from(self.state.read().await.topology.session_count()).unwrap_or(usize::MAX)
     }
 
     #[cfg(test)]
