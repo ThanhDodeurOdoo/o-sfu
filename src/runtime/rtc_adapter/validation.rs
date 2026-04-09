@@ -1,11 +1,10 @@
 use std::str::FromStr;
 
 use o_sfu_router::ParseDiagnosticKind;
-use str0m::IceCreds;
 use str0m::config::Fingerprint;
 use tracing::{debug, error, warn};
 
-use super::{RtcSessionState, dtls, ice, sdp};
+use super::{ParsedRemoteIceCredentials, RtcSessionState, dtls, ice, sdp};
 use crate::runtime::transport_adapter::TransportAdapterError;
 use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
 use crate::signaling::webrtc::{DtlsParameters, IceCandidate, IceParameters};
@@ -82,7 +81,7 @@ pub(super) fn parse_remote_fingerprint(
 
 pub(super) fn parse_remote_ice_credentials(
     ice_parameters: Option<&IceParameters>,
-) -> Result<Option<IceCreds>, TransportAdapterError> {
+) -> Result<Option<ParsedRemoteIceCredentials>, TransportAdapterError> {
     let Some(ice_parameters) = ice_parameters else {
         return Ok(None);
     };
@@ -100,9 +99,9 @@ pub(super) fn parse_remote_ice_credentials(
     else {
         return Err(TransportAdapterError::InvalidInput);
     };
-    Ok(Some(IceCreds {
-        ufrag: username_fragment.to_owned(),
-        pass: password.to_owned(),
+    Ok(Some(ParsedRemoteIceCredentials {
+        username_fragment: username_fragment.to_owned(),
+        password: password.to_owned(),
     }))
 }
 
@@ -114,6 +113,23 @@ pub(super) fn ensure_remote_fingerprint_compatibility(
         return Ok(());
     };
     if existing_fingerprint == remote_fingerprint {
+        Ok(())
+    } else {
+        Err(TransportAdapterError::InvalidInput)
+    }
+}
+
+pub(super) fn ensure_remote_ice_credentials_compatibility(
+    session_state: &RtcSessionState,
+    remote_ice_credentials: Option<&ParsedRemoteIceCredentials>,
+) -> Result<(), TransportAdapterError> {
+    let Some(existing_credentials) = session_state.remote_ice_credentials.as_ref() else {
+        return Ok(());
+    };
+    let Some(remote_ice_credentials) = remote_ice_credentials else {
+        return Ok(());
+    };
+    if existing_credentials == remote_ice_credentials {
         Ok(())
     } else {
         Err(TransportAdapterError::InvalidInput)

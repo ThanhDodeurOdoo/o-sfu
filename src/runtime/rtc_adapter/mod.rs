@@ -83,6 +83,7 @@ pub(super) struct RtcSessionState {
     pub(super) local_dtls_fingerprint: Fingerprint,
     pub(super) transport_ids: SessionTransportIds,
     pub(super) remote_dtls_fingerprint: Option<String>,
+    pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
     pub(super) dtls_started: bool,
     pub(super) recv_mids: Vec<Mid>,
     pub(super) send_mids: Vec<Mid>,
@@ -92,6 +93,21 @@ pub(super) struct RtcSessionState {
 pub(super) struct SessionTransportIds {
     pub(super) upload: String,
     pub(super) download: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedRemoteIceCredentials {
+    username_fragment: String,
+    password: String,
+}
+
+impl ParsedRemoteIceCredentials {
+    fn as_ice_creds(&self) -> IceCreds {
+        IceCreds {
+            ufrag: self.username_fragment.clone(),
+            pass: self.password.clone(),
+        }
+    }
 }
 
 /// A single forwarding destination within the media route index.
@@ -416,6 +432,11 @@ impl RtcTransportAdapter {
         let parsed_dtls_parameters = validation::parse_dtls_parameters(dtls_parameters)?;
         let remote_ice_credentials = validation::parse_remote_ice_credentials(ice_parameters)?;
         self.ensure_connect_transition(session_key, direction)?;
+        self.ensure_transport_connect_compatibility(
+            session_key,
+            &parsed_dtls_parameters,
+            remote_ice_credentials.as_ref(),
+        )?;
         debug!(
             ?direction,
             session_id = ?session_key.session_id(),
@@ -426,7 +447,7 @@ impl RtcTransportAdapter {
             session_key,
             direction,
             &parsed_dtls_parameters,
-            remote_ice_credentials,
+            remote_ice_credentials.as_ref(),
         )?;
         self.mark_connected(session_key, direction)?;
         Ok(())
@@ -803,7 +824,7 @@ impl RtcTransportAdapter {
         session_key: &TransportSessionKey,
         direction: TransportConnectDirection,
         parsed_dtls_parameters: &dtls::ParsedDtlsParameters,
-        remote_ice_credentials: Option<IceCreds>,
+        remote_ice_credentials: Option<&ParsedRemoteIceCredentials>,
     ) -> Result<(), TransportAdapterError> {
         let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -820,12 +841,14 @@ impl RtcTransportAdapter {
             primary_fingerprint.value()
         );
         let remote_fingerprint = validation::parse_remote_fingerprint(primary_fingerprint)?;
-        validation::ensure_remote_fingerprint_compatibility(session_state, &fingerprint_literal)?;
         let should_start_dtls = !session_state.dtls_started;
         {
             let mut direct_api = session_state.rtc.direct_api();
-            if let Some(remote_ice_credentials) = remote_ice_credentials {
-                direct_api.set_remote_ice_credentials(remote_ice_credentials);
+            if let Some(remote_ice_credentials) = remote_ice_credentials
+                && session_state.remote_ice_credentials.is_none()
+            {
+                direct_api.set_remote_ice_credentials(remote_ice_credentials.as_ice_creds());
+                session_state.remote_ice_credentials = Some(remote_ice_credentials.clone());
             }
             if session_state.remote_dtls_fingerprint.is_none() {
                 direct_api.set_remote_fingerprint(remote_fingerprint);
@@ -854,6 +877,34 @@ impl RtcTransportAdapter {
                 );
             }
         }
+        Ok(())
+    }
+
+    fn ensure_transport_connect_compatibility(
+        &self,
+        session_key: &TransportSessionKey,
+        parsed_dtls_parameters: &dtls::ParsedDtlsParameters,
+        remote_ice_credentials: Option<&ParsedRemoteIceCredentials>,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(session_state) = bootstrap_state.sessions.get(session_key) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        let Some(primary_fingerprint) = parsed_dtls_parameters.fingerprints().first() else {
+            return Err(TransportAdapterError::InvalidInput);
+        };
+        let fingerprint_literal = format!(
+            "{} {}",
+            primary_fingerprint.algorithm(),
+            primary_fingerprint.value()
+        );
+        validation::ensure_remote_fingerprint_compatibility(session_state, &fingerprint_literal)?;
+        validation::ensure_remote_ice_credentials_compatibility(
+            session_state,
+            remote_ice_credentials,
+        )?;
         Ok(())
     }
 

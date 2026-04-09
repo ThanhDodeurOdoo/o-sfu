@@ -112,6 +112,14 @@ fn sample_transport_bootstrap(id: &str, candidate: IceCandidate) -> TransportBoo
     }
 }
 
+fn sample_ice_parameters(username_fragment: &str, password: &str) -> IceParameters {
+    IceParameters(json!({
+        "usernameFragment": username_fragment,
+        "password": password,
+        "iceLite": false
+    }))
+}
+
 fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {
     RouterRtpParameters::new(
         vec![],
@@ -243,6 +251,54 @@ async fn rtc_transport_connect_succeeds_after_bootstrap() {
         )
         .await;
     assert_eq!(connect_result, Ok(()));
+}
+
+#[tokio::test]
+async fn rtc_transport_connect_accepts_remote_ice_credentials() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 90, SessionId::Integer(90));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    let result = adapter
+        .connect_transport(
+            &session_key,
+            TransportConnectDirection::Upload,
+            &sample_sha256_dtls_parameters("client"),
+            Some(&sample_ice_parameters("client-ufrag", "client-password")),
+            None,
+        )
+        .await;
+    assert_eq!(result, Ok(()));
+}
+
+#[tokio::test]
+async fn rtc_transport_connect_rejects_invalid_remote_ice_credentials() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 91, SessionId::Integer(91));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    let result = adapter
+        .connect_transport(
+            &session_key,
+            TransportConnectDirection::Upload,
+            &sample_sha256_dtls_parameters("client"),
+            Some(&IceParameters(json!({
+                "usernameFragment": "client-ufrag"
+            }))),
+            None,
+        )
+        .await;
+    assert_eq!(result, Err(TransportAdapterError::InvalidInput));
 }
 
 #[tokio::test]
@@ -569,6 +625,82 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
         .await;
     assert_eq!(
         second_connect_result,
+        Err(TransportAdapterError::InvalidInput)
+    );
+}
+
+#[tokio::test]
+async fn rtc_transport_connect_allows_late_remote_ice_credentials_on_second_direction() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 92, SessionId::Integer(92));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    assert_eq!(
+        adapter
+            .connect_transport(
+                &session_key,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                None,
+                None,
+            )
+            .await,
+        Ok(())
+    );
+
+    assert_eq!(
+        adapter
+            .connect_transport(
+                &session_key,
+                TransportConnectDirection::Download,
+                &sample_sha256_dtls_parameters("client"),
+                Some(&sample_ice_parameters("client-ufrag", "client-password")),
+                None,
+            )
+            .await,
+        Ok(())
+    );
+}
+
+#[tokio::test]
+async fn rtc_transport_connect_rejects_mismatched_remote_ice_credentials_between_directions() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 93, SessionId::Integer(93));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    assert_eq!(
+        adapter
+            .connect_transport(
+                &session_key,
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+                Some(&sample_ice_parameters("client-ufrag", "client-password")),
+                None,
+            )
+            .await,
+        Ok(())
+    );
+
+    assert_eq!(
+        adapter
+            .connect_transport(
+                &session_key,
+                TransportConnectDirection::Download,
+                &sample_sha256_dtls_parameters("client"),
+                Some(&sample_ice_parameters("other-ufrag", "other-password")),
+                None,
+            )
+            .await,
         Err(TransportAdapterError::InvalidInput)
     );
 }
