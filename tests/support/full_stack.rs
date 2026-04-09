@@ -185,6 +185,10 @@ impl FakePeer {
         .await
     }
 
+    pub async fn unpublish_upload(&mut self, stream_type: StreamType) -> Option<()> {
+        self.set_upload_active(stream_type, false).await
+    }
+
     pub async fn set_download_state(
         &mut self,
         target_session_id: SessionId,

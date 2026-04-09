@@ -369,6 +369,44 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
     .await;
 }
 
+#[tokio::test]
+#[allow(
+    clippy::large_futures,
+    reason = "the integration test intentionally awaits a setup helper that returns owned fake peers and rtc handles"
+)]
+async fn fake_rtc_peers_cover_explicit_upload_unpublish_compatibility_semantics() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = LocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-f", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let setup = connect_audio_media_flow_peers(&network, &channel).await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber, mut publisher_rtc, mut subscriber_rtc)) = setup else {
+        return;
+    };
+
+    assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
+        &mut publisher,
+        &mut subscriber,
+        &mut publisher_rtc,
+        &mut subscriber_rtc,
+    )
+    .await;
+}
+
 #[allow(
     clippy::large_futures,
     reason = "the integration-only setup helper returns owned fake peers and rtc handles for one scenario"
@@ -468,6 +506,53 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
 
     let next_payload = publisher_rtc.send_frame(&mut source, &mut clock).await;
     assert!(next_payload.is_some());
+    assert!(
+        subscriber_rtc
+            .read_media_frame(Duration::from_millis(300))
+            .await
+            .is_none()
+    );
+}
+
+async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
+    publisher: &mut FakePeer,
+    subscriber: &mut FakePeer,
+    publisher_rtc: &mut FakeRtcPeer,
+    subscriber_rtc: &mut FakeRtcPeer,
+) {
+    let mut source = FakeMediaSource::audio();
+    let producer_id = publisher.publish_track(&source).await;
+    assert!(producer_id.is_some());
+
+    let request = subscriber.read_next_server_request().await;
+    assert!(request.is_some());
+    let Some(CurrentServerRequest::BootstrapRemoteTrack(track)) = request else {
+        panic!("expected INIT_CONSUMER before explicit upload unpublish");
+    };
+    assert_eq!(track.session_id, SessionId::Integer(70));
+    assert_eq!(track.stream_type, StreamType::Audio);
+    assert_eq!(track.media_kind, MediaKind::Audio);
+    assert!(subscriber_rtc.expect_remote_track(&track).is_some());
+
+    let mut clock = FakeClock::default();
+    let first_payload = publisher_rtc.send_frame(&mut source, &mut clock).await;
+    assert!(first_payload.is_some());
+    assert!(
+        subscriber_rtc
+            .read_media_frame(Duration::from_secs(2))
+            .await
+            .is_some()
+    );
+
+    assert!(
+        publisher
+            .unpublish_upload(StreamType::Audio)
+            .await
+            .is_some()
+    );
+
+    let second_payload = publisher_rtc.send_frame(&mut source, &mut clock).await;
+    assert!(second_payload.is_some());
     assert!(
         subscriber_rtc
             .read_media_frame(Duration::from_millis(300))
