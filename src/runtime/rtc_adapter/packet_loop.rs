@@ -27,10 +27,26 @@ struct PendingTransmit {
     contents: Vec<u8>,
 }
 
+impl PendingTransmit {
+    fn empty() -> Self {
+        Self {
+            destination: SocketAddr::from(([0, 0, 0, 0], 0)),
+            contents: Vec::new(),
+        }
+    }
+
+    fn overwrite(&mut self, destination: SocketAddr, contents: &[u8]) {
+        self.destination = destination;
+        self.contents.clear();
+        self.contents.extend_from_slice(contents);
+    }
+}
+
 /// Reusable buffers for the packet loop, allocated once and cleared per iteration
 /// to avoids steady-state heap allocations
 struct PacketLoopBuffers {
     pending_transmits: Vec<PendingTransmit>,
+    pending_transmit_count: usize,
     pending_media: Vec<(TransportSessionKey, MediaData)>,
     forwards: Vec<(usize, TransportSessionKey, Mid)>,
 }
@@ -39,15 +55,33 @@ impl PacketLoopBuffers {
     fn new() -> Self {
         Self {
             pending_transmits: Vec::with_capacity(64),
+            pending_transmit_count: 0,
             pending_media: Vec::with_capacity(32),
             forwards: Vec::with_capacity(64),
         }
     }
 
     fn clear(&mut self) {
-        self.pending_transmits.clear();
+        self.pending_transmit_count = 0;
         self.pending_media.clear();
         self.forwards.clear();
+    }
+
+    fn push_pending_transmit(&mut self, destination: SocketAddr, contents: &[u8]) {
+        if let Some(slot) = self.pending_transmits.get_mut(self.pending_transmit_count) {
+            slot.overwrite(destination, contents);
+        } else {
+            let mut slot = PendingTransmit::empty();
+            slot.overwrite(destination, contents);
+            self.pending_transmits.push(slot);
+        }
+        self.pending_transmit_count = self.pending_transmit_count.saturating_add(1);
+    }
+
+    fn pending_transmits(&self) -> impl Iterator<Item = &PendingTransmit> {
+        self.pending_transmits
+            .iter()
+            .take(self.pending_transmit_count)
     }
 }
 
@@ -65,7 +99,7 @@ pub(super) async fn run_packet_loop(bootstrap_state: Arc<Mutex<RtcBootstrapState
             sleep(IDLE_SLEEP).await;
             continue;
         };
-        for pending_transmit in &buffers.pending_transmits {
+        for pending_transmit in buffers.pending_transmits() {
             if info
                 .socket
                 .send_to(
@@ -117,12 +151,7 @@ fn snapshot_and_pump(
     };
     let mut next_timeout: Option<Instant> = None;
     for (session_id, session_state) in &mut state.sessions {
-        let session_timeout = drain_single_session(
-            session_id,
-            session_state,
-            &mut buffers.pending_transmits,
-            &mut buffers.pending_media,
-        );
+        let session_timeout = drain_single_session(session_id, session_state, buffers);
         if let Some(t) = session_timeout {
             next_timeout = Some(next_timeout.map_or(t, |current| current.min(t)));
         }
@@ -212,20 +241,16 @@ fn snapshot_and_pump(
 fn drain_single_session(
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
-    pending_transmits: &mut Vec<PendingTransmit>,
-    pending_media: &mut Vec<(TransportSessionKey, MediaData)>,
+    buffers: &mut PacketLoopBuffers,
 ) -> Option<Instant> {
     loop {
         let now = Instant::now();
         match session_state.rtc.poll_output() {
             Ok(Output::Transmit(transmit)) => {
-                pending_transmits.push(PendingTransmit {
-                    destination: transmit.destination,
-                    contents: Vec::from(transmit.contents),
-                });
+                buffers.push_pending_transmit(transmit.destination, &transmit.contents);
             }
             Ok(Output::Event(Event::MediaData(data))) => {
-                pending_media.push((session_key.clone(), data));
+                buffers.pending_media.push((session_key.clone(), data));
             }
             Ok(Output::Event(event)) => {
                 log_rtc_event(session_key, &event);
