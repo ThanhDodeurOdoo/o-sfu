@@ -23,7 +23,7 @@ use o_sfu::{
         webrtc::{DtlsFingerprint, DtlsParameters},
     },
 };
-use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use super::{
     FakeWebSocketClient, create_channel, fake_media::FakeMediaSource,
@@ -175,6 +175,10 @@ impl FakePeer {
 
     pub async fn close(self) -> Option<()> {
         self.client.close().await
+    }
+
+    pub async fn read_close_code(&mut self) -> Option<CloseCode> {
+        self.client.read_close_code().await
     }
 
     pub async fn read_next_server_request(&mut self) -> Option<CurrentServerRequest> {

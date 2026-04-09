@@ -22,6 +22,7 @@ use crate::support::{
     full_stack::{FakePeer, LocalNetwork},
     test_config,
 };
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[test]
 fn fake_media_source_uses_manual_clock_deterministically() {
@@ -160,6 +161,77 @@ async fn fake_peers_cover_publish_mute_late_join_and_disconnect_deterministicall
     assert!(publisher.close().await.is_some());
     assert_departure_message(&mut subscriber, SessionId::Integer(10)).await;
     assert_departure_message(&mut late_subscriber, SessionId::Integer(10)).await;
+}
+
+#[tokio::test]
+async fn fake_peers_cover_session_replacement_and_republish_deterministically() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = LocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-c", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let initial_publisher = network
+        .connect_fake_peer(&channel, SessionId::Integer(40), TEST_CHANNEL_KEY)
+        .await;
+    let subscriber = network
+        .connect_fake_peer(&channel, SessionId::Integer(50), TEST_CHANNEL_KEY)
+        .await;
+    assert!(initial_publisher.is_some());
+    assert!(subscriber.is_some());
+    let Some(mut initial_publisher) = initial_publisher else {
+        return;
+    };
+    let Some(mut subscriber) = subscriber else {
+        return;
+    };
+
+    assert!(initial_publisher.connect_transports().await.is_some());
+    assert!(subscriber.connect_transports().await.is_some());
+
+    let replacement = network
+        .connect_fake_peer(&channel, SessionId::Integer(40), TEST_CHANNEL_KEY)
+        .await;
+    assert!(replacement.is_some());
+    let Some(mut replacement) = replacement else {
+        return;
+    };
+
+    assert_eq!(
+        initial_publisher.read_close_code().await,
+        Some(CloseCode::Library(4108))
+    );
+    assert_departure_message(&mut subscriber, SessionId::Integer(40)).await;
+
+    assert!(replacement.connect_transports().await.is_some());
+    let source = FakeMediaSource::audio();
+    let producer_id = replacement.publish_track(&source).await;
+    assert!(producer_id.is_some());
+    let Some(producer_id) = producer_id else {
+        return;
+    };
+
+    let request = subscriber.read_next_server_request().await;
+    assert!(request.is_some());
+    let Some(CurrentServerRequest::BootstrapRemoteTrack(payload)) = request else {
+        panic!("expected INIT_CONSUMER after session replacement");
+    };
+    assert_eq!(payload.source_id, producer_id);
+    assert_eq!(payload.session_id, SessionId::Integer(40));
+    assert_eq!(payload.stream_type, StreamType::Audio);
+    assert_eq!(payload.media_kind, MediaKind::Audio);
+    assert!(payload.active);
 }
 
 async fn connect_camera_flow_peers(
