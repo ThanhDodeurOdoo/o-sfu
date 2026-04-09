@@ -24,7 +24,7 @@ use crate::support::{
     full_stack::{FakePeer, LocalNetwork},
     test_config,
 };
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[test]
@@ -117,6 +117,49 @@ async fn fake_peers_publish_and_receive_consumer_bootstrap_over_real_server_entr
     assert_eq!(payload.stream_type, StreamType::Audio);
     assert_eq!(payload.media_kind, MediaKind::Audio);
     assert!(payload.active);
+}
+
+#[tokio::test]
+async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = LocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let peers = connect_two_isolated_audio_flows(&network).await;
+    assert!(peers.is_some());
+    let Some((mut publisher_a, mut subscriber_a, mut publisher_b, mut subscriber_b)) = peers else {
+        return;
+    };
+
+    let source = FakeMediaSource::audio();
+    let producer_a = publisher_a.publish_track(&source).await;
+    assert!(producer_a.is_some());
+    let Some(producer_a) = producer_a else {
+        return;
+    };
+
+    assert_remote_track_bootstrap(&mut subscriber_a, &producer_a, SessionId::Integer(90)).await;
+    assert_no_server_request(&mut subscriber_b).await;
+
+    let producer_b = publisher_b.publish_track(&source).await;
+    assert!(producer_b.is_some());
+    let Some(producer_b) = producer_b else {
+        return;
+    };
+
+    assert_remote_track_bootstrap(&mut subscriber_b, &producer_b, SessionId::Integer(90)).await;
+
+    assert!(producer_a.starts_with("producer-"));
+    assert!(producer_b.starts_with("producer-"));
+
+    assert!(publisher_a.close().await.is_some());
+    assert_departure_message(&mut subscriber_a, SessionId::Integer(90)).await;
+    assert_no_server_message(&mut subscriber_b).await;
 }
 
 #[tokio::test]
@@ -454,6 +497,40 @@ async fn connect_audio_media_flow_peers(
     Some((publisher, subscriber, publisher_rtc, subscriber_rtc))
 }
 
+async fn connect_two_isolated_audio_flows(
+    network: &LocalNetwork,
+) -> Option<(FakePeer, FakePeer, FakePeer, FakePeer)> {
+    let channel_a = network
+        .create_channel("issuer-topology-a", Some(TEST_CHANNEL_KEY))
+        .await?;
+    let channel_b = network
+        .create_channel("issuer-topology-b", Some(TEST_CHANNEL_KEY))
+        .await?;
+
+    let publisher_a = network
+        .connect_fake_peer(&channel_a, SessionId::Integer(90), TEST_CHANNEL_KEY)
+        .await?;
+    let subscriber_a = network
+        .connect_fake_peer(&channel_a, SessionId::Integer(91), TEST_CHANNEL_KEY)
+        .await?;
+    let publisher_b = network
+        .connect_fake_peer(&channel_b, SessionId::Integer(90), TEST_CHANNEL_KEY)
+        .await?;
+    let subscriber_b = network
+        .connect_fake_peer(&channel_b, SessionId::Integer(91), TEST_CHANNEL_KEY)
+        .await?;
+
+    let mut publisher_a = publisher_a;
+    let mut subscriber_a = subscriber_a;
+    let mut publisher_b = publisher_b;
+    let mut subscriber_b = subscriber_b;
+    publisher_a.connect_transports().await?;
+    subscriber_a.connect_transports().await?;
+    publisher_b.connect_transports().await?;
+    subscriber_b.connect_transports().await?;
+    Some((publisher_a, subscriber_a, publisher_b, subscriber_b))
+}
+
 async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     publisher: &mut FakePeer,
     subscriber: &mut FakePeer,
@@ -511,6 +588,45 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
             .read_media_frame(Duration::from_millis(300))
             .await
             .is_none()
+    );
+}
+
+async fn assert_remote_track_bootstrap(
+    subscriber: &mut FakePeer,
+    producer_id: &str,
+    session_id: SessionId,
+) {
+    let request = subscriber.read_next_server_request().await;
+    assert!(request.is_some());
+    let Some(CurrentServerRequest::BootstrapRemoteTrack(request)) = request else {
+        panic!("expected INIT_CONSUMER");
+    };
+    assert_eq!(request.source_id, producer_id);
+    assert_eq!(request.session_id, session_id);
+    assert_eq!(request.stream_type, StreamType::Audio);
+    assert_eq!(request.media_kind, MediaKind::Audio);
+    assert!(request.active);
+}
+
+async fn assert_no_server_request(subscriber: &mut FakePeer) {
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            subscriber.read_next_server_request()
+        )
+        .await
+        .is_err()
+    );
+}
+
+async fn assert_no_server_message(subscriber: &mut FakePeer) {
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            subscriber.read_next_server_message()
+        )
+        .await
+        .is_err()
     );
 }
 
