@@ -47,7 +47,21 @@ fn transport_key(
     connection_id: u64,
     session_id: SessionId,
 ) -> TransportSessionKey {
-    TransportSessionKey::new(channel_runtime_id, connection_id, session_id)
+    transport_key_on_worker(channel_runtime_id, 0, connection_id, session_id)
+}
+
+fn transport_key_on_worker(
+    channel_runtime_id: u64,
+    media_worker_id: usize,
+    connection_id: u64,
+    session_id: SessionId,
+) -> TransportSessionKey {
+    TransportSessionKey::new(
+        channel_runtime_id,
+        media_worker_id,
+        connection_id,
+        session_id,
+    )
 }
 
 fn sample_bootstrap_payload(candidate: IceCandidate) -> CurrentTransportBootstrapPayload {
@@ -417,8 +431,8 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
 #[tokio::test]
 async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     let adapter = RtcTransportAdapter::default();
-    let first_session_key = transport_key(1, 30, SessionId::Integer(30));
-    let second_session_key = transport_key(2, 30, SessionId::Integer(30));
+    let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
+    let second_session_key = transport_key_on_worker(2, 1, 30, SessionId::Integer(30));
 
     let first_payload = adapter
         .transport_bootstrap_payload(&first_session_key, &empty_router_capabilities())
@@ -462,8 +476,8 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
 fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
     let mut bootstrap_state = super::RtcBootstrapState::default();
     let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_001);
-    let first_session_key = transport_key(1, 30, SessionId::Integer(30));
-    let second_session_key = transport_key(2, 30, SessionId::Integer(30));
+    let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
+    let second_session_key = transport_key_on_worker(2, 1, 30, SessionId::Integer(30));
 
     bootstrap_state.remember_remote_addr(source_addr, &first_session_key);
     assert_eq!(

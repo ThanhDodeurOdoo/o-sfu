@@ -47,10 +47,11 @@ impl Runtime {
     #[must_use]
     pub fn new(config: Config) -> Self {
         let transport_adapter = build_transport_adapter(&config);
+        let rtc_media_worker_count = config.rtc_media_worker_count;
         Self {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
-            channels: Arc::new(ChannelManager::new()),
+            channels: Arc::new(ChannelManager::with_media_workers(rtc_media_worker_count)),
             metrics: Arc::new(RuntimeMetrics::default()),
             transport_adapter,
         }

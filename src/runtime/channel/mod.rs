@@ -94,6 +94,7 @@ pub(crate) struct ChannelSessionStatsSnapshot {
 /// Mutable state (sessions, recording, routing) is behind an interior lock.
 pub struct Channel {
     runtime_id: u64,
+    media_worker_id: usize,
     uuid: String,
     issuer: String,
     key: Option<String>,
@@ -106,6 +107,7 @@ pub struct Channel {
 impl Channel {
     pub(super) fn new(
         runtime_id: u64,
+        media_worker_id: usize,
         router_id: RouterId,
         issuer: String,
         key: Option<String>,
@@ -113,6 +115,7 @@ impl Channel {
     ) -> Self {
         Self {
             runtime_id,
+            media_worker_id,
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
@@ -133,7 +136,12 @@ impl Channel {
         session_id: &SessionId,
         connection_id: u64,
     ) -> TransportSessionKey {
-        TransportSessionKey::new(self.runtime_id, connection_id, session_id.clone())
+        TransportSessionKey::new(
+            self.runtime_id,
+            self.media_worker_id,
+            connection_id,
+            session_id.clone(),
+        )
     }
 
     #[must_use]
@@ -173,7 +181,12 @@ impl Channel {
             .sessions
             .iter()
             .map(|(session_id, session)| {
-                TransportSessionKey::new(self.runtime_id, session.connection_id, session_id.clone())
+                TransportSessionKey::new(
+                    self.runtime_id,
+                    self.media_worker_id,
+                    session.connection_id,
+                    session_id.clone(),
+                )
             })
             .collect::<Vec<_>>();
         ChannelSessionStatsSnapshot {
@@ -188,6 +201,12 @@ impl Channel {
     pub(super) fn web_rtc_enabled(&self) -> bool {
         self.web_rtc_enabled
     }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) const fn media_worker_id(&self) -> usize {
+        self.media_worker_id
+    }
 }
 
 impl fmt::Debug for Channel {
@@ -195,6 +214,7 @@ impl fmt::Debug for Channel {
         formatter
             .debug_struct("Channel")
             .field("runtime_id", &self.runtime_id)
+            .field("media_worker_id", &self.media_worker_id)
             .field("uuid", &self.uuid)
             .field("issuer", &self.issuer)
             .field("web_rtc_enabled", &self.web_rtc_enabled)

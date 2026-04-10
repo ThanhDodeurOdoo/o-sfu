@@ -271,6 +271,24 @@ mod channel_tests {
     }
 
     #[tokio::test]
+    async fn channel_manager_assigns_media_workers_explicitly() {
+        let manager = ChannelManager::with_media_workers(2);
+        let first = manager
+            .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+            .await;
+        let second = manager
+            .create_or_get("issuer-b", None, &ChannelConfig::default(), None)
+            .await;
+        let third = manager
+            .create_or_get("issuer-c", None, &ChannelConfig::default(), None)
+            .await;
+
+        assert_eq!(first.media_worker_id(), 0);
+        assert_eq!(second.media_worker_id(), 1);
+        assert_eq!(third.media_worker_id(), 0);
+    }
+
+    #[tokio::test]
     async fn channel_manager_lookup_by_uuid() {
         let manager = ChannelManager::new();
         let channel = manager

@@ -19,15 +19,22 @@ use str0m::media::MediaKind as Str0mMediaKind;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TransportSessionKey {
     channel_runtime: u64,
+    media_worker: usize,
     connection: u64,
     session: Arc<SessionId>,
 }
 
 impl TransportSessionKey {
     #[must_use]
-    pub(crate) fn new(channel_runtime_id: u64, connection_id: u64, session_id: SessionId) -> Self {
+    pub(crate) fn new(
+        channel_runtime_id: u64,
+        media_worker_id: usize,
+        connection_id: u64,
+        session_id: SessionId,
+    ) -> Self {
         Self {
             channel_runtime: channel_runtime_id,
+            media_worker: media_worker_id,
             connection: connection_id,
             session: Arc::new(session_id),
         }
@@ -36,6 +43,11 @@ impl TransportSessionKey {
     #[must_use]
     pub(crate) fn channel_runtime_id(&self) -> u64 {
         self.channel_runtime
+    }
+
+    #[must_use]
+    pub(crate) fn media_worker_id(&self) -> usize {
+        self.media_worker
     }
 
     #[must_use]
@@ -121,18 +133,17 @@ impl RtcTransportAdapterShardSet {
         }
     }
 
-    fn shard_index_for_channel_runtime_id(&self, channel_runtime_id: u64) -> usize {
+    fn shard_index_for_media_worker_id(&self, media_worker_id: usize) -> usize {
         let shard_count = self.extra_shards.len().saturating_add(1);
-        let shard_count_u64 = u64::try_from(shard_count).unwrap_or(1);
-        usize::try_from(channel_runtime_id % shard_count_u64).unwrap_or(0)
+        media_worker_id % shard_count
     }
 
     fn shard_for_session(&self, session_key: &TransportSessionKey) -> Arc<RtcTransportAdapter> {
-        self.shard_for_channel_runtime_id(session_key.channel_runtime_id())
+        self.shard_for_media_worker_id(session_key.media_worker_id())
     }
 
-    fn shard_for_channel_runtime_id(&self, channel_runtime_id: u64) -> Arc<RtcTransportAdapter> {
-        self.shard_for_index(self.shard_index_for_channel_runtime_id(channel_runtime_id))
+    fn shard_for_media_worker_id(&self, media_worker_id: usize) -> Arc<RtcTransportAdapter> {
+        self.shard_for_index(self.shard_index_for_media_worker_id(media_worker_id))
     }
 
     fn shard_for_index(&self, shard_index: usize) -> Arc<RtcTransportAdapter> {
@@ -146,7 +157,7 @@ impl RtcTransportAdapterShardSet {
     }
 
     fn shard_index_for_session(&self, session_key: &TransportSessionKey) -> usize {
-        self.shard_index_for_channel_runtime_id(session_key.channel_runtime_id())
+        self.shard_index_for_media_worker_id(session_key.media_worker_id())
     }
 
     fn incoming_bitrate_snapshot(
@@ -453,15 +464,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rtc_adapter_shards_channel_bootstrap_by_runtime_id() {
+    async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
         let adapter = RuntimeTransportAdapter::rtc(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             RtcPortRange::new(46_000, 46_003),
             2,
         );
-        let first_channel_session = TransportSessionKey::new(0, 1, SessionId::Integer(1));
-        let second_channel_session = TransportSessionKey::new(1, 1, SessionId::Integer(2));
-        let same_shard_session = TransportSessionKey::new(2, 1, SessionId::Integer(3));
+        let first_channel_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));
+        let second_channel_session = TransportSessionKey::new(11, 1, 1, SessionId::Integer(2));
+        let same_shard_session = TransportSessionKey::new(12, 0, 1, SessionId::Integer(3));
 
         let first_payload = adapter
             .transport_bootstrap_payload(&first_channel_session, &empty_router_capabilities())

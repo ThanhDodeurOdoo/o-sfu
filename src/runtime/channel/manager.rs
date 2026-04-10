@@ -24,9 +24,10 @@ pub(crate) struct RuntimeChannelStatsSnapshot {
 }
 
 /// Manages all active channels with idempotent creation by issuer.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ChannelManager {
     state: RwLock<ChannelManagerState>,
+    media_worker_count: usize,
 }
 
 #[derive(Debug, Default)]
@@ -49,6 +50,14 @@ impl ChannelManager {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn with_media_workers(media_worker_count: usize) -> Self {
+        Self {
+            state: RwLock::new(ChannelManagerState::default()),
+            media_worker_count: media_worker_count.max(1),
+        }
     }
 
     /// Create a channel for the given issuer, or return the existing one.
@@ -79,10 +88,12 @@ impl ChannelManager {
         }
         let channel_runtime_id = state.next_channel_runtime_id;
         state.next_channel_runtime_id = state.next_channel_runtime_id.saturating_add(1);
+        let media_worker_id = self.media_worker_id_for_channel_runtime(channel_runtime_id);
         let router_id = RouterId(state.next_router_id);
         state.next_router_id = state.next_router_id.saturating_add(1);
         let channel = Arc::new(Channel::new(
             channel_runtime_id,
+            media_worker_id,
             router_id,
             issuer.to_owned(),
             key.map(str::to_owned),
@@ -240,5 +251,16 @@ impl ChannelManager {
         }
         state.channels_by_uuid.remove(channel_uuid);
         state.uuids_by_issuer.remove(channel.issuer());
+    }
+
+    fn media_worker_id_for_channel_runtime(&self, channel_runtime_id: u64) -> usize {
+        let media_worker_count_u64 = u64::try_from(self.media_worker_count).unwrap_or(1);
+        usize::try_from(channel_runtime_id % media_worker_count_u64).unwrap_or(0)
+    }
+}
+
+impl Default for ChannelManager {
+    fn default() -> Self {
+        Self::with_media_workers(1)
     }
 }
