@@ -106,10 +106,26 @@ pub(super) struct PreparedConsumerBootstrap {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ReservedConsumerBootstrap {
+pub(super) struct PendingPublishedTrack {
+    pub(super) producer_wire_id: String,
+    pub(super) owner_session_id: SessionId,
+    pub(super) owner_connection_id: u64,
+    pub(super) stream_type: StreamType,
+    pub(super) media_kind: SignalingMediaKind,
+    pub(super) consumable_rtp_parameters: RouterRtpParameters,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingConsumerBootstrap {
     pub(super) sender: mpsc::UnboundedSender<SessionOutbound>,
     pub(super) request: CurrentServerRequest,
-    pub(super) routed_consumer_id: RoutedConsumerId,
+    pub(super) producer_owner_session_id: SessionId,
+    pub(super) producer_connection_id: u64,
+    pub(super) producer_stream_type: StreamType,
+    pub(super) producer_media_kind: SignalingMediaKind,
+    pub(super) producer_routed_id: RoutedProducerId,
+    pub(super) producer_wire_id: String,
+    pub(super) producer_active: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -209,94 +225,121 @@ impl ChannelState {
             .collect()
     }
 
-    pub(super) fn reserve_published_track(
+    pub(super) fn prepare_published_track(
         &mut self,
         session_id: &SessionId,
         publisher_connection_id: u64,
         stream_type: StreamType,
         media_kind: SignalingMediaKind,
         consumable_rtp_parameters: RouterRtpParameters,
-    ) -> Option<String> {
+    ) -> Option<PendingPublishedTrack> {
         let session = self.sessions.get(session_id)?;
         if session.connection_id != publisher_connection_id || !session.upload_transport_connected {
             return None;
         }
+        Some(PendingPublishedTrack {
+            producer_wire_id: allocate_wire_producer_id(&mut self.next_producer_id),
+            owner_session_id: session_id.clone(),
+            owner_connection_id: publisher_connection_id,
+            stream_type,
+            media_kind,
+            consumable_rtp_parameters,
+        })
+    }
+
+    pub(super) fn commit_published_track(
+        &mut self,
+        pending: PendingPublishedTrack,
+        transport_media_id: TransportMediaId,
+    ) -> Option<(String, Vec<PendingConsumerBootstrapTarget>)> {
+        let session = self.sessions.get(&pending.owner_session_id)?;
+        if session.connection_id != pending.owner_connection_id
+            || !session.upload_transport_connected
+        {
+            return None;
+        }
         let routed_producer_id = match self.topology.add_producer(
-            session_id,
-            to_router_media_kind(media_kind),
-            to_router_stream_type(stream_type),
+            &pending.owner_session_id,
+            to_router_media_kind(pending.media_kind),
+            to_router_stream_type(pending.stream_type),
         ) {
             Ok(producer_id) => producer_id,
             Err(_error) => {
                 error!(
-                    ?session_id,
+                    session_id = ?pending.owner_session_id,
                     "failed to mirror publish request into channel router producer state"
                 );
                 return None;
             }
         };
-        let producer_id = allocate_wire_producer_id(&mut self.next_producer_id);
         self.producers.insert(
-            producer_id.clone(),
+            pending.producer_wire_id.clone(),
             PublishedProducer {
-                owner_session_id: session_id.clone(),
-                owner_connection_id: publisher_connection_id,
-                stream_type,
-                media_kind,
-                consumable_rtp_parameters,
+                owner_session_id: pending.owner_session_id.clone(),
+                owner_connection_id: pending.owner_connection_id,
+                stream_type: pending.stream_type,
+                media_kind: pending.media_kind,
+                consumable_rtp_parameters: pending.consumable_rtp_parameters,
                 routed_producer_id,
-                transport_media_id: None,
+                transport_media_id: Some(transport_media_id),
                 active: true,
             },
         );
-        Some(producer_id)
-    }
-
-    pub(super) fn finalize_published_track(
-        &mut self,
-        session_id: &SessionId,
-        publisher_connection_id: u64,
-        producer_id: &str,
-        transport_media_id: TransportMediaId,
-    ) -> Option<Vec<PendingConsumerBootstrapTarget>> {
-        let session = self.sessions.get(session_id)?;
-        if session.connection_id != publisher_connection_id || !session.upload_transport_connected {
-            return None;
-        }
-        let producer = self.producers.get_mut(producer_id)?;
-        if producer.owner_session_id != *session_id
-            || producer.owner_connection_id != publisher_connection_id
-            || producer.transport_media_id.is_some()
-        {
-            return None;
-        }
-        let stream_type = producer.stream_type;
-        let media_kind = producer.media_kind;
-        producer.transport_media_id = Some(transport_media_id);
-        Some(self.publish_consumer_targets(
-            session_id,
-            publisher_connection_id,
-            producer_id,
-            stream_type,
-            media_kind,
+        let consumer_targets = self.publish_consumer_targets(
+            &pending.owner_session_id,
+            pending.owner_connection_id,
+            &pending.producer_wire_id,
+            pending.stream_type,
+            pending.media_kind,
             transport_media_id,
-        ))
+        );
+        Some((pending.producer_wire_id, consumer_targets))
     }
 
-    pub(super) fn rollback_published_track(&mut self, producer_id: &str) {
-        let Some(producer) = self.producers.remove(producer_id) else {
-            return;
-        };
-        if self
-            .topology
-            .remove_producer(producer.routed_producer_id)
-            .is_err()
+    pub(super) fn prepare_consumer_bootstrap_transaction(
+        &mut self,
+        target: &PendingConsumerBootstrapTarget,
+        prepared: &PreparedConsumerBootstrap,
+    ) -> Option<PendingConsumerBootstrap> {
+        let session = self.sessions.get(&target.consumer_session_id)?;
+        if session.connection_id != target.consumer_connection_id
+            || !session.download_transport_connected
         {
-            error!(
-                producer_id,
-                "failed to roll back reserved producer from channel router"
-            );
+            return None;
         }
+        let producer = self.producers.get(&prepared.producer_wire_id)?;
+        if producer.owner_session_id != prepared.producer_owner_session_id
+            || producer.owner_connection_id != prepared.producer_connection_id
+            || producer.stream_type != prepared.producer_stream_type
+            || producer.media_kind != prepared.producer_media_kind
+            || producer.transport_media_id != Some(target.transport_media_id)
+            || producer.routed_producer_id != prepared.producer_routed_id
+            || producer.active != prepared.producer_active
+        {
+            return None;
+        }
+        let consumer_id = allocate_wire_consumer_id(&mut self.next_consumer_id);
+        Some(PendingConsumerBootstrap {
+            sender: prepared.sender.clone(),
+            request: CurrentServerRequest::BootstrapRemoteTrack(
+                CurrentRemoteTrackBootstrapPayload {
+                    id: consumer_id,
+                    media_kind: prepared.producer_media_kind,
+                    source_id: prepared.producer_wire_id.clone(),
+                    rtp_parameters: prepared.consumer_wire_rtp_parameters.clone(),
+                    session_id: prepared.producer_owner_session_id.clone(),
+                    active: prepared.producer_active,
+                    stream_type: prepared.producer_stream_type,
+                },
+            ),
+            producer_owner_session_id: prepared.producer_owner_session_id.clone(),
+            producer_connection_id: prepared.producer_connection_id,
+            producer_stream_type: prepared.producer_stream_type,
+            producer_media_kind: prepared.producer_media_kind,
+            producer_routed_id: prepared.producer_routed_id,
+            producer_wire_id: prepared.producer_wire_id.clone(),
+            producer_active: prepared.producer_active,
+        })
     }
 
     pub(super) fn prepare_consumer_bootstrap(
@@ -357,68 +400,10 @@ impl ChannelState {
         })
     }
 
-    pub(super) fn reserve_consumer_bootstrap(
+    pub(super) fn commit_consumer_bootstrap(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
-        prepared: &PreparedConsumerBootstrap,
-    ) -> Option<ReservedConsumerBootstrap> {
-        let session = self.sessions.get(&target.consumer_session_id)?;
-        if session.connection_id != target.consumer_connection_id
-            || !session.download_transport_connected
-        {
-            return None;
-        }
-        let producer = self.producers.get(&prepared.producer_wire_id)?;
-        if producer.owner_session_id != prepared.producer_owner_session_id
-            || producer.owner_connection_id != prepared.producer_connection_id
-            || producer.stream_type != prepared.producer_stream_type
-            || producer.media_kind != prepared.producer_media_kind
-            || producer.transport_media_id != Some(target.transport_media_id)
-            || producer.routed_producer_id != prepared.producer_routed_id
-            || producer.active != prepared.producer_active
-        {
-            return None;
-        }
-        let consumer_id = allocate_wire_consumer_id(&mut self.next_consumer_id);
-        let routed_consumer_id = match self.topology.add_consumer(
-            &target.consumer_session_id,
-            prepared.producer_routed_id,
-            to_router_media_kind(prepared.producer_media_kind),
-            to_router_stream_type(prepared.producer_stream_type),
-            true,
-        ) {
-            Ok(id) => id,
-            Err(_error) => {
-                warn!(
-                    consumer_session_id = ?target.consumer_session_id,
-                    producer_id = %prepared.producer_wire_id,
-                    "router rejected consumer creation"
-                );
-                return None;
-            }
-        };
-        Some(ReservedConsumerBootstrap {
-            sender: prepared.sender.clone(),
-            request: CurrentServerRequest::BootstrapRemoteTrack(
-                CurrentRemoteTrackBootstrapPayload {
-                    id: consumer_id,
-                    media_kind: prepared.producer_media_kind,
-                    source_id: prepared.producer_wire_id.clone(),
-                    rtp_parameters: prepared.consumer_wire_rtp_parameters.clone(),
-                    session_id: prepared.producer_owner_session_id.clone(),
-                    active: prepared.producer_active,
-                    stream_type: prepared.producer_stream_type,
-                },
-            ),
-            routed_consumer_id,
-        })
-    }
-
-    pub(super) fn finalize_reserved_consumer_bootstrap(
-        &mut self,
-        target: &PendingConsumerBootstrapTarget,
-        prepared: &PreparedConsumerBootstrap,
-        reserved: &ReservedConsumerBootstrap,
+        pending: PendingConsumerBootstrap,
         consumer_transport_media_id: TransportMediaId,
     ) -> Option<(mpsc::UnboundedSender<SessionOutbound>, CurrentServerRequest)> {
         let session = self.sessions.get(&target.consumer_session_id)?;
@@ -427,48 +412,49 @@ impl ChannelState {
         {
             return None;
         }
-        let producer = self.producers.get(&prepared.producer_wire_id)?;
-        if producer.owner_session_id != prepared.producer_owner_session_id
-            || producer.owner_connection_id != prepared.producer_connection_id
-            || producer.stream_type != prepared.producer_stream_type
-            || producer.media_kind != prepared.producer_media_kind
+        let producer = self.producers.get(&pending.producer_wire_id)?;
+        if producer.owner_session_id != pending.producer_owner_session_id
+            || producer.owner_connection_id != pending.producer_connection_id
+            || producer.stream_type != pending.producer_stream_type
+            || producer.media_kind != pending.producer_media_kind
             || producer.transport_media_id != Some(target.transport_media_id)
-            || producer.routed_producer_id != prepared.producer_routed_id
-            || producer.active != prepared.producer_active
+            || producer.routed_producer_id != pending.producer_routed_id
+            || producer.active != pending.producer_active
         {
             return None;
         }
+        let routed_consumer_id = match self.topology.add_consumer(
+            &target.consumer_session_id,
+            pending.producer_routed_id,
+            to_router_media_kind(pending.producer_media_kind),
+            to_router_stream_type(pending.producer_stream_type),
+            true,
+        ) {
+            Ok(id) => id,
+            Err(_error) => {
+                warn!(
+                    consumer_session_id = ?target.consumer_session_id,
+                    producer_id = %pending.producer_wire_id,
+                    "router rejected consumer creation"
+                );
+                return None;
+            }
+        };
         self.consumer_index.insert(
             ConsumerKey {
                 consumer_session_id: target.consumer_session_id.clone(),
-                producer_session_id: prepared.producer_owner_session_id.clone(),
-                stream_type: prepared.producer_stream_type,
+                producer_session_id: pending.producer_owner_session_id.clone(),
+                stream_type: pending.producer_stream_type,
             },
             ConsumerState {
-                routed_consumer_id: reserved.routed_consumer_id,
+                routed_consumer_id,
                 consumer_connection_id: target.consumer_connection_id,
-                source_connection_id: prepared.producer_connection_id,
+                source_connection_id: pending.producer_connection_id,
                 source_media: target.transport_media_id,
                 consumer_media: consumer_transport_media_id,
             },
         );
-        Some((reserved.sender.clone(), reserved.request.clone()))
-    }
-
-    pub(super) fn rollback_reserved_consumer_bootstrap(
-        &mut self,
-        reserved: &ReservedConsumerBootstrap,
-    ) {
-        if self
-            .topology
-            .remove_consumer(reserved.routed_consumer_id)
-            .is_err()
-        {
-            error!(
-                routed_consumer_id = ?reserved.routed_consumer_id,
-                "failed to roll back reserved consumer from channel router"
-            );
-        }
+        Some((pending.sender, pending.request))
     }
 
     #[cfg(test)]

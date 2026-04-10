@@ -78,9 +78,9 @@ impl Channel {
                 })
                 .ok()?;
 
-        let producer_id = {
+        let pending_publish = {
             let mut state = self.state.write().await;
-            state.reserve_published_track(
+            state.prepare_published_track(
                 session_id,
                 publisher_connection_id,
                 stream_type,
@@ -99,10 +99,6 @@ impl Channel {
         {
             Ok(id) => id,
             Err(_error) => {
-                self.state
-                    .write()
-                    .await
-                    .rollback_published_track(&producer_id);
                 warn!(
                     ?session_id,
                     "transport adapter rejected publish media declaration"
@@ -113,24 +109,15 @@ impl Channel {
 
         let consumer_targets = {
             let mut state = self.state.write().await;
-            state.finalize_published_track(
-                session_id,
-                publisher_connection_id,
-                &producer_id,
-                transport_media_id,
-            )
+            state.commit_published_track(pending_publish, transport_media_id)
         };
-        let Some(consumer_targets) = consumer_targets else {
+        let Some((producer_id, consumer_targets)) = consumer_targets else {
             let _result = transport_adapter
                 .remove_media(
                     &self.transport_session_key(session_id, publisher_connection_id),
                     transport_media_id,
                 )
                 .await;
-            self.state
-                .write()
-                .await
-                .rollback_published_track(&producer_id);
             return None;
         };
 
@@ -157,9 +144,9 @@ impl Channel {
         }) else {
             return;
         };
-        let Some(reserved) = ({
+        let Some(pending_bootstrap) = ({
             let mut state = self.state.write().await;
-            state.reserve_consumer_bootstrap(target, &prepared)
+            state.prepare_consumer_bootstrap_transaction(target, &prepared)
         }) else {
             return;
         };
@@ -181,10 +168,6 @@ impl Channel {
         {
             Ok(transport_media_id) => transport_media_id,
             Err(_error) => {
-                self.state
-                    .write()
-                    .await
-                    .rollback_reserved_consumer_bootstrap(&reserved);
                 warn!(
                     consumer_session_id = ?target.consumer_session_id,
                     producer_session_id = ?target.producer_session_id,
@@ -196,12 +179,7 @@ impl Channel {
         };
         let outbound = {
             let mut state = self.state.write().await;
-            state.finalize_reserved_consumer_bootstrap(
-                target,
-                &prepared,
-                &reserved,
-                consumer_transport_media_id,
-            )
+            state.commit_consumer_bootstrap(target, pending_bootstrap, consumer_transport_media_id)
         };
         let Some((sender, request)) = outbound else {
             let _result = transport_adapter
@@ -213,10 +191,6 @@ impl Channel {
                     consumer_transport_media_id,
                 )
                 .await;
-            self.state
-                .write()
-                .await
-                .rollback_reserved_consumer_bootstrap(&reserved);
             return;
         };
         let _ = sender.send(super::SessionOutbound::Request(Box::new(request)));

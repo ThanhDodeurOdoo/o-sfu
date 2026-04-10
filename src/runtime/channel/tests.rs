@@ -1300,6 +1300,59 @@ mod channel_tests {
     }
 
     #[tokio::test]
+    async fn publish_track_defers_producer_commit_until_transport_publish_succeeds() {
+        let (channel, adapter, stub, _rx1, _rx2) = setup_two_ready_sessions_with_stub().await;
+        stub.set_publish_media_delay(Some(Duration::from_millis(200)));
+
+        let publish_task = tokio::spawn({
+            let channel = Arc::clone(&channel);
+            let adapter = adapter.clone();
+            async move {
+                channel
+                    .publish_track(
+                        &SessionId::Integer(1),
+                        StreamType::Camera,
+                        MediaKind::Video,
+                        test_video_rtp_parameters(),
+                        &adapter,
+                    )
+                    .await
+            }
+        });
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::PublishMediaRequested {
+                    session_id: SessionId::Integer(1),
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .await;
+
+        {
+            let state = channel.state.read().await;
+            assert!(state.producers.is_empty());
+            drop(state);
+        }
+
+        assert!(publish_task.await.unwrap().is_some());
+
+        {
+            let state = channel.state.read().await;
+            assert_eq!(state.producers.len(), 1);
+            assert!(
+                state
+                    .producers
+                    .values()
+                    .all(|producer| producer.transport_media_id.is_some())
+            );
+            drop(state);
+        }
+    }
+
+    #[tokio::test]
     async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish() {
         let (channel, adapter, stub, _rx1, _rx2) = setup_two_ready_sessions_with_stub().await;
         stub.set_publish_media_delay(Some(Duration::from_millis(200)));
@@ -1485,6 +1538,58 @@ mod channel_tests {
                 )),
             "late joiner should receive outbound traffic while bootstrap is running"
         );
+    }
+
+    #[tokio::test]
+    async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succeeds() {
+        let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+            setup_late_join_bootstrap_scenario().await;
+        drain_outbound(&mut publisher_rx);
+        drain_outbound(&mut subscriber_rx);
+
+        channel
+            .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+            .await;
+        channel
+            .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
+            .await;
+        stub.set_consume_media_delay(Some(Duration::from_millis(200)));
+
+        let bootstrap_task = tokio::spawn({
+            let channel = Arc::clone(&channel);
+            let adapter = transport_adapter.clone();
+            async move {
+                channel
+                    .bootstrap_late_join_consumers(&SessionId::Integer(2), &adapter)
+                    .await;
+            }
+        });
+
+        wait_for_stub_event(&stub, |event| {
+            matches!(
+                event,
+                StubWebRtcEvent::ConsumeMediaRequested {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .await;
+
+        {
+            let state = channel.state.read().await;
+            assert!(state.consumer_index.is_empty());
+            drop(state);
+        }
+
+        bootstrap_task.await.unwrap();
+
+        {
+            let state = channel.state.read().await;
+            assert_eq!(state.consumer_index.len(), 1);
+            drop(state);
+        }
     }
 
     #[tokio::test]

@@ -192,22 +192,6 @@ impl ChannelTopology {
             .set_consumer_paused(consumer_id.consumer_id(), paused)
     }
 
-    pub(super) fn remove_producer(
-        &mut self,
-        producer_id: RoutedProducerId,
-    ) -> Result<(), RouterError> {
-        self.router_mut(producer_id.router_id())?
-            .remove_producer(producer_id.producer_id())
-    }
-
-    pub(super) fn remove_consumer(
-        &mut self,
-        consumer_id: RoutedConsumerId,
-    ) -> Result<(), RouterError> {
-        self.router_mut(consumer_id.router_id())?
-            .remove_consumer(consumer_id.consumer_id())
-    }
-
     pub(super) fn remove_session(&mut self, session_id: &SessionId) -> Result<(), RouterError> {
         let router_id = self.router_id_for_session(session_id);
         self.router_mut(router_id)?.remove_session(session_id)?;
