@@ -200,16 +200,43 @@ mod channel_tests {
 
         assert!(
             topology
-                .ensure_session(&session_id, 42, &SessionPermissions::default())
+                .apply_client_join(&session_id, 42, &SessionPermissions::default())
                 .is_ok()
         );
-        assert!(topology.ensure_session_transports(&session_id).is_ok());
 
         assert_eq!(
             topology.home_router_id_for_session(&session_id),
             Some(RouterId(7))
         );
         assert_eq!(topology.session_count(), 1);
+    }
+
+    #[test]
+    fn topology_rejoin_updates_permissions_without_duplicating_router_sessions() {
+        let mut topology = ChannelTopology::new(RouterId(7));
+        let session_id = SessionId::Integer(10);
+        let initial_permissions = SessionPermissions::default();
+        let replacement_permissions = SessionPermissions {
+            video_recording: Some(true),
+            ..SessionPermissions::default()
+        };
+
+        assert!(
+            topology
+                .apply_client_join(&session_id, 42, &initial_permissions)
+                .is_ok()
+        );
+        assert!(
+            topology
+                .apply_client_join(&session_id, 43, &replacement_permissions)
+                .is_ok()
+        );
+
+        assert_eq!(topology.session_count(), 1);
+        assert_eq!(
+            topology.session_permissions(&session_id),
+            Some(o_sfu_router::SessionPermissions::new(false, false, true))
+        );
     }
 
     #[test]
@@ -221,10 +248,9 @@ mod channel_tests {
         for (seed, session_id) in [(10, &producer_session_id), (20, &consumer_session_id)] {
             assert!(
                 topology
-                    .ensure_session(session_id, seed, &SessionPermissions::default())
+                    .apply_client_join(session_id, seed, &SessionPermissions::default())
                     .is_ok()
             );
-            assert!(topology.ensure_session_transports(session_id).is_ok());
         }
 
         let producer = topology

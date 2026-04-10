@@ -7,8 +7,12 @@ use o_sfu_router::{
 use tokio::sync::mpsc;
 use tracing::{error, warn};
 
+use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
-    current_protocol::{CurrentRemoteTrackBootstrapPayload, CurrentServerRequest},
+    current_protocol::{
+        CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
+        CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById, CurrentWebSocketCloseCode,
+    },
     ortc_mapper,
     shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
     webrtc::{
@@ -18,9 +22,11 @@ use crate::signaling::{
 
 use super::{
     SessionOutbound,
+    outbound::{MessageFanout, OutboundSender, fanout_all, fanout_all_except},
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use crate::runtime::transport_adapter::TransportMediaId;
+use crate::signaling::bundle_api::bundle_session_info_key;
 
 #[derive(Debug)]
 pub(super) struct ChannelState {
@@ -128,6 +134,63 @@ pub(super) struct PendingConsumerBootstrap {
     pub(super) producer_active: bool,
 }
 
+#[derive(Debug)]
+pub(super) struct JoinSessionOutcome {
+    pub(super) connection_id: u64,
+    replaced_sender: Option<OutboundSender>,
+    departure_fanout: Option<MessageFanout>,
+}
+
+impl JoinSessionOutcome {
+    pub(super) fn emit(self) {
+        if let Some(sender) = self.replaced_sender {
+            let _ = sender.send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
+        }
+        if let Some(fanout) = self.departure_fanout {
+            fanout.emit();
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct LeaveSessionOutcome {
+    departure_fanout: MessageFanout,
+}
+
+impl LeaveSessionOutcome {
+    pub(super) fn emit(self) {
+        self.departure_fanout.emit();
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct SessionInfoUpdateOutcome {
+    fanout: MessageFanout,
+}
+
+impl SessionInfoUpdateOutcome {
+    pub(super) fn emit(self) {
+        self.fanout.emit();
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct DisconnectSessionsOutcome {
+    kicked_senders: Vec<OutboundSender>,
+    departure_fanouts: Vec<MessageFanout>,
+}
+
+impl DisconnectSessionsOutcome {
+    pub(super) fn emit(self) {
+        for sender in self.kicked_senders {
+            let _ = sender.send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
+        }
+        for fanout in self.departure_fanouts {
+            fanout.emit();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ConsumerBootstrapOrigin {
     LateJoin,
@@ -191,6 +254,218 @@ impl ChannelState {
                 })
             })
             .collect()
+    }
+
+    pub(super) fn apply_join(
+        &mut self,
+        session_id: &SessionId,
+        label: Option<String>,
+        permissions: SessionPermissions,
+        sender: OutboundSender,
+        max_sessions: usize,
+    ) -> Result<JoinSessionOutcome, super::ChannelJoinError> {
+        let is_new = !self.sessions.contains_key(session_id);
+        if is_new && self.sessions.len() >= max_sessions {
+            return Err(super::ChannelJoinError::ChannelFull);
+        }
+        let connection_id = self.next_connection_id;
+        self.next_connection_id = self.next_connection_id.saturating_add(1);
+        if self
+            .topology
+            .apply_client_join(session_id, connection_id, &permissions)
+            .is_err()
+        {
+            error!(
+                ?session_id,
+                "failed to mirror session join into channel router"
+            );
+            return Err(super::ChannelJoinError::RouterState);
+        }
+
+        let previous_sender = if let Some(session) = self.sessions.get_mut(session_id) {
+            let old_sender = session.sender.clone();
+            session.label.clone_from(&label);
+            session.permissions.clone_from(&permissions);
+            session.info = SessionInfo::default();
+            session.client_rtp_capabilities = None;
+            session.upload_transport_connected = false;
+            session.download_transport_connected = false;
+            session.connection_id = connection_id;
+            session.sender = sender;
+            Some(old_sender)
+        } else {
+            self.sessions.insert(
+                session_id.clone(),
+                ActiveSession {
+                    label,
+                    permissions,
+                    info: SessionInfo::default(),
+                    client_rtp_capabilities: None,
+                    upload_transport_connected: false,
+                    download_transport_connected: false,
+                    connection_id,
+                    sender,
+                },
+            );
+            None
+        };
+
+        let departure_fanout = previous_sender.as_ref().map(|_| {
+            fanout_all_except(
+                &self.sessions,
+                &CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
+                    session_id: session_id.clone(),
+                }),
+                Some(session_id),
+            )
+        });
+        Ok(JoinSessionOutcome {
+            connection_id,
+            replaced_sender: previous_sender,
+            departure_fanout,
+        })
+    }
+
+    pub(super) fn apply_leave(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> Option<LeaveSessionOutcome> {
+        let session = self.sessions.get(session_id)?;
+        if session.connection_id != connection_id {
+            return None;
+        }
+        if self.topology.apply_client_leave(session_id).is_err() {
+            error!(
+                ?session_id,
+                "failed to mirror session leave into channel router"
+            );
+            return None;
+        }
+        self.sessions.remove(session_id);
+        self.purge_session_media_state(session_id);
+        Some(LeaveSessionOutcome {
+            departure_fanout: fanout_all(
+                &self.sessions,
+                &CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
+                    session_id: session_id.clone(),
+                }),
+            ),
+        })
+    }
+
+    pub(super) fn apply_update_session_info(
+        &mut self,
+        session_id: &SessionId,
+        info: SessionInfo,
+        need_refresh: bool,
+    ) -> Option<SessionInfoUpdateOutcome> {
+        let updated_info = {
+            let session = self.sessions.get_mut(session_id)?;
+            session.info = info;
+            session.info.clone()
+        };
+        if self
+            .topology
+            .update_session_info(session_id, &updated_info)
+            .is_err()
+        {
+            error!(
+                ?session_id,
+                "failed to mirror session info update into channel router"
+            );
+            return None;
+        }
+        let snapshot: CurrentSessionInfoSnapshotById = if need_refresh {
+            self.sessions
+                .iter()
+                .map(|(id, session)| (bundle_session_info_key(id), session.info.clone()))
+                .collect()
+        } else {
+            BTreeMap::from([(
+                bundle_session_info_key(session_id),
+                self.sessions
+                    .get(session_id)
+                    .map_or_else(SessionInfo::default, |session| session.info.clone()),
+            )])
+        };
+        Some(SessionInfoUpdateOutcome {
+            fanout: fanout_all(
+                &self.sessions,
+                &CurrentServerMessage::SessionInfoChanged(snapshot),
+            ),
+        })
+    }
+
+    pub(super) fn apply_disconnect_sessions(
+        &mut self,
+        session_ids: &[SessionId],
+    ) -> DisconnectSessionsOutcome {
+        let mut kicked_senders = Vec::new();
+        let mut departed = Vec::new();
+        for session_id in session_ids {
+            if !self.sessions.contains_key(session_id) {
+                continue;
+            }
+            if self.topology.apply_client_leave(session_id).is_err() {
+                error!(
+                    ?session_id,
+                    "failed to mirror bulk disconnect into channel router"
+                );
+                continue;
+            }
+            if let Some(session) = self.sessions.remove(session_id) {
+                self.purge_session_media_state(session_id);
+                kicked_senders.push(session.sender);
+                departed.push(session_id.clone());
+            }
+        }
+        let departure_fanouts = departed
+            .into_iter()
+            .map(|departed_id| {
+                fanout_all(
+                    &self.sessions,
+                    &CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
+                        session_id: departed_id,
+                    }),
+                )
+            })
+            .collect();
+        DisconnectSessionsOutcome {
+            kicked_senders,
+            departure_fanouts,
+        }
+    }
+
+    pub(super) fn set_client_rtp_capabilities(
+        &mut self,
+        session_id: &SessionId,
+        capabilities: SignalingRtpCapabilities,
+    ) -> bool {
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.client_rtp_capabilities = Some(capabilities);
+        true
+    }
+
+    pub(super) fn set_transport_connected(
+        &mut self,
+        session_id: &SessionId,
+        direction: TransportConnectDirection,
+    ) -> bool {
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return false;
+        };
+        match direction {
+            TransportConnectDirection::Upload => {
+                session.upload_transport_connected = true;
+            }
+            TransportConnectDirection::Download => {
+                session.download_transport_connected = true;
+            }
+        }
+        true
     }
 
     pub(super) fn publish_consumer_targets(

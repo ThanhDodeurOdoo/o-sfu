@@ -123,6 +123,25 @@ impl ChannelTopology {
             .ensure_session_transports(session_id)
     }
 
+    pub(super) fn apply_client_join(
+        &mut self,
+        session_id: &SessionId,
+        router_session_seed: u64,
+        permissions: &SignalingSessionPermissions,
+    ) -> Result<(), RouterError> {
+        let is_existing_session = self.session_home_router.contains_key(session_id);
+        self.ensure_session(session_id, router_session_seed, permissions)?;
+        self.ensure_session_transports(session_id)?;
+        if is_existing_session {
+            self.update_session_info(session_id, &SignalingSessionInfo::default())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_client_leave(&mut self, session_id: &SessionId) -> Result<(), RouterError> {
+        self.remove_session(session_id)
+    }
+
     pub(super) fn add_producer(
         &mut self,
         session_id: &SessionId,
@@ -152,16 +171,6 @@ impl ChannelTopology {
             capable,
         )?;
         Ok(RoutedConsumerId::new(producer_id.router_id(), consumer_id))
-    }
-
-    pub(super) fn update_session_permissions(
-        &mut self,
-        session_id: &SessionId,
-        permissions: &SignalingSessionPermissions,
-    ) -> Result<(), RouterError> {
-        let router_id = self.router_id_for_session(session_id);
-        self.router_mut(router_id)?
-            .update_session_permissions(session_id, permissions)
     }
 
     pub(super) fn update_session_info(
