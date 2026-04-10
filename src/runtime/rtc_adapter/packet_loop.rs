@@ -251,6 +251,29 @@ fn handle_socket_receive_result(
     }
 }
 
+fn record_incoming_stats(
+    state: &RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    buffers: &PacketLoopBuffers,
+    now: Instant,
+) {
+    let Ok(mut snapshot) = snapshot_state.lock() else {
+        return;
+    };
+    for (source_session, media) in &buffers.pending_media {
+        if let Some(transport_media_id) =
+            state.transport_media_id_for_source(source_session, media.mid)
+        {
+            snapshot.record_incoming_media(
+                source_session,
+                transport_media_id,
+                now,
+                media.data.len(),
+            );
+        }
+    }
+}
+
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -280,17 +303,8 @@ fn snapshot_and_pump(
     // Separating the read of the route index from the mutable session access
     // avoids a borrow conflict on `state`.
     let media_stats_now = Instant::now();
+    record_incoming_stats(state, snapshot_state, buffers, media_stats_now);
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
-        if let Some(stream_type) = state.stream_type_for_source(source_session, media.mid)
-            && let Ok(mut snapshot) = snapshot_state.lock()
-        {
-            snapshot.record_incoming_stream(
-                source_session,
-                stream_type,
-                media_stats_now,
-                media.data.len(),
-            );
-        }
         if let Some(route_entry) = state
             .media_route_index
             .get(&(source_session.clone(), media.mid))

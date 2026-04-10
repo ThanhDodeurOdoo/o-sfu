@@ -91,7 +91,6 @@ impl Channel {
         let transport_media_id = match transport_adapter
             .publish_media(
                 &self.transport_session_key(session_id, publisher_connection_id),
-                stream_type,
                 media_kind,
                 &parsed_rtp_parameters,
             )

@@ -1258,7 +1258,6 @@ mod channel_tests {
                 event,
                 StubWebRtcEvent::PublishMediaRequested {
                     session_id: SessionId::Integer(1),
-                    stream_type: StreamType::Camera,
                     media_kind: MediaKind::Video,
                 }
             )
@@ -1326,7 +1325,6 @@ mod channel_tests {
                 event,
                 StubWebRtcEvent::PublishMediaRequested {
                     session_id: SessionId::Integer(1),
-                    stream_type: StreamType::Camera,
                     media_kind: MediaKind::Video,
                 }
             )

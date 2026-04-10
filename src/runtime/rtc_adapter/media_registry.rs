@@ -6,7 +6,6 @@
 use str0m::media::Mid;
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-use crate::signaling::shared::StreamType;
 
 use super::state::RtcBootstrapState;
 
@@ -96,12 +95,12 @@ impl RtcBootstrapState {
             .any(|handle| handle.is_producer_for(session_key, mid))
     }
 
-    pub(super) fn stream_type_for_source(
+    pub(super) fn transport_media_id_for_source(
         &self,
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
-    ) -> Option<StreamType> {
-        self.recv_stream_types
+    ) -> Option<TransportMediaId> {
+        self.recv_media_ids
             .get(&(source_session_key.clone(), source_mid))
             .copied()
     }

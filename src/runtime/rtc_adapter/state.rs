@@ -15,9 +15,8 @@ use str0m::{IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
 use crate::runtime::transport_adapter::{
-    IncomingBitrateSnapshot, TransportConnectDirection, TransportSessionKey,
+    TransportBitrateSnapshot, TransportConnectDirection, TransportMediaId, TransportSessionKey,
 };
-use crate::signaling::shared::StreamType;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey};
 use super::media_registry::RegisteredMediaHandle;
@@ -88,30 +87,41 @@ impl ParsedRemoteIceCredentials {
 
 #[derive(Debug, Default)]
 pub(super) struct SessionIncomingBitrates {
-    audio: RecentBitrate,
-    camera: RecentBitrate,
-    screen: RecentBitrate,
+    per_media: BTreeMap<TransportMediaId, RecentBitrate>,
 }
 
 impl SessionIncomingBitrates {
-    pub(super) fn record(&mut self, stream_type: StreamType, now: Instant, payload_bytes: usize) {
-        match stream_type {
-            StreamType::Audio => self.audio.record(now, payload_bytes),
-            StreamType::Camera => self.camera.record(now, payload_bytes),
-            StreamType::Screen => self.screen.record(now, payload_bytes),
-        }
+    pub(super) fn record(
+        &mut self,
+        transport_media_id: TransportMediaId,
+        now: Instant,
+        payload_bytes: usize,
+    ) {
+        self.per_media
+            .entry(transport_media_id)
+            .or_default()
+            .record(now, payload_bytes);
     }
 
-    pub(super) fn snapshot(&self, now: Instant) -> IncomingBitrateSnapshot {
-        let audio = self.audio.snapshot(now);
-        let camera = self.camera.snapshot(now);
-        let screen = self.screen.snapshot(now);
-        IncomingBitrateSnapshot {
-            total: audio.saturating_add(camera).saturating_add(screen),
-            audio,
-            camera,
-            screen,
-        }
+    pub(super) fn snapshot(&self, now: Instant) -> Vec<(TransportMediaId, u64)> {
+        self.per_media
+            .iter()
+            .filter_map(|(media_id, bitrate)| {
+                let bits = bitrate.snapshot(now);
+                if bits > 0 {
+                    Some((*media_id, bits))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn total(&self, now: Instant) -> u64 {
+        self.per_media
+            .values()
+            .map(|bitrate| bitrate.snapshot(now))
+            .sum()
     }
 }
 
@@ -159,7 +169,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
-    pub(super) recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
+    pub(super) recv_media_ids: BTreeMap<MediaRouteKey, TransportMediaId>,
     pub(super) remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
     pub(super) remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
     pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
@@ -254,34 +264,31 @@ impl RtcSnapshotState {
         self.incoming_bitrates_by_session.remove(session_key);
     }
 
-    pub(super) fn record_incoming_stream(
+    pub(super) fn record_incoming_media(
         &mut self,
         session_key: &TransportSessionKey,
-        stream_type: StreamType,
+        transport_media_id: TransportMediaId,
         now: Instant,
         payload_bytes: usize,
     ) {
         self.incoming_bitrates_by_session
             .entry(session_key.clone())
             .or_default()
-            .record(stream_type, now, payload_bytes);
+            .record(transport_media_id, now, payload_bytes);
     }
 
-    pub(super) fn incoming_bitrate_snapshot_at(
+    pub(super) fn transport_bitrate_snapshot_at(
         &self,
         session_keys: &[TransportSessionKey],
         now: Instant,
-    ) -> IncomingBitrateSnapshot {
-        let mut snapshot = IncomingBitrateSnapshot::default();
+    ) -> TransportBitrateSnapshot {
+        let mut snapshot = TransportBitrateSnapshot::default();
         for session_key in session_keys {
             let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_key) else {
                 continue;
             };
-            let session_snapshot = session_bitrates.snapshot(now);
-            snapshot.total = snapshot.total.saturating_add(session_snapshot.total);
-            snapshot.audio = snapshot.audio.saturating_add(session_snapshot.audio);
-            snapshot.camera = snapshot.camera.saturating_add(session_snapshot.camera);
-            snapshot.screen = snapshot.screen.saturating_add(session_snapshot.screen);
+            snapshot.total = snapshot.total.saturating_add(session_bitrates.total(now));
+            snapshot.per_media.extend(session_bitrates.snapshot(now));
         }
         snapshot
     }

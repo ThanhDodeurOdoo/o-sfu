@@ -1,3 +1,10 @@
+#![allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
+)]
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     slice,
@@ -20,7 +27,7 @@ use crate::{
     },
     signaling::{
         current_protocol::CurrentTransportBootstrapPayload,
-        shared::{SessionId, StreamType},
+        shared::SessionId,
         webrtc::{
             DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
             PublishOptionsByMediaKind, RtpCapabilities as WireRtpCapabilities, SctpParameters,
@@ -798,12 +805,7 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
-        .add_recv_media(
-            &session_key,
-            StreamType::Audio,
-            Str0mMediaKind::Audio,
-            &rtp_parameters,
-        )
+        .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await;
     assert!(transport_media_id.is_ok());
     let Some(transport_media_id) = transport_media_id.ok() else {
@@ -847,7 +849,6 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let source_media_id = adapter
         .add_recv_media(
             &producer_session_key,
-            StreamType::Audio,
             Str0mMediaKind::Audio,
             &producer_rtp_parameters,
         )
@@ -913,7 +914,6 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let source_media_id = adapter
         .add_recv_media(
             &producer_session_key,
-            StreamType::Camera,
             Str0mMediaKind::Video,
             &producer_rtp_parameters,
         )
@@ -983,27 +983,24 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
             .await
             .is_ok()
     );
-    assert!(
-        adapter
-            .add_recv_media(
-                &session_key,
-                StreamType::Camera,
-                Str0mMediaKind::Video,
-                &rtp_parameters,
-            )
-            .await
-            .is_ok()
-    );
+    let transport_media_id = adapter
+        .add_recv_media(&session_key, Str0mMediaKind::Video, &rtp_parameters)
+        .await
+        .expect("should declare recv media");
 
     adapter
-        .debug_record_incoming_media(&session_key, Mid::from("cam-up"), 120, Instant::now())
+        .debug_record_incoming_media(&session_key, transport_media_id, 120, Instant::now())
         .await;
 
-    let snapshot = adapter.incoming_bitrate_snapshot(slice::from_ref(&session_key));
-    assert_eq!(snapshot.total, 960);
-    assert_eq!(snapshot.audio, 0);
-    assert_eq!(snapshot.camera, 960);
-    assert_eq!(snapshot.screen, 0);
+    let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
+    assert_eq!(snapshot.per_media.len(), 1);
+    assert_eq!(
+        snapshot
+            .per_media
+            .first()
+            .expect("should have media bitrate"),
+        &(transport_media_id, 960)
+    );
 }
 
 #[tokio::test]
@@ -1018,21 +1015,14 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
             .await
             .is_ok()
     );
-    assert!(
-        adapter
-            .add_recv_media(
-                &session_key,
-                StreamType::Audio,
-                Str0mMediaKind::Audio,
-                &rtp_parameters,
-            )
-            .await
-            .is_ok()
-    );
+    let transport_media_id = adapter
+        .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
+        .await
+        .expect("should declare recv media");
 
     let now = Instant::now();
     adapter
-        .debug_record_incoming_media(&session_key, Mid::from("aud-up"), 64, now)
+        .debug_record_incoming_media(&session_key, transport_media_id, 64, now)
         .await;
     let Some(worker_handle) = adapter.worker_handle().ok().flatten() else {
         return;
@@ -1041,13 +1031,11 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
             return;
         };
-        snapshot_state.incoming_bitrate_snapshot_at(
+        snapshot_state.transport_bitrate_snapshot_at(
             slice::from_ref(&session_key),
             now + Duration::from_secs(2),
         )
     };
     assert_eq!(snapshot.total, 0);
-    assert_eq!(snapshot.audio, 0);
-    assert_eq!(snapshot.camera, 0);
-    assert_eq!(snapshot.screen, 0);
+    assert!(snapshot.per_media.is_empty());
 }

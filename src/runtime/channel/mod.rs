@@ -17,12 +17,10 @@ use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::transport_adapter::{
-    IncomingBitrateSnapshot, RuntimeTransportAdapter, TransportSessionKey,
-};
+use super::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
-    shared::{AvailableFeatures, RecordingState, SessionId},
+    shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
 };
 
 mod manager;
@@ -78,6 +76,14 @@ impl Default for ChannelConfig {
             recording_address: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct IncomingBitrateSnapshot {
+    pub(crate) total: u64,
+    pub(crate) audio: u64,
+    pub(crate) camera: u64,
+    pub(crate) screen: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,8 +195,35 @@ impl Channel {
                 )
             })
             .collect::<Vec<_>>();
+        let transport_snapshot = transport_adapter.transport_bitrate_snapshot(&session_keys);
+        let mut aggregated_bitrate = IncomingBitrateSnapshot {
+            total: transport_snapshot.total,
+            ..Default::default()
+        };
+        for (transport_media_id, bits) in transport_snapshot.per_media {
+            let Some(stream_type) = state.producers.values().find_map(|producer| {
+                if producer.transport_media_id == Some(transport_media_id) {
+                    Some(producer.stream_type)
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+            match stream_type {
+                StreamType::Audio => {
+                    aggregated_bitrate.audio = aggregated_bitrate.audio.saturating_add(bits);
+                }
+                StreamType::Camera => {
+                    aggregated_bitrate.camera = aggregated_bitrate.camera.saturating_add(bits);
+                }
+                StreamType::Screen => {
+                    aggregated_bitrate.screen = aggregated_bitrate.screen.saturating_add(bits);
+                }
+            }
+        }
         ChannelSessionStatsSnapshot {
-            incoming_bitrate: transport_adapter.incoming_bitrate_snapshot(&session_keys),
+            incoming_bitrate: aggregated_bitrate,
             count: state.topology.session_count(),
             camera_count: state.topology.camera_count(),
             screen_count: state.topology.screen_count(),

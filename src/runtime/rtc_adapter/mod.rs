@@ -28,7 +28,7 @@ use std::net::SocketAddr;
 
 use super::{
     transport_adapter::{
-        IncomingBitrateSnapshot, TransportAdapterError, TransportConnectDirection,
+        TransportAdapterError, TransportBitrateSnapshot, TransportConnectDirection,
         TransportSessionKey,
     },
     transport_bootstrap,
@@ -36,7 +36,6 @@ use super::{
 use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
-    shared::StreamType,
     webrtc::{DtlsParameters, IceParameters},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
@@ -110,7 +109,6 @@ enum RtcWorkerCommand {
     },
     AddRecvMedia {
         session_key: TransportSessionKey,
-        stream_type: StreamType,
         media_kind: MediaKind,
         rtp_parameters: RouterRtpParameters,
         response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
@@ -182,7 +180,7 @@ enum DebugRtcCommand {
     },
     RecordIncomingMedia {
         session_key: TransportSessionKey,
-        mid: Mid,
+        transport_media_id: TransportMediaId,
         payload_bytes: usize,
         now: Instant,
         response: oneshot::Sender<()>,
@@ -361,7 +359,6 @@ impl RtcTransportAdapter {
     pub(super) async fn add_recv_media(
         &self,
         session_key: &TransportSessionKey,
-        stream_type: StreamType,
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
@@ -371,7 +368,6 @@ impl RtcTransportAdapter {
             .command_tx
             .send(RtcWorkerCommand::AddRecvMedia {
                 session_key: session_key.clone(),
-                stream_type,
                 media_kind,
                 rtp_parameters: rtp_parameters.clone(),
                 response: response_tx,
@@ -575,17 +571,17 @@ impl RtcTransportAdapter {
         Ok(())
     }
 
-    pub(super) fn incoming_bitrate_snapshot(
+    pub(super) fn transport_bitrate_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
-    ) -> IncomingBitrateSnapshot {
+    ) -> TransportBitrateSnapshot {
         let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return IncomingBitrateSnapshot::default();
+            return TransportBitrateSnapshot::default();
         };
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
-            return IncomingBitrateSnapshot::default();
+            return TransportBitrateSnapshot::default();
         };
-        snapshot_state.incoming_bitrate_snapshot_at(session_keys, Instant::now())
+        snapshot_state.transport_bitrate_snapshot_at(session_keys, Instant::now())
     }
 }
 
@@ -784,7 +780,7 @@ impl RtcTransportAdapter {
     async fn debug_record_incoming_media(
         &self,
         session_key: &TransportSessionKey,
-        mid: Mid,
+        transport_media_id: TransportMediaId,
         payload_bytes: usize,
         now: Instant,
     ) {
@@ -797,7 +793,7 @@ impl RtcTransportAdapter {
             .send(RtcWorkerCommand::Debug(
                 DebugRtcCommand::RecordIncomingMedia {
                     session_key: session_key.clone(),
-                    mid,
+                    transport_media_id,
                     payload_bytes,
                     now,
                     response: response_tx,
@@ -888,18 +884,10 @@ fn handle_core_worker_command(
         } => respond_remove_media(state, &session_key, transport_media_id, response),
         RtcWorkerCommand::AddRecvMedia {
             session_key,
-            stream_type,
             media_kind,
             rtp_parameters,
             response,
-        } => respond_add_recv_media(
-            state,
-            &session_key,
-            stream_type,
-            media_kind,
-            &rtp_parameters,
-            response,
-        ),
+        } => respond_add_recv_media(state, &session_key, media_kind, &rtp_parameters, response),
         RtcWorkerCommand::AddSendMedia {
             consumer_session_key,
             media_kind,
@@ -1012,7 +1000,6 @@ fn respond_remove_media(
 fn respond_add_recv_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
-    stream_type: StreamType,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
@@ -1020,7 +1007,6 @@ fn respond_add_recv_media(
     let _ = response.send(worker_add_recv_media(
         state,
         session_key,
-        stream_type,
         media_kind,
         rtp_parameters,
     ));
@@ -1233,7 +1219,7 @@ fn worker_close_session(
         .mid_registry
         .retain(|_id, handle| handle.session_key() != session_key);
     state
-        .recv_stream_types
+        .recv_media_ids
         .retain(|(source_session, _), _| source_session != session_key);
     state
         .media_route_index
@@ -1279,7 +1265,7 @@ fn worker_remove_media(
                 }
             }
             if should_remove_stream_type {
-                state.recv_stream_types.remove(&(session_key.clone(), mid));
+                state.recv_media_ids.remove(&(session_key.clone(), mid));
                 state.media_route_index.remove(&(session_key.clone(), mid));
             }
             state.mark_session_dirty(&session_key);
@@ -1321,7 +1307,6 @@ fn worker_remove_media(
 fn worker_add_recv_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
-    stream_type: StreamType,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
 ) -> Result<TransportMediaId, TransportAdapterError> {
@@ -1340,19 +1325,18 @@ fn worker_add_recv_media(
         }
     }
     session_state.recv_mids.push(mid);
-    state
-        .recv_stream_types
-        .insert((session_key.clone(), mid), stream_type);
     state.mark_session_dirty(session_key);
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
         mid,
     });
+    state
+        .recv_media_ids
+        .insert((session_key.clone(), mid), transport_media_id);
     debug!(
         session_id = ?session_key.session_id(),
         channel_runtime_id = session_key.channel_runtime_id(),
         ?transport_media_id,
-        ?stream_type,
         ?media_kind,
         "declared recv-only media on rtc session for incoming producer RTP"
     );
@@ -1511,15 +1495,14 @@ fn handle_debug_command(
         } => respond_debug_route_entry(state, &source_session_key, source_mid, response),
         DebugRtcCommand::RecordIncomingMedia {
             session_key,
-            mid,
+            transport_media_id,
             payload_bytes,
             now,
             response,
         } => respond_debug_record_incoming_media(
-            state,
             snapshot_state,
             &session_key,
-            mid,
+            transport_media_id,
             payload_bytes,
             now,
             response,
@@ -1641,18 +1624,15 @@ fn respond_debug_route_entry(
 
 #[cfg(test)]
 fn respond_debug_record_incoming_media(
-    state: &RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
-    mid: Mid,
+    transport_media_id: TransportMediaId,
     payload_bytes: usize,
     now: Instant,
     response: oneshot::Sender<()>,
 ) {
-    if let Some(stream_type) = state.stream_type_for_source(session_key, mid)
-        && let Ok(mut snapshot) = snapshot_state.lock()
-    {
-        snapshot.record_incoming_stream(session_key, stream_type, now, payload_bytes);
+    if let Ok(mut snapshot) = snapshot_state.lock() {
+        snapshot.record_incoming_media(session_key, transport_media_id, now, payload_bytes);
     }
     let _ = response.send(());
 }

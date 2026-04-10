@@ -6,7 +6,6 @@ use crate::config::RtcPortRange;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
-    shared::StreamType as SignalingStreamType,
     webrtc::{DtlsParameters, IceParameters, MediaKind as SignalingMediaKind},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
@@ -69,19 +68,17 @@ pub(crate) enum TransportAdapterError {
     UnsupportedFeature,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct IncomingBitrateSnapshot {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TransportBitrateSnapshot {
     pub(crate) total: u64,
-    pub(crate) audio: u64,
-    pub(crate) camera: u64,
-    pub(crate) screen: u64,
+    pub(crate) per_media: Vec<(TransportMediaId, u64)>,
 }
 
 /// Opaque identifier for a media line allocated by the transport adapter.
 ///
 /// Wraps the transport-internal representation (e.g. str0m `Mid`) without
 /// exposing WebRTC library types to the signaling/channel layers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub(crate) struct TransportMediaId(u64);
 
 impl TransportMediaId {
@@ -160,10 +157,10 @@ impl RtcTransportAdapterShardSet {
         self.shard_index_for_media_worker_id(session_key.media_worker_id())
     }
 
-    fn incoming_bitrate_snapshot(
+    fn transport_bitrate_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
-    ) -> IncomingBitrateSnapshot {
+    ) -> TransportBitrateSnapshot {
         let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
             keys_by_shard
@@ -171,14 +168,12 @@ impl RtcTransportAdapterShardSet {
                 .or_default()
                 .push(session_key.clone());
         }
-        let mut snapshot = IncomingBitrateSnapshot::default();
+        let mut snapshot = TransportBitrateSnapshot::default();
         for (shard_index, shard_session_keys) in keys_by_shard {
             let shard = self.shard_for_index(shard_index);
-            let shard_snapshot = shard.incoming_bitrate_snapshot(&shard_session_keys);
+            let shard_snapshot = shard.transport_bitrate_snapshot(&shard_session_keys);
             snapshot.total = snapshot.total.saturating_add(shard_snapshot.total);
-            snapshot.audio = snapshot.audio.saturating_add(shard_snapshot.audio);
-            snapshot.camera = snapshot.camera.saturating_add(shard_snapshot.camera);
-            snapshot.screen = snapshot.screen.saturating_add(shard_snapshot.screen);
+            snapshot.per_media.extend(shard_snapshot.per_media);
         }
         snapshot
     }
@@ -303,14 +298,13 @@ impl RuntimeTransportAdapter {
     pub(crate) async fn publish_media(
         &self,
         session_key: &TransportSessionKey,
-        stream_type: SignalingStreamType,
         media_kind: SignalingMediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .publish_media(session_key, stream_type, media_kind, rtp_parameters)
+                    .publish_media(session_key, media_kind, rtp_parameters)
                     .await
             }
             Self::Rtc(adapter) => {
@@ -318,7 +312,6 @@ impl RuntimeTransportAdapter {
                     .shard_for_session(session_key)
                     .add_recv_media(
                         session_key,
-                        stream_type,
                         signaling_to_str0m_media_kind(media_kind),
                         rtp_parameters,
                     )
@@ -367,13 +360,13 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    pub(crate) fn incoming_bitrate_snapshot(
+    pub(crate) fn transport_bitrate_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
-    ) -> IncomingBitrateSnapshot {
+    ) -> TransportBitrateSnapshot {
         match self {
-            Self::Stub(_adapter) => IncomingBitrateSnapshot::default(),
-            Self::Rtc(adapter) => adapter.incoming_bitrate_snapshot(session_keys),
+            Self::Stub(_adapter) => TransportBitrateSnapshot::default(),
+            Self::Rtc(adapter) => adapter.transport_bitrate_snapshot(session_keys),
         }
     }
 
