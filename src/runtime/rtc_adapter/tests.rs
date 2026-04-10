@@ -415,6 +415,34 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
 }
 
 #[tokio::test]
+async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
+    let adapter = RtcTransportAdapter::default();
+    let first_session_key = transport_key(1, 141, SessionId::Integer(141));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&first_session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    sleep(Duration::from_millis(5)).await;
+    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+
+    assert_eq!(adapter.close_session(&first_session_key).await, Ok(()));
+    assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(matches!(adapter.worker_handle(), Ok(None)));
+
+    let second_session_key = transport_key(1, 142, SessionId::Integer(142));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&second_session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    sleep(Duration::from_millis(5)).await;
+    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     let adapter = RtcTransportAdapter::default();
     let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
@@ -488,6 +516,47 @@ fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
             .get(&second_session_key),
         Some(&vec![source_addr])
     );
+}
+
+#[test]
+fn rtc_bootstrap_state_tracks_dirty_and_timed_out_sessions_separately() {
+    let mut state = super::RtcBootstrapState::default();
+    let first_session_key = transport_key_on_worker(1, 0, 31, SessionId::Integer(31));
+    let second_session_key = transport_key_on_worker(1, 0, 32, SessionId::Integer(32));
+    let now = Instant::now();
+    let first_timeout = now + Duration::from_millis(20);
+    let second_timeout = now + Duration::from_millis(40);
+
+    state.update_session_timeout(&first_session_key, Some(first_timeout));
+    state.update_session_timeout(&second_session_key, Some(second_timeout));
+    state.mark_session_dirty(&second_session_key);
+
+    assert_eq!(state.next_timeout_deadline(), Some(first_timeout));
+
+    let ready_sessions = state.take_ready_sessions(now + Duration::from_millis(25));
+    assert!(ready_sessions.contains(&first_session_key));
+    assert!(ready_sessions.contains(&second_session_key));
+    assert_eq!(ready_sessions.len(), 2);
+    assert_eq!(state.next_timeout_deadline(), Some(second_timeout));
+}
+
+#[test]
+fn rtc_bootstrap_state_prefers_latest_session_timeout_deadline() {
+    let mut state = super::RtcBootstrapState::default();
+    let session_key = transport_key_on_worker(1, 0, 33, SessionId::Integer(33));
+    let now = Instant::now();
+    let first_timeout = now + Duration::from_millis(50);
+    let updated_timeout = now + Duration::from_millis(10);
+
+    state.update_session_timeout(&session_key, Some(first_timeout));
+    state.update_session_timeout(&session_key, Some(updated_timeout));
+
+    assert_eq!(state.next_timeout_deadline(), Some(updated_timeout));
+
+    let ready_sessions = state.take_ready_sessions(now + Duration::from_millis(15));
+    assert_eq!(ready_sessions.len(), 1);
+    assert!(ready_sessions.contains(&session_key));
+    assert_eq!(state.next_timeout_deadline(), None);
 }
 
 #[tokio::test]

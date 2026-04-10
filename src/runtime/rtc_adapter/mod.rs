@@ -10,8 +10,10 @@
 //! - `parse_diagnostic`: shared parse diagnostic infrastructure
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     fmt,
+    mem::take,
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
@@ -43,6 +45,7 @@ use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::transport_adapter::TransportMediaId;
@@ -242,10 +245,72 @@ pub(super) struct RtcBootstrapState {
     remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
     remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
     mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
+    dirty_sessions: BTreeSet<TransportSessionKey>,
+    session_timeouts: BTreeMap<TransportSessionKey, Instant>,
+    timeout_queue: BinaryHeap<Reverse<(Instant, TransportSessionKey)>>,
     next_media_id: u64,
 }
 
 impl RtcBootstrapState {
+    fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
+        self.dirty_sessions.insert(session_key.clone());
+    }
+
+    fn take_ready_sessions(&mut self, now: Instant) -> BTreeSet<TransportSessionKey> {
+        let mut ready_sessions = take(&mut self.dirty_sessions);
+        while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
+            let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
+                self.timeout_queue.pop();
+                continue;
+            };
+            if current_deadline != deadline {
+                self.timeout_queue.pop();
+                continue;
+            }
+            if deadline > now {
+                break;
+            }
+            self.timeout_queue.pop();
+            self.session_timeouts.remove(&session_key);
+            ready_sessions.insert(session_key);
+        }
+        ready_sessions
+    }
+
+    fn update_session_timeout(
+        &mut self,
+        session_key: &TransportSessionKey,
+        next_timeout: Option<Instant>,
+    ) {
+        self.session_timeouts.remove(session_key);
+        if let Some(next_timeout) = next_timeout {
+            self.session_timeouts
+                .insert(session_key.clone(), next_timeout);
+            self.timeout_queue
+                .push(Reverse((next_timeout, session_key.clone())));
+        }
+    }
+
+    fn next_timeout_deadline(&mut self) -> Option<Instant> {
+        while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
+            let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
+                self.timeout_queue.pop();
+                continue;
+            };
+            if current_deadline != deadline {
+                self.timeout_queue.pop();
+                continue;
+            }
+            return Some(deadline);
+        }
+        None
+    }
+
+    fn clear_session_schedule(&mut self, session_key: &TransportSessionKey) {
+        self.dirty_sessions.remove(session_key);
+        self.session_timeouts.remove(session_key);
+    }
+
     fn register_media_handle(&mut self, handle: RegisteredMediaHandle) -> TransportMediaId {
         let id = self.next_media_id;
         self.next_media_id = self.next_media_id.saturating_add(1);
@@ -456,6 +521,13 @@ impl RtcSnapshotState {
 struct RtcWorkerHandle {
     command_tx: mpsc::Sender<RtcWorkerCommand>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    shutdown_token: CancellationToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseSessionOutcome {
+    SessionClosed,
+    WorkerDrained,
 }
 
 enum RtcWorkerCommand {
@@ -473,7 +545,7 @@ enum RtcWorkerCommand {
     },
     CloseSession {
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
     },
     RemoveMedia {
         session_key: TransportSessionKey,
@@ -690,9 +762,17 @@ impl RtcTransportAdapter {
             })
             .await
             .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
-        response_rx
+        let close_outcome = response_rx
             .await
-            .map_err(|_error| TransportAdapterError::TransportUnavailable)?
+            .map_err(|_error| TransportAdapterError::TransportUnavailable)??;
+        if close_outcome == CloseSessionOutcome::WorkerDrained {
+            worker_handle.shutdown_token.cancel();
+            if let Ok(mut worker_slot) = self.worker_handle.lock() {
+                *worker_slot = None;
+            }
+            self.packet_loop_started.store(false, Ordering::Release);
+        }
+        Ok(())
     }
 
     pub(super) async fn remove_media(
@@ -856,9 +936,11 @@ impl RtcTransportAdapter {
         };
         let (command_tx, command_rx) = mpsc::channel(64);
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let shutdown_token = CancellationToken::new();
         let worker_handle = RtcWorkerHandle {
             command_tx,
             snapshot_state: Arc::clone(&snapshot_state),
+            shutdown_token: shutdown_token.clone(),
         };
         {
             let Ok(mut worker_slot) = self.worker_handle.lock() else {
@@ -872,6 +954,7 @@ impl RtcTransportAdapter {
             self.rtc_port_range,
             snapshot_state,
             command_rx,
+            shutdown_token,
         ));
         Ok(worker_handle)
     }
@@ -1355,10 +1438,10 @@ fn respond_close_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
-    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+    response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
 ) {
-    worker_close_session(state, snapshot_state, session_key);
-    let _ = response.send(Ok(()));
+    let close_outcome = worker_close_session(state, snapshot_state, session_key);
+    let _ = response.send(Ok(close_outcome));
 }
 
 fn respond_remove_media(
@@ -1477,6 +1560,7 @@ fn worker_build_bootstrap_payload(
         candidate_addr
     };
     bootstrap::ensure_session_rtc_state(&mut state.sessions, session_key, candidate_addr)?;
+    state.mark_session_dirty(session_key);
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
     }
@@ -1577,6 +1661,7 @@ fn worker_apply_transport_connect(
             );
         }
     }
+    state.mark_session_dirty(session_key);
     Ok(())
 }
 
@@ -1584,8 +1669,9 @@ fn worker_close_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
-) {
+) -> CloseSessionOutcome {
     state.sessions.remove(session_key);
+    state.clear_session_schedule(session_key);
     state.forget_session_remote_addrs(session_key);
     state
         .mid_registry
@@ -1607,6 +1693,11 @@ fn worker_close_session(
     }
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.remove_session(session_key);
+    }
+    if state.sessions.is_empty() {
+        CloseSessionOutcome::WorkerDrained
+    } else {
+        CloseSessionOutcome::SessionClosed
     }
 }
 
@@ -1633,8 +1724,9 @@ fn worker_remove_media(
             }
             if should_remove_stream_type {
                 state.recv_stream_types.remove(&(session_key.clone(), mid));
-                state.media_route_index.remove(&(session_key, mid));
+                state.media_route_index.remove(&(session_key.clone(), mid));
             }
+            state.mark_session_dirty(&session_key);
         }
         RegisteredMediaHandle::Consumer {
             session_key,
@@ -1664,6 +1756,7 @@ fn worker_remove_media(
                         .remove(&(source_session_key, source_mid));
                 }
             }
+            state.mark_session_dirty(&session_key);
         }
     }
     Ok(())
@@ -1694,6 +1787,7 @@ fn worker_add_recv_media(
     state
         .recv_stream_types
         .insert((session_key.clone(), mid), stream_type);
+    state.mark_session_dirty(session_key);
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
         mid,
@@ -1735,6 +1829,7 @@ fn worker_add_send_media(
         api.declare_stream_tx(ssrc, None, mid, rid);
     }
     session_state.send_mids.push(mid);
+    state.mark_session_dirty(consumer_session_key);
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session_key.clone(),
         mid,
