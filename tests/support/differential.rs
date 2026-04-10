@@ -31,8 +31,8 @@ use super::{
     TEST_AUTH_KEY, TEST_CHANNEL_KEY, TestWebSocket,
     fake_media::FakeMediaSource,
     full_stack::{FakePeer, LocalNetwork},
-    read_bus_batch, respond_to_server_request, signed_channel_claims, signed_connect_claims,
-    supported_client_rtp_capabilities,
+    read_bus_batch, read_close_code, respond_to_server_request, signed_channel_claims,
+    signed_connect_claims, supported_client_rtp_capabilities,
 };
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -51,6 +51,10 @@ pub struct CompatibilityTranscript {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompatibilityEvent {
+    SessionClosed {
+        session_id: SessionId,
+        close_code: u16,
+    },
     RemoteTrackBootstrap {
         observer_session_id: SessionId,
         owner_session_id: SessionId,
@@ -112,6 +116,8 @@ pub trait ScenarioPeer: Sized {
         request_id: CurrentBusRequestId,
         response: Value,
     ) -> BoxFuture<'_, Option<()>>;
+
+    fn read_close_code(&mut self) -> BoxFuture<'_, Option<u16>>;
 
     fn close(self) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>;
 }
@@ -186,6 +192,10 @@ impl ScenarioPeer for FakePeer {
         response: Value,
     ) -> BoxFuture<'_, Option<()>> {
         Box::pin(async move { Self::respond_to_server_request(self, &request_id, response).await })
+    }
+
+    fn read_close_code(&mut self) -> BoxFuture<'_, Option<u16>> {
+        Box::pin(async move { Self::read_close_code(self).await.map(u16::from) })
     }
 
     fn close(self) -> Pin<Box<dyn Future<Output = Option<()>> + Send>> {
@@ -569,6 +579,10 @@ impl ScenarioPeer for LegacyFakePeer {
         })
     }
 
+    fn read_close_code(&mut self) -> BoxFuture<'_, Option<u16>> {
+        Box::pin(async move { read_close_code(&mut self.websocket).await.map(u16::from) })
+    }
+
     fn close(mut self) -> Pin<Box<dyn Future<Output = Option<()>> + Send>> {
         Box::pin(async move {
             self.websocket.close(None).await.ok()?;
@@ -638,6 +652,78 @@ where
     Ok(transcript)
 }
 
+pub async fn run_session_replacement_oracle_scenario_result<B>(
+    backend: &B,
+) -> Result<CompatibilityTranscript, String>
+where
+    B: ScenarioBackend,
+{
+    let channel_uuid = backend
+        .create_channel("issuer-differential-replacement", Some(TEST_CHANNEL_KEY))
+        .await
+        .map_err(|error| format!("channel creation failed: {error}"))?;
+    let (mut initial_publisher, mut subscriber) =
+        connect_initial_replacement_flow_peers(backend, &channel_uuid).await?;
+
+    let mut transcript = CompatibilityTranscript {
+        backend_name: backend.backend_name(),
+        scenario_name: "session_replacement_republish",
+        events: Vec::new(),
+    };
+
+    let mut replacement = backend
+        .connect_peer(&channel_uuid, SessionId::Integer(40), TEST_CHANNEL_KEY)
+        .await
+        .map_err(|error| format!("replacement peer connect failed: {error}"))?;
+    ensure_rtc_startup(&replacement)
+        .ok_or_else(|| String::from("replacement startup missing rtc feature"))?;
+
+    let close_code = timeout(SCENARIO_EVENT_TIMEOUT, initial_publisher.read_close_code())
+        .await
+        .map_err(|_elapsed| String::from("timed out waiting for replaced publisher close"))?
+        .ok_or_else(|| String::from("replaced publisher did not receive a close code"))?;
+    record_close_event(&mut transcript, SessionId::Integer(40), close_code);
+
+    record_departure_event(
+        &mut transcript,
+        SessionId::Integer(50),
+        timeout(SCENARIO_EVENT_TIMEOUT, expect_departure(&mut subscriber))
+            .await
+            .map_err(|_elapsed| {
+                String::from("timed out waiting for subscriber departure after replacement")
+            })?
+            .ok_or_else(|| {
+                String::from("subscriber did not observe departure after replacement")
+            })?,
+    );
+
+    timeout(SCENARIO_EVENT_TIMEOUT, replacement.connect_transports())
+        .await
+        .map_err(|_elapsed| String::from("timed out waiting for replacement transport connect"))?
+        .ok_or_else(|| String::from("replacement transport connect failed"))?;
+    let producer_id = replacement
+        .publish_track(&FakeMediaSource::audio())
+        .await
+        .ok_or_else(|| String::from("replacement publish_track returned None"))?;
+    let track = timeout(SCENARIO_EVENT_TIMEOUT, expect_remote_track(&mut subscriber))
+        .await
+        .map_err(|_elapsed| {
+            String::from("timed out waiting for subscriber track bootstrap after replacement")
+        })?
+        .ok_or_else(|| {
+            String::from("subscriber did not receive track bootstrap after replacement")
+        })?;
+    if track.source_id != producer_id {
+        return Err(format!(
+            "subscriber observed producer {} instead of replacement producer {}",
+            track.source_id, producer_id
+        ));
+    }
+    record_track_event(&mut transcript, SessionId::Integer(50), "track-0", &track);
+
+    Ok(transcript)
+}
+
 async fn connect_initial_camera_flow_peers<B>(
     backend: &B,
     channel_uuid: &str,
@@ -666,6 +752,39 @@ where
         .map_err(|_elapsed| String::from("timed out waiting for subscriber transport connect"))?
         .ok_or_else(|| String::from("subscriber transport connect failed"))?;
     Ok((publisher, subscriber))
+}
+
+async fn connect_initial_replacement_flow_peers<B>(
+    backend: &B,
+    channel_uuid: &str,
+) -> Result<(B::Peer, B::Peer), String>
+where
+    B: ScenarioBackend,
+{
+    let mut initial_publisher = backend
+        .connect_peer(channel_uuid, SessionId::Integer(40), TEST_CHANNEL_KEY)
+        .await
+        .map_err(|error| format!("initial publisher peer connect failed: {error}"))?;
+    let mut subscriber = backend
+        .connect_peer(channel_uuid, SessionId::Integer(50), TEST_CHANNEL_KEY)
+        .await
+        .map_err(|error| format!("subscriber peer connect failed: {error}"))?;
+    ensure_rtc_startup(&initial_publisher)
+        .ok_or_else(|| String::from("initial publisher startup missing rtc feature"))?;
+    ensure_rtc_startup(&subscriber)
+        .ok_or_else(|| String::from("subscriber startup missing rtc feature"))?;
+    timeout(
+        SCENARIO_EVENT_TIMEOUT,
+        initial_publisher.connect_transports(),
+    )
+    .await
+    .map_err(|_elapsed| String::from("timed out waiting for initial publisher transport connect"))?
+    .ok_or_else(|| String::from("initial publisher transport connect failed"))?;
+    timeout(SCENARIO_EVENT_TIMEOUT, subscriber.connect_transports())
+        .await
+        .map_err(|_elapsed| String::from("timed out waiting for subscriber transport connect"))?
+        .ok_or_else(|| String::from("subscriber transport connect failed"))?;
+    Ok((initial_publisher, subscriber))
 }
 
 async fn publish_camera_and_record_initial_events<P>(
@@ -888,6 +1007,17 @@ fn record_track_event(
             media_kind: track.media_kind,
             active: track.active,
         });
+}
+
+fn record_close_event(
+    transcript: &mut CompatibilityTranscript,
+    session_id: SessionId,
+    close_code: u16,
+) {
+    transcript.events.push(CompatibilityEvent::SessionClosed {
+        session_id,
+        close_code,
+    });
 }
 
 fn record_camera_state_event(
