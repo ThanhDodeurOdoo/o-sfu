@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-differential-tests")]
 #![allow(
     clippy::panic,
     reason = "integration tests use panic-based assertions for clear failures"

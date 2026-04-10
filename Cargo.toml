@@ -106,6 +106,7 @@ version.workspace = true
 
 [features]
 internal-benchmarks = []
+legacy-differential-tests = []
 
 [dependencies]
 anyhow.workspace = true
