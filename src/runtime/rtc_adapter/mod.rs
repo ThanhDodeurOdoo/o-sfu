@@ -10,7 +10,7 @@
 //! - `parse_diagnostic`: shared parse diagnostic infrastructure
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fmt,
     net::{IpAddr, SocketAddr},
     sync::{
@@ -236,7 +236,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
     incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
-    remote_addr_index: BTreeMap<SocketAddr, TransportSessionKey>,
+    remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
     remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
     mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     next_media_id: u64,
