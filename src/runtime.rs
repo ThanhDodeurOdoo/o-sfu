@@ -95,8 +95,10 @@ pub fn run() -> Result<()> {
 fn build_transport_adapter(config: &Config) -> RuntimeTransportAdapter {
     match config.transport_backend {
         TransportBackend::Stub => RuntimeTransportAdapter::stub(),
-        TransportBackend::Rtc => {
-            RuntimeTransportAdapter::rtc(config.public_ip, config.rtc_port_range)
-        }
+        TransportBackend::Rtc => RuntimeTransportAdapter::rtc(
+            config.public_ip,
+            config.rtc_port_range,
+            config.rtc_media_worker_count,
+        ),
     }
 }

@@ -83,6 +83,7 @@ mod websocket_server_tests {
             ping_interval_ms,
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            rtc_media_worker_count: 1,
             transport_backend: TransportBackend::Stub,
         }
     }

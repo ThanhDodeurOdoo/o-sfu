@@ -13,6 +13,7 @@ const DEFAULT_SESSION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
+const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
 const TRANSPORT_BACKEND_STUB: &str = "stub";
 const TRANSPORT_BACKEND_RTC: &str = "rtc";
 const STUB_PUBLIC_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -39,8 +40,36 @@ impl RtcPortRange {
         self.max
     }
 
+    #[must_use]
+    pub const fn port_count(self) -> u16 {
+        self.max - self.min + 1
+    }
+
     pub fn ports(self) -> impl Iterator<Item = u16> {
         self.min..=self.max
+    }
+
+    #[must_use]
+    pub fn split_for_workers(self, worker_count: usize) -> Option<Vec<Self>> {
+        if worker_count == 0 || worker_count > usize::from(self.port_count()) {
+            return None;
+        }
+        let total_ports = usize::from(self.port_count());
+        let base_ports_per_worker = total_ports / worker_count;
+        let extra_ports = total_ports % worker_count;
+        let mut next_min = u32::from(self.min);
+        let mut ranges = Vec::with_capacity(worker_count);
+        for worker_idx in 0..worker_count {
+            let worker_port_count = base_ports_per_worker + usize::from(worker_idx < extra_ports);
+            let worker_port_count = u32::try_from(worker_port_count).ok()?;
+            let max_inclusive = next_min + worker_port_count - 1;
+            ranges.push(Self::new(
+                u16::try_from(next_min).ok()?,
+                u16::try_from(max_inclusive).ok()?,
+            ));
+            next_min = max_inclusive + 1;
+        }
+        Some(ranges)
     }
 }
 
@@ -74,6 +103,7 @@ pub struct Config {
     pub ping_interval_ms: u64,
     pub public_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
+    pub rtc_media_worker_count: usize,
     pub transport_backend: TransportBackend,
 }
 
@@ -119,29 +149,8 @@ impl Config {
             "PING_INTERVAL_MS must be a valid u64",
         )?
         .unwrap_or(DEFAULT_PING_INTERVAL_MS);
-        let public_ip = parse_optional_env(
-            &mut get_var,
-            "PUBLIC_IP",
-            "PUBLIC_IP must be a valid IP address",
-        )?;
-        let rtc_min_port = parse_optional_env(
-            &mut get_var,
-            "RTC_MIN_PORT",
-            "RTC_MIN_PORT must be a valid u16",
-        )?
-        .unwrap_or(DEFAULT_RTC_MIN_PORT);
-        let rtc_max_port = parse_optional_env(
-            &mut get_var,
-            "RTC_MAX_PORT",
-            "RTC_MAX_PORT must be a valid u16",
-        )?
-        .unwrap_or(DEFAULT_RTC_MAX_PORT);
-        let transport_backend = parse_optional_env(
-            &mut get_var,
-            "TRANSPORT_BACKEND",
-            "TRANSPORT_BACKEND must be either `stub` or `rtc`",
-        )?
-        .unwrap_or(TransportBackend::Stub);
+        let (public_ip, rtc_port_range, rtc_media_worker_count, transport_backend) =
+            load_transport_config(&mut get_var)?;
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
         ensure!(
             session_timeout_ms > 0,
@@ -151,19 +160,6 @@ impl Config {
             ping_interval_ms > 0,
             "PING_INTERVAL_MS must be greater than zero"
         );
-        ensure!(
-            rtc_min_port <= rtc_max_port,
-            "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
-        );
-        let public_ip = match (transport_backend, public_ip) {
-            (_, Some(public_ip)) => public_ip,
-            (TransportBackend::Stub, None) => STUB_PUBLIC_IP_DEFAULT,
-            (TransportBackend::Rtc, None) => {
-                return Err(anyhow!(
-                    "PUBLIC_IP env variable is required when TRANSPORT_BACKEND=rtc"
-                ));
-            }
-        };
         Ok(Self {
             auth_key,
             bind_address,
@@ -172,10 +168,73 @@ impl Config {
             session_timeout_ms,
             ping_interval_ms,
             public_ip,
-            rtc_port_range: RtcPortRange::new(rtc_min_port, rtc_max_port),
+            rtc_port_range,
+            rtc_media_worker_count,
             transport_backend,
         })
     }
+}
+
+fn load_transport_config(
+    mut get_var: impl FnMut(&str) -> Option<String>,
+) -> Result<(IpAddr, RtcPortRange, usize, TransportBackend)> {
+    let public_ip = parse_optional_env(
+        &mut get_var,
+        "PUBLIC_IP",
+        "PUBLIC_IP must be a valid IP address",
+    )?;
+    let rtc_min_port = parse_optional_env(
+        &mut get_var,
+        "RTC_MIN_PORT",
+        "RTC_MIN_PORT must be a valid u16",
+    )?
+    .unwrap_or(DEFAULT_RTC_MIN_PORT);
+    let rtc_max_port = parse_optional_env(
+        &mut get_var,
+        "RTC_MAX_PORT",
+        "RTC_MAX_PORT must be a valid u16",
+    )?
+    .unwrap_or(DEFAULT_RTC_MAX_PORT);
+    let rtc_media_worker_count = parse_optional_env(
+        &mut get_var,
+        "RTC_MEDIA_WORKER_COUNT",
+        "RTC_MEDIA_WORKER_COUNT must be a valid usize",
+    )?
+    .unwrap_or(DEFAULT_RTC_MEDIA_WORKER_COUNT);
+    let transport_backend = parse_optional_env(
+        &mut get_var,
+        "TRANSPORT_BACKEND",
+        "TRANSPORT_BACKEND must be either `stub` or `rtc`",
+    )?
+    .unwrap_or(TransportBackend::Stub);
+    ensure!(
+        rtc_min_port <= rtc_max_port,
+        "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
+    );
+    ensure!(
+        rtc_media_worker_count > 0,
+        "RTC_MEDIA_WORKER_COUNT must be greater than zero"
+    );
+    let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
+    ensure!(
+        rtc_media_worker_count <= usize::from(rtc_port_range.port_count()),
+        "RTC_MEDIA_WORKER_COUNT must be less than or equal to the available RTC port count"
+    );
+    let public_ip = match (transport_backend, public_ip) {
+        (_, Some(public_ip)) => public_ip,
+        (TransportBackend::Stub, None) => STUB_PUBLIC_IP_DEFAULT,
+        (TransportBackend::Rtc, None) => {
+            return Err(anyhow!(
+                "PUBLIC_IP env variable is required when TRANSPORT_BACKEND=rtc"
+            ));
+        }
+    };
+    Ok((
+        public_ip,
+        rtc_port_range,
+        rtc_media_worker_count,
+        transport_backend,
+    ))
 }
 
 fn parse_optional_env<T>(
@@ -227,6 +286,7 @@ mod tests {
         assert_eq!(config.ping_interval_ms, 60_000);
         assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
+        assert_eq!(config.rtc_media_worker_count, 1);
         assert_eq!(config.transport_backend, TransportBackend::Stub);
     }
 
@@ -304,5 +364,40 @@ mod tests {
             _ => None,
         });
         assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_rtc_media_worker_count() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_more_rtc_workers_than_ports() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "RTC_MIN_PORT" => Some("4000".to_owned()),
+            "RTC_MAX_PORT" => Some("4001".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("3".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn rtc_port_range_splits_ports_across_workers() {
+        let ranges = RtcPortRange::new(40_000, 40_004).split_for_workers(3);
+        assert_eq!(
+            ranges,
+            Some(vec![
+                RtcPortRange::new(40_000, 40_001),
+                RtcPortRange::new(40_002, 40_003),
+                RtcPortRange::new(40_004, 40_004),
+            ])
+        );
     }
 }
