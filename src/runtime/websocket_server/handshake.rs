@@ -8,7 +8,10 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{Span, field, info};
 
-use super::{ConnectedSession, WsReader, close_writer};
+use super::{
+    close_writer,
+    controller::{ConnectedSession, WsReader},
+};
 use crate::runtime::{
     RuntimeState,
     channel::{Channel, ChannelManagerJoinError, SessionOutbound},

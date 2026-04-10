@@ -10,7 +10,7 @@ use str0m::config::Fingerprint;
 use str0m::{Candidate, IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
-use super::{RtcSessionState, SessionTransportIds, SharedRtcSocket};
+use super::state::{RtcSessionState, SessionTransportIds, SharedRtcSocket};
 use crate::config::RtcPortRange;
 use crate::rfc::webrtc;
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
@@ -18,7 +18,7 @@ use crate::signaling::webrtc::{
     DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, TransportBootstrap,
 };
 
-use super::transport_bootstrap;
+use crate::runtime::transport_bootstrap;
 
 const HOST_CANDIDATE_FOUNDATION: &str = "rtc-host";
 const ICE_LOCAL_PREFERENCE_MAX: u16 = u16::MAX;

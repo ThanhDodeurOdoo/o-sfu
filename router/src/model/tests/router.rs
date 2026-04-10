@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::helpers::assert_router_is_consistent;
+use super::router_invariants::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError, RouterEvent,
     RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissions, SessionState,

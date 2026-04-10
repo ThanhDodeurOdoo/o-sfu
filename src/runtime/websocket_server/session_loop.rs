@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info};
 
-use super::{WsReader, close_writer};
+use super::{close_writer, controller::WsReader};
 use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},

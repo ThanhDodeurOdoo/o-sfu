@@ -242,7 +242,7 @@ impl RtcBootstrapState {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
-pub(super) struct RtcSnapshotState {
+pub(crate) struct RtcSnapshotState {
     pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
     pub(super) remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
     pub(super) remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
@@ -273,7 +273,7 @@ impl RtcSnapshotState {
             .record(transport_media_id, now, payload_bytes);
     }
 
-    pub(super) fn transport_bitrate_snapshot_at(
+    pub(crate) fn transport_bitrate_snapshot_at(
         &self,
         session_keys: &[TransportSessionKey],
         now: Instant,

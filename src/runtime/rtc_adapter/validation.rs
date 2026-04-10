@@ -4,7 +4,10 @@ use o_sfu_router::ParseDiagnosticKind;
 use str0m::config::Fingerprint;
 use tracing::{debug, error, warn};
 
-use super::{ParsedRemoteIceCredentials, RtcSessionState, dtls, ice, sdp};
+use super::{
+    dtls, ice, sdp,
+    state::{ParsedRemoteIceCredentials, RtcSessionState},
+};
 use crate::runtime::transport_adapter::TransportAdapterError;
 use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
 use crate::signaling::webrtc::{DtlsParameters, IceCandidate, IceParameters};
