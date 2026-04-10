@@ -34,17 +34,6 @@ Then run the proof harnesses with:
 cargo kani -p o-sfu-router
 ```
 
-## TODO (formatting in a pretty way later)
-
-- explain rfc files and how they act as reference for implementations using them
-- explain the metrics system (intended to be compatible with openTelemetry)
-- explain kani proofs
-- explain router layer
-- general architecture (mostly based on odoo sfu, for compatibility reason)
-
-## Nice to have:
-- Good docstring or "readme" for each feature directory (eg: websocket_server, web_rtc, http_server,...) explaining the role of each component
-
 ## TODO cleanup later
 
 - "rust" and "tests" github workflows have overlap, "rust" exists because it's the default one from github, will probably remove later 
@@ -52,9 +41,4 @@ The router and rfc sections may be split into separate crates later (but too ann
 
 ## random thoughts
 
-- having a "system" for directory layout:
-  - component_name/ (like http_server/)
-    - mod.rs for the main logic
-    - technical.rs for technical but well encapsulated logic used by the main file (helper functions, things that are not important to see to understand the logic)
-    - tests.rs for tests
-    - verification/... for formal verification (or a root/verification/component_name, not sure)
+  
