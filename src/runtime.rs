@@ -10,6 +10,9 @@ use crate::{
     signaling::CURRENT_WIRE_PROTOCOL_VERSION,
 };
 
+#[cfg(feature = "internal-benchmarks")]
+#[doc(hidden)]
+pub mod benchmark_support;
 pub(crate) mod channel;
 mod http_server;
 mod metrics;

@@ -104,6 +104,9 @@ edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+internal-benchmarks = []
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
@@ -127,5 +130,11 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
+criterion = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tower = { version = "0.5", features = ["util"] }
+
+[[bench]]
+name = "rtc_udp_demux"
+harness = false
+required-features = ["internal-benchmarks"]

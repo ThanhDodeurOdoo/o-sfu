@@ -979,6 +979,58 @@ impl RtcTransportAdapter {
     }
 }
 
+#[cfg(feature = "internal-benchmarks")]
+impl RtcTransportAdapter {
+    pub(super) fn benchmark_prime_sessions(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> Result<(), TransportAdapterError> {
+        let router_capabilities = o_sfu_router::RtpCapabilities::new(vec![], vec![]);
+        for session_key in session_keys {
+            let _payload = self.build_bootstrap_payload(session_key, &router_capabilities)?;
+            self.mark_bootstrap_sent(session_key)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn benchmark_register_remote_addr(
+        &self,
+        source_addr: SocketAddr,
+        session_key: &TransportSessionKey,
+    ) -> Result<(), TransportAdapterError> {
+        let Ok(mut bootstrap_state) = self.bootstrap_state.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        if !bootstrap_state.sessions.contains_key(session_key) {
+            return Err(TransportAdapterError::TransportUnavailable);
+        }
+        bootstrap_state.remember_remote_addr(source_addr, session_key);
+        Ok(())
+    }
+
+    pub(super) fn benchmark_cached_remote_addr_lookup(&self, source_addr: SocketAddr) -> bool {
+        let Ok(bootstrap_state) = self.bootstrap_state.lock() else {
+            return false;
+        };
+        bootstrap_state
+            .session_key_for_remote_addr(source_addr)
+            .is_some_and(|session_key| bootstrap_state.sessions.contains_key(session_key))
+    }
+
+    pub(super) fn benchmark_linear_remote_addr_lookup(&self, source_addr: SocketAddr) -> bool {
+        let Ok(bootstrap_state) = self.bootstrap_state.lock() else {
+            return false;
+        };
+        bootstrap_state
+            .remote_addrs_by_session
+            .iter()
+            .any(|(session_key, session_addrs)| {
+                bootstrap_state.sessions.contains_key(session_key)
+                    && session_addrs.contains(&source_addr)
+            })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Trait impls
 // ---------------------------------------------------------------------------
