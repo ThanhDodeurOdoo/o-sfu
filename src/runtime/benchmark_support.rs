@@ -11,8 +11,12 @@ use std::{
 
 use tokio::runtime::Builder;
 
-use super::{rtc_adapter::RtcTransportAdapter, transport_adapter::TransportSessionKey};
+use super::{
+    rtc_adapter::RtcTransportAdapter,
+    transport_adapter::{TransportAdapterError, TransportSessionKey},
+};
 use crate::{config::RtcPortRange, signaling::shared::SessionId};
+use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
 
 const BENCHMARK_PUBLIC_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const BENCHMARK_PORT_RANGE: RtcPortRange = RtcPortRange::new(40_000, 49_999);
@@ -50,14 +54,24 @@ impl RtcUdpDemuxBenchmarkFixture {
             session_keys.push(session_key);
             probe_addrs.push(remote_addr);
         }
-        if adapter.benchmark_prime_sessions(&session_keys).is_err() {
-            return None;
-        }
+        let router_capabilities = RouterRtpCapabilities::new(vec![], vec![]);
+        runtime
+            .block_on(async {
+                for session_key in &session_keys {
+                    let _payload = adapter
+                        .transport_bootstrap_payload(session_key, &router_capabilities)
+                        .await?;
+                }
+                Ok::<(), TransportAdapterError>(())
+            })
+            .ok()?;
         for (session_key, remote_addr) in session_keys.iter().zip(probe_addrs.iter().copied()) {
-            if adapter
-                .benchmark_register_remote_addr(remote_addr, session_key)
-                .is_err()
-            {
+            let register_result = runtime.block_on(async {
+                adapter
+                    .benchmark_register_remote_addr(remote_addr, session_key)
+                    .await
+            });
+            if register_result.is_err() {
                 return None;
             }
         }

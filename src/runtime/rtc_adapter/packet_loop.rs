@@ -1,6 +1,7 @@
 use std::{
+    io::Error as IoError,
     mem::take,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -10,14 +11,17 @@ use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{
     net::UdpSocket,
-    time::{sleep, timeout},
+    sync::mpsc,
+    time::{error::Elapsed, timeout},
 };
 use tracing::{debug, trace, warn};
 
-use super::{RtcBootstrapState, RtcSessionState};
+use super::{
+    RtcBootstrapState, RtcSessionState, RtcSnapshotState, RtcWorkerCommand, handle_worker_command,
+};
+use crate::config::RtcPortRange;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
-const IDLE_SLEEP: Duration = Duration::from_millis(50);
 const MAX_SOCKET_WAIT: Duration = Duration::from_millis(100);
 const RECEIVE_BUFFER_LEN: usize = 2000;
 
@@ -91,57 +95,146 @@ struct SnapshotInfo {
     next_timeout: Option<Instant>,
 }
 
-pub(super) async fn run_packet_loop(bootstrap_state: Arc<Mutex<RtcBootstrapState>>) {
+enum NextLoopInput {
+    Command(RtcWorkerCommand),
+    Datagram {
+        source_addr: SocketAddr,
+        candidate_addr: SocketAddr,
+        received_size: usize,
+    },
+}
+
+pub(super) async fn run_packet_loop(
+    public_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
+) {
+    let mut bootstrap_state = RtcBootstrapState::default();
     let mut receive_buffer = vec![0_u8; RECEIVE_BUFFER_LEN];
     let mut buffers = PacketLoopBuffers::new();
     loop {
-        let Some(info) = snapshot_and_pump(&bootstrap_state, &mut buffers) else {
-            sleep(IDLE_SLEEP).await;
-            continue;
-        };
-        for pending_transmit in buffers.pending_transmits() {
-            if info
-                .socket
-                .send_to(
-                    pending_transmit.contents.as_slice(),
-                    pending_transmit.destination,
-                )
-                .await
-                .is_err()
-            {
-                warn!(
-                    destination = %pending_transmit.destination,
-                    "failed to send packet-loop transport datagram"
-                );
+        while let Ok(command) = command_rx.try_recv() {
+            handle_worker_command(
+                &mut bootstrap_state,
+                &snapshot_state,
+                public_ip,
+                rtc_port_range,
+                command,
+            );
+        }
+        let snapshot = snapshot_and_pump(&mut bootstrap_state, &snapshot_state, &mut buffers);
+        if let Some(info) = snapshot.as_ref() {
+            for pending_transmit in buffers.pending_transmits() {
+                if info
+                    .socket
+                    .send_to(
+                        pending_transmit.contents.as_slice(),
+                        pending_transmit.destination,
+                    )
+                    .await
+                    .is_err()
+                {
+                    warn!(
+                        destination = %pending_transmit.destination,
+                        "failed to send packet-loop transport datagram"
+                    );
+                }
             }
         }
-        let wait_duration = socket_wait_duration(info.next_timeout);
-        match timeout(wait_duration, info.socket.recv_from(&mut receive_buffer)).await {
-            Ok(Ok((received_size, source_addr))) => {
+        let Some(next_input) =
+            wait_for_next_loop_input(snapshot, &mut command_rx, &mut receive_buffer).await
+        else {
+            return;
+        };
+        match next_input {
+            NextLoopInput::Command(command) => {
+                handle_worker_command(
+                    &mut bootstrap_state,
+                    &snapshot_state,
+                    public_ip,
+                    rtc_port_range,
+                    command,
+                );
+            }
+            NextLoopInput::Datagram {
+                source_addr,
+                candidate_addr,
+                received_size,
+            } => {
                 if received_size == 0 {
                     continue;
                 }
                 let Some(packet) = receive_buffer.get(..received_size) else {
                     continue;
                 };
-                route_incoming_packet(&bootstrap_state, source_addr, info.candidate_addr, packet);
+                route_incoming_packet(
+                    &mut bootstrap_state,
+                    &snapshot_state,
+                    source_addr,
+                    candidate_addr,
+                    packet,
+                );
             }
-            Ok(Err(_error)) => {
-                warn!("rtc packet loop failed to receive datagram");
-            }
-            Err(_elapsed) => {}
         }
     }
 }
 
+async fn wait_for_next_loop_input(
+    snapshot: Option<SnapshotInfo>,
+    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    receive_buffer: &mut [u8],
+) -> Option<NextLoopInput> {
+    let Some(info) = snapshot else {
+        let command = command_rx.recv().await?;
+        return Some(NextLoopInput::Command(command));
+    };
+    tokio::select! {
+        biased;
+        maybe_command = command_rx.recv() => {
+            maybe_command.map(NextLoopInput::Command)
+        }
+        result = timeout(
+            socket_wait_duration(info.next_timeout),
+            info.socket.recv_from(receive_buffer),
+        ) => {
+            Some(handle_datagram_wait_result(result, info.candidate_addr))
+        }
+    }
+}
+
+fn handle_datagram_wait_result(
+    result: Result<Result<(usize, SocketAddr), IoError>, Elapsed>,
+    candidate_addr: SocketAddr,
+) -> NextLoopInput {
+    match result {
+        Ok(Ok((received_size, source_addr))) => NextLoopInput::Datagram {
+            source_addr,
+            candidate_addr,
+            received_size,
+        },
+        Ok(Err(_error)) => {
+            warn!("rtc packet loop failed to receive datagram");
+            NextLoopInput::Datagram {
+                source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+                candidate_addr,
+                received_size: 0,
+            }
+        }
+        Err(_elapsed) => NextLoopInput::Datagram {
+            source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+            candidate_addr,
+            received_size: 0,
+        },
+    }
+}
+
 fn snapshot_and_pump(
-    bootstrap_state: &Arc<Mutex<RtcBootstrapState>>,
+    state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<SnapshotInfo> {
     buffers.clear();
-    let Ok(mut state) = bootstrap_state.lock() else {
-        return None;
-    };
     let (socket, candidate_addr) = {
         let shared_socket = state.shared_socket.as_ref()?;
         (
@@ -162,7 +255,16 @@ fn snapshot_and_pump(
     // avoids a borrow conflict on `state`.
     let media_stats_now = Instant::now();
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
-        state.record_incoming_media(source_session, media.mid, media.data.len(), media_stats_now);
+        if let Some(stream_type) = state.stream_type_for_source(source_session, media.mid)
+            && let Ok(mut snapshot) = snapshot_state.lock()
+        {
+            snapshot.record_incoming_stream(
+                source_session,
+                stream_type,
+                media_stats_now,
+                media.data.len(),
+            );
+        }
         if let Some(route_entry) = state
             .media_route_index
             .get(&(source_session.clone(), media.mid))
@@ -332,31 +434,38 @@ fn socket_wait_duration(next_timeout: Option<Instant>) -> Duration {
 }
 
 fn route_incoming_packet(
-    bootstrap_state: &Arc<Mutex<RtcBootstrapState>>,
+    bootstrap_state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) {
-    let Ok(mut state) = bootstrap_state.lock() else {
-        return;
-    };
-    route_packet_to_matching_session(&mut state, source_addr, candidate_addr, packet);
+    route_packet_to_matching_session(
+        bootstrap_state,
+        snapshot_state,
+        source_addr,
+        candidate_addr,
+        packet,
+    );
 }
 
 fn route_packet_to_matching_session(
     state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) {
-    if route_packet_with_cached_session(state, source_addr, candidate_addr, packet) {
+    if route_packet_with_cached_session(state, snapshot_state, source_addr, candidate_addr, packet)
+    {
         return;
     }
-    route_packet_by_scan(state, source_addr, candidate_addr, packet);
+    route_packet_by_scan(state, snapshot_state, source_addr, candidate_addr, packet);
 }
 
 fn route_packet_with_cached_session(
     state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -366,6 +475,9 @@ fn route_packet_with_cached_session(
     };
     let Some(session_state) = state.sessions.get_mut(&session_key) else {
         state.forget_remote_addr(source_addr);
+        if let Ok(mut snapshot) = snapshot_state.lock() {
+            snapshot.forget_remote_addr(source_addr);
+        }
         return false;
     };
     let Ok(receive) = Receive::new(Protocol::Udp, source_addr, candidate_addr, packet) else {
@@ -381,6 +493,9 @@ fn route_packet_with_cached_session(
     if !accepts_input {
         let _ = session_state;
         state.forget_remote_addr(source_addr);
+        if let Ok(mut snapshot) = snapshot_state.lock() {
+            snapshot.forget_remote_addr(source_addr);
+        }
         return false;
     }
     let handle_result = session_state.rtc.handle_input(input);
@@ -393,6 +508,9 @@ fn route_packet_with_cached_session(
         );
     }
     state.remember_remote_addr(source_addr, &session_key);
+    if let Ok(mut snapshot) = snapshot_state.lock() {
+        snapshot.remember_remote_addr(source_addr, &session_key);
+    }
     true
 }
 
@@ -433,6 +551,7 @@ fn log_malformed_datagram(source_addr: SocketAddr) {
 
 fn route_packet_by_scan(
     state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -470,4 +589,7 @@ fn route_packet_by_scan(
         );
     }
     state.remember_remote_addr(source_addr, &session_key);
+    if let Ok(mut snapshot) = snapshot_state.lock() {
+        snapshot.remember_remote_addr(source_addr, &session_key);
+    }
 }

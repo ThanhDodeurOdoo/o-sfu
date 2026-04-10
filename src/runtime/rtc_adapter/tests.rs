@@ -400,32 +400,18 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
     );
 
     let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_000);
-    {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
-            return;
-        };
-        bootstrap_state.remember_remote_addr(source_addr, &session_key);
-        assert_eq!(
-            bootstrap_state.session_key_for_remote_addr(source_addr),
-            Some(&session_key)
-        );
-    }
+    adapter
+        .debug_remember_remote_addr(source_addr, &session_key)
+        .await;
+    assert_eq!(
+        adapter.debug_remote_addr_owner(source_addr).await,
+        Some(session_key.clone())
+    );
 
     assert_eq!(adapter.close_session(&session_key).await, Ok(()));
 
-    {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(bootstrap_state) = adapter.bootstrap_state.lock() else {
-            return;
-        };
-        assert!(
-            bootstrap_state
-                .session_key_for_remote_addr(source_addr)
-                .is_none()
-        );
-        assert!(bootstrap_state.remote_addrs_by_session.is_empty());
-    }
+    assert_eq!(adapter.debug_remote_addr_owner(source_addr).await, None);
+    assert!(!adapter.debug_has_any_remote_addr_session().await);
 }
 
 #[tokio::test]
@@ -732,10 +718,6 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
     assert!(adapter.packet_loop_started.load(Ordering::Acquire));
 }
 
-#[allow(
-    clippy::significant_drop_tightening,
-    reason = "the test intentionally inspects the guarded rtc state in one contiguous scope"
-)]
 #[tokio::test]
 async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
@@ -760,35 +742,18 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     };
 
     let expected_mid: Mid = "aud-up".into();
-    {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
-            return;
-        };
-        assert_eq!(
-            bootstrap_state.resolve_mid(transport_media_id),
-            Some(expected_mid)
-        );
-        let session_state = bootstrap_state.sessions.get_mut(&session_key);
-        assert!(session_state.is_some());
-        let Some(session_state) = session_state else {
-            return;
-        };
-        assert!(session_state.rtc.media(expected_mid).is_some());
-        let mut direct_api = session_state.rtc.direct_api();
-        let stream_rx = direct_api.stream_rx_by_mid(expected_mid, None);
-        assert!(stream_rx.is_some());
-        let Some(stream_rx) = stream_rx else {
-            return;
-        };
-        assert_eq!(*stream_rx.ssrc(), 42_424);
-    }
+    assert_eq!(
+        adapter.debug_resolve_mid(transport_media_id).await,
+        Some(expected_mid)
+    );
+    assert_eq!(
+        adapter
+            .debug_session_stream_rx_ssrc(&session_key, expected_mid)
+            .await,
+        Some(42_424)
+    );
 }
 
-#[allow(
-    clippy::significant_drop_tightening,
-    reason = "the test intentionally inspects the guarded rtc state in one contiguous scope"
-)]
 #[tokio::test]
 async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
@@ -836,41 +801,25 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 
     let expected_source_mid: Mid = "aud-up".into();
     let expected_dest_mid: Mid = "aud-down".into();
-    {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
-            return;
-        };
-        let destinations = bootstrap_state
-            .media_route_index
-            .get(&(producer_session_key.clone(), expected_source_mid));
-        assert!(destinations.is_some());
-        let Some(destinations) = destinations else {
-            return;
-        };
-        assert!(destinations.source_active);
-        assert!(destinations.destinations.iter().any(|dest| {
-            dest.dest_session == consumer_session_key && dest.dest_mid == expected_dest_mid
-        }));
-        let session_state = bootstrap_state.sessions.get_mut(&consumer_session_key);
-        assert!(session_state.is_some());
-        let Some(session_state) = session_state else {
-            return;
-        };
-        let mut direct_api = session_state.rtc.direct_api();
-        let stream_tx = direct_api.stream_tx_by_mid(expected_dest_mid, None);
-        assert!(stream_tx.is_some());
-        let Some(stream_tx) = stream_tx else {
-            return;
-        };
-        assert_eq!(*stream_tx.ssrc(), 61_000);
-    }
+    let route_entry = adapter
+        .debug_route_entry(&producer_session_key, expected_source_mid)
+        .await;
+    assert!(route_entry.is_some());
+    let Some(route_entry) = route_entry else {
+        return;
+    };
+    assert!(route_entry.source_active);
+    assert!(route_entry.destinations.iter().any(|dest| {
+        dest.dest_session == consumer_session_key && dest.dest_mid == expected_dest_mid
+    }));
+    assert_eq!(
+        adapter
+            .debug_session_stream_tx_ssrc(&consumer_session_key, expected_dest_mid)
+            .await,
+        Some(61_000)
+    );
 }
 
-#[allow(
-    clippy::significant_drop_tightening,
-    reason = "the test intentionally inspects the guarded rtc route state in one contiguous scope"
-)]
 #[tokio::test]
 async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let adapter = RtcTransportAdapter::default();
@@ -938,31 +887,21 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
             .is_ok()
     );
 
-    {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(bootstrap_state) = adapter.bootstrap_state.lock() else {
-            return;
-        };
-        let route_entry = bootstrap_state
-            .media_route_index
-            .get(&(producer_session_key.clone(), Mid::from("vid-up")));
-        assert!(route_entry.is_some());
-        let Some(route_entry) = route_entry else {
-            return;
-        };
-        assert!(!route_entry.source_active);
-        assert!(route_entry.destinations.iter().any(|destination| {
-            destination.dest_session == consumer_session_key
-                && destination.dest_mid == Mid::from("vid-down")
-                && !destination.active
-        }));
-    }
+    let route_entry = adapter
+        .debug_route_entry(&producer_session_key, Mid::from("vid-up"))
+        .await;
+    assert!(route_entry.is_some());
+    let Some(route_entry) = route_entry else {
+        return;
+    };
+    assert!(!route_entry.source_active);
+    assert!(route_entry.destinations.iter().any(|destination| {
+        destination.dest_session == consumer_session_key
+            && destination.dest_mid == Mid::from("vid-down")
+            && !destination.active
+    }));
 }
 
-#[allow(
-    clippy::significant_drop_tightening,
-    reason = "the test intentionally inspects and seeds the guarded rtc state in one contiguous scope"
-)]
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     let adapter = RtcTransportAdapter::default();
@@ -987,18 +926,9 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
             .is_ok()
     );
 
-    {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
-            return;
-        };
-        bootstrap_state.record_incoming_media(
-            &session_key,
-            Mid::from("cam-up"),
-            120,
-            Instant::now(),
-        );
-    }
+    adapter
+        .debug_record_incoming_media(&session_key, Mid::from("cam-up"), 120, Instant::now())
+        .await;
 
     let snapshot = adapter.incoming_bitrate_snapshot(slice::from_ref(&session_key));
     assert_eq!(snapshot.total, 960);
@@ -1007,10 +937,6 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     assert_eq!(snapshot.screen, 0);
 }
 
-#[allow(
-    clippy::significant_drop_tightening,
-    reason = "the test intentionally inspects and seeds the guarded rtc state in one contiguous scope"
-)]
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     let adapter = RtcTransportAdapter::default();
@@ -1036,13 +962,17 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     );
 
     let now = Instant::now();
+    adapter
+        .debug_record_incoming_media(&session_key, Mid::from("aud-up"), 64, now)
+        .await;
+    let Some(worker_handle) = adapter.worker_handle().ok().flatten() else {
+        return;
+    };
     let snapshot = {
-        assert!(!adapter.bootstrap_state.is_poisoned());
-        let Ok(mut bootstrap_state) = adapter.bootstrap_state.lock() else {
+        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
             return;
         };
-        bootstrap_state.record_incoming_media(&session_key, Mid::from("aud-up"), 64, now);
-        bootstrap_state.incoming_bitrate_snapshot_at(
+        snapshot_state.incoming_bitrate_snapshot_at(
             slice::from_ref(&session_key),
             now + Duration::from_secs(2),
         )
