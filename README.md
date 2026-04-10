@@ -9,7 +9,7 @@
 
 > [!WARNING]  
 > Early phase of developments, the readme may not be up to date, or be incorrect.
->
+> Everything is up for massive refactor, some files are just testing prototypes
 
 ## Development
 

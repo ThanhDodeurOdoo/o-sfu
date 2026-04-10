@@ -16,69 +16,86 @@ use o_sfu::{
 use crate::support::full_stack::LocalNetwork;
 use crate::support::{
     differential::{
-        CompatibilityEvent, CompatibilityTranscript, run_camera_publish_oracle_scenario,
+        CompatibilityEvent, CompatibilityTranscript, LegacySfuBackend,
+        run_camera_publish_oracle_scenario_result,
     },
     test_config,
 };
 
 #[tokio::test]
-async fn camera_publish_scenario_produces_a_normalized_compatibility_transcript() {
+async fn camera_publish_scenario_matches_legacy_sfu_and_expected_transcript() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = LocalNetwork::start(config).await;
-    assert!(network.is_some());
-    let Some(network) = network else {
+    let o_sfu_network = LocalNetwork::start(config).await;
+    assert!(o_sfu_network.is_some());
+    let Some(o_sfu_network) = o_sfu_network else {
+        return;
+    };
+    let legacy_backend = LegacySfuBackend::start().await;
+    assert!(legacy_backend.is_ok(), "{legacy_backend:?}");
+    let Ok(legacy_backend) = legacy_backend else {
         return;
     };
 
-    let transcript = run_camera_publish_oracle_scenario(&network).await;
-    assert!(transcript.is_some());
-    let Some(transcript) = transcript else {
+    let o_sfu_transcript = run_camera_publish_oracle_scenario_result(&o_sfu_network).await;
+    let legacy_transcript = run_camera_publish_oracle_scenario_result(&legacy_backend).await;
+    assert!(o_sfu_transcript.is_ok(), "{o_sfu_transcript:?}");
+    assert!(legacy_transcript.is_ok(), "{legacy_transcript:?}");
+    let Ok(o_sfu_transcript) = o_sfu_transcript else {
+        return;
+    };
+    let Ok(legacy_transcript) = legacy_transcript else {
         return;
     };
 
+    assert_eq!(o_sfu_transcript, expected_o_sfu_transcript());
     assert_eq!(
-        transcript,
-        CompatibilityTranscript {
-            backend_name: "o-sfu",
-            scenario_name: "camera_publish_toggle_late_join_departure",
-            events: vec![
-                CompatibilityEvent::RemoteTrackBootstrap {
-                    observer_session_id: SessionId::Integer(20),
-                    owner_session_id: SessionId::Integer(10),
-                    source_token: String::from("track-0"),
-                    stream_type: StreamType::Camera,
-                    media_kind: MediaKind::Video,
-                    active: true,
-                },
-                CompatibilityEvent::SessionCameraState {
-                    observer_session_id: SessionId::Integer(20),
-                    owner_session_id: SessionId::Integer(10),
-                    active: true,
-                },
-                CompatibilityEvent::SessionCameraState {
-                    observer_session_id: SessionId::Integer(20),
-                    owner_session_id: SessionId::Integer(10),
-                    active: false,
-                },
-                CompatibilityEvent::RemoteTrackBootstrap {
-                    observer_session_id: SessionId::Integer(30),
-                    owner_session_id: SessionId::Integer(10),
-                    source_token: String::from("track-0"),
-                    stream_type: StreamType::Camera,
-                    media_kind: MediaKind::Video,
-                    active: false,
-                },
-                CompatibilityEvent::SessionDeparted {
-                    observer_session_id: SessionId::Integer(20),
-                    departed_session_id: SessionId::Integer(10),
-                },
-                CompatibilityEvent::SessionDeparted {
-                    observer_session_id: SessionId::Integer(30),
-                    departed_session_id: SessionId::Integer(10),
-                },
-            ],
-        }
+        o_sfu_transcript.scenario_name,
+        legacy_transcript.scenario_name
     );
+    assert_eq!(o_sfu_transcript.events, legacy_transcript.events);
+}
+
+fn expected_o_sfu_transcript() -> CompatibilityTranscript {
+    CompatibilityTranscript {
+        backend_name: "o-sfu",
+        scenario_name: "camera_publish_toggle_late_join_departure",
+        events: vec![
+            CompatibilityEvent::RemoteTrackBootstrap {
+                observer_session_id: SessionId::Integer(20),
+                owner_session_id: SessionId::Integer(10),
+                source_token: String::from("track-0"),
+                stream_type: StreamType::Camera,
+                media_kind: MediaKind::Video,
+                active: true,
+            },
+            CompatibilityEvent::SessionCameraState {
+                observer_session_id: SessionId::Integer(20),
+                owner_session_id: SessionId::Integer(10),
+                active: true,
+            },
+            CompatibilityEvent::SessionCameraState {
+                observer_session_id: SessionId::Integer(20),
+                owner_session_id: SessionId::Integer(10),
+                active: false,
+            },
+            CompatibilityEvent::RemoteTrackBootstrap {
+                observer_session_id: SessionId::Integer(30),
+                owner_session_id: SessionId::Integer(10),
+                source_token: String::from("track-0"),
+                stream_type: StreamType::Camera,
+                media_kind: MediaKind::Video,
+                active: false,
+            },
+            CompatibilityEvent::SessionDeparted {
+                observer_session_id: SessionId::Integer(20),
+                departed_session_id: SessionId::Integer(10),
+            },
+            CompatibilityEvent::SessionDeparted {
+                observer_session_id: SessionId::Integer(30),
+                departed_session_id: SessionId::Integer(10),
+            },
+        ],
+    }
 }

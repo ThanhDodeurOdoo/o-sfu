@@ -207,6 +207,20 @@ impl FakePeer {
         self.client.read_server_message().await
     }
 
+    pub async fn read_next_bus_batch(&mut self) -> Option<CurrentBusBatch> {
+        self.client.read_bus_batch().await
+    }
+
+    pub async fn respond_to_server_request(
+        &mut self,
+        request_id: &CurrentBusRequestId,
+        response: Value,
+    ) -> Option<()> {
+        self.client
+            .respond_to_server_request(request_id, response)
+            .await
+    }
+
     pub async fn close(self) -> Option<()> {
         self.client.close().await
     }

@@ -74,19 +74,38 @@ impl FakeMediaSource {
             next_rtp_timestamp: 0,
             next_sequence_number: 0,
             rtp_parameters: RtpParameters(json!({
+                "mid": "0",
                 "codecs": [{
                     "mimeType": "audio/opus",
                     "payloadType": 111,
                     "clockRate": AUDIO_CLOCK_RATE,
                     "channels": 2,
-                    "parameters": { "useinbandfec": "1" },
-                    "rtcpFeedback": [{ "type": "transport-cc" }]
+                    "parameters": {
+                        "minptime": 10,
+                        "useinbandfec": 1
+                    },
+                    "rtcpFeedback": [{ "type": "transport-cc", "parameter": "" }]
                 }],
                 "headerExtensions": [
-                    { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
-                    { "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level", "id": 10, "encrypt": false }
+                    {
+                        "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                        "id": 1,
+                        "encrypt": false,
+                        "parameters": {}
+                    },
+                    {
+                        "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+                        "id": 10,
+                        "encrypt": false,
+                        "parameters": {}
+                    }
                 ],
-                "encodings": [{ "ssrc": 11111 }]
+                "encodings": [{ "ssrc": 11111, "dtx": false }],
+                "rtcp": {
+                    "cname": "o-sfu-audio",
+                    "reducedSize": true,
+                    "mux": true
+                }
             })),
         }
     }
@@ -103,6 +122,7 @@ impl FakeMediaSource {
             next_rtp_timestamp: 0,
             next_sequence_number: 0,
             rtp_parameters: RtpParameters(json!({
+                "mid": "1",
                 "codecs": [
                     {
                         "mimeType": "video/VP8",
@@ -110,27 +130,59 @@ impl FakeMediaSource {
                         "clockRate": VIDEO_CLOCK_RATE,
                         "parameters": {},
                         "rtcpFeedback": [
-                            { "type": "nack" },
-                            { "type": "nack", "parameter": "pli" },
+                            { "type": "goog-remb", "parameter": "" },
+                            { "type": "transport-cc", "parameter": "" },
                             { "type": "ccm", "parameter": "fir" },
-                            { "type": "goog-remb" },
-                            { "type": "transport-cc" }
+                            { "type": "nack", "parameter": "" },
+                            { "type": "nack", "parameter": "pli" }
                         ]
                     },
                     {
                         "mimeType": "video/rtx",
                         "payloadType": 97,
                         "clockRate": VIDEO_CLOCK_RATE,
-                        "parameters": { "apt": "96" },
+                        "parameters": { "apt": 96 },
                         "rtcpFeedback": []
                     }
                 ],
                 "headerExtensions": [
-                    { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
-                    { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
-                    { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
+                    {
+                        "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+                        "id": 1,
+                        "encrypt": false,
+                        "parameters": {}
+                    },
+                    {
+                        "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+                        "id": 4,
+                        "encrypt": false,
+                        "parameters": {}
+                    },
+                    {
+                        "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+                        "id": 5,
+                        "encrypt": false,
+                        "parameters": {}
+                    },
+                    {
+                        "uri": "urn:3gpp:video-orientation",
+                        "id": 11,
+                        "encrypt": false,
+                        "parameters": {}
+                    },
+                    {
+                        "uri": "urn:ietf:params:rtp-hdrext:toffset",
+                        "id": 12,
+                        "encrypt": false,
+                        "parameters": {}
+                    }
                 ],
-                "encodings": [{ "ssrc": 22222 }]
+                "encodings": [{ "ssrc": 22222, "rtx": { "ssrc": 22223 } }],
+                "rtcp": {
+                    "cname": "o-sfu-camera",
+                    "reducedSize": true,
+                    "mux": true
+                }
             })),
         }
     }

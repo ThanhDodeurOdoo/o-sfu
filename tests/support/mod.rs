@@ -275,70 +275,116 @@ pub async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> O
 /// Realistc client RTP capabilities (corespond to router default)
 fn test_client_rtp_capabilities() -> serde_json::Value {
     serde_json::json!({
-        "codecs": [
-            {
-                "mimeType": "audio/opus",
-                "kind": "audio",
-                "preferredPayloadType": 111,
-                "clockRate": 48000,
-                "channels": 2,
-                "parameters": { "useinbandfec": "1" },
-                "rtcpFeedback": [{ "type": "transport-cc" }]
-            },
-            {
-                "mimeType": "video/VP8",
-                "kind": "video",
-                "preferredPayloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" },
-                    { "type": "transport-cc" }
-                ]
-            },
-            {
-                "mimeType": "video/rtx",
-                "kind": "video",
-                "preferredPayloadType": 97,
-                "clockRate": 90000,
-                "parameters": { "apt": "96" },
-                "rtcpFeedback": []
-            }
-        ],
-        "headerExtensions": [
-            {
-                "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
-                "preferredId": 1,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            },
-            {
-                "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
-                "preferredId": 4,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            },
-            {
-                "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
-                "preferredId": 5,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            },
-            {
-                "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
-                "preferredId": 10,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            }
-        ]
+        "codecs": test_client_rtp_capability_codecs(),
+        "headerExtensions": test_client_rtp_capability_header_extensions()
     })
+}
+
+fn test_client_rtp_capability_codecs() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "mimeType": "audio/opus",
+            "kind": "audio",
+            "preferredPayloadType": 111,
+            "clockRate": 48000,
+            "channels": 2,
+            "parameters": {
+                "minptime": 10,
+                "useinbandfec": 1
+            },
+            "rtcpFeedback": [{ "type": "transport-cc", "parameter": "" }]
+        },
+        {
+            "mimeType": "video/VP8",
+            "kind": "video",
+            "preferredPayloadType": 96,
+            "clockRate": 90000,
+            "parameters": {},
+            "rtcpFeedback": [
+                { "type": "goog-remb", "parameter": "" },
+                { "type": "transport-cc", "parameter": "" },
+                { "type": "ccm", "parameter": "fir" },
+                { "type": "nack", "parameter": "" },
+                { "type": "nack", "parameter": "pli" }
+            ]
+        },
+        {
+            "mimeType": "video/rtx",
+            "kind": "video",
+            "preferredPayloadType": 97,
+            "clockRate": 90000,
+            "parameters": { "apt": 96 },
+            "rtcpFeedback": []
+        }
+    ])
+}
+
+fn test_client_rtp_capability_header_extensions() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+            "preferredId": 1,
+            "preferredEncrypt": false,
+            "kind": "audio",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+            "preferredId": 4,
+            "preferredEncrypt": false,
+            "kind": "audio",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+            "preferredId": 5,
+            "preferredEncrypt": false,
+            "kind": "audio",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+            "preferredId": 10,
+            "preferredEncrypt": false,
+            "kind": "audio",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+            "preferredId": 1,
+            "preferredEncrypt": false,
+            "kind": "video",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+            "preferredId": 4,
+            "preferredEncrypt": false,
+            "kind": "video",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+            "preferredId": 5,
+            "preferredEncrypt": false,
+            "kind": "video",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "urn:3gpp:video-orientation",
+            "preferredId": 11,
+            "preferredEncrypt": false,
+            "kind": "video",
+            "direction": "sendrecv"
+        },
+        {
+            "uri": "urn:ietf:params:rtp-hdrext:toffset",
+            "preferredId": 12,
+            "preferredEncrypt": false,
+            "kind": "video",
+            "direction": "sendrecv"
+        }
+    ])
 }
 
 pub async fn send_bus_message(
