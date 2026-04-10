@@ -1,6 +1,9 @@
 //! Runtime transport adapter for the `rtc` WebRTC backend.
 //!
 //! Internal modules:
+//! - `state`: pure state types and session scheduling
+//! - `media_registry`: media handle tracking and mid registry
+//! - `demux`: IP hash-indexed demux and media route entries
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
 //! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
@@ -10,17 +13,18 @@
 //! - `parse_diagnostic`: shared parse diagnostic infrastructure
 
 use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
+    collections::BTreeMap,
     fmt,
-    mem::take,
-    net::{IpAddr, SocketAddr},
+    net::IpAddr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
+
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use std::net::SocketAddr;
 
 use super::{
     transport_adapter::{
@@ -36,12 +40,9 @@ use crate::signaling::{
     webrtc::{DtlsParameters, IceParameters},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-use str0m::config::Fingerprint;
 use str0m::media::{MediaKind, Mid, Rid};
 use str0m::rtp::Ssrc;
-use str0m::{IceCreds, Rtc};
 use tokio::{
-    net::UdpSocket,
     runtime::Handle,
     sync::{mpsc, oneshot},
 };
@@ -51,471 +52,26 @@ use tracing::debug;
 use super::transport_adapter::TransportMediaId;
 
 mod bootstrap;
+mod demux;
 mod dtls;
 mod ice;
+mod media_registry;
 mod packet_loop;
 mod parse_diagnostic;
 mod sdp;
+mod state;
 mod validation;
 
 #[cfg(test)]
 mod tests;
 
-const BITRATE_WINDOW: Duration = Duration::from_secs(1);
-
-// ---------------------------------------------------------------------------
-// Internal types shared across submodules
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TransportLifecycleState {
-    BootstrapSent,
-    Connected,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct TransportStateKey {
-    session_key: TransportSessionKey,
-    direction: TransportConnectDirection,
-}
-
-pub(super) struct SharedRtcSocket {
-    pub(super) socket: Arc<UdpSocket>,
-    pub(super) candidate_addr: SocketAddr,
-}
-
-pub(super) struct RtcSessionState {
-    pub(super) rtc: Rtc,
-    pub(super) local_ice_credentials: IceCreds,
-    pub(super) local_dtls_fingerprint: Fingerprint,
-    pub(super) transport_ids: SessionTransportIds,
-    pub(super) remote_dtls_fingerprint: Option<String>,
-    pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
-    pub(super) dtls_started: bool,
-    pub(super) recv_mids: Vec<Mid>,
-    pub(super) send_mids: Vec<Mid>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SessionTransportIds {
-    pub(super) upload: String,
-    pub(super) download: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ParsedRemoteIceCredentials {
-    username_fragment: String,
-    password: String,
-}
-
-impl ParsedRemoteIceCredentials {
-    fn as_ice_creds(&self) -> IceCreds {
-        IceCreds {
-            ufrag: self.username_fragment.clone(),
-            pass: self.password.clone(),
-        }
-    }
-}
-
-/// A single forwarding destination within the media route index.
-#[derive(Debug, Clone)]
-pub(super) struct MediaRouteDestination {
-    pub(super) dest_session: TransportSessionKey,
-    pub(super) dest_mid: Mid,
-    pub(super) active: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct MediaRouteEntry {
-    pub(super) source_active: bool,
-    pub(super) destinations: Vec<MediaRouteDestination>,
-}
-
-/// Media route source key: `(producer session, producer mid)`.
-pub(super) type MediaRouteKey = (TransportSessionKey, Mid);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RegisteredMediaHandle {
-    Producer {
-        session_key: TransportSessionKey,
-        mid: Mid,
-    },
-    Consumer {
-        session_key: TransportSessionKey,
-        mid: Mid,
-        source_session_key: TransportSessionKey,
-        source_mid: Mid,
-    },
-}
-
-impl RegisteredMediaHandle {
-    fn session_key(&self) -> &TransportSessionKey {
-        match self {
-            Self::Producer { session_key, .. } | Self::Consumer { session_key, .. } => session_key,
-        }
-    }
-
-    fn mid(&self) -> Mid {
-        match self {
-            Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
-        }
-    }
-
-    fn is_producer_for(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
-        matches!(
-            self,
-            Self::Producer {
-                session_key: owner_session_key,
-                mid: owner_mid,
-            } if owner_session_key == session_key && *owner_mid == mid
-        )
-    }
-}
-
-#[derive(Debug, Default)]
-struct SessionIncomingBitrates {
-    audio: RecentBitrate,
-    camera: RecentBitrate,
-    screen: RecentBitrate,
-}
-
-impl SessionIncomingBitrates {
-    fn record(&mut self, stream_type: StreamType, now: Instant, payload_bytes: usize) {
-        match stream_type {
-            StreamType::Audio => self.audio.record(now, payload_bytes),
-            StreamType::Camera => self.camera.record(now, payload_bytes),
-            StreamType::Screen => self.screen.record(now, payload_bytes),
-        }
-    }
-
-    fn snapshot(&self, now: Instant) -> IncomingBitrateSnapshot {
-        let audio = self.audio.snapshot(now);
-        let camera = self.camera.snapshot(now);
-        let screen = self.screen.snapshot(now);
-        IncomingBitrateSnapshot {
-            total: audio.saturating_add(camera).saturating_add(screen),
-            audio,
-            camera,
-            screen,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RecentBitrate {
-    window_start: Instant,
-    bytes_in_window: u64,
-}
-
-impl Default for RecentBitrate {
-    fn default() -> Self {
-        Self {
-            window_start: Instant::now(),
-            bytes_in_window: 0,
-        }
-    }
-}
-
-impl RecentBitrate {
-    fn record(&mut self, now: Instant, payload_bytes: usize) {
-        if now.duration_since(self.window_start) >= BITRATE_WINDOW {
-            self.window_start = now;
-            self.bytes_in_window = 0;
-        }
-        self.bytes_in_window = self
-            .bytes_in_window
-            .saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
-    }
-
-    fn snapshot(&self, now: Instant) -> u64 {
-        if now.duration_since(self.window_start) >= BITRATE_WINDOW {
-            0
-        } else {
-            self.bytes_in_window.saturating_mul(8)
-        }
-    }
-}
-
-#[derive(Default)]
-pub(super) struct RtcBootstrapState {
-    pub(super) shared_socket: Option<SharedRtcSocket>,
-    pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
-    pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
-    recv_stream_types: BTreeMap<MediaRouteKey, StreamType>,
-    remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
-    remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
-    mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
-    dirty_sessions: BTreeSet<TransportSessionKey>,
-    session_timeouts: BTreeMap<TransportSessionKey, Instant>,
-    timeout_queue: BinaryHeap<Reverse<(Instant, TransportSessionKey)>>,
-    next_media_id: u64,
-}
-
-impl RtcBootstrapState {
-    fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
-        self.dirty_sessions.insert(session_key.clone());
-    }
-
-    fn take_ready_sessions(&mut self, now: Instant) -> BTreeSet<TransportSessionKey> {
-        let mut ready_sessions = take(&mut self.dirty_sessions);
-        while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
-            let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
-                self.timeout_queue.pop();
-                continue;
-            };
-            if current_deadline != deadline {
-                self.timeout_queue.pop();
-                continue;
-            }
-            if deadline > now {
-                break;
-            }
-            self.timeout_queue.pop();
-            self.session_timeouts.remove(&session_key);
-            ready_sessions.insert(session_key);
-        }
-        ready_sessions
-    }
-
-    fn update_session_timeout(
-        &mut self,
-        session_key: &TransportSessionKey,
-        next_timeout: Option<Instant>,
-    ) {
-        self.session_timeouts.remove(session_key);
-        if let Some(next_timeout) = next_timeout {
-            self.session_timeouts
-                .insert(session_key.clone(), next_timeout);
-            self.timeout_queue
-                .push(Reverse((next_timeout, session_key.clone())));
-        }
-    }
-
-    fn next_timeout_deadline(&mut self) -> Option<Instant> {
-        while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
-            let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
-                self.timeout_queue.pop();
-                continue;
-            };
-            if current_deadline != deadline {
-                self.timeout_queue.pop();
-                continue;
-            }
-            return Some(deadline);
-        }
-        None
-    }
-
-    fn clear_session_schedule(&mut self, session_key: &TransportSessionKey) {
-        self.dirty_sessions.remove(session_key);
-        self.session_timeouts.remove(session_key);
-    }
-
-    fn register_media_handle(&mut self, handle: RegisteredMediaHandle) -> TransportMediaId {
-        let id = self.next_media_id;
-        self.next_media_id = self.next_media_id.saturating_add(1);
-        self.mid_registry.insert(id, handle);
-        TransportMediaId::new(id)
-    }
-
-    fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
-        self.mid_registry
-            .get(&transport_media_id.as_u64())
-            .map(RegisteredMediaHandle::mid)
-    }
-
-    fn remove_media_handle(
-        &mut self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<RegisteredMediaHandle> {
-        self.mid_registry.remove(&transport_media_id.as_u64())
-    }
-
-    fn session_has_mid(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
-        self.mid_registry
-            .values()
-            .any(|handle| handle.session_key() == session_key && handle.mid() == mid)
-    }
-
-    fn session_has_producer_mid(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
-        self.mid_registry
-            .values()
-            .any(|handle| handle.is_producer_for(session_key, mid))
-    }
-
-    fn session_key_for_remote_addr(&self, source_addr: SocketAddr) -> Option<&TransportSessionKey> {
-        self.remote_addr_index.get(&source_addr)
-    }
-
-    fn remember_remote_addr(&mut self, source_addr: SocketAddr, session_key: &TransportSessionKey) {
-        let previous_session = self
-            .remote_addr_index
-            .insert(source_addr, session_key.clone());
-        if let Some(previous_session) = previous_session {
-            self.remove_remote_addr_from_session(&previous_session, source_addr);
-        }
-        let session_addrs = self
-            .remote_addrs_by_session
-            .entry(session_key.clone())
-            .or_default();
-        if !session_addrs.contains(&source_addr) {
-            session_addrs.push(source_addr);
-        }
-    }
-
-    fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
-        let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
-            return;
-        };
-        self.remove_remote_addr_from_session(&session_key, source_addr);
-    }
-
-    fn forget_session_remote_addrs(&mut self, session_key: &TransportSessionKey) {
-        let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
-            return;
-        };
-        for source_addr in session_addrs {
-            self.remote_addr_index.remove(&source_addr);
-        }
-    }
-
-    fn remove_remote_addr_from_session(
-        &mut self,
-        session_key: &TransportSessionKey,
-        source_addr: SocketAddr,
-    ) {
-        let should_remove_session_entry = self
-            .remote_addrs_by_session
-            .get_mut(session_key)
-            .is_some_and(|session_addrs| {
-                if let Some(position) = session_addrs.iter().position(|addr| *addr == source_addr) {
-                    session_addrs.swap_remove(position);
-                }
-                session_addrs.is_empty()
-            });
-        if should_remove_session_entry {
-            self.remote_addrs_by_session.remove(session_key);
-        }
-    }
-
-    fn stream_type_for_source(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_mid: Mid,
-    ) -> Option<StreamType> {
-        self.recv_stream_types
-            .get(&(source_session_key.clone(), source_mid))
-            .copied()
-    }
-}
-
-#[derive(Debug, Default)]
-struct RtcSnapshotState {
-    incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
-    remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
-    remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
-    live_sessions: BTreeSet<TransportSessionKey>,
-}
-
-impl RtcSnapshotState {
-    fn add_session(&mut self, session_key: &TransportSessionKey) {
-        self.live_sessions.insert(session_key.clone());
-    }
-
-    fn remove_session(&mut self, session_key: &TransportSessionKey) {
-        self.live_sessions.remove(session_key);
-        self.forget_session_remote_addrs(session_key);
-        self.incoming_bitrates_by_session.remove(session_key);
-    }
-
-    fn record_incoming_stream(
-        &mut self,
-        session_key: &TransportSessionKey,
-        stream_type: StreamType,
-        now: Instant,
-        payload_bytes: usize,
-    ) {
-        self.incoming_bitrates_by_session
-            .entry(session_key.clone())
-            .or_default()
-            .record(stream_type, now, payload_bytes);
-    }
-
-    fn incoming_bitrate_snapshot_at(
-        &self,
-        session_keys: &[TransportSessionKey],
-        now: Instant,
-    ) -> IncomingBitrateSnapshot {
-        let mut snapshot = IncomingBitrateSnapshot::default();
-        for session_key in session_keys {
-            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_key) else {
-                continue;
-            };
-            let session_snapshot = session_bitrates.snapshot(now);
-            snapshot.total = snapshot.total.saturating_add(session_snapshot.total);
-            snapshot.audio = snapshot.audio.saturating_add(session_snapshot.audio);
-            snapshot.camera = snapshot.camera.saturating_add(session_snapshot.camera);
-            snapshot.screen = snapshot.screen.saturating_add(session_snapshot.screen);
-        }
-        snapshot
-    }
-
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    fn session_key_for_remote_addr(&self, source_addr: SocketAddr) -> Option<&TransportSessionKey> {
-        self.remote_addr_index.get(&source_addr)
-    }
-
-    fn remember_remote_addr(&mut self, source_addr: SocketAddr, session_key: &TransportSessionKey) {
-        let previous_session = self
-            .remote_addr_index
-            .insert(source_addr, session_key.clone());
-        if let Some(previous_session) = previous_session {
-            self.remove_remote_addr_from_session(&previous_session, source_addr);
-        }
-        let session_addrs = self
-            .remote_addrs_by_session
-            .entry(session_key.clone())
-            .or_default();
-        if !session_addrs.contains(&source_addr) {
-            session_addrs.push(source_addr);
-        }
-    }
-
-    fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
-        let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
-            return;
-        };
-        self.remove_remote_addr_from_session(&session_key, source_addr);
-    }
-
-    fn forget_session_remote_addrs(&mut self, session_key: &TransportSessionKey) {
-        let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
-            return;
-        };
-        for source_addr in session_addrs {
-            self.remote_addr_index.remove(&source_addr);
-        }
-    }
-
-    fn remove_remote_addr_from_session(
-        &mut self,
-        session_key: &TransportSessionKey,
-        source_addr: SocketAddr,
-    ) {
-        let should_remove_session_entry = self
-            .remote_addrs_by_session
-            .get_mut(session_key)
-            .is_some_and(|session_addrs| {
-                if let Some(position) = session_addrs.iter().position(|addr| *addr == source_addr) {
-                    session_addrs.swap_remove(position);
-                }
-                session_addrs.is_empty()
-            });
-        if should_remove_session_entry {
-            self.remote_addrs_by_session.remove(session_key);
-        }
-    }
-}
+// Re-exports from extracted submodules for sibling module access
+use demux::{MediaRouteDestination, MediaRouteEntry};
+use media_registry::RegisteredMediaHandle;
+use state::{
+    ParsedRemoteIceCredentials, RtcBootstrapState, RtcSessionState, RtcSnapshotState,
+    SessionTransportIds, SharedRtcSocket, TransportLifecycleState, TransportStateKey,
+};
 
 #[derive(Debug, Clone)]
 struct RtcWorkerHandle {
