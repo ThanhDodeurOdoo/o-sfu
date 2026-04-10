@@ -1,8 +1,7 @@
 //! Benchmark-only helpers for transport hot-path measurements.
 //!
 //! This module is intentionally hidden behind the `internal-benchmarks`
-//! feature so the benchmark harness can inspect runtime behavior without
-//! widening the normal public runtime contract.
+//! feature as we only benchmark if we need to verify something
 
 use std::{
     hint::black_box,
@@ -28,7 +27,7 @@ const BENCHMARK_FIRST_REMOTE_PORT: u16 = 10_000;
 /// Prepared benchmark fixture for the steady-state UDP demux lookup path.
 ///
 /// The fixture exercises the worker-local remote-address cache against the
-/// old reverse-scan shape over the same prepared session set. It intentionally
+/// old reverse-scan shape over the same prepared session set.intentionally
 /// isolates the lookup portion of the hot path so benchmark noise from socket
 /// I/O, packet parsing, or `Rtc::accepts(...)` does not drown the index cost.
 #[derive(Debug)]

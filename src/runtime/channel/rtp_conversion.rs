@@ -8,7 +8,7 @@
 //! opaque JSON contract while the router core stays free of serde dependencies.
 //!
 //! Wire format reference:
-//! - ORTC API dictionaries: <https://www.w3.org/TR/ortc/>
+//! - ORTC API dictionaries: <https://draft.ortc.org/>
 //! - mediasoup `RtpParameters`, `RtpCapabilities` JSON shapes
 
 use o_sfu_router::{
@@ -192,7 +192,7 @@ fn parse_single_codec_capability(value: &Value) -> Option<RtpCodecCapability> {
 // Header extension parsing and serialization
 // ---------------------------------------------------------------------------
 
-/// Parse header extensions from `RtpParameters` (uses `id` field).
+/// from `RtpParameters` (uses `id` field).
 fn parse_header_extension_array(value: Option<&Value>) -> Vec<RtpHeaderExtension> {
     let Some(arr) = value.and_then(Value::as_array) else {
         return Vec::new();

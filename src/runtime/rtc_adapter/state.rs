@@ -160,10 +160,6 @@ impl RecentBitrate {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RtcBootstrapState
-// ---------------------------------------------------------------------------
-
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,

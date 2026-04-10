@@ -1637,10 +1637,6 @@ fn respond_debug_record_incoming_media(
     let _ = response.send(());
 }
 
-// ---------------------------------------------------------------------------
-// Trait impls
-// ---------------------------------------------------------------------------
-
 impl fmt::Debug for RtcTransportAdapter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RtcTransportAdapter")

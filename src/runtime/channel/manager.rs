@@ -23,7 +23,6 @@ pub(crate) struct RuntimeChannelStatsSnapshot {
     pub(crate) web_rtc_enabled: bool,
 }
 
-/// Manages all active channels with idempotent creation by issuer.
 #[derive(Debug)]
 pub struct ChannelManager {
     state: RwLock<ChannelManagerState>,
@@ -62,9 +61,10 @@ impl ChannelManager {
 
     /// Create a channel for the given issuer, or return the existing one.
     /// Channel creation is idempotent: repeated calls with the same issuer
-    /// return the same channel regardless of key, config, or remote-address differences.
+    /// return the same channel regardless of key, config, or remote-address differences
+    /// similar to odoo's sfu
     ///
-    /// `remote_address` is observability metadata used for stats surfaces only.
+    /// `remote_address` is observability metadata used for stats like traceability, lggging,...
     pub async fn create_or_get(
         &self,
         issuer: &str,

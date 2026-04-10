@@ -1,5 +1,5 @@
-//! Current bundle/server batching envelope used by the deployed SFU.
-//! This is a compatibility reference layer, not a permanent architectural boundary.
+//! Current bundle/server batching envelope used by odoo sfu ( github.com/odoo/sfu )
+//! This is a compatibility reference layer, just to have some baseline dhring conversion
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

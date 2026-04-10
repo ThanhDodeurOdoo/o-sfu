@@ -56,9 +56,12 @@ impl ChannelRouterState {
     /// channel-local map keeps that compatibility at the edge while the pure router
     /// continues to use compact numeric identifiers internally.
     ///
+    /// TODO: maybe will deprecate the use of string sessiond id and make the code simpler,
+    /// in practice in discuss, session ids are number (their actual postgrsql id)
+    ///
     /// # Errors
     ///
-    /// Returns the underlying [`RouterError`] if joining the pure router fails.
+    /// potentially the underlying [`RouterError`] if joining the pure router fails
     pub(super) fn ensure_session(
         &mut self,
         session_id: &SessionId,

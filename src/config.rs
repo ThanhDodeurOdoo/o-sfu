@@ -8,6 +8,9 @@ use anyhow::{Context, Result, anyhow, ensure};
 
 use crate::signaling::DEFAULT_AUTHENTICATION_TIMEOUT_MS;
 
+// maybe not worth being consts
+// pushning the no-literal orthodoxy a bit far here, may be better to see
+// the default values inline
 const DEFAULT_CHANNEL_SIZE: usize = 100;
 const DEFAULT_SESSION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;

@@ -299,9 +299,7 @@ fn snapshot_and_pump(
         state.update_session_timeout(&session_id, session_timeout);
     }
 
-    // Two-pass: collect matching routes, then write to destination sessions.
-    // Separating the read of the route index from the mutable session access
-    // avoids a borrow conflict on `state`.
+    // Two-pass: collect matching routes, then write to destination sessions
     let media_stats_now = Instant::now();
     record_incoming_stats(state, snapshot_state, buffers, media_stats_now);
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {

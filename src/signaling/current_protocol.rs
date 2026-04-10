@@ -1,5 +1,5 @@
-//! Current bundle/server wire protocol used by the deployed SFU.
-//! This module exists as a typed reference for migration and compatibility work.
+//! Current bundle/server wire protocol used by odoo sfu ( github.com/odoo/sfu )
+//! This is a compatibility reference layer, just to have some baseline during conversion
 
 use std::collections::BTreeMap;
 

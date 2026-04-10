@@ -39,14 +39,10 @@ pub use manager::ChannelManager;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
 use state::ChannelState;
 
-/// A message the server pushes to a connected session's WebSocket handler.
 #[derive(Debug, Clone)]
 pub enum SessionOutbound {
-    /// A fire-and-forget server message wrapped in a Bus envelope by the handler.
     Message(CurrentServerMessage),
-    /// A request-style server event wrapped in a Bus envelope by the handler.
     Request(Box<CurrentServerRequest>),
-    /// Instruct the handler to close the WebSocket with the given code.
     Close(CurrentWebSocketCloseCode),
 }
 
@@ -94,10 +90,11 @@ pub(crate) struct ChannelSessionStatsSnapshot {
     pub(crate) screen_count: u64,
 }
 
-/// A single discussion channel owning sessions, features, and recording state.
-///
+/// A single discussion channel owning sessions, features, and recording state,
+/// roughly same concepts as in odoo's sfu and odoo discuss
 /// Identity fields (uuid, issuer, key, features) are immutable after creation.
 /// Mutable state (sessions, recording, routing) is behind an interior lock.
+/// TODO: update docstring later
 pub struct Channel {
     runtime_id: u64,
     media_worker_id: usize,
