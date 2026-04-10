@@ -7,6 +7,7 @@ use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::{
     bundle_api::bundle_session_info_key,
     current_protocol::{CurrentServerMessage, CurrentSessionInfoSnapshotById},
+    ortc_mapper,
     shared::{DownloadStates, SessionId, StreamType},
     webrtc::{MediaKind as SignalingMediaKind, RtpParameters},
 };
@@ -58,8 +59,8 @@ impl Channel {
             )
         };
 
-        let parsed_rtp_parameters = super::rtp_conversion::parse_rtp_parameters(&rtp_parameters.0)
-            .or_else(|| {
+        let parsed_rtp_parameters =
+            ortc_mapper::parse_rtp_parameters(&rtp_parameters.0).or_else(|| {
                 warn!(
                     ?session_id,
                     "failed to parse producer RTP parameters from wire format"

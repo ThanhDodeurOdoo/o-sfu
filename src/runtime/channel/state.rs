@@ -9,6 +9,7 @@ use tracing::{error, warn};
 
 use crate::signaling::{
     current_protocol::{CurrentRemoteTrackBootstrapPayload, CurrentServerRequest},
+    ortc_mapper,
     shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
     webrtc::{
         MediaKind as SignalingMediaKind, RtpCapabilities as SignalingRtpCapabilities, RtpParameters,
@@ -16,7 +17,7 @@ use crate::signaling::{
 };
 
 use super::{
-    SessionOutbound, rtp_conversion,
+    SessionOutbound,
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -330,7 +331,7 @@ impl ChannelState {
         let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
         let producer_active = producer.active;
 
-        let parsed_capabilities = rtp_conversion::parse_rtp_capabilities(&client_capabilities.0)?;
+        let parsed_capabilities = ortc_mapper::parse_rtp_capabilities(&client_capabilities.0)?;
         if !can_consume(&producer_consumable_rtp_parameters, &parsed_capabilities) {
             return None;
         }
@@ -339,7 +340,7 @@ impl ChannelState {
             &parsed_capabilities,
         )
         .ok()?;
-        let consumer_wire_rtp_parameters = RtpParameters(rtp_conversion::serialize_rtp_parameters(
+        let consumer_wire_rtp_parameters = RtpParameters(ortc_mapper::serialize_rtp_parameters(
             &negotiated_rtp_parameters,
         ));
         Some(PreparedConsumerBootstrap {

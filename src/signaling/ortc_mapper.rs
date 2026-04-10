@@ -4,8 +4,8 @@
 //! as opaque wrappers over the mediasoup/ORTC wire format. The router crate uses typed
 //! domain models (`o_sfu_router::RtpParameters`, `o_sfu_router::RtpCapabilities`).
 //!
-//! These conversion functions sit at the channel boundary so the signaling edge keeps its
-//! opaque JSON contract while the router core stays free of serde dependencies.
+//! These conversion functions live at the signaling edge so channel/runtime code can depend
+//! on typed router models without owning ORTC-shaped JSON translation concerns.
 //!
 //! Wire format reference:
 //! - ORTC API dictionaries: <https://draft.ortc.org/>
@@ -18,7 +18,7 @@ use o_sfu_router::{
 use serde_json::{Map, Value, json};
 
 // ---------------------------------------------------------------------------
-// Parse: wire JSON → router types
+// Parse: wire JSON -> router types
 // ---------------------------------------------------------------------------
 
 /// Parse signaling-layer `RtpParameters` JSON into the router-native typed form.
@@ -32,7 +32,7 @@ use serde_json::{Map, Value, json};
 ///   "encodings": [{ "ssrc": 12345, ... }]
 /// }
 /// ```
-pub(super) fn parse_rtp_parameters(value: &Value) -> Option<RtpParameters> {
+pub(crate) fn parse_rtp_parameters(value: &Value) -> Option<RtpParameters> {
     let obj = value.as_object()?;
     let codecs = parse_codec_parameters_array(obj.get("codecs")?)?;
     let header_extensions = parse_header_extension_array(obj.get("headerExtensions"));
@@ -53,7 +53,7 @@ pub(super) fn parse_rtp_parameters(value: &Value) -> Option<RtpParameters> {
 ///   "headerExtensions": [{ "uri": "...", "preferredId": 1, "kind": "audio", ... }]
 /// }
 /// ```
-pub(super) fn parse_rtp_capabilities(value: &Value) -> Option<RtpCapabilities> {
+pub(crate) fn parse_rtp_capabilities(value: &Value) -> Option<RtpCapabilities> {
     let obj = value.as_object()?;
     let codecs = parse_codec_capability_array(obj.get("codecs")?)?;
     let header_extensions = parse_header_extension_capability_array(obj.get("headerExtensions"));
@@ -61,13 +61,13 @@ pub(super) fn parse_rtp_capabilities(value: &Value) -> Option<RtpCapabilities> {
 }
 
 // ---------------------------------------------------------------------------
-// Serialize: router types → wire JSON
+// Serialize: router types -> wire JSON
 // ---------------------------------------------------------------------------
 
 /// Serialize router-native `RtpParameters` to the mediasoup/ORTC wire JSON shape.
 ///
 /// Used to build the `rtpParameters` field in `INIT_CONSUMER` payloads after negotiation.
-pub(super) fn serialize_rtp_parameters(params: &RtpParameters) -> Value {
+pub(crate) fn serialize_rtp_parameters(params: &RtpParameters) -> Value {
     let codecs: Vec<Value> = params.codecs().map(serialize_codec_parameters).collect();
     let header_extensions: Vec<Value> = params
         .header_extensions()

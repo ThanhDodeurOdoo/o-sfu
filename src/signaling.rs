@@ -3,6 +3,7 @@ pub mod bundle_api;
 pub mod current_bus;
 pub mod current_protocol;
 pub mod http;
+pub mod ortc_mapper;
 pub mod shared;
 pub mod webrtc;
 
