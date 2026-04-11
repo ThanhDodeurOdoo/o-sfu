@@ -1,18 +1,18 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use super::shared::{
+use crate::shared::{
     AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
     SessionId, SessionInfo, StreamType,
 };
 
-pub type NativeEnvelopeBatch = Vec<NativeEnvelope>;
+pub type EnvelopeBatch = Vec<Envelope>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct NativeRequestId(String);
+pub struct RequestId(String);
 
-impl NativeRequestId {
+impl RequestId {
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -25,18 +25,18 @@ impl NativeRequestId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeEnvelope {
+pub struct Envelope {
     #[serde(rename = "t")]
     pub tag: String,
     #[serde(rename = "p", skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
     #[serde(rename = "q", skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<NativeRequestId>,
+    pub request_id: Option<RequestId>,
     #[serde(rename = "r", skip_serializing_if = "Option::is_none")]
-    pub response_to: Option<NativeRequestId>,
+    pub response_to: Option<RequestId>,
 }
 
-impl NativeEnvelope {
+impl Envelope {
     fn message(tag: &str, payload: Option<Value>) -> Self {
         Self {
             tag: tag.to_owned(),
@@ -46,7 +46,7 @@ impl NativeEnvelope {
         }
     }
 
-    fn request(tag: &str, request_id: NativeRequestId, payload: Option<Value>) -> Self {
+    fn request(tag: &str, request_id: RequestId, payload: Option<Value>) -> Self {
         Self {
             tag: tag.to_owned(),
             payload,
@@ -55,7 +55,7 @@ impl NativeEnvelope {
         }
     }
 
-    fn response(tag: &str, response_to: NativeRequestId, payload: Option<Value>) -> Self {
+    fn response(tag: &str, response_to: RequestId, payload: Option<Value>) -> Self {
         Self {
             tag: tag.to_owned(),
             payload,
@@ -67,7 +67,7 @@ impl NativeEnvelope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
-pub enum NativeWebSocketCloseCode {
+pub enum WebSocketCloseCode {
     Clean = 1000,
     Leaving = 1001,
     ProtocolError = 1002,
@@ -78,23 +78,23 @@ pub enum NativeWebSocketCloseCode {
     ChannelFull = 4004,
 }
 
-impl From<NativeWebSocketCloseCode> for u16 {
-    fn from(value: NativeWebSocketCloseCode) -> Self {
+impl From<WebSocketCloseCode> for u16 {
+    fn from(value: WebSocketCloseCode) -> Self {
         match value {
-            NativeWebSocketCloseCode::Clean => 1000,
-            NativeWebSocketCloseCode::Leaving => 1001,
-            NativeWebSocketCloseCode::ProtocolError => 1002,
-            NativeWebSocketCloseCode::Error => 1011,
-            NativeWebSocketCloseCode::AuthFailed => 4001,
-            NativeWebSocketCloseCode::AuthTimeout => 4002,
-            NativeWebSocketCloseCode::Kicked => 4003,
-            NativeWebSocketCloseCode::ChannelFull => 4004,
+            WebSocketCloseCode::Clean => 1000,
+            WebSocketCloseCode::Leaving => 1001,
+            WebSocketCloseCode::ProtocolError => 1002,
+            WebSocketCloseCode::Error => 1011,
+            WebSocketCloseCode::AuthFailed => 4001,
+            WebSocketCloseCode::AuthTimeout => 4002,
+            WebSocketCloseCode::Kicked => 4003,
+            WebSocketCloseCode::ChannelFull => 4004,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAuthPayload {
+pub struct AuthPayload {
     pub jwt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
@@ -102,33 +102,33 @@ pub struct NativeAuthPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativePeerSnapshot {
+pub struct PeerSnapshot {
     pub session_id: SessionId,
     #[serde(default)]
     pub info: SessionInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeWelcomePayload {
+pub struct WelcomePayload {
     pub features: AvailableFeatures,
     pub recording: RecordingState,
-    pub peers: Vec<NativePeerSnapshot>,
+    pub peers: Vec<PeerSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeSessionDescriptionPayload {
+pub struct SessionDescriptionPayload {
     pub sdp: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeStreamIntentPayload {
+pub struct StreamIntentPayload {
     #[serde(rename = "type")]
     pub stream_type: StreamType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeSubscribePayload {
+pub struct SubscribePayload {
     pub session_id: SessionId,
     #[serde(flatten)]
     pub states: DownloadStates,
@@ -136,7 +136,7 @@ pub struct NativeSubscribePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeTrackBinding {
+pub struct TrackBinding {
     pub mid: String,
     pub session_id: SessionId,
     #[serde(rename = "type")]
@@ -146,31 +146,31 @@ pub struct NativeTrackBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativePeerInfoPayload {
+pub struct PeerInfoPayload {
     pub session_id: SessionId,
     pub info: SessionInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativePeerLeftPayload {
+pub struct PeerLeftPayload {
     pub session_id: SessionId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeClientBroadcastPayload {
+pub struct ClientBroadcastPayload {
     pub message: JsonPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeServerBroadcastPayload {
+pub struct ServerBroadcastPayload {
     pub sender_id: SessionId,
     pub message: JsonPayload,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeRecordingOptions {
+pub struct RecordingOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -180,21 +180,21 @@ pub struct NativeRecordingOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeRecordingActionResult {
+pub struct RecordingActionResult {
     pub ok: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeClientMessage {
-    Auth(NativeAuthPayload),
-    Publish(NativeStreamIntentPayload),
-    Unpublish(NativeStreamIntentPayload),
-    Subscribe(NativeSubscribePayload),
+pub enum ClientMessage {
+    Auth(AuthPayload),
+    Publish(StreamIntentPayload),
+    Unpublish(StreamIntentPayload),
+    Subscribe(SubscribePayload),
     Info(SessionInfo),
-    Broadcast(NativeClientBroadcastPayload),
+    Broadcast(ClientBroadcastPayload),
 }
 
-impl NativeClientMessage {
+impl ClientMessage {
     fn tag(&self) -> &'static str {
         match self {
             Self::Auth(_) => "auth",
@@ -206,8 +206,8 @@ impl NativeClientMessage {
         }
     }
 
-    fn into_envelope(self) -> Result<NativeEnvelope, serde_json::Error> {
-        Ok(NativeEnvelope::message(
+    fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
+        Ok(Envelope::message(
             self.tag(),
             Some(match self {
                 Self::Auth(payload) => serde_json::to_value(payload)?,
@@ -221,12 +221,12 @@ impl NativeClientMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeClientRequest {
-    StartRecording(NativeRecordingOptions),
+pub enum ClientRequest {
+    StartRecording(RecordingOptions),
     StopRecording,
 }
 
-impl NativeClientRequest {
+impl ClientRequest {
     fn tag(&self) -> &'static str {
         match self {
             Self::StartRecording(_) => "startrecording",
@@ -234,11 +234,8 @@ impl NativeClientRequest {
         }
     }
 
-    fn into_envelope(
-        self,
-        request_id: NativeRequestId,
-    ) -> Result<NativeEnvelope, serde_json::Error> {
-        Ok(NativeEnvelope::request(
+    fn into_envelope(self, request_id: RequestId) -> Result<Envelope, serde_json::Error> {
+        Ok(Envelope::request(
             self.tag(),
             request_id,
             match self {
@@ -250,24 +247,24 @@ impl NativeClientRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeClientResponse {
-    Offer(NativeSessionDescriptionPayload),
-    Renegotiate(NativeSessionDescriptionPayload),
+pub enum ClientResponse {
+    Offer(SessionDescriptionPayload),
+    Renegotiate(SessionDescriptionPayload),
     Ping,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeServerMessage {
-    Welcome(NativeWelcomePayload),
-    Tracks(Vec<NativeTrackBinding>),
-    PeerInfo(NativePeerInfoPayload),
-    PeerJoined(NativePeerInfoPayload),
-    PeerLeft(NativePeerLeftPayload),
-    Broadcast(NativeServerBroadcastPayload),
+pub enum ServerMessage {
+    Welcome(WelcomePayload),
+    Tracks(Vec<TrackBinding>),
+    PeerInfo(PeerInfoPayload),
+    PeerJoined(PeerInfoPayload),
+    PeerLeft(PeerLeftPayload),
+    Broadcast(ServerBroadcastPayload),
     RecordingChange(RecordingStateUpdate),
 }
 
-impl NativeServerMessage {
+impl ServerMessage {
     fn tag(&self) -> &'static str {
         match self {
             Self::Welcome(_) => "welcome",
@@ -280,13 +277,13 @@ impl NativeServerMessage {
         }
     }
 
-    /// Serialize a server push message into the native websocket envelope shape.
+    /// Serialize a server push message into the protocol websocket envelope shape.
     ///
     /// # Errors
     ///
     /// Returns an error if the payload cannot be serialized to JSON.
-    pub fn into_envelope(self) -> Result<NativeEnvelope, serde_json::Error> {
-        Ok(NativeEnvelope::message(
+    pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
+        Ok(Envelope::message(
             self.tag(),
             Some(match self {
                 Self::Welcome(payload) => serde_json::to_value(payload)?,
@@ -303,13 +300,13 @@ impl NativeServerMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeServerRequest {
-    Offer(NativeSessionDescriptionPayload),
-    Renegotiate(NativeSessionDescriptionPayload),
+pub enum ServerRequest {
+    Offer(SessionDescriptionPayload),
+    Renegotiate(SessionDescriptionPayload),
     Ping,
 }
 
-impl NativeServerRequest {
+impl ServerRequest {
     fn tag(&self) -> &'static str {
         match self {
             Self::Offer(_) => "offer",
@@ -318,16 +315,13 @@ impl NativeServerRequest {
         }
     }
 
-    /// Serialize a server request into the native websocket envelope shape.
+    /// Serialize a server request into the protocol websocket envelope shape.
     ///
     /// # Errors
     ///
     /// Returns an error if the payload cannot be serialized to JSON.
-    pub fn into_envelope(
-        self,
-        request_id: NativeRequestId,
-    ) -> Result<NativeEnvelope, serde_json::Error> {
-        Ok(NativeEnvelope::request(
+    pub fn into_envelope(self, request_id: RequestId) -> Result<Envelope, serde_json::Error> {
+        Ok(Envelope::request(
             self.tag(),
             request_id,
             match self {
@@ -341,12 +335,12 @@ impl NativeServerRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeServerResponse {
-    StartRecording(NativeRecordingActionResult),
-    StopRecording(NativeRecordingActionResult),
+pub enum ServerResponse {
+    StartRecording(RecordingActionResult),
+    StopRecording(RecordingActionResult),
 }
 
-impl NativeServerResponse {
+impl ServerResponse {
     fn tag(&self) -> &'static str {
         match self {
             Self::StartRecording(_) => "startrecording",
@@ -354,16 +348,13 @@ impl NativeServerResponse {
         }
     }
 
-    /// Serialize a server response into the native websocket envelope shape.
+    /// Serialize a server response into the protocol websocket envelope shape.
     ///
     /// # Errors
     ///
     /// Returns an error if the payload cannot be serialized to JSON.
-    pub fn into_envelope(
-        self,
-        response_to: NativeRequestId,
-    ) -> Result<NativeEnvelope, serde_json::Error> {
-        Ok(NativeEnvelope::response(
+    pub fn into_envelope(self, response_to: RequestId) -> Result<Envelope, serde_json::Error> {
+        Ok(Envelope::response(
             self.tag(),
             response_to,
             Some(match self {
@@ -376,33 +367,33 @@ impl NativeServerResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeClientEnvelope {
-    Message(NativeClientMessage),
+pub enum ClientEnvelope {
+    Message(ClientMessage),
     Request {
-        request_id: NativeRequestId,
-        request: NativeClientRequest,
+        request_id: RequestId,
+        request: ClientRequest,
     },
     Response {
-        response_to: NativeRequestId,
-        response: NativeClientResponse,
+        response_to: RequestId,
+        response: ClientResponse,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeEnvelopeDecodeError {
+pub enum EnvelopeDecodeError {
     InvalidRoutingMetadata,
     UnknownTag(String),
     InvalidPayload(String),
     UnexpectedPayload(String),
 }
 
-impl NativeClientEnvelope {
-    /// Serialize a typed client-side envelope into the native websocket shape.
+impl ClientEnvelope {
+    /// Serialize a typed client-side envelope into the protocol websocket shape.
     ///
     /// # Errors
     ///
     /// Returns an error if the payload cannot be serialized to JSON.
-    pub fn into_envelope(self) -> Result<NativeEnvelope, serde_json::Error> {
+    pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Message(message) => message.into_envelope(),
             Self::Request {
@@ -413,19 +404,17 @@ impl NativeClientEnvelope {
                 response_to,
                 response,
             } => match response {
-                NativeClientResponse::Offer(payload) => Ok(NativeEnvelope::response(
+                ClientResponse::Offer(payload) => Ok(Envelope::response(
                     "offer",
                     response_to,
                     Some(serde_json::to_value(payload)?),
                 )),
-                NativeClientResponse::Renegotiate(payload) => Ok(NativeEnvelope::response(
+                ClientResponse::Renegotiate(payload) => Ok(Envelope::response(
                     "renegotiate",
                     response_to,
                     Some(serde_json::to_value(payload)?),
                 )),
-                NativeClientResponse::Ping => {
-                    Ok(NativeEnvelope::response("ping", response_to, None))
-                }
+                ClientResponse::Ping => Ok(Envelope::response("ping", response_to, None)),
             },
         }
     }
@@ -436,9 +425,9 @@ impl NativeClientEnvelope {
     ///
     /// Returns an error when the routing metadata is invalid, the tag is unknown,
     /// or the payload does not match the declared message shape.
-    pub fn decode(envelope: NativeEnvelope) -> Result<Self, NativeEnvelopeDecodeError> {
+    pub fn decode(envelope: Envelope) -> Result<Self, EnvelopeDecodeError> {
         match (envelope.request_id, envelope.response_to) {
-            (Some(_), Some(_)) => Err(NativeEnvelopeDecodeError::InvalidRoutingMetadata),
+            (Some(_), Some(_)) => Err(EnvelopeDecodeError::InvalidRoutingMetadata),
             (None, Some(response_to)) => {
                 decode_client_response(response_to, &envelope.tag, envelope.payload)
             }
@@ -453,66 +442,66 @@ impl NativeClientEnvelope {
 fn decode_client_message(
     tag: &str,
     payload: Option<Value>,
-) -> Result<NativeClientEnvelope, NativeEnvelopeDecodeError> {
+) -> Result<ClientEnvelope, EnvelopeDecodeError> {
     match tag {
-        "auth" => Ok(NativeClientEnvelope::Message(NativeClientMessage::Auth(
+        "auth" => Ok(ClientEnvelope::Message(ClientMessage::Auth(parse_payload(
+            tag, payload,
+        )?))),
+        "publish" => Ok(ClientEnvelope::Message(ClientMessage::Publish(
             parse_payload(tag, payload)?,
         ))),
-        "publish" => Ok(NativeClientEnvelope::Message(NativeClientMessage::Publish(
+        "unpublish" => Ok(ClientEnvelope::Message(ClientMessage::Unpublish(
             parse_payload(tag, payload)?,
         ))),
-        "unpublish" => Ok(NativeClientEnvelope::Message(
-            NativeClientMessage::Unpublish(parse_payload(tag, payload)?),
-        )),
-        "subscribe" => Ok(NativeClientEnvelope::Message(
-            NativeClientMessage::Subscribe(parse_payload(tag, payload)?),
-        )),
-        "info" => Ok(NativeClientEnvelope::Message(NativeClientMessage::Info(
+        "subscribe" => Ok(ClientEnvelope::Message(ClientMessage::Subscribe(
             parse_payload(tag, payload)?,
         ))),
-        "broadcast" => Ok(NativeClientEnvelope::Message(
-            NativeClientMessage::Broadcast(parse_payload(tag, payload)?),
-        )),
-        _ => Err(NativeEnvelopeDecodeError::UnknownTag(tag.to_owned())),
+        "info" => Ok(ClientEnvelope::Message(ClientMessage::Info(parse_payload(
+            tag, payload,
+        )?))),
+        "broadcast" => Ok(ClientEnvelope::Message(ClientMessage::Broadcast(
+            parse_payload(tag, payload)?,
+        ))),
+        _ => Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     }
 }
 
 fn decode_client_request(
-    request_id: NativeRequestId,
+    request_id: RequestId,
     tag: &str,
     payload: Option<Value>,
-) -> Result<NativeClientEnvelope, NativeEnvelopeDecodeError> {
+) -> Result<ClientEnvelope, EnvelopeDecodeError> {
     match tag {
-        "startrecording" => Ok(NativeClientEnvelope::Request {
+        "startrecording" => Ok(ClientEnvelope::Request {
             request_id,
-            request: NativeClientRequest::StartRecording(parse_payload(tag, payload)?),
+            request: ClientRequest::StartRecording(parse_payload(tag, payload)?),
         }),
         "stoprecording" => {
             ensure_empty_payload(tag, payload.as_ref())?;
-            Ok(NativeClientEnvelope::Request {
+            Ok(ClientEnvelope::Request {
                 request_id,
-                request: NativeClientRequest::StopRecording,
+                request: ClientRequest::StopRecording,
             })
         }
-        _ => Err(NativeEnvelopeDecodeError::UnknownTag(tag.to_owned())),
+        _ => Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     }
 }
 
 fn decode_client_response(
-    response_to: NativeRequestId,
+    response_to: RequestId,
     tag: &str,
     payload: Option<Value>,
-) -> Result<NativeClientEnvelope, NativeEnvelopeDecodeError> {
+) -> Result<ClientEnvelope, EnvelopeDecodeError> {
     let response = match tag {
-        "offer" => NativeClientResponse::Offer(parse_payload(tag, payload)?),
-        "renegotiate" => NativeClientResponse::Renegotiate(parse_payload(tag, payload)?),
+        "offer" => ClientResponse::Offer(parse_payload(tag, payload)?),
+        "renegotiate" => ClientResponse::Renegotiate(parse_payload(tag, payload)?),
         "ping" => {
             ensure_empty_payload(tag, payload.as_ref())?;
-            NativeClientResponse::Ping
+            ClientResponse::Ping
         }
-        _ => return Err(NativeEnvelopeDecodeError::UnknownTag(tag.to_owned())),
+        _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     };
-    Ok(NativeClientEnvelope::Response {
+    Ok(ClientEnvelope::Response {
         response_to,
         response,
     })
@@ -521,19 +510,16 @@ fn decode_client_response(
 fn parse_payload<T: DeserializeOwned>(
     tag: &str,
     payload: Option<Value>,
-) -> Result<T, NativeEnvelopeDecodeError> {
+) -> Result<T, EnvelopeDecodeError> {
     serde_json::from_value(
-        payload.ok_or_else(|| NativeEnvelopeDecodeError::InvalidPayload(tag.to_owned()))?,
+        payload.ok_or_else(|| EnvelopeDecodeError::InvalidPayload(tag.to_owned()))?,
     )
-    .map_err(|_error| NativeEnvelopeDecodeError::InvalidPayload(tag.to_owned()))
+    .map_err(|_error| EnvelopeDecodeError::InvalidPayload(tag.to_owned()))
 }
 
-fn ensure_empty_payload(
-    tag: &str,
-    payload: Option<&Value>,
-) -> Result<(), NativeEnvelopeDecodeError> {
+fn ensure_empty_payload(tag: &str, payload: Option<&Value>) -> Result<(), EnvelopeDecodeError> {
     if payload.is_some() {
-        return Err(NativeEnvelopeDecodeError::UnexpectedPayload(tag.to_owned()));
+        return Err(EnvelopeDecodeError::UnexpectedPayload(tag.to_owned()));
     }
     Ok(())
 }
@@ -543,35 +529,32 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeClientRequest,
-        NativeClientResponse, NativeEnvelope, NativeEnvelopeDecodeError, NativePeerInfoPayload,
-        NativePeerLeftPayload, NativePeerSnapshot, NativeRecordingActionResult,
-        NativeRecordingOptions, NativeRequestId, NativeServerBroadcastPayload, NativeServerMessage,
-        NativeServerRequest, NativeServerResponse, NativeSessionDescriptionPayload,
-        NativeStreamIntentPayload, NativeSubscribePayload, NativeTrackBinding,
-        NativeWebSocketCloseCode, NativeWelcomePayload,
+        AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse, Envelope,
+        EnvelopeDecodeError, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
+        RecordingOptions, RequestId, ServerBroadcastPayload, ServerMessage, ServerRequest,
+        ServerResponse, SessionDescriptionPayload, StreamIntentPayload, SubscribePayload,
+        TrackBinding, WebSocketCloseCode, WelcomePayload,
     };
-    use crate::signaling::shared::{
+    use crate::shared::{
         AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
         SessionInfo, StopCode, StreamType,
     };
 
     #[test]
-    fn native_close_codes_follow_phase_nine_contract() {
-        assert_eq!(u16::from(NativeWebSocketCloseCode::AuthFailed), 4001);
-        assert_eq!(u16::from(NativeWebSocketCloseCode::AuthTimeout), 4002);
-        assert_eq!(u16::from(NativeWebSocketCloseCode::Kicked), 4003);
-        assert_eq!(u16::from(NativeWebSocketCloseCode::ChannelFull), 4004);
+    fn protocol_close_codes_follow_phase_nine_contract() {
+        assert_eq!(u16::from(WebSocketCloseCode::AuthFailed), 4001);
+        assert_eq!(u16::from(WebSocketCloseCode::AuthTimeout), 4002);
+        assert_eq!(u16::from(WebSocketCloseCode::Kicked), 4003);
+        assert_eq!(u16::from(WebSocketCloseCode::ChannelFull), 4004);
     }
 
     #[test]
-    fn native_client_auth_message_round_trips_to_wire_envelope() -> serde_json::Result<()> {
-        let envelope =
-            NativeClientEnvelope::Message(NativeClientMessage::Auth(NativeAuthPayload {
-                jwt: String::from("jwt-token"),
-                channel: Some(String::from("channel-1")),
-            }))
-            .into_envelope()?;
+    fn protocol_client_auth_message_round_trips_to_wire_envelope() -> serde_json::Result<()> {
+        let envelope = ClientEnvelope::Message(ClientMessage::Auth(AuthPayload {
+            jwt: String::from("jwt-token"),
+            channel: Some(String::from("channel-1")),
+        }))
+        .into_envelope()?;
         assert_eq!(
             serde_json::to_value(&envelope)?,
             json!({
@@ -586,22 +569,22 @@ mod tests {
     }
 
     #[test]
-    fn native_start_recording_request_decodes_with_request_id() {
-        let decoded = NativeClientEnvelope::decode(NativeEnvelope {
+    fn protocol_start_recording_request_decodes_with_request_id() {
+        let decoded = ClientEnvelope::decode(Envelope {
             tag: String::from("startrecording"),
             payload: Some(json!({
                 "audio": true,
                 "video": false,
             })),
-            request_id: Some(NativeRequestId::new("3")),
+            request_id: Some(RequestId::new("3")),
             response_to: None,
         });
 
         assert_eq!(
             decoded,
-            Ok(NativeClientEnvelope::Request {
-                request_id: NativeRequestId::new("3"),
-                request: NativeClientRequest::StartRecording(NativeRecordingOptions {
+            Ok(ClientEnvelope::Request {
+                request_id: RequestId::new("3"),
+                request: ClientRequest::StartRecording(RecordingOptions {
                     audio: Some(true),
                     video: Some(false),
                     transcription: None,
@@ -611,21 +594,21 @@ mod tests {
     }
 
     #[test]
-    fn native_offer_response_decodes_with_response_id() {
-        let decoded = NativeClientEnvelope::decode(NativeEnvelope {
+    fn protocol_offer_response_decodes_with_response_id() {
+        let decoded = ClientEnvelope::decode(Envelope {
             tag: String::from("offer"),
             payload: Some(json!({
                 "sdp": "v=0\r\n",
             })),
             request_id: None,
-            response_to: Some(NativeRequestId::new("1")),
+            response_to: Some(RequestId::new("1")),
         });
 
         assert_eq!(
             decoded,
-            Ok(NativeClientEnvelope::Response {
-                response_to: NativeRequestId::new("1"),
-                response: NativeClientResponse::Offer(NativeSessionDescriptionPayload {
+            Ok(ClientEnvelope::Response {
+                response_to: RequestId::new("1"),
+                response: ClientResponse::Offer(SessionDescriptionPayload {
                     sdp: String::from("v=0\r\n"),
                 }),
             })
@@ -633,8 +616,8 @@ mod tests {
     }
 
     #[test]
-    fn native_subscribe_message_decodes_flat_download_state_shape() {
-        let decoded = NativeClientEnvelope::decode(NativeEnvelope {
+    fn protocol_subscribe_message_decodes_flat_download_state_shape() {
+        let decoded = ClientEnvelope::decode(Envelope {
             tag: String::from("subscribe"),
             payload: Some(json!({
                 "sessionId": 7,
@@ -647,37 +630,34 @@ mod tests {
 
         assert_eq!(
             decoded,
-            Ok(NativeClientEnvelope::Message(
-                NativeClientMessage::Subscribe(NativeSubscribePayload {
+            Ok(ClientEnvelope::Message(ClientMessage::Subscribe(
+                SubscribePayload {
                     session_id: SessionId::Integer(7),
                     states: DownloadStates {
                         audio: Some(true),
                         camera: Some(false),
                         screen: None,
                     },
-                })
-            ))
+                }
+            )))
         );
     }
 
     #[test]
-    fn native_decode_rejects_envelopes_with_both_request_and_response_ids() {
-        let decoded = NativeClientEnvelope::decode(NativeEnvelope {
+    fn protocol_decode_rejects_envelopes_with_both_request_and_response_ids() {
+        let decoded = ClientEnvelope::decode(Envelope {
             tag: String::from("ping"),
             payload: None,
-            request_id: Some(NativeRequestId::new("1")),
-            response_to: Some(NativeRequestId::new("2")),
+            request_id: Some(RequestId::new("1")),
+            response_to: Some(RequestId::new("2")),
         });
 
-        assert_eq!(
-            decoded,
-            Err(NativeEnvelopeDecodeError::InvalidRoutingMetadata)
-        );
+        assert_eq!(decoded, Err(EnvelopeDecodeError::InvalidRoutingMetadata));
     }
 
     #[test]
-    fn native_welcome_message_round_trips_to_wire_envelope() -> serde_json::Result<()> {
-        let welcome = NativeServerMessage::Welcome(NativeWelcomePayload {
+    fn protocol_welcome_message_round_trips_to_wire_envelope() -> serde_json::Result<()> {
+        let welcome = ServerMessage::Welcome(WelcomePayload {
             features: AvailableFeatures {
                 rtc: true,
                 transcription: false,
@@ -690,7 +670,7 @@ mod tests {
                 transcription: Some(false),
                 video: Some(false),
             },
-            peers: vec![NativePeerSnapshot {
+            peers: vec![PeerSnapshot {
                 session_id: SessionId::String(String::from("alice")),
                 info: SessionInfo {
                     is_talking: Some(true),
@@ -729,8 +709,8 @@ mod tests {
     }
 
     #[test]
-    fn native_publish_message_uses_stream_type_field() -> serde_json::Result<()> {
-        let envelope = NativeClientMessage::Publish(NativeStreamIntentPayload {
+    fn protocol_publish_message_uses_stream_type_field() -> serde_json::Result<()> {
+        let envelope = ClientMessage::Publish(StreamIntentPayload {
             stream_type: StreamType::Screen,
         })
         .into_envelope()?;
@@ -747,9 +727,9 @@ mod tests {
     }
 
     #[test]
-    fn native_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> serde_json::Result<()>
-    {
-        let track_update = NativeServerMessage::Tracks(vec![NativeTrackBinding {
+    fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes()
+    -> serde_json::Result<()> {
+        let track_update = ServerMessage::Tracks(vec![TrackBinding {
             mid: String::from("0"),
             session_id: SessionId::Integer(5),
             stream_type: StreamType::Camera,
@@ -769,7 +749,7 @@ mod tests {
             })
         );
 
-        let peer_joined = NativeServerMessage::PeerJoined(NativePeerInfoPayload {
+        let peer_joined = ServerMessage::PeerJoined(PeerInfoPayload {
             session_id: SessionId::Integer(9),
             info: SessionInfo {
                 is_camera_on: Some(true),
@@ -790,7 +770,7 @@ mod tests {
             })
         );
 
-        let peer_left = NativeServerMessage::PeerLeft(NativePeerLeftPayload {
+        let peer_left = ServerMessage::PeerLeft(PeerLeftPayload {
             session_id: SessionId::Integer(9),
         })
         .into_envelope()?;
@@ -807,9 +787,9 @@ mod tests {
     }
 
     #[test]
-    fn native_server_broadcast_and_recording_messages_round_trip_to_wire_envelopes()
+    fn protocol_server_broadcast_and_recording_messages_round_trip_to_wire_envelopes()
     -> serde_json::Result<()> {
-        let broadcast = NativeServerMessage::Broadcast(NativeServerBroadcastPayload {
+        let broadcast = ServerMessage::Broadcast(ServerBroadcastPayload {
             sender_id: SessionId::String(String::from("bob")),
             message: json!({"text": "hello"}),
         })
@@ -827,7 +807,7 @@ mod tests {
             })
         );
 
-        let recording_change = NativeServerMessage::RecordingChange(RecordingStateUpdate {
+        let recording_change = ServerMessage::RecordingChange(RecordingStateUpdate {
             state: RecordingState {
                 recording: Some(true),
                 audio: Some(true),
@@ -856,12 +836,12 @@ mod tests {
     }
 
     #[test]
-    fn native_server_requests_and_responses_round_trip_to_wire_envelopes() -> serde_json::Result<()>
-    {
-        let offer = NativeServerRequest::Offer(NativeSessionDescriptionPayload {
+    fn protocol_server_requests_and_responses_round_trip_to_wire_envelopes()
+    -> serde_json::Result<()> {
+        let offer = ServerRequest::Offer(SessionDescriptionPayload {
             sdp: String::from("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"),
         })
-        .into_envelope(NativeRequestId::new("1"))?;
+        .into_envelope(RequestId::new("1"))?;
         assert_eq!(
             serde_json::to_value(&offer)?,
             json!({
@@ -873,7 +853,7 @@ mod tests {
             })
         );
 
-        let ping = NativeServerRequest::Ping.into_envelope(NativeRequestId::new("4"))?;
+        let ping = ServerRequest::Ping.into_envelope(RequestId::new("4"))?;
         assert_eq!(
             serde_json::to_value(&ping)?,
             json!({
@@ -882,9 +862,8 @@ mod tests {
             })
         );
 
-        let start_recording =
-            NativeServerResponse::StartRecording(NativeRecordingActionResult { ok: true })
-                .into_envelope(NativeRequestId::new("3"))?;
+        let start_recording = ServerResponse::StartRecording(RecordingActionResult { ok: true })
+            .into_envelope(RequestId::new("3"))?;
         assert_eq!(
             serde_json::to_value(&start_recording)?,
             json!({

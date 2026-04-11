@@ -16,7 +16,7 @@ use crate::runtime::{
 };
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest},
-    native_protocol::NativeWebSocketCloseCode,
+    protocol::WebSocketCloseCode,
 };
 
 pub(super) async fn run(
@@ -54,7 +54,7 @@ pub(super) async fn run(
                 }
             }, if ping_response_deadline.is_some() => {
                 info!("timed out waiting for websocket bus ping response");
-                close_writer(writer, NativeWebSocketCloseCode::Error).await;
+                close_writer(writer, WebSocketCloseCode::Error).await;
                 return WsSessionLoopExitReason::PingTimeout;
             }
             message = reader.next() => {
@@ -182,7 +182,7 @@ async fn handle_outbound_request(
 
 async fn handle_outbound_close(
     writer: &mut WsWriter,
-    code: NativeWebSocketCloseCode,
+    code: WebSocketCloseCode,
 ) -> Option<WsSessionLoopExitReason> {
     info!(
         close_code = u16::from(code),

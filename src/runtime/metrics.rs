@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::signaling::native_protocol::NativeWebSocketCloseCode;
+use crate::signaling::protocol::WebSocketCloseCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WsSessionLoopExitReason {
@@ -219,26 +219,23 @@ impl RuntimeMetrics {
         increment(&self.ws_handshake_credentials_received);
     }
 
-    pub(super) fn record_ws_handshake_rejection(
-        &self,
-        close_code: Option<NativeWebSocketCloseCode>,
-    ) {
+    pub(super) fn record_ws_handshake_rejection(&self, close_code: Option<WebSocketCloseCode>) {
         match close_code {
-            Some(NativeWebSocketCloseCode::AuthTimeout) => {
+            Some(WebSocketCloseCode::AuthTimeout) => {
                 increment(&self.ws_handshake_rejected_timeout);
             }
-            Some(NativeWebSocketCloseCode::AuthFailed) => {
+            Some(WebSocketCloseCode::AuthFailed) => {
                 increment(&self.ws_handshake_rejected_authentication_failed);
             }
-            Some(NativeWebSocketCloseCode::ChannelFull) => {
+            Some(WebSocketCloseCode::ChannelFull) => {
                 increment(&self.ws_handshake_rejected_channel_full);
             }
             Some(
-                NativeWebSocketCloseCode::Error
-                | NativeWebSocketCloseCode::Clean
-                | NativeWebSocketCloseCode::Leaving
-                | NativeWebSocketCloseCode::ProtocolError
-                | NativeWebSocketCloseCode::Kicked,
+                WebSocketCloseCode::Error
+                | WebSocketCloseCode::Clean
+                | WebSocketCloseCode::Leaving
+                | WebSocketCloseCode::ProtocolError
+                | WebSocketCloseCode::Kicked,
             )
             | None => increment(&self.ws_handshake_rejected_error),
         }
@@ -350,7 +347,7 @@ fn load(counter: &AtomicU64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{RuntimeMetrics, WsSessionLoopExitReason};
-    use crate::signaling::native_protocol::NativeWebSocketCloseCode;
+    use crate::signaling::protocol::WebSocketCloseCode;
 
     #[test]
     fn metrics_snapshot_tracks_http_and_websocket_counters() {
@@ -361,7 +358,7 @@ mod tests {
         metrics.record_http_disconnect_unprocessable_entity();
         metrics.record_ws_connection_accepted();
         metrics.record_ws_handshake_credentials_received();
-        metrics.record_ws_handshake_rejection(Some(NativeWebSocketCloseCode::AuthTimeout));
+        metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::AuthTimeout));
         metrics.record_ws_session_joined();
         metrics.record_ws_session_loop_started();
         metrics.record_ws_session_loop_exit(WsSessionLoopExitReason::PeerClosed);
@@ -395,9 +392,9 @@ mod tests {
     #[test]
     fn handshake_rejection_buckets_are_distinct() {
         let metrics = RuntimeMetrics::default();
-        metrics.record_ws_handshake_rejection(Some(NativeWebSocketCloseCode::AuthFailed));
-        metrics.record_ws_handshake_rejection(Some(NativeWebSocketCloseCode::ChannelFull));
-        metrics.record_ws_handshake_rejection(Some(NativeWebSocketCloseCode::Error));
+        metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::AuthFailed));
+        metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::ChannelFull));
+        metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::Error));
         let snapshot = metrics.snapshot();
 
         assert_eq!(snapshot.ws_handshake_rejected_authentication_failed, 1);

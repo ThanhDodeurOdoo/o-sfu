@@ -17,7 +17,7 @@ use crate::runtime::{
     channel::{Channel, SessionOutbound},
     stub_bus::{StubBusSession, WsWriter},
 };
-use crate::signaling::{native_protocol::NativeWebSocketCloseCode, shared::SessionId};
+use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 
@@ -89,7 +89,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     .await;
 }
 
-pub(crate) async fn close_writer(writer: &mut WsWriter, close_code: NativeWebSocketCloseCode) {
+pub(crate) async fn close_writer(writer: &mut WsWriter, close_code: WebSocketCloseCode) {
     let _result = writer
         .send(Message::Close(Some(CloseFrame {
             code: u16::from(close_code),

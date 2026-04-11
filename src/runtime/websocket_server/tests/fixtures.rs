@@ -32,10 +32,7 @@ pub(super) use crate::{
             CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
             CurrentStartupPayload, CurrentTransportConnectPayload, CurrentWebSocketCredentials,
         },
-        native_protocol::{
-            NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeEnvelopeBatch,
-            NativeWelcomePayload,
-        },
+        protocol::{AuthPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, WelcomePayload},
         shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
         webrtc::{DtlsFingerprint, DtlsParameters, MediaKind, RtpParameters},
     },
@@ -209,7 +206,7 @@ pub(super) async fn authenticate_with_jwt(
     token: &str,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = encode_native_auth(NativeAuthPayload {
+    let payload = encode_native_auth(AuthPayload {
         jwt: token.to_owned(),
         channel: None,
     })?;
@@ -225,7 +222,7 @@ pub(super) async fn authenticate_with_credentials(
     credentials: &CurrentWebSocketCredentials,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = encode_native_auth(NativeAuthPayload {
+    let payload = encode_native_auth(AuthPayload {
         jwt: credentials.jwt.clone(),
         channel: credentials.channel_uuid.clone(),
     })?;
@@ -249,9 +246,9 @@ pub(super) async fn authenticate_and_read_startup(
     Some((websocket, startup))
 }
 
-pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<NativeWelcomePayload> {
+pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
-    let batch = serde_json::from_str::<NativeEnvelopeBatch>(&payload).ok()?;
+    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
     let envelope = batch.first()?;
     if envelope.tag != "welcome" {
         return None;
@@ -330,8 +327,8 @@ pub(super) async fn respond_to_server_request(
     Some(())
 }
 
-fn encode_native_auth(auth_payload: NativeAuthPayload) -> Option<String> {
-    let envelope = NativeClientEnvelope::Message(NativeClientMessage::Auth(auth_payload))
+fn encode_native_auth(auth_payload: AuthPayload) -> Option<String> {
+    let envelope = ClientEnvelope::Message(ClientMessage::Auth(auth_payload))
         .into_envelope()
         .ok()?;
     serde_json::to_string(&vec![envelope]).ok()

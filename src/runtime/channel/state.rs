@@ -15,8 +15,8 @@ use crate::signaling::{
         CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
         CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById,
     },
-    native_protocol::NativeWebSocketCloseCode,
     ortc_mapper,
+    protocol::WebSocketCloseCode,
     shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
     webrtc::{
         MediaKind as SignalingMediaKind, RtpCapabilities as SignalingRtpCapabilities, RtpParameters,
@@ -146,7 +146,7 @@ pub(super) struct JoinSessionOutcome {
 impl JoinSessionOutcome {
     pub(super) fn emit(self) {
         if let Some(sender) = self.replaced_sender {
-            let _ = sender.send(SessionOutbound::Close(NativeWebSocketCloseCode::Kicked));
+            let _ = sender.send(SessionOutbound::Close(WebSocketCloseCode::Kicked));
         }
         if let Some(fanout) = self.departure_fanout {
             fanout.emit();
@@ -185,7 +185,7 @@ pub(super) struct DisconnectSessionsOutcome {
 impl DisconnectSessionsOutcome {
     pub(super) fn emit(self) {
         for sender in self.kicked_senders {
-            let _ = sender.send(SessionOutbound::Close(NativeWebSocketCloseCode::Kicked));
+            let _ = sender.send(SessionOutbound::Close(WebSocketCloseCode::Kicked));
         }
         for fanout in self.departure_fanouts {
             fanout.emit();

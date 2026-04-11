@@ -1181,6 +1181,7 @@ dependencies = [
  "criterion",
  "futures-util",
  "hmac",
+ "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",
  "reqwest",
@@ -1196,6 +1197,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "o-sfu-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -64,7 +64,7 @@ async fn websocket_authenticates_with_channel_key_and_sends_welcome_payload() {
     };
     assert_eq!(
         welcome,
-        NativeWelcomePayload {
+        WelcomePayload {
             features: AvailableFeatures {
                 rtc: true,
                 transcription: false,

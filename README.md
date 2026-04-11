@@ -4,10 +4,13 @@
 
 # o-sfu
 
-- `router/`: isolated router crate for the core routing domain.
+WORK IN PROGRESS, MAY CHANGE, MAY BE OPUT OF DATE
+- `protocol/`: shared bundle and signaling contract crate that will feed both the server and the future client/WASM core
+- `client/`: TypeScript browser-shell groundwork for the future bundle that can replace the current odoo sfu bundle
+- `router/`: isolated router crate
 - `src/runtime.rs`: application bootstrap shell around the core crates.
-- `src/signaling.rs` + `src/signaling/`: frozen bundle-facing contract types, current wire reference types, auth claims, transport/bootstrap primitives, ...
-  The first replacement prototype keeps the current wire protocol under a bundle (that will be added to odoo codebase) contract so the Odoo-facing API stays stable while the server runtime is replaced
+- `src/signaling.rs` + `src/signaling/`: server signaling side, auth claims, current wire reference types, and transiitonal re-exports for the extracted protocol crate.
+  The first replacement prototype keeps the current wire protocol as a bundle (that will be added to odoo codebase) contract so the Odoo-facing API stays stable while the server runtime is repalced (ideally we just hot swap the client bundle, at least thats the goal...)
 
 > [!WARNING]  
 > Early phase of developments, the readme may not be up to date, or be incorrect.
@@ -22,6 +25,9 @@ cargo fmt
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features
 ```
+NOTE: will do proper typescript check later
+TODO: copy the liting and formatting rules from odoo/sfu
+TODO: add yml github action to run tests and lint checks
 
 Kani proofs are not run by `cargo test`. Install Kani separately:
 

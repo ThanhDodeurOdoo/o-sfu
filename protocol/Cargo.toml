@@ -1,0 +1,15 @@
+[package]
+description = "Shared o-sfu bundle and signaling protocol types"
+name = "o-sfu-protocol"
+
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

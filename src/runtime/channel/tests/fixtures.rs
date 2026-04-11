@@ -17,7 +17,7 @@ pub(super) use crate::runtime::transport_adapter::{
 };
 pub(super) use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest},
-    native_protocol::NativeWebSocketCloseCode,
+    protocol::WebSocketCloseCode,
     shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
     webrtc::{MediaKind, RtpCapabilities, RtpParameters},
 };

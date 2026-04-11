@@ -23,7 +23,7 @@ use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest},
-    native_protocol::{NativePeerSnapshot, NativeWebSocketCloseCode},
+    protocol::{PeerSnapshot, WebSocketCloseCode},
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
 };
 
@@ -33,7 +33,7 @@ use super::state::ChannelState;
 pub enum SessionOutbound {
     Message(CurrentServerMessage),
     Request(Box<CurrentServerRequest>),
-    Close(NativeWebSocketCloseCode),
+    Close(WebSocketCloseCode),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,14 +173,14 @@ impl Channel {
     pub(crate) async fn peer_snapshots_except(
         &self,
         excluded_session_id: &SessionId,
-    ) -> Vec<NativePeerSnapshot> {
+    ) -> Vec<PeerSnapshot> {
         self.state
             .read()
             .await
             .sessions
             .iter()
             .filter(|(session_id, _session)| *session_id != excluded_session_id)
-            .map(|(session_id, session)| NativePeerSnapshot {
+            .map(|(session_id, session)| PeerSnapshot {
                 session_id: session_id.clone(),
                 info: session.info.clone(),
             })

@@ -30,9 +30,9 @@ use o_sfu::{
             CurrentStartupPayload, CurrentWebSocketCredentials,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
-        native_protocol::{
-            NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeEnvelopeBatch,
-            NativeServerMessage, NativeWelcomePayload,
+        protocol::{
+            AuthPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, ServerMessage,
+            WelcomePayload,
         },
         shared::{SessionId, SessionPermissions},
     },
@@ -188,7 +188,7 @@ impl FakeWebSocketClient {
         })
     }
 
-    pub async fn read_welcome(&mut self) -> Option<NativeWelcomePayload> {
+    pub async fn read_welcome(&mut self) -> Option<WelcomePayload> {
         read_welcome(&mut self.websocket).await
     }
 
@@ -244,7 +244,7 @@ pub async fn authenticate_with_credentials(
     credentials: &CurrentWebSocketCredentials,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = encode_native_auth(NativeAuthPayload {
+    let payload = encode_native_auth(AuthPayload {
         jwt: credentials.jwt.clone(),
         channel: credentials.channel_uuid.clone(),
     })?;
@@ -257,7 +257,7 @@ pub async fn authenticate_with_credentials(
 
 pub async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = encode_native_auth(NativeAuthPayload {
+    let payload = encode_native_auth(AuthPayload {
         jwt: token.to_owned(),
         channel: None,
     })?;
@@ -284,30 +284,29 @@ pub async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> O
     Some(())
 }
 
-fn encode_native_auth(auth_payload: NativeAuthPayload) -> Option<String> {
-    let envelope = NativeClientEnvelope::Message(NativeClientMessage::Auth(auth_payload))
+fn encode_native_auth(auth_payload: AuthPayload) -> Option<String> {
+    let envelope = ClientEnvelope::Message(ClientMessage::Auth(auth_payload))
         .into_envelope()
         .ok()?;
     serde_json::to_string(&vec![envelope]).ok()
 }
 
-pub async fn read_welcome(websocket: &mut TestWebSocket) -> Option<NativeWelcomePayload> {
+pub async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
-    let batch = serde_json::from_str::<NativeEnvelopeBatch>(&payload).ok()?;
+    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
     let envelope = batch.first()?;
     if envelope.tag != "welcome" {
         return None;
     }
-    let message =
-        NativeServerMessage::Welcome(serde_json::from_value(envelope.payload.clone()?).ok()?);
+    let message = ServerMessage::Welcome(serde_json::from_value(envelope.payload.clone()?).ok()?);
     match message {
-        NativeServerMessage::Welcome(welcome) => Some(welcome),
-        NativeServerMessage::Tracks(_)
-        | NativeServerMessage::PeerInfo(_)
-        | NativeServerMessage::PeerJoined(_)
-        | NativeServerMessage::PeerLeft(_)
-        | NativeServerMessage::Broadcast(_)
-        | NativeServerMessage::RecordingChange(_) => None,
+        ServerMessage::Welcome(welcome) => Some(welcome),
+        ServerMessage::Tracks(_)
+        | ServerMessage::PeerInfo(_)
+        | ServerMessage::PeerJoined(_)
+        | ServerMessage::PeerLeft(_)
+        | ServerMessage::Broadcast(_)
+        | ServerMessage::RecordingChange(_) => None,
     }
 }
 
