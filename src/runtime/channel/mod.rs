@@ -6,6 +6,7 @@
 //! - `membership`: join/leave, session-info fan-out, and transport readiness
 //! - `media`: producer/consumer bootstrap plus upload/download activity transitions
 //! - `outbound`: shared outbound fan-out helpers for session handlers
+//! - `session_negotiation`: explicit transport/bootstrap readiness state for one session
 //! - `state`: channel-local mutable state and internal bootstrap bookkeeping
 //! - `router_state`: compatibility bridge from signaling session ids into the pure router
 //! - `topology`: channel-local routing placement boundary
@@ -20,6 +21,7 @@ mod membership;
 mod outbound;
 mod router_state;
 mod rtp_capabilities;
+mod session_negotiation;
 mod state;
 #[cfg(test)]
 mod tests;

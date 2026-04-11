@@ -7,7 +7,10 @@ use crate::signaling::{
     webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
 
-use super::{Channel, ChannelJoinError, SessionOutbound, outbound::fanout_all_except};
+use super::{
+    Channel, ChannelJoinError, SessionOutbound, outbound::fanout_all_except,
+    session_negotiation::SessionNegotiationUpdate,
+};
 
 impl Channel {
     pub async fn join_session(
@@ -81,7 +84,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         capabilities: SignalingRtpCapabilities,
-    ) -> bool {
+    ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         state.set_client_rtp_capabilities(session_id, capabilities)
     }
@@ -90,7 +93,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         direction: TransportConnectDirection,
-    ) -> bool {
+    ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         state.set_transport_connected(session_id, direction)
     }

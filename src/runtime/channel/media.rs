@@ -50,7 +50,7 @@ impl Channel {
         let (publisher_connection_id, router_capabilities) = {
             let state = self.state.read().await;
             let session = state.sessions.get(session_id)?;
-            if !session.upload_transport_connected {
+            if !session.negotiation.can_publish() {
                 return None;
             }
             (

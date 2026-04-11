@@ -26,6 +26,7 @@ use crate::signaling::{
 use super::{
     SessionOutbound,
     outbound::{MessageFanout, OutboundSender, fanout_all, fanout_all_except},
+    session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -60,9 +61,7 @@ pub(super) struct ActiveSession {
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
     pub(super) permissions: SessionPermissions,
     pub(super) info: SessionInfo,
-    pub(super) client_rtp_capabilities: Option<SignalingRtpCapabilities>,
-    pub(super) upload_transport_connected: bool,
-    pub(super) download_transport_connected: bool,
+    pub(super) negotiation: SessionNegotiation,
     pub(super) connection_id: u64,
     pub(super) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
@@ -234,7 +233,7 @@ impl ChannelState {
         let Some(session) = self.sessions.get(session_id) else {
             return Vec::new();
         };
-        if !session.download_transport_connected || session.client_rtp_capabilities.is_none() {
+        if !session.negotiation.can_consume() {
             return Vec::new();
         }
 
@@ -290,9 +289,7 @@ impl ChannelState {
             session.label.clone_from(&label);
             session.permissions.clone_from(&permissions);
             session.info = SessionInfo::default();
-            session.client_rtp_capabilities = None;
-            session.upload_transport_connected = false;
-            session.download_transport_connected = false;
+            session.negotiation = SessionNegotiation::default();
             session.connection_id = connection_id;
             session.sender = sender;
             Some(old_sender)
@@ -303,9 +300,7 @@ impl ChannelState {
                     label,
                     permissions,
                     info: SessionInfo::default(),
-                    client_rtp_capabilities: None,
-                    upload_transport_connected: false,
-                    download_transport_connected: false,
+                    negotiation: SessionNegotiation::default(),
                     connection_id,
                     sender,
                 },
@@ -444,31 +439,24 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         capabilities: SignalingRtpCapabilities,
-    ) -> bool {
+    ) -> SessionNegotiationUpdate {
         let Some(session) = self.sessions.get_mut(session_id) else {
-            return false;
+            return SessionNegotiationUpdate::default();
         };
-        session.client_rtp_capabilities = Some(capabilities);
-        true
+        session
+            .negotiation
+            .set_client_rtp_capabilities(capabilities)
     }
 
     pub(super) fn set_transport_connected(
         &mut self,
         session_id: &SessionId,
         direction: TransportConnectDirection,
-    ) -> bool {
+    ) -> SessionNegotiationUpdate {
         let Some(session) = self.sessions.get_mut(session_id) else {
-            return false;
+            return SessionNegotiationUpdate::default();
         };
-        match direction {
-            TransportConnectDirection::Upload => {
-                session.upload_transport_connected = true;
-            }
-            TransportConnectDirection::Download => {
-                session.download_transport_connected = true;
-            }
-        }
-        true
+        session.negotiation.set_transport_connected(direction)
     }
 
     pub(super) fn publish_consumer_targets(
@@ -483,9 +471,7 @@ impl ChannelState {
         self.sessions
             .iter()
             .filter_map(|(peer_session_id, peer_session)| {
-                if peer_session_id == producer_session_id
-                    || !peer_session.download_transport_connected
-                    || peer_session.client_rtp_capabilities.is_none()
+                if peer_session_id == producer_session_id || !peer_session.negotiation.can_consume()
                 {
                     return None;
                 }
@@ -512,7 +498,7 @@ impl ChannelState {
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<PendingPublishedTrack> {
         let session = self.sessions.get(session_id)?;
-        if session.connection_id != publisher_connection_id || !session.upload_transport_connected {
+        if session.connection_id != publisher_connection_id || !session.negotiation.can_publish() {
             return None;
         }
         Some(PendingPublishedTrack {
@@ -532,7 +518,7 @@ impl ChannelState {
     ) -> Option<(String, Vec<PendingConsumerBootstrapTarget>)> {
         let session = self.sessions.get(&pending.owner_session_id)?;
         if session.connection_id != pending.owner_connection_id
-            || !session.upload_transport_connected
+            || !session.negotiation.can_publish()
         {
             return None;
         }
@@ -581,7 +567,7 @@ impl ChannelState {
     ) -> Option<PendingConsumerBootstrap> {
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
-            || !session.download_transport_connected
+            || !session.negotiation.can_consume()
         {
             return None;
         }
@@ -627,13 +613,13 @@ impl ChannelState {
         let (sender, client_capabilities) = {
             let session = self.sessions.get(&target.consumer_session_id)?;
             if session.connection_id != target.consumer_connection_id
-                || !session.download_transport_connected
+                || !session.negotiation.can_consume()
             {
                 return None;
             }
             (
                 session.sender.clone(),
-                session.client_rtp_capabilities.clone()?,
+                session.negotiation.client_rtp_capabilities().cloned()?,
             )
         };
         let producer = self.producers.get(&target.producer_wire_id)?;
@@ -686,7 +672,7 @@ impl ChannelState {
     ) -> Option<(mpsc::UnboundedSender<SessionOutbound>, CurrentServerRequest)> {
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
-            || !session.download_transport_connected
+            || !session.negotiation.can_consume()
         {
             return None;
         }

@@ -75,6 +75,7 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
                 test_client_rtp_capabilities_without_video_rtx(),
             )
             .await
+            .session_present
     );
 
     channel
@@ -535,5 +536,48 @@ async fn production_change_ignores_unknown_stream_type() {
     assert!(
         drain_outbound(&mut rx1).is_empty(),
         "no broadcast expected when no producer exists for the stream type"
+    );
+}
+
+#[tokio::test]
+async fn client_capabilities_bootstrap_late_join_when_download_connected_first() {
+    let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+        setup_late_join_bootstrap_scenario().await;
+    drain_outbound(&mut publisher_rx);
+    drain_outbound(&mut subscriber_rx);
+
+    let download_update = channel
+        .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+        .await;
+    assert!(download_update.session_present);
+    assert!(!download_update.became_consumer_ready);
+
+    let capabilities_update = channel
+        .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
+        .await;
+    assert!(capabilities_update.session_present);
+    assert!(capabilities_update.became_consumer_ready);
+
+    channel
+        .bootstrap_late_join_consumers(&SessionId::Integer(2), &transport_adapter)
+        .await;
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::ConsumeMediaRequested {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+                media_kind: MediaKind::Video,
+            }
+        )
+    })
+    .await;
+
+    assert!(
+        drain_outbound(&mut subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, SessionOutbound::Request(_))),
+        "subscriber should receive a consumer bootstrap after capabilities make it ready"
     );
 }
