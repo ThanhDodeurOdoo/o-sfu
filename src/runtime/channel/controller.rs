@@ -9,7 +9,8 @@
 //! - `router_state`: compatibility bridge from signaling session ids into the pure router
 //! - `topology`: channel-local routing placement boundary
 //! - `rtp_capabilities`: default router RTP capability surface
-//! - signaling edge owns RTP/ORTC wire mapping through `crate::signaling::ortc_mapper`
+//! - the legacy signaling edge owns RTP/ORTC wire mapping through `crate::signaling::ortc_mapper`
+//!   until the native Phase 9 negotiation path replaces the current websocket protocol
 
 use std::fmt;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
+    native_protocol::NativePeerSnapshot,
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
 };
 
@@ -166,6 +168,23 @@ impl Channel {
 
     pub async fn recording_state(&self) -> RecordingState {
         self.state.read().await.recording_state.clone()
+    }
+
+    pub(crate) async fn peer_snapshots_except(
+        &self,
+        excluded_session_id: &SessionId,
+    ) -> Vec<NativePeerSnapshot> {
+        self.state
+            .read()
+            .await
+            .sessions
+            .iter()
+            .filter(|(session_id, _session)| *session_id != excluded_session_id)
+            .map(|(session_id, session)| NativePeerSnapshot {
+                session_id: session_id.clone(),
+                info: session.info.clone(),
+            })
+            .collect()
     }
 
     pub async fn router_rtp_capabilities(&self) -> o_sfu_router::MediaCapabilities {

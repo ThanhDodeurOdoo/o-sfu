@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{Span, field, info};
@@ -19,25 +18,24 @@ use crate::runtime::{
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
-    current_protocol::{
-        CurrentStartupPayload, CurrentWebSocketCloseCode, CurrentWebSocketCredentials,
+    current_protocol::{CurrentWebSocketCloseCode, CurrentWebSocketCredentials},
+    native_protocol::{
+        NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeEnvelopeBatch,
+        NativeServerMessage, NativeWelcomePayload,
     },
     shared::SessionId,
 };
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum AuthenticationPayload {
-    Credentials(CurrentWebSocketCredentials),
-    Jwt(String),
-}
 
 pub(super) async fn establish_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
 ) -> Option<ConnectedSession> {
-    let credentials = receive_credentials_or_reject(state, writer, reader).await?;
+    let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
+    let credentials = CurrentWebSocketCredentials {
+        channel_uuid: auth_payload.channel,
+        jwt: auth_payload.jwt,
+    };
     let (channel, claims) = authenticate_session(state, writer, credentials).await?;
     let (session_id, outbound_rx, channel, connection_id) =
         join_authenticated_session(state, writer, channel, claims).await?;
@@ -68,10 +66,10 @@ pub(super) async fn establish_session(
     })
 }
 
-async fn receive_credentials(
+async fn receive_auth(
     state: &RuntimeState,
     reader: &mut WsReader,
-) -> Result<Option<CurrentWebSocketCredentials>, Option<CurrentWebSocketCloseCode>> {
+) -> Result<Option<NativeAuthPayload>, Option<CurrentWebSocketCloseCode>> {
     match timeout(
         Duration::from_millis(state.config.authentication_timeout_ms),
         reader.next(),
@@ -81,19 +79,19 @@ async fn receive_credentials(
         Err(_) => Err(Some(CurrentWebSocketCloseCode::Timeout)),
         Ok(None) => Ok(None),
         Ok(Some(Err(_error))) => Err(Some(CurrentWebSocketCloseCode::Error)),
-        Ok(Some(Ok(message))) => parse_credentials(message).map(Some).map_err(Some),
+        Ok(Some(Ok(message))) => parse_auth_payload(message).map(Some).map_err(Some),
     }
 }
 
-async fn receive_credentials_or_reject(
+async fn receive_auth_or_reject(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
-) -> Option<CurrentWebSocketCredentials> {
-    match receive_credentials(state, reader).await {
-        Ok(Some(credentials)) => {
+) -> Option<NativeAuthPayload> {
+    match receive_auth(state, reader).await {
+        Ok(Some(auth_payload)) => {
             state.metrics.record_ws_handshake_credentials_received();
-            Some(credentials)
+            Some(auth_payload)
         }
         Ok(None) => None,
         Err(close_code) => {
@@ -101,16 +99,14 @@ async fn receive_credentials_or_reject(
                 state,
                 Some(writer),
                 close_code,
-                "rejecting websocket during credential receive",
+                "rejecting websocket during auth receive",
             )
             .await
         }
     }
 }
 
-fn parse_credentials(
-    message: Message,
-) -> Result<CurrentWebSocketCredentials, CurrentWebSocketCloseCode> {
+fn parse_auth_payload(message: Message) -> Result<NativeAuthPayload, CurrentWebSocketCloseCode> {
     let payload = match message {
         Message::Text(payload) => payload.to_string(),
         Message::Binary(payload) => String::from_utf8(payload.to_vec())
@@ -118,15 +114,22 @@ fn parse_credentials(
         Message::Close(_) => return Err(CurrentWebSocketCloseCode::Clean),
         Message::Ping(_) | Message::Pong(_) => return Err(CurrentWebSocketCloseCode::Error),
     };
-    let payload: AuthenticationPayload =
-        serde_json::from_str(&payload).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
-    Ok(match payload {
-        AuthenticationPayload::Credentials(credentials) => credentials,
-        AuthenticationPayload::Jwt(jwt) => CurrentWebSocketCredentials {
-            channel_uuid: None,
-            jwt,
-        },
-    })
+    let batch = serde_json::from_str::<NativeEnvelopeBatch>(&payload)
+        .map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+    if batch.len() != 1 {
+        return Err(CurrentWebSocketCloseCode::Error);
+    }
+    let Some(envelope) = batch.into_iter().next() else {
+        return Err(CurrentWebSocketCloseCode::Error);
+    };
+    match NativeClientEnvelope::decode(envelope)
+        .map_err(|_error| CurrentWebSocketCloseCode::Error)?
+    {
+        NativeClientEnvelope::Message(NativeClientMessage::Auth(auth_payload)) => Ok(auth_payload),
+        NativeClientEnvelope::Message(_)
+        | NativeClientEnvelope::Request { .. }
+        | NativeClientEnvelope::Response { .. } => Err(CurrentWebSocketCloseCode::Error),
+    }
 }
 
 async fn authenticate(
@@ -235,8 +238,8 @@ async fn initialize_session(
     connection_id: u64,
     stub_bus: &mut StubBusSession,
 ) -> Option<()> {
-    if send_startup(channel, writer).await.is_err() {
-        info!("failed to send startup payload");
+    if send_welcome(channel, session_id, writer).await.is_err() {
+        info!("failed to send welcome payload");
         state.metrics.record_ws_startup_send_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
@@ -282,14 +285,20 @@ async fn reject_handshake<T>(
     None
 }
 
-async fn send_startup(channel: &Channel, writer: &mut WsWriter) -> Result<(), ()> {
-    let startup_payload = CurrentStartupPayload {
-        available_features: channel.available_features(),
-        recording_state: channel.recording_state().await,
-    };
-    let startup_json = serde_json::to_string(&startup_payload).map_err(|_error| ())?;
+async fn send_welcome(
+    channel: &Channel,
+    session_id: &SessionId,
+    writer: &mut WsWriter,
+) -> Result<(), ()> {
+    let welcome_payload = NativeServerMessage::Welcome(NativeWelcomePayload {
+        features: channel.available_features(),
+        recording: channel.recording_state().await,
+        peers: channel.peer_snapshots_except(session_id).await,
+    });
+    let welcome_envelope = welcome_payload.into_envelope().map_err(|_error| ())?;
+    let welcome_json = serde_json::to_string(&vec![welcome_envelope]).map_err(|_error| ())?;
     writer
-        .send(Message::Text(startup_json.into()))
+        .send(Message::Text(welcome_json.into()))
         .await
         .map_err(|_error| ())
 }

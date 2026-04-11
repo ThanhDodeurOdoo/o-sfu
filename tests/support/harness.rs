@@ -30,6 +30,10 @@ use o_sfu::{
             CurrentStartupPayload, CurrentWebSocketCredentials,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
+        native_protocol::{
+            NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeEnvelopeBatch,
+            NativeServerMessage, NativeWelcomePayload,
+        },
         shared::{SessionId, SessionPermissions},
     },
 };
@@ -177,8 +181,15 @@ impl FakeWebSocketClient {
     }
 
     pub async fn read_startup(&mut self) -> Option<CurrentStartupPayload> {
-        let startup_json = read_text_message(&mut self.websocket).await?;
-        serde_json::from_str::<CurrentStartupPayload>(&startup_json).ok()
+        let welcome = self.read_welcome().await?;
+        Some(CurrentStartupPayload {
+            available_features: welcome.features,
+            recording_state: welcome.recording,
+        })
+    }
+
+    pub async fn read_welcome(&mut self) -> Option<NativeWelcomePayload> {
+        read_welcome(&mut self.websocket).await
     }
 
     pub async fn acknowledge_transport_bootstrap(&mut self) -> Option<()> {
@@ -233,7 +244,10 @@ pub async fn authenticate_with_credentials(
     credentials: &CurrentWebSocketCredentials,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = serde_json::to_string(credentials).ok()?;
+    let payload = encode_native_auth(NativeAuthPayload {
+        jwt: credentials.jwt.clone(),
+        channel: credentials.channel_uuid.clone(),
+    })?;
     websocket
         .send(tungstenite::Message::Text(payload.into()))
         .await
@@ -243,7 +257,10 @@ pub async fn authenticate_with_credentials(
 
 pub async fn authenticate_with_jwt(server: &TestServer, token: &str) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = serde_json::to_string(&serde_json::json!({ "jwt": token })).ok()?;
+    let payload = encode_native_auth(NativeAuthPayload {
+        jwt: token.to_owned(),
+        channel: None,
+    })?;
     websocket
         .send(tungstenite::Message::Text(payload.into()))
         .await
@@ -265,6 +282,33 @@ pub async fn acknowledge_transport_bootstrap(websocket: &mut TestWebSocket) -> O
         .await
         .ok()?;
     Some(())
+}
+
+fn encode_native_auth(auth_payload: NativeAuthPayload) -> Option<String> {
+    let envelope = NativeClientEnvelope::Message(NativeClientMessage::Auth(auth_payload))
+        .into_envelope()
+        .ok()?;
+    serde_json::to_string(&vec![envelope]).ok()
+}
+
+pub async fn read_welcome(websocket: &mut TestWebSocket) -> Option<NativeWelcomePayload> {
+    let payload = read_text_message(websocket).await?;
+    let batch = serde_json::from_str::<NativeEnvelopeBatch>(&payload).ok()?;
+    let envelope = batch.first()?;
+    if envelope.tag != "welcome" {
+        return None;
+    }
+    let message =
+        NativeServerMessage::Welcome(serde_json::from_value(envelope.payload.clone()?).ok()?);
+    match message {
+        NativeServerMessage::Welcome(welcome) => Some(welcome),
+        NativeServerMessage::Tracks(_)
+        | NativeServerMessage::PeerInfo(_)
+        | NativeServerMessage::PeerJoined(_)
+        | NativeServerMessage::PeerLeft(_)
+        | NativeServerMessage::Broadcast(_)
+        | NativeServerMessage::RecordingChange(_) => None,
+    }
 }
 
 /// Realistc client RTP capabilities (corespond to router default)

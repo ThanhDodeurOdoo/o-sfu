@@ -1,3 +1,8 @@
+//! Legacy wire wrappers and transport literals used by the current compatibility path.
+//!
+//! Native signaling work should avoid introducing new dependencies on the opaque RTP/ORTC
+//! wrappers defined here.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

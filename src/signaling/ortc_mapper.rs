@@ -1,11 +1,11 @@
-//! Conversions betwen JSON RTP types and router-native media models
+//! Legacy ORTC compatibility conversions between JSON RTP payloads and router-native media models.
+//!
+//! This module exists only for the current compatibility websocket path.
+//! The Phase 9 native signaling protocol must not grow new dependencies on it.
 //!
 //! The signaling layer uses `RtpParameters(serde_json::Value)` and `RtpCapabilities(Value)`
 //! as opaque wrappers over the mediasoup/ORTC wire format. The router crate uses typed
 //! domain models (`o_sfu_router::MediaStream`, `o_sfu_router::MediaCapabilities`).
-//!
-//! These conversion are only for signaling compatitibility with ORTC, may remove later if
-//! it becomes useless
 //!
 //! - ORTC API dictionaries: <https://draft.ortc.org/>
 

@@ -10,7 +10,8 @@
 //! - `router_state`: compatibility bridge from signaling session ids into the pure router
 //! - `topology`: channel-local routing placement boundary
 //! - `rtp_capabilities`: default router RTP capability surface
-//! - signaling edge owns RTP/ORTC wire mapping through `crate::signaling::ortc_mapper`
+//! - the legacy signaling edge owns RTP/ORTC wire mapping through `crate::signaling::ortc_mapper`
+//!   until the native Phase 9 negotiation path replaces the current websocket protocol
 
 mod controller;
 mod manager;

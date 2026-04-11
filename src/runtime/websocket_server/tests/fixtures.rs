@@ -32,6 +32,10 @@ pub(super) use crate::{
             CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
             CurrentStartupPayload, CurrentTransportConnectPayload, CurrentWebSocketCredentials,
         },
+        native_protocol::{
+            NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeEnvelopeBatch,
+            NativeWelcomePayload,
+        },
         shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
         webrtc::{DtlsFingerprint, DtlsParameters, MediaKind, RtpParameters},
     },
@@ -205,7 +209,26 @@ pub(super) async fn authenticate_with_jwt(
     token: &str,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = serde_json::to_string(&serde_json::json!({ "jwt": token })).ok()?;
+    let payload = encode_native_auth(NativeAuthPayload {
+        jwt: token.to_owned(),
+        channel: None,
+    })?;
+    websocket
+        .send(tungstenite::Message::Text(payload.into()))
+        .await
+        .ok()?;
+    Some(websocket)
+}
+
+pub(super) async fn authenticate_with_credentials(
+    server: &TestServer,
+    credentials: &CurrentWebSocketCredentials,
+) -> Option<TestWebSocket> {
+    let mut websocket = connect_websocket(server).await?;
+    let payload = encode_native_auth(NativeAuthPayload {
+        jwt: credentials.jwt.clone(),
+        channel: credentials.channel_uuid.clone(),
+    })?;
     websocket
         .send(tungstenite::Message::Text(payload.into()))
         .await
@@ -218,9 +241,22 @@ pub(super) async fn authenticate_and_read_startup(
     token: &str,
 ) -> Option<(TestWebSocket, CurrentStartupPayload)> {
     let mut websocket = authenticate_with_jwt(server, token).await?;
-    let startup_json = read_text_message(&mut websocket).await?;
-    let startup = serde_json::from_str::<CurrentStartupPayload>(&startup_json).ok()?;
+    let welcome = read_welcome(&mut websocket).await?;
+    let startup = CurrentStartupPayload {
+        available_features: welcome.features,
+        recording_state: welcome.recording,
+    };
     Some((websocket, startup))
+}
+
+pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<NativeWelcomePayload> {
+    let payload = read_text_message(websocket).await?;
+    let batch = serde_json::from_str::<NativeEnvelopeBatch>(&payload).ok()?;
+    let envelope = batch.first()?;
+    if envelope.tag != "welcome" {
+        return None;
+    }
+    serde_json::from_value(envelope.payload.clone()?).ok()
 }
 
 pub(super) async fn read_message(
@@ -292,6 +328,13 @@ pub(super) async fn respond_to_server_request(
         .await
         .ok()?;
     Some(())
+}
+
+fn encode_native_auth(auth_payload: NativeAuthPayload) -> Option<String> {
+    let envelope = NativeClientEnvelope::Message(NativeClientMessage::Auth(auth_payload))
+        .into_envelope()
+        .ok()?;
+    serde_json::to_string(&vec![envelope]).ok()
 }
 
 pub(super) fn test_client_rtp_capabilities() -> serde_json::Value {

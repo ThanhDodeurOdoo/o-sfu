@@ -358,13 +358,17 @@ impl LegacyFakePeer {
             jwt: token,
         })
         .map_err(|error| {
-            format!("failed to serialize legacy websocket credentials for session {session_label}: {error}")
+            format!(
+                "failed to serialize legacy websocket credentials for session {session_label}: {error}"
+            )
         })?;
         websocket
             .send(tungstenite::Message::Text(credentials.into()))
             .await
             .map_err(|error| {
-                format!("failed to send legacy websocket credentials for session {session_label}: {error}")
+                format!(
+                    "failed to send legacy websocket credentials for session {session_label}: {error}"
+                )
             })?;
         let startup = serde_json::from_str::<CurrentStartupPayload>(
             &read_text_message_with_context(
