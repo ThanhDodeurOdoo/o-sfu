@@ -1,4 +1,4 @@
-//! RFC references for this module:
+//! RFC references coverd
 //! - RTP base protocol: <https://www.rfc-editor.org/rfc/rfc3550>
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
@@ -89,9 +89,67 @@ impl AvpStaticPayloadType {
     }
 }
 
+/// RTP payload-format MIME subtype names commonly used by WebRTC endpoints.
+pub mod codec_name {
+    /// Opus RTP payload-format subtype.
+    ///
+    /// Reference: RFC 7587.
+    pub const OPUS: &str = "opus";
+
+    /// VP8 RTP payload-format subtype.
+    ///
+    /// Reference: RFC 7741.
+    pub const VP8: &str = "VP8";
+
+    /// H264 RTP payload-format subtype.
+    ///
+    /// Reference: RFC 6184.
+    pub const H264: &str = "H264";
+
+    /// RTX retransmission RTP payload-format subtype.
+    ///
+    /// Reference: RFC 4588.
+    pub const RTX: &str = "rtx";
+}
+
+/// Codec `fmtp` parameter names and canonical valuse
+pub mod fmtp {
+    /// RTX associated payload type parameter
+    ///
+    /// Reference: RFC 4588 section 8.
+    pub const RTX_ASSOCIATION: &str = "apt";
+
+    /// H264 packetization mode parameter.
+    ///
+    /// Reference: RFC 6184 section 8.1.
+    pub const H264_PACKETIZATION_MODE: &str = "packetization-mode";
+
+    /// H264 profile-level-id parameter.
+    ///
+    /// Reference: RFC 6184 section 8.1
+    pub const H264_PROFILE_LEVEL_ID: &str = "profile-level-id";
+
+    /// Opus in-band FEC parameter
+    ///
+    /// Reference: RFC 7587 section 6.1.
+    pub const OPUS_USE_IN_BAND_FEC: &str = "useinbandfec";
+
+    /// Canonical numeric enabled flag used in WebRTC `fmtp` dictionaries.
+    pub const VALUE_ENABLED: &str = "1";
+
+    /// Canonical numeric disabled flag used in WebRTC `fmtp` dictionaries
+    pub const VALUE_DISABLED: &str = "0";
+
+    /// Textual enabled flag accepted by current ORTC/WebRTC capability payloads
+    pub const VALUE_TRUE: &str = "true";
+
+    /// Textual disabled flag accepted by current ORTC/WebRTC capability payloads
+    pub const VALUE_FALSE: &str = "false";
+}
+
 /// Returns `true` if `payload_type` falls in the dynamic range (96–127).
 ///
-/// Reference: RFC 3551 section 6.
+/// Reference: RFC 3551sectionn 6
 #[must_use]
 pub const fn is_dynamic_payload_type(payload_type: u8) -> bool {
     payload_type >= RTP_DYNAMIC_PAYLOAD_TYPE_START && payload_type <= RTP_DYNAMIC_PAYLOAD_TYPE_END
@@ -153,13 +211,15 @@ pub mod header_extension {
     }
 }
 
+/// The tests are a bit redundant but it makes things extra annoying to change on purpose
+/// will maybe remove them alter
 #[cfg(test)]
 mod tests {
     use super::{
         AvpStaticPayloadType, RTP_DYNAMIC_PAYLOAD_TYPE_END, RTP_DYNAMIC_PAYLOAD_TYPE_START,
         RTP_RESERVED_PAYLOAD_TYPE_72, RTP_RESERVED_PAYLOAD_TYPE_73, RTP_RESERVED_PAYLOAD_TYPE_74,
-        RTP_RESERVED_PAYLOAD_TYPE_75, RTP_RESERVED_PAYLOAD_TYPE_76, header_extension,
-        is_dynamic_payload_type,
+        RTP_RESERVED_PAYLOAD_TYPE_75, RTP_RESERVED_PAYLOAD_TYPE_76, codec_name, fmtp,
+        header_extension, is_dynamic_payload_type,
     };
 
     #[test]
@@ -176,6 +236,22 @@ mod tests {
         assert!(!is_dynamic_payload_type(95));
         assert!(is_dynamic_payload_type(96));
         assert!(is_dynamic_payload_type(127));
+    }
+
+    #[test]
+    fn codec_and_fmtp_literals_match_registered_tokens() {
+        assert_eq!(codec_name::OPUS, "opus");
+        assert_eq!(codec_name::VP8, "VP8");
+        assert_eq!(codec_name::H264, "H264");
+        assert_eq!(codec_name::RTX, "rtx");
+        assert_eq!(fmtp::RTX_ASSOCIATION, "apt");
+        assert_eq!(fmtp::H264_PACKETIZATION_MODE, "packetization-mode");
+        assert_eq!(fmtp::H264_PROFILE_LEVEL_ID, "profile-level-id");
+        assert_eq!(fmtp::OPUS_USE_IN_BAND_FEC, "useinbandfec");
+        assert_eq!(fmtp::VALUE_ENABLED, "1");
+        assert_eq!(fmtp::VALUE_DISABLED, "0");
+        assert_eq!(fmtp::VALUE_TRUE, "true");
+        assert_eq!(fmtp::VALUE_FALSE, "false");
     }
 
     /// RFC 3551 section 6 reserves payload types 72–76 to avoid collision

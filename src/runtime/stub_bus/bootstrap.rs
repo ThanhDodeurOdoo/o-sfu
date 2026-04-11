@@ -36,9 +36,9 @@ fn stub_transport_bootstrap(id: &str) -> TransportBootstrap {
             foundation: String::from("foundation"),
             priority: 1,
             ip: String::from("203.0.113.10"),
-            protocol: String::from(webrtc::ICE_TRANSPORT_UDP),
+            protocol: String::from(webrtc::ice::transport::UDP),
             port: 40_000,
-            candidate_type: String::from(webrtc::ICE_CANDIDATE_TYPE_HOST),
+            candidate_type: String::from(webrtc::ice::candidate_type::HOST),
         }],
         dtls_parameters: DtlsParameters {
             role: String::from("auto"),

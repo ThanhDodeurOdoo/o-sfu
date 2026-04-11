@@ -1,19 +1,12 @@
 use std::net::IpAddr;
 
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
+use crate::rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
 const CANDIDATE_PREFIX: &str = "candidate:";
 const CANDIDATE_TYPE_TOKEN: &str = "typ";
-
-const ICE_TRANSPORT_UDP: &str = "udp";
-const ICE_TRANSPORT_TCP: &str = "tcp";
-
-const ICE_CANDIDATE_TYPE_HOST: &str = "host";
-const ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE: &str = "srflx";
-const ICE_CANDIDATE_TYPE_PEER_REFLEXIVE: &str = "prflx";
-const ICE_CANDIDATE_TYPE_RELAYED: &str = "relay";
 
 const ICE_REPLAY_CONTEXT_HINT: &str = "raw ICE candidate line";
 
@@ -249,7 +242,7 @@ fn parse_component_id(token: &str, raw_candidate: &str) -> IceParseResult<u16> {
         log_diagnostic(&diagnostic);
         Box::new(diagnostic)
     })?;
-    if component_id != 1 && component_id != 2 {
+    if component_id != webrtc::ice::component::RTP && component_id != webrtc::ice::component::RTCP {
         let diagnostic = invalid_input(
             "ICE candidate component ID is out of range",
             String::from("1 or 2"),
@@ -260,7 +253,7 @@ fn parse_component_id(token: &str, raw_candidate: &str) -> IceParseResult<u16> {
         log_diagnostic(&diagnostic);
         return Err(Box::new(diagnostic));
     }
-    if component_id != 1 {
+    if component_id != webrtc::ice::component::RTP {
         let diagnostic = unsupported_feature(
             "ICE RTCP component candidates are not supported yet",
             token,
@@ -276,8 +269,8 @@ fn parse_component_id(token: &str, raw_candidate: &str) -> IceParseResult<u16> {
 fn parse_transport(token: &str, raw_candidate: &str) -> IceParseResult<IceTransportProtocol> {
     let lower = token.to_ascii_lowercase();
     match lower.as_str() {
-        ICE_TRANSPORT_UDP => Ok(IceTransportProtocol::Udp),
-        ICE_TRANSPORT_TCP => {
+        webrtc::ice::transport::UDP => Ok(IceTransportProtocol::Udp),
+        webrtc::ice::transport::TCP => {
             let diagnostic = unsupported_feature(
                 "ICE TCP candidates are not supported yet",
                 token,
@@ -359,10 +352,10 @@ fn ensure_type_label(token: &str, raw_candidate: &str) -> IceParseResult<()> {
 
 fn parse_candidate_type(token: &str, raw_candidate: &str) -> IceParseResult<IceCandidateType> {
     match token {
-        ICE_CANDIDATE_TYPE_HOST => Ok(IceCandidateType::Host),
-        ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE => Ok(IceCandidateType::ServerReflexive),
-        ICE_CANDIDATE_TYPE_PEER_REFLEXIVE => Ok(IceCandidateType::PeerReflexive),
-        ICE_CANDIDATE_TYPE_RELAYED => Ok(IceCandidateType::Relayed),
+        webrtc::ice::candidate_type::HOST => Ok(IceCandidateType::Host),
+        webrtc::ice::candidate_type::SERVER_REFLEXIVE => Ok(IceCandidateType::ServerReflexive),
+        webrtc::ice::candidate_type::PEER_REFLEXIVE => Ok(IceCandidateType::PeerReflexive),
+        webrtc::ice::candidate_type::RELAYED => Ok(IceCandidateType::Relayed),
         _ => {
             let diagnostic = unsupported_feature(
                 "ICE candidate type is valid but not supported yet",

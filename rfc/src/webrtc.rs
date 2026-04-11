@@ -14,55 +14,125 @@
 /// Reference: RFC 8834 section 4.2.
 pub const RTP_PROFILE_SAVPF: &str = "RTP/SAVPF";
 
-/// ICE component IDs for RTP and RTCP.
-///
-/// Reference: RFC 8445 section 5.1.1.
-pub const ICE_COMPONENT_RTP: u16 = 1;
-pub const ICE_COMPONENT_RTCP: u16 = 2;
+/// ICE portocol registries used by WebRTC signaling.
+pub mod ice {
+    /// ICE component IDs for RTP and RTCP.
+    ///
+    /// Reference: RFC 8445 section 5.1.1.
+    pub mod component {
+        pub const RTP: u16 = 1;
+        pub const RTCP: u16 = 2;
+    }
 
-/// ICE candidate type literals used by SDP candidate attributes.
-///
-/// References:
-/// - RFC 5245 section 15.1 candidate grammar (`typ host|srflx|prflx|relay`)
-/// - RFC 8445 (semantic model preserved by the updated ICE specification)
-pub const ICE_CANDIDATE_TYPE_HOST: &str = "host";
-pub const ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE: &str = "srflx";
-pub const ICE_CANDIDATE_TYPE_PEER_REFLEXIVE: &str = "prflx";
-pub const ICE_CANDIDATE_TYPE_RELAYED: &str = "relay";
+    /// ICE candidate type literals used by SDP candidate attributes.
+    ///
+    /// References:
+    /// - RFC 5245 section 15.1 candidate grammar (`typ host|srflx|prflx|relay`)
+    /// - RFC 8445 (semantic model preserved by the updated ICE specification)
+    pub mod candidate_type {
+        pub const HOST: &str = "host";
+        pub const SERVER_REFLEXIVE: &str = "srflx";
+        pub const PEER_REFLEXIVE: &str = "prflx";
+        pub const RELAYED: &str = "relay";
+    }
 
-/// Recommended ICE type-preference values.
-///
-/// Reference: RFC 8445 section 5.1.2.2.
-pub const ICE_TYPE_PREFERENCE_HOST: u8 = 126;
-pub const ICE_TYPE_PREFERENCE_PEER_REFLEXIVE: u8 = 110;
-pub const ICE_TYPE_PREFERENCE_SERVER_REFLEXIVE: u8 = 100;
-pub const ICE_TYPE_PREFERENCE_RELAYED: u8 = 0;
+    /// Recommended ICE type-preference values.
+    ///
+    /// Reference: RFC 8445 section 5.1.2.2.
+    pub mod type_preference {
+        pub const HOST: u8 = 126;
+        pub const PEER_REFLEXIVE: u8 = 110;
+        pub const SERVER_REFLEXIVE: u8 = 100;
+        pub const RELAYED: u8 = 0;
+    }
 
-/// ICE transport token used in SDP candidate lines.
-///
-/// Reference: RFC 8445 section 5.1.1 and candidate grammar inherited from RFC 5245.
-pub const ICE_TRANSPORT_UDP: &str = "udp";
+    /// ICE transport token used in SDP candidate lines.
+    ///
+    /// Reference: RFC 8445 section 5.1.1 and candidate grammar inherited from RFC 5245.
+    pub mod transport {
+        pub const UDP: &str = "udp";
+        pub const TCP: &str = "tcp";
+    }
+}
 
-/// SDP attribute names and literals used by WebRTC signaling.
+/// MIME top-level media kidns used by ORTC and SDP paylods
+/// same as on web stream/tracks APIs
+pub mod media_kind {
+    pub const AUDIO: &str = "audio";
+    pub const VIDEO: &str = "video";
+}
+
+/// RTCP feedback type and parameter tokens used by current WebRTC capability paylods.
+pub mod rtcp_feedback {
+    /// RTCP feedback kind tokens used in capability dictionnaries.
+    pub mod kind {
+        /// Generic NACK feedback type token.
+        ///
+        /// Reference: RFC 4585 section 6.2.1.
+        pub const NACK: &str = "nack";
+
+        /// Codec control message feedback type token.
+        ///
+        /// Reference: RFC 5104.
+        pub const CCM: &str = "ccm";
+
+        /// Google Receiver Estimated Maximum Bitrate token used by current browser stacks.
+        pub const GOOG_REMB: &str = "goog-remb";
+
+        /// Transport-wide congestion control feedback token.
+        ///
+        /// Reference:
+        /// <https://www.ietf.org/archive/id/draft-holmer-rmcat-transport-wide-cc-extensions-01.txt>
+        pub const TRANSPORT_CC: &str = "transport-cc";
+    }
+
+    /// RTCP feedback parameter tokens used by current WebRTC cpaability payloads.
+    pub mod parameter {
+        /// Picture loss indication parameter token.
+        ///
+        /// Reference: RFC 4585 section 6.3.1.
+        pub const PLI: &str = "pli";
+
+        /// Full intra request parameter token.
+        ///
+        /// Reference: RFC 5104 section 4.3.1.
+        pub const FIR: &str = "fir";
+    }
+}
+
 pub mod sdp {
-    /// `a=group:BUNDLE ...`
-    ///
-    /// Reference: RFC 8843.
-    pub const GROUP_SEMANTICS_BUNDLE: &str = "BUNDLE";
+    pub mod group_semantics {
+        /// `a=group:BUNDLE ...`
+        ///
+        /// Reference: RFC 8843.
+        pub const BUNDLE: &str = "BUNDLE";
+    }
 
-    /// `a=rtcp-mux`
-    ///
-    /// Reference: RFC 5761.
-    pub const ATTRIBUTE_RTCP_MUX: &str = "rtcp-mux";
+    pub mod attribute {
+        /// `a=rtcp-mux`
+        ///
+        /// Reference: RFC 5761.
+        pub const RTCP_MUX: &str = "rtcp-mux";
 
-    /// `a=setup:<role>`
-    ///
-    /// References: RFC 4145, RFC 5763.
-    pub const ATTRIBUTE_SETUP: &str = "setup";
-    pub const SETUP_ACTIVE: &str = "active";
-    pub const SETUP_PASSIVE: &str = "passive";
-    pub const SETUP_ACTPASS: &str = "actpass";
-    pub const SETUP_HOLDCONN: &str = "holdconn";
+        /// `a=setup:<role>`
+        ///
+        /// References: RFC 4145, RFC 5763.
+        pub const SETUP: &str = "setup";
+    }
+
+    pub mod setup_role {
+        pub const ACTIVE: &str = "active";
+        pub const PASSIVE: &str = "passive";
+        pub const ACTPASS: &str = "actpass";
+        pub const HOLDCONN: &str = "holdconn";
+    }
+
+    pub mod direction {
+        /// `a=sendrecv`
+        ///
+        /// Reference: RFC 8866 section 6.7.
+        pub const SEND_RECV: &str = "sendrecv";
+    }
 }
 
 /// DTLS-SRTP protection profile identifiers for `use_srtp`.
@@ -83,6 +153,14 @@ impl DtlsSrtpProtectionProfile {
             Self::Aes128CmHmacSha1_32 => 0x0002,
         }
     }
+}
+
+/// SCTP transport dictionary defaults preserved by the current WebRTC bootstrap payload.
+pub mod data_channel {
+    pub const SCTP_PORT: u16 = 5_000;
+    pub const OUTGOING_STREAMS: u16 = 1_024;
+    pub const INCOMING_STREAMS: u16 = 1_024;
+    pub const MAX_MESSAGE_SIZE: u32 = 262_144;
 }
 
 /// RTP header-extension URIs commonly needed by WebRTC endpoints.
@@ -127,10 +205,25 @@ pub mod rtp_header_extension_uri {
 
     /// Absolute send time RTP header extension URI.
     ///
+    /// The RTP header-extension framework identify extensions by URI string,
+    /// and that URI is signaled verbatim in SDP `a=extmap` lines. Even though
+    /// this identifier looks like an HTTP URL, it just is a protocol name.
+    ///
+    /// Current WebRTC stacks use this exact literal, so we preserve it for interoperability.
+    ///
     /// Reference: <https://www.webrtc.org/experiments/rtp-hdrext/abs-send-time>
     pub const ABS_SEND_TIME: &str = "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time";
 
     /// Transport-wide sequence number RTP header extension URI.
+    ///
+    /// This value is likewise the negotiated wire identifier carried in SDP
+    /// `a=extmap` lines. It is not dereferenced as a network resource; the
+    /// exact string itself is the interoperability key used to match the
+    /// extension.
+    ///
+    /// Browsers and other rtc ecosystems commonly advertise the
+    /// historical `...-01` draft URI literal, so we keeps that deployed
+    /// identifier instead of normalizing it to a different name.
     ///
     /// Reference:
     /// <https://www.ietf.org/archive/id/draft-holmer-rmcat-transport-wide-cc-extensions-01.txt>
@@ -143,22 +236,41 @@ pub mod rtp_header_extension_uri {
 /// Reference: RFC 8843 section 15.1.
 pub const RTCP_SDES_ITEM_MID: u8 = 15;
 
+/// Maybe needelessly verbose, may remove tests later or only keep a few
 #[cfg(test)]
 mod tests {
     use super::{
-        DtlsSrtpProtectionProfile, ICE_CANDIDATE_TYPE_HOST, ICE_CANDIDATE_TYPE_PEER_REFLEXIVE,
-        ICE_CANDIDATE_TYPE_RELAYED, ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE, ICE_COMPONENT_RTCP,
-        ICE_COMPONENT_RTP, RTCP_SDES_ITEM_MID, RTP_PROFILE_SAVPF, rtp_header_extension_uri,
+        DtlsSrtpProtectionProfile, RTCP_SDES_ITEM_MID, RTP_PROFILE_SAVPF, data_channel, ice,
+        media_kind, rtcp_feedback, rtp_header_extension_uri, sdp,
     };
 
     #[test]
     fn ice_constants_match_expected_literals() {
-        assert_eq!(ICE_COMPONENT_RTP, 1);
-        assert_eq!(ICE_COMPONENT_RTCP, 2);
-        assert_eq!(ICE_CANDIDATE_TYPE_HOST, "host");
-        assert_eq!(ICE_CANDIDATE_TYPE_SERVER_REFLEXIVE, "srflx");
-        assert_eq!(ICE_CANDIDATE_TYPE_PEER_REFLEXIVE, "prflx");
-        assert_eq!(ICE_CANDIDATE_TYPE_RELAYED, "relay");
+        assert_eq!(ice::component::RTP, 1);
+        assert_eq!(ice::component::RTCP, 2);
+        assert_eq!(ice::candidate_type::HOST, "host");
+        assert_eq!(ice::candidate_type::SERVER_REFLEXIVE, "srflx");
+        assert_eq!(ice::candidate_type::PEER_REFLEXIVE, "prflx");
+        assert_eq!(ice::candidate_type::RELAYED, "relay");
+        assert_eq!(ice::transport::UDP, "udp");
+        assert_eq!(ice::transport::TCP, "tcp");
+    }
+
+    #[test]
+    fn media_kind_feedback_and_sctp_literals_are_stable() {
+        assert_eq!(media_kind::AUDIO, "audio");
+        assert_eq!(media_kind::VIDEO, "video");
+        assert_eq!(rtcp_feedback::kind::NACK, "nack");
+        assert_eq!(rtcp_feedback::kind::CCM, "ccm");
+        assert_eq!(rtcp_feedback::kind::GOOG_REMB, "goog-remb");
+        assert_eq!(rtcp_feedback::kind::TRANSPORT_CC, "transport-cc");
+        assert_eq!(rtcp_feedback::parameter::PLI, "pli");
+        assert_eq!(rtcp_feedback::parameter::FIR, "fir");
+        assert_eq!(sdp::direction::SEND_RECV, "sendrecv");
+        assert_eq!(data_channel::SCTP_PORT, 5_000);
+        assert_eq!(data_channel::OUTGOING_STREAMS, 1_024);
+        assert_eq!(data_channel::INCOMING_STREAMS, 1_024);
+        assert_eq!(data_channel::MAX_MESSAGE_SIZE, 262_144);
     }
 
     #[test]

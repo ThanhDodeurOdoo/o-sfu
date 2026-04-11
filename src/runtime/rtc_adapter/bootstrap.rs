@@ -67,7 +67,7 @@ pub(super) fn ensure_session_rtc_state(
         return Ok(());
     }
     let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
-    let candidate = Candidate::host(candidate_addr, webrtc::ICE_TRANSPORT_UDP)
+    let candidate = Candidate::host(candidate_addr, webrtc::ice::transport::UDP)
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
         return Err(TransportAdapterError::TransportUnavailable);
@@ -132,9 +132,9 @@ fn build_host_candidate(candidate_addr: SocketAddr) -> IceCandidate {
         foundation: String::from(HOST_CANDIDATE_FOUNDATION),
         priority: host_candidate_priority(),
         ip: candidate_addr.ip().to_string(),
-        protocol: String::from(webrtc::ICE_TRANSPORT_UDP),
+        protocol: String::from(webrtc::ice::transport::UDP),
         port: u64::from(candidate_addr.port()),
-        candidate_type: String::from(webrtc::ICE_CANDIDATE_TYPE_HOST),
+        candidate_type: String::from(webrtc::ice::candidate_type::HOST),
     }
 }
 
@@ -150,7 +150,7 @@ fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> DtlsFingerprint {
 fn host_candidate_priority() -> u64 {
     // RFC 8445 section 5.1.2.1 computes candidate priority as
     // (2^24 * type preference) + (2^8 * local preference) + (256 - component ID).
-    (u64::from(webrtc::ICE_TYPE_PREFERENCE_HOST) << 24)
+    (u64::from(webrtc::ice::type_preference::HOST) << 24)
         + (u64::from(ICE_LOCAL_PREFERENCE_MAX) << 8)
-        + u64::from(256_u16 - webrtc::ICE_COMPONENT_RTP)
+        + u64::from(256_u16 - webrtc::ice::component::RTP)
 }

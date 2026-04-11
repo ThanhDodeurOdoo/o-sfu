@@ -6,6 +6,7 @@
 use std::{borrow::Cow, fmt};
 
 use super::MediaKind;
+use crate::rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 
 /// RTCP feedback categories used by codec capabilities and negotiated formats.
 ///
@@ -59,10 +60,10 @@ impl MediaCodec {
     #[must_use]
     pub fn as_wire_name(&self) -> &str {
         match self {
-            Self::Opus => "opus",
-            Self::Vp8 => "VP8",
-            Self::H264 => "H264",
-            Self::Rtx => "rtx",
+            Self::Opus => rfc_rtp::codec_name::OPUS,
+            Self::Vp8 => rfc_rtp::codec_name::VP8,
+            Self::H264 => rfc_rtp::codec_name::H264,
+            Self::Rtx => rfc_rtp::codec_name::RTX,
             Self::Other(name) => name.as_str(),
         }
     }
@@ -75,16 +76,16 @@ impl MediaCodec {
 
 impl From<&str> for MediaCodec {
     fn from(value: &str) -> Self {
-        if value.eq_ignore_ascii_case("opus") {
+        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::OPUS) {
             return Self::Opus;
         }
-        if value.eq_ignore_ascii_case("vp8") {
+        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::VP8) {
             return Self::Vp8;
         }
-        if value.eq_ignore_ascii_case("h264") {
+        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::H264) {
             return Self::H264;
         }
-        if value.eq_ignore_ascii_case("rtx") {
+        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::RTX) {
             return Self::Rtx;
         }
         Self::Other(value.to_owned())
@@ -251,12 +252,12 @@ impl HeaderExtensionUri {
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Mid => "urn:ietf:params:rtp-hdrext:sdes:mid",
-            Self::AbsSendTime => "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+            Self::Mid => rfc_webrtc::rtp_header_extension_uri::MID,
+            Self::AbsSendTime => rfc_webrtc::rtp_header_extension_uri::ABS_SEND_TIME,
             Self::TransportWideCcDraft01 => {
-                "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+                rfc_webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01
             }
-            Self::SsrcAudioLevel => "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+            Self::SsrcAudioLevel => rfc_webrtc::rtp_header_extension_uri::SSRC_AUDIO_LEVEL,
             Self::Other(uri) => uri.as_str(),
         }
     }
@@ -265,12 +266,12 @@ impl HeaderExtensionUri {
 impl From<&str> for HeaderExtensionUri {
     fn from(value: &str) -> Self {
         match value {
-            "urn:ietf:params:rtp-hdrext:sdes:mid" => Self::Mid,
-            "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time" => Self::AbsSendTime,
-            "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01" => {
+            rfc_webrtc::rtp_header_extension_uri::MID => Self::Mid,
+            rfc_webrtc::rtp_header_extension_uri::ABS_SEND_TIME => Self::AbsSendTime,
+            rfc_webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01 => {
                 Self::TransportWideCcDraft01
             }
-            "urn:ietf:params:rtp-hdrext:ssrc-audio-level" => Self::SsrcAudioLevel,
+            rfc_webrtc::rtp_header_extension_uri::SSRC_AUDIO_LEVEL => Self::SsrcAudioLevel,
             _ => Self::Other(value.to_owned()),
         }
     }
@@ -301,10 +302,10 @@ impl CodecSetting {
     #[must_use]
     pub fn key(&self) -> &str {
         match self {
-            Self::RtxAssociation(_) => "apt",
-            Self::H264PacketizationMode(_) => "packetization-mode",
-            Self::H264ProfileLevelId(_) => "profile-level-id",
-            Self::UseInBandFec(_) => "useinbandfec",
+            Self::RtxAssociation(_) => rfc_rtp::fmtp::RTX_ASSOCIATION,
+            Self::H264PacketizationMode(_) => rfc_rtp::fmtp::H264_PACKETIZATION_MODE,
+            Self::H264ProfileLevelId(_) => rfc_rtp::fmtp::H264_PROFILE_LEVEL_ID,
+            Self::UseInBandFec(_) => rfc_rtp::fmtp::OPUS_USE_IN_BAND_FEC,
             Self::Other { key, .. } => key.as_str(),
         }
     }
@@ -315,7 +316,11 @@ impl CodecSetting {
             Self::RtxAssociation(payload_type) => Cow::Owned(payload_type.value().to_string()),
             Self::H264PacketizationMode(mode) => Cow::Owned(mode.to_string()),
             Self::H264ProfileLevelId(profile_level_id) => Cow::Borrowed(profile_level_id.as_str()),
-            Self::UseInBandFec(enabled) => Cow::Borrowed(if *enabled { "1" } else { "0" }),
+            Self::UseInBandFec(enabled) => Cow::Borrowed(if *enabled {
+                rfc_rtp::fmtp::VALUE_ENABLED
+            } else {
+                rfc_rtp::fmtp::VALUE_DISABLED
+            }),
             Self::Other { value, .. } => Cow::Borrowed(value.as_str()),
         }
     }
@@ -752,18 +757,22 @@ impl MediaStream {
 
 fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
     match key.as_str() {
-        "apt" => value.parse::<u8>().map(PayloadType::new).map_or(
+        rfc_rtp::fmtp::RTX_ASSOCIATION => value.parse::<u8>().map(PayloadType::new).map_or(
             CodecSetting::Other { key, value },
             CodecSetting::RtxAssociation,
         ),
-        "packetization-mode" => value.parse::<u8>().map_or(
+        rfc_rtp::fmtp::H264_PACKETIZATION_MODE => value.parse::<u8>().map_or(
             CodecSetting::Other { key, value },
             CodecSetting::H264PacketizationMode,
         ),
-        "profile-level-id" => CodecSetting::H264ProfileLevelId(value),
-        "useinbandfec" => match value.as_str() {
-            "1" | "true" => CodecSetting::UseInBandFec(true),
-            "0" | "false" => CodecSetting::UseInBandFec(false),
+        rfc_rtp::fmtp::H264_PROFILE_LEVEL_ID => CodecSetting::H264ProfileLevelId(value),
+        rfc_rtp::fmtp::OPUS_USE_IN_BAND_FEC => match value.as_str() {
+            rfc_rtp::fmtp::VALUE_ENABLED | rfc_rtp::fmtp::VALUE_TRUE => {
+                CodecSetting::UseInBandFec(true)
+            }
+            rfc_rtp::fmtp::VALUE_DISABLED | rfc_rtp::fmtp::VALUE_FALSE => {
+                CodecSetting::UseInBandFec(false)
+            }
             _ => CodecSetting::Other { key, value },
         },
         _ => CodecSetting::Other { key, value },

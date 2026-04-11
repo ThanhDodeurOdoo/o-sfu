@@ -15,6 +15,8 @@ use o_sfu_router::{
 };
 use serde_json::{Map, Value, json};
 
+use crate::rfc::webrtc;
+
 // ---------------------------------------------------------------------------
 // Parse: ortc JSON -> router types
 // ---------------------------------------------------------------------------
@@ -295,11 +297,15 @@ fn parse_rtcp_feedback(value: &Value) -> Option<RtcpFeedback> {
     let feedback_type = obj.get("type").and_then(Value::as_str)?;
     let parameter = obj.get("parameter").and_then(Value::as_str);
     let kind = match (feedback_type, parameter) {
-        ("nack", None) => RtcpFeedbackKind::Nack,
-        ("nack", Some("pli")) => RtcpFeedbackKind::NackPli,
-        ("ccm", Some("fir")) => RtcpFeedbackKind::CcmFir,
-        ("goog-remb", _) => RtcpFeedbackKind::GoogRemb,
-        ("transport-cc", _) => RtcpFeedbackKind::TransportCc,
+        (webrtc::rtcp_feedback::kind::NACK, None) => RtcpFeedbackKind::Nack,
+        (webrtc::rtcp_feedback::kind::NACK, Some(webrtc::rtcp_feedback::parameter::PLI)) => {
+            RtcpFeedbackKind::NackPli
+        }
+        (webrtc::rtcp_feedback::kind::CCM, Some(webrtc::rtcp_feedback::parameter::FIR)) => {
+            RtcpFeedbackKind::CcmFir
+        }
+        (webrtc::rtcp_feedback::kind::GOOG_REMB, _) => RtcpFeedbackKind::GoogRemb,
+        (webrtc::rtcp_feedback::kind::TRANSPORT_CC, _) => RtcpFeedbackKind::TransportCc,
         _ => RtcpFeedbackKind::Other(feedback_type.to_owned()),
     };
     let rtcp_parameter = match &kind {
@@ -311,11 +317,17 @@ fn parse_rtcp_feedback(value: &Value) -> Option<RtcpFeedback> {
 
 fn serialize_rtcp_feedback(feedback: &RtcpFeedback) -> Value {
     let (feedback_type, parameter) = match feedback.kind() {
-        RtcpFeedbackKind::Nack => ("nack", feedback.parameter()),
-        RtcpFeedbackKind::NackPli => ("nack", Some("pli")),
-        RtcpFeedbackKind::CcmFir => ("ccm", Some("fir")),
-        RtcpFeedbackKind::GoogRemb => ("goog-remb", None),
-        RtcpFeedbackKind::TransportCc => ("transport-cc", None),
+        RtcpFeedbackKind::Nack => (webrtc::rtcp_feedback::kind::NACK, feedback.parameter()),
+        RtcpFeedbackKind::NackPli => (
+            webrtc::rtcp_feedback::kind::NACK,
+            Some(webrtc::rtcp_feedback::parameter::PLI),
+        ),
+        RtcpFeedbackKind::CcmFir => (
+            webrtc::rtcp_feedback::kind::CCM,
+            Some(webrtc::rtcp_feedback::parameter::FIR),
+        ),
+        RtcpFeedbackKind::GoogRemb => (webrtc::rtcp_feedback::kind::GOOG_REMB, None),
+        RtcpFeedbackKind::TransportCc => (webrtc::rtcp_feedback::kind::TRANSPORT_CC, None),
         RtcpFeedbackKind::Other(name) => (name.as_str(), feedback.parameter()),
     };
     let mut obj = Map::new();
@@ -367,8 +379,8 @@ fn parse_mime_type(obj: &Map<String, Value>) -> Option<(RouterMediaKind, String)
     let mime_type = obj.get("mimeType").and_then(Value::as_str)?;
     let (kind_str, codec_name) = mime_type.split_once('/')?;
     let media_kind = match kind_str {
-        "audio" => RouterMediaKind::Audio,
-        "video" => RouterMediaKind::Video,
+        webrtc::media_kind::AUDIO => RouterMediaKind::Audio,
+        webrtc::media_kind::VIDEO => RouterMediaKind::Video,
         _ => return None,
     };
     Some((media_kind, codec_name.to_owned()))
@@ -376,8 +388,8 @@ fn parse_mime_type(obj: &Map<String, Value>) -> Option<(RouterMediaKind, String)
 
 fn media_kind_label(media_kind: RouterMediaKind) -> &'static str {
     match media_kind {
-        RouterMediaKind::Audio => "audio",
-        RouterMediaKind::Video => "video",
+        RouterMediaKind::Audio => webrtc::media_kind::AUDIO,
+        RouterMediaKind::Video => webrtc::media_kind::VIDEO,
     }
 }
 

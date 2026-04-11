@@ -1,20 +1,13 @@
 use o_sfu_router::{
-    MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
+    CodecSetting, MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
     RtpHeaderExtension,
 };
 
-use crate::rfc::webrtc;
-
-const AUDIO_CODEC_OPUS: &str = "opus";
-const VIDEO_CODEC_VP8: &str = "VP8";
-const VIDEO_CODEC_RTX: &str = "rtx";
+use crate::rfc::{rtp, webrtc};
 
 const AUDIO_PAYLOAD_TYPE_OPUS: u8 = 111;
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 const VIDEO_PAYLOAD_TYPE_VP8_RTX: u8 = 97;
-
-const RTP_PARAMETER_APT: &str = "apt";
-const RTP_PARAMETER_USE_IN_BAND_FEC: &str = "useinbandfec";
 
 const HEADER_EXTENSION_ID_MID: u8 = 1;
 const HEADER_EXTENSION_ID_ABS_SEND_TIME: u8 = 4;
@@ -50,15 +43,15 @@ pub(super) fn default_router_rtp_capabilities() -> RtpCapabilities {
 }
 
 fn default_audio_codec_capability() -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Audio, AUDIO_CODEC_OPUS, 48_000)
+    RtpCodecCapability::new(MediaKind::Audio, rtp::codec_name::OPUS, 48_000)
         .with_preferred_payload_type(AUDIO_PAYLOAD_TYPE_OPUS)
         .with_channels(2)
-        .with_parameter(RTP_PARAMETER_USE_IN_BAND_FEC, "1")
+        .with_setting(CodecSetting::UseInBandFec(true))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
 }
 
 fn default_video_codec_capability() -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Video, VIDEO_CODEC_VP8, 90_000)
+    RtpCodecCapability::new(MediaKind::Video, rtp::codec_name::VP8, 90_000)
         .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
@@ -68,7 +61,7 @@ fn default_video_codec_capability() -> RtpCodecCapability {
 }
 
 fn default_video_rtx_codec_capability() -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Video, VIDEO_CODEC_RTX, 90_000)
+    RtpCodecCapability::new(MediaKind::Video, rtp::codec_name::RTX, 90_000)
         .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8_RTX)
-        .with_parameter(RTP_PARAMETER_APT, VIDEO_PAYLOAD_TYPE_VP8.to_string())
+        .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8.into()))
 }

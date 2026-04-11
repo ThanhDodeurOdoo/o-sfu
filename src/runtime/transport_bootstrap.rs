@@ -3,6 +3,7 @@ use o_sfu_router::{
 };
 use serde_json::{Map, Value, json};
 
+use crate::rfc::webrtc;
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     webrtc::{
@@ -10,18 +11,6 @@ use crate::signaling::{
         TransportBootstrap,
     },
 };
-
-const RTCP_FEEDBACK_NACK: &str = "nack";
-const RTCP_FEEDBACK_PLI: &str = "pli";
-const RTCP_FEEDBACK_CCM: &str = "ccm";
-const RTCP_FEEDBACK_FIR: &str = "fir";
-const RTCP_FEEDBACK_GOOG_REMB: &str = "goog-remb";
-const RTCP_FEEDBACK_TRANSPORT_CC: &str = "transport-cc";
-const RTP_HEADER_DIRECTION_SEND_RECV: &str = "sendrecv";
-const SCTP_PORT: u16 = 5_000;
-const SCTP_OS: u16 = 1_024;
-const SCTP_MIS: u16 = 1_024;
-const SCTP_MAX_MESSAGE_SIZE: u32 = 262_144;
 
 pub(super) fn transport_bootstrap_payload(
     router_capabilities: &MediaCapabilities,
@@ -50,10 +39,10 @@ pub(super) fn default_publish_options_by_media_kind() -> PublishOptionsByMediaKi
 
 pub(super) fn default_sctp_parameters() -> SctpParameters {
     SctpParameters(json!({
-        "port": SCTP_PORT,
-        "OS": SCTP_OS,
-        "MIS": SCTP_MIS,
-        "maxMessageSize": SCTP_MAX_MESSAGE_SIZE
+        "port": webrtc::data_channel::SCTP_PORT,
+        "OS": webrtc::data_channel::OUTGOING_STREAMS,
+        "MIS": webrtc::data_channel::INCOMING_STREAMS,
+        "maxMessageSize": webrtc::data_channel::MAX_MESSAGE_SIZE
     }))
 }
 
@@ -119,7 +108,7 @@ fn serialize_header_extension(
         "uri": header_extension.uri(),
         "preferredId": header_extension.id().value(),
         "preferredEncrypt": header_extension.encrypt(),
-        "direction": RTP_HEADER_DIRECTION_SEND_RECV,
+        "direction": webrtc::sdp::direction::SEND_RECV,
     })
 }
 
@@ -136,26 +125,28 @@ fn serialize_rtcp_feedback(feedback: &RtcpFeedback) -> Value {
 fn rtcp_feedback_wire_parts(feedback: &RtcpFeedback) -> (String, Option<String>) {
     match feedback.kind() {
         RtcpFeedbackKind::Nack => (
-            RTCP_FEEDBACK_NACK.to_owned(),
+            webrtc::rtcp_feedback::kind::NACK.to_owned(),
             feedback.parameter().map(str::to_owned),
         ),
         RtcpFeedbackKind::NackPli => (
-            RTCP_FEEDBACK_NACK.to_owned(),
-            Some(RTCP_FEEDBACK_PLI.to_owned()),
+            webrtc::rtcp_feedback::kind::NACK.to_owned(),
+            Some(webrtc::rtcp_feedback::parameter::PLI.to_owned()),
         ),
         RtcpFeedbackKind::CcmFir => (
-            RTCP_FEEDBACK_CCM.to_owned(),
-            Some(RTCP_FEEDBACK_FIR.to_owned()),
+            webrtc::rtcp_feedback::kind::CCM.to_owned(),
+            Some(webrtc::rtcp_feedback::parameter::FIR.to_owned()),
         ),
-        RtcpFeedbackKind::GoogRemb => (RTCP_FEEDBACK_GOOG_REMB.to_owned(), None),
-        RtcpFeedbackKind::TransportCc => (RTCP_FEEDBACK_TRANSPORT_CC.to_owned(), None),
+        RtcpFeedbackKind::GoogRemb => (webrtc::rtcp_feedback::kind::GOOG_REMB.to_owned(), None),
+        RtcpFeedbackKind::TransportCc => {
+            (webrtc::rtcp_feedback::kind::TRANSPORT_CC.to_owned(), None)
+        }
         RtcpFeedbackKind::Other(name) => (name.clone(), feedback.parameter().map(str::to_owned)),
     }
 }
 
 fn media_kind_label(media_kind: MediaKind) -> &'static str {
     match media_kind {
-        MediaKind::Audio => "audio",
-        MediaKind::Video => "video",
+        MediaKind::Audio => webrtc::media_kind::AUDIO,
+        MediaKind::Video => webrtc::media_kind::VIDEO,
     }
 }
