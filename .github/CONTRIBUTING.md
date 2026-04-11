@@ -1,11 +1,5 @@
 # Contributing
 
-## Project layout
-
-- `router/` contains the pure router model and is the primary proof target.
-- `src/` contains the application shell, runtime bootstrap, and signaling surface.
-- `internal-documentation/` contains the living roadmap and formal verification strategy.
-
 ## Style guidelines
 
 ### General Rules
@@ -21,23 +15,15 @@ We follow standard Rust idioms and enforce strict safety.
 
 - **Formatting**: Always run `cargo fmt` before committing.
 - **Linting**: We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml), see the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html) for explanations.
-- **Unsafe Code**: Use of `unsafe` is discouraged. If absolutely necessary, it must be locally scoped and justified.
+- **Unsafe Code**: Use of `unsafe` is discouraged. If absolutely necessary, it must be locally scoped (as narrow as possible) and justified.
 - **Tests**: Every new feature must include corresponding tests.
 
-## Working rules
-
-- Keep the router core independent from sockets, async orchestration, and browser concerns.
-- Add or update `internal-documentation/server-development-plan.md` when the implementation order or milestones change.
-- Add or update `internal-documentation/formal-verification.md` when invariants, proof targets, or verifier choices change.
-
 ## Validation
-
-Run these commands from the repository root:
 
 ```bash
 cargo fmt
 cargo test --workspace
-cargo clippy --workspace --all-targets --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 ## Kani proofs
