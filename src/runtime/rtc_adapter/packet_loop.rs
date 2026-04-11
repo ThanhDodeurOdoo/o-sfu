@@ -14,8 +14,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use super::{
-    controller::{RtcWorkerCommand, handle_worker_command},
+    commands::RtcWorkerCommand,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState},
+    worker::handle_worker_command,
 };
 use crate::config::RtcPortRange;
 use crate::runtime::transport_adapter::TransportSessionKey;

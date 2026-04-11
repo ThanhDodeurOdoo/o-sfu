@@ -1,7 +1,9 @@
 //! Runtime transport adapter for the `rtc` WebRTC backend.
 //!
 //! Internal modules:
-//! - `controller`: runtime adapter facade, worker lifecycle, and command orchestration
+//! - `api`: runtime adapter facade and worker lifecycle
+//! - `commands`: worker mailbox contract and debug-only test commands
+//! - `worker`: command dispatch and worker-local state mutations
 //! - `state`: pure state types and session scheduling
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
@@ -13,8 +15,9 @@
 //! - `sdp`: SDP offer parsing (RFC 8866)
 //! - `parse_diagnostic`: shared parse diagnostic infrastructure
 
+mod api;
 mod bootstrap;
-mod controller;
+mod commands;
 mod demux;
 mod dtls;
 mod ice;
@@ -26,5 +29,6 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod validation;
+mod worker;
 
-pub(crate) use controller::RtcTransportAdapter;
+pub(crate) use api::RtcTransportAdapter;

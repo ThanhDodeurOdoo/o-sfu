@@ -1,0 +1,194 @@
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
+use str0m::media::Mid;
+use tokio::sync::oneshot;
+
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+
+use super::super::{
+    commands::{DebugRouteDestination, DebugRouteEntry, DebugRtcCommand},
+    state::{RtcBootstrapState, RtcSnapshotState},
+};
+
+pub(super) fn handle_debug_command(
+    state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    command: DebugRtcCommand,
+) {
+    match command {
+        DebugRtcCommand::ResolveMid {
+            transport_media_id,
+            response,
+        } => respond_debug_resolve_mid(state, transport_media_id, response),
+        DebugRtcCommand::RemoteAddrOwner {
+            source_addr,
+            response,
+        } => respond_debug_remote_addr_owner(snapshot_state, source_addr, response),
+        DebugRtcCommand::HasAnyRemoteAddrSession { response } => {
+            respond_debug_has_any_remote_addr_session(snapshot_state, response);
+        }
+        DebugRtcCommand::RememberRemoteAddr {
+            source_addr,
+            session_key,
+            response,
+        } => respond_debug_remember_remote_addr(
+            state,
+            snapshot_state,
+            source_addr,
+            &session_key,
+            response,
+        ),
+        DebugRtcCommand::SessionStreamRxSsrc {
+            session_key,
+            mid,
+            response,
+        } => respond_debug_session_stream_rx_ssrc(state, &session_key, mid, response),
+        DebugRtcCommand::SessionStreamTxSsrc {
+            session_key,
+            mid,
+            response,
+        } => respond_debug_session_stream_tx_ssrc(state, &session_key, mid, response),
+        DebugRtcCommand::RouteEntry {
+            source_session_key,
+            source_mid,
+            response,
+        } => respond_debug_route_entry(state, &source_session_key, source_mid, response),
+        DebugRtcCommand::RecordIncomingMedia {
+            session_key,
+            transport_media_id,
+            payload_bytes,
+            now,
+            response,
+        } => respond_debug_record_incoming_media(
+            snapshot_state,
+            &session_key,
+            transport_media_id,
+            payload_bytes,
+            now,
+            response,
+        ),
+    }
+}
+
+fn respond_debug_resolve_mid(
+    state: &RtcBootstrapState,
+    transport_media_id: TransportMediaId,
+    response: oneshot::Sender<Option<Mid>>,
+) {
+    let _ = response.send(state.resolve_mid(transport_media_id));
+}
+
+fn respond_debug_remote_addr_owner(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    source_addr: SocketAddr,
+    response: oneshot::Sender<Option<TransportSessionKey>>,
+) {
+    let value = snapshot_state
+        .lock()
+        .ok()
+        .and_then(|snapshot| snapshot.session_key_for_remote_addr(source_addr).cloned());
+    let _ = response.send(value);
+}
+
+fn respond_debug_has_any_remote_addr_session(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    response: oneshot::Sender<bool>,
+) {
+    let value = snapshot_state
+        .lock()
+        .ok()
+        .is_some_and(|snapshot| !snapshot.remote_addrs_by_session.is_empty());
+    let _ = response.send(value);
+}
+
+fn respond_debug_remember_remote_addr(
+    state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    source_addr: SocketAddr,
+    session_key: &TransportSessionKey,
+    response: oneshot::Sender<()>,
+) {
+    state.remember_remote_addr(source_addr, session_key);
+    if let Ok(mut snapshot) = snapshot_state.lock() {
+        snapshot.remember_remote_addr(source_addr, session_key);
+    }
+    let _ = response.send(());
+}
+
+fn respond_debug_session_stream_rx_ssrc(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    mid: Mid,
+    response: oneshot::Sender<Option<u32>>,
+) {
+    let value = state
+        .sessions
+        .get_mut(session_key)
+        .and_then(|session_state| {
+            let mut direct_api = session_state.rtc.direct_api();
+            direct_api
+                .stream_rx_by_mid(mid, None)
+                .map(|stream_rx| *stream_rx.ssrc())
+        });
+    let _ = response.send(value);
+}
+
+fn respond_debug_session_stream_tx_ssrc(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    mid: Mid,
+    response: oneshot::Sender<Option<u32>>,
+) {
+    let value = state
+        .sessions
+        .get_mut(session_key)
+        .and_then(|session_state| {
+            let mut direct_api = session_state.rtc.direct_api();
+            direct_api
+                .stream_tx_by_mid(mid, None)
+                .map(|stream_tx| *stream_tx.ssrc())
+        });
+    let _ = response.send(value);
+}
+
+fn respond_debug_route_entry(
+    state: &RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_mid: Mid,
+    response: oneshot::Sender<Option<DebugRouteEntry>>,
+) {
+    let value = state
+        .media_route_index
+        .get(&(source_session_key.clone(), source_mid))
+        .map(|entry| DebugRouteEntry {
+            source_active: entry.source_active,
+            destinations: entry
+                .destinations
+                .iter()
+                .map(|destination| DebugRouteDestination {
+                    dest_session: destination.dest_session.clone(),
+                    dest_mid: destination.dest_mid,
+                    active: destination.active,
+                })
+                .collect(),
+        });
+    let _ = response.send(value);
+}
+
+fn respond_debug_record_incoming_media(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    payload_bytes: usize,
+    now: Instant,
+    response: oneshot::Sender<()>,
+) {
+    if let Ok(mut snapshot) = snapshot_state.lock() {
+        snapshot.record_incoming_media(session_key, transport_media_id, now, payload_bytes);
+    }
+    let _ = response.send(());
+}

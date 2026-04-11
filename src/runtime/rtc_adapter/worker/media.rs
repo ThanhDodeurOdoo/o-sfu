@@ -1,0 +1,317 @@
+use o_sfu_router::RtpParameters as RouterRtpParameters;
+use str0m::media::{MediaKind, Mid, Rid};
+use str0m::rtp::Ssrc;
+use tokio::sync::oneshot;
+use tracing::debug;
+
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
+};
+
+use super::super::{
+    demux::{MediaRouteDestination, MediaRouteEntry},
+    media_registry::RegisteredMediaHandle,
+    state::RtcBootstrapState,
+};
+
+pub(super) fn respond_remove_media(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_remove_media(state, session_key, transport_media_id));
+}
+
+pub(super) fn respond_add_recv_media(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+    response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+) {
+    let _ = response.send(worker_add_recv_media(
+        state,
+        session_key,
+        media_kind,
+        rtp_parameters,
+    ));
+}
+
+pub(super) fn respond_add_send_media(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    media_kind: MediaKind,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    consumer_rtp_parameters: &RouterRtpParameters,
+    response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+) {
+    let _ = response.send(worker_add_send_media(
+        state,
+        consumer_session_key,
+        media_kind,
+        source_session_key,
+        source_transport_media_id,
+        consumer_rtp_parameters,
+    ));
+}
+
+pub(super) fn respond_set_producer_active(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    active: bool,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_producer_active(
+        state,
+        session_key,
+        transport_media_id,
+        active,
+    ));
+}
+
+pub(super) fn respond_set_consumer_active(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_consumer_active(
+        state,
+        consumer_session_key,
+        consumer_transport_media_id,
+        source_session_key,
+        source_transport_media_id,
+        active,
+    ));
+}
+
+fn worker_remove_media(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+) -> Result<(), TransportAdapterError> {
+    let Some(handle) = state.remove_media_handle(transport_media_id) else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    if handle.session_key() != session_key {
+        return Err(TransportAdapterError::InvalidInput);
+    }
+    match handle {
+        RegisteredMediaHandle::Producer { session_key, mid } => {
+            let should_remove_media = !state.session_has_mid(&session_key, mid);
+            let should_remove_stream_type = !state.session_has_producer_mid(&session_key, mid);
+            if let Some(session_state) = state.sessions.get_mut(&session_key) {
+                remove_mid_once(&mut session_state.recv_mids, mid);
+                if should_remove_media {
+                    session_state.rtc.direct_api().remove_media(mid);
+                }
+            }
+            if should_remove_stream_type {
+                state.recv_media_ids.remove(&(session_key.clone(), mid));
+                state.media_route_index.remove(&(session_key.clone(), mid));
+            }
+            state.mark_session_dirty(&session_key);
+        }
+        RegisteredMediaHandle::Consumer {
+            session_key,
+            mid,
+            source_session_key,
+            source_mid,
+        } => {
+            let should_remove_media = !state.session_has_mid(&session_key, mid);
+            if let Some(session_state) = state.sessions.get_mut(&session_key) {
+                remove_mid_once(&mut session_state.send_mids, mid);
+                if should_remove_media {
+                    session_state.rtc.direct_api().remove_media(mid);
+                }
+            }
+            if let Some(route_entry) = state
+                .media_route_index
+                .get_mut(&(source_session_key.clone(), source_mid))
+            {
+                if let Some(position) = route_entry.destinations.iter().position(|destination| {
+                    destination.dest_session == session_key && destination.dest_mid == mid
+                }) {
+                    route_entry.destinations.remove(position);
+                }
+                if route_entry.destinations.is_empty() {
+                    state
+                        .media_route_index
+                        .remove(&(source_session_key, source_mid));
+                }
+            }
+            state.mark_session_dirty(&session_key);
+        }
+    }
+    Ok(())
+}
+
+fn worker_add_recv_media(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+) -> Result<TransportMediaId, TransportAdapterError> {
+    let Some(session_state) = state.sessions.get_mut(session_key) else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    let mid = transport_mid(rtp_parameters).unwrap_or_default();
+    let has_media = session_state.rtc.media(mid).is_some();
+    {
+        let mut api = session_state.rtc.direct_api();
+        if !has_media {
+            api.declare_media(mid, media_kind);
+        }
+        if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
+            api.expect_stream_rx(ssrc, None, mid, rid);
+        }
+    }
+    session_state.recv_mids.push(mid);
+    state.mark_session_dirty(session_key);
+    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: session_key.clone(),
+        mid,
+    });
+    state
+        .recv_media_ids
+        .insert((session_key.clone(), mid), transport_media_id);
+    debug!(
+        session_id = ?session_key.session_id(),
+        channel_runtime_id = session_key.channel_runtime_id(),
+        ?transport_media_id,
+        ?media_kind,
+        "declared recv-only media on rtc session for incoming producer RTP"
+    );
+    Ok(transport_media_id)
+}
+
+fn worker_add_send_media(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    media_kind: MediaKind,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    consumer_rtp_parameters: &RouterRtpParameters,
+) -> Result<TransportMediaId, TransportAdapterError> {
+    let source_mid = state
+        .resolve_mid(source_transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
+    let has_media = session_state.rtc.media(mid).is_some();
+    {
+        let mut api = session_state.rtc.direct_api();
+        if !has_media {
+            api.declare_media(mid, media_kind);
+        }
+        let (ssrc, rid) = primary_encoding_identity(consumer_rtp_parameters)
+            .unwrap_or_else(|| (api.new_ssrc(), None));
+        api.declare_stream_tx(ssrc, None, mid, rid);
+    }
+    session_state.send_mids.push(mid);
+    state.mark_session_dirty(consumer_session_key);
+    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
+        session_key: consumer_session_key.clone(),
+        mid,
+        source_session_key: source_session_key.clone(),
+        source_mid,
+    });
+    state
+        .media_route_index
+        .entry((source_session_key.clone(), source_mid))
+        .or_insert_with(|| MediaRouteEntry {
+            source_active: true,
+            destinations: Vec::new(),
+        })
+        .destinations
+        .push(MediaRouteDestination {
+            dest_session: consumer_session_key.clone(),
+            dest_mid: mid,
+            active: true,
+        });
+    debug!(
+        consumer_session_id = ?consumer_session_key.session_id(),
+        consumer_channel_runtime_id = consumer_session_key.channel_runtime_id(),
+        source_session_id = ?source_session_key.session_id(),
+        source_channel_runtime_id = source_session_key.channel_runtime_id(),
+        ?source_mid,
+        ?transport_media_id,
+        ?media_kind,
+        "declared send-only media and registered media route for consumer"
+    );
+    Ok(transport_media_id)
+}
+
+fn worker_set_producer_active(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    active: bool,
+) -> Result<(), TransportAdapterError> {
+    let source_mid = state
+        .resolve_mid(transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let route_entry = state
+        .media_route_index
+        .get_mut(&(session_key.clone(), source_mid))
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    route_entry.source_active = active;
+    Ok(())
+}
+
+fn worker_set_consumer_active(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+) -> Result<(), TransportAdapterError> {
+    let source_mid = state
+        .resolve_mid(source_transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let consumer_mid = state
+        .resolve_mid(consumer_transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let route_entry = state
+        .media_route_index
+        .get_mut(&(source_session_key.clone(), source_mid))
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let destination = route_entry
+        .destinations
+        .iter_mut()
+        .find(|destination| {
+            destination.dest_session == *consumer_session_key
+                && destination.dest_mid == consumer_mid
+        })
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    destination.active = active;
+    Ok(())
+}
+
+fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
+    rtp_parameters.mid().map(Into::into)
+}
+
+fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ssrc, Option<Rid>)> {
+    let encoding = rtp_parameters
+        .encodings()
+        .find(|encoding| encoding.ssrc().is_some() || encoding.rid().is_some())?;
+    let ssrc = encoding.ssrc().map(Ssrc::from)?;
+    let rid = encoding.rid().map(Into::into);
+    Some((ssrc, rid))
+}
+
+fn remove_mid_once(mids: &mut Vec<Mid>, mid: Mid) {
+    if let Some(position) = mids.iter().position(|current_mid| *current_mid == mid) {
+        mids.remove(position);
+    }
+}
