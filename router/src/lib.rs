@@ -1,12 +1,18 @@
 mod model;
 
 pub use self::model::{
-    Consumer, ConsumerId, MediaKind, NoopRouterObserver, ParseDiagnostic, ParseDiagnosticKind,
-    ParseDiagnosticSpec, Producer, ProducerId, RfcReference, Router, RouterError, RouterEvent,
-    RouterId, RouterObserver, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
-    RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpNegotiationError, RtpParameters,
-    Session, SessionId, SessionInfo, SessionPermissions, SessionState, StreamType, Transport,
+    CodecSetting, Consumer, ConsumerId, HeaderExtension, HeaderExtensionId, HeaderExtensionUri,
+    MediaCapabilities, MediaCodec, MediaCodecCapability, MediaFormat, MediaKind, MediaStream, Mid,
+    NoopRouterObserver, ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, PayloadType,
+    Producer, ProducerId, RfcReference, Rid, Router, RouterError, RouterEvent, RouterId,
+    RouterObserver, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError, Session, SessionId,
+    SessionInfo, SessionPermissions, SessionState, Ssrc, StreamBinding, StreamType, Transport,
     TransportDirection, TransportId, can_consume, derive_consumable_rtp_parameters,
     negotiate_consumer_rtp_parameters,
+};
+pub use self::model::{
+    HeaderExtension as RtpHeaderExtension, MediaCapabilities as RtpCapabilities,
+    MediaCodecCapability as RtpCodecCapability, MediaFormat as RtpCodecParameters,
+    MediaStream as RtpParameters, StreamBinding as RtpEncoding,
 };
 pub use o_sfu_rfc as rfc;

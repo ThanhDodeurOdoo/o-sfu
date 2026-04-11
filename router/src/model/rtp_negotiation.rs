@@ -1,17 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use super::{
-    MediaKind, ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
-    RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability, RtpCodecParameters,
-    RtpEncoding, RtpHeaderExtension, RtpParameters,
+    CodecSetting, HeaderExtension, HeaderExtensionUri, MediaCapabilities, MediaCodec,
+    MediaCodecCapability, MediaFormat, MediaKind, MediaStream, ParseDiagnostic,
+    ParseDiagnosticKind, ParseDiagnosticSpec, PayloadType, RfcReference, RtcpFeedback,
+    RtcpFeedbackKind, StreamBinding,
 };
-use crate::rfc::webrtc;
-
-const RTP_PARAMETER_APT: &str = "apt";
-const H264_PACKETIZATION_MODE_PARAMETER: &str = "packetization-mode";
-const H264_PROFILE_LEVEL_ID_PARAMETER: &str = "profile-level-id";
-const CODEC_NAME_H264: &str = "h264";
-const CODEC_NAME_RTX: &str = "rtx";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RtpNegotiationError {
@@ -48,31 +42,31 @@ impl ParseDiagnostic for RtpNegotiationError {
                 ParseDiagnosticKind::UnsupportedFeature,
                 "producer codec is valid but not supported by router capabilities",
                 RFC_3264_SECTION_6,
-                "capture producer RTP parameters and router capabilities and replay derive_consumable_rtp_parameters",
+                "capture producer media stream and router media capabilities and replay derive_consumable_rtp_parameters",
             ),
             Self::InvalidAptParameter { .. } => ParseDiagnosticSpec::new(
                 ParseDiagnosticKind::InvalidInput,
                 "RTX codec has an invalid or missing apt parameter",
                 RFC_4588_SECTION_8_1,
-                "capture producer RTP parameters and replay derive_consumable_rtp_parameters to inspect RTX fmtp apt",
+                "capture producer media stream and replay derive_consumable_rtp_parameters to inspect RTX linkage",
             ),
             Self::MissingAssociatedMediaCodecForRtx { .. } => ParseDiagnosticSpec::new(
                 ParseDiagnosticKind::InvalidInput,
                 "RTX codec references an associated payload type that is not negotiated",
                 RFC_4588_SECTION_8_1,
-                "capture producer RTP parameters and replay derive_consumable_rtp_parameters to inspect RTX apt mapping",
+                "capture producer media stream and replay derive_consumable_rtp_parameters to inspect RTX linkage",
             ),
             Self::NoCompatibleConsumerCodec => ParseDiagnosticSpec::new(
                 ParseDiagnosticKind::UnsupportedFeature,
                 "consumer capabilities have no compatible media codec with the consumable set",
                 RFC_3264_SECTION_6,
-                "capture consumable RTP parameters and consumer capabilities and replay negotiate_consumer_rtp_parameters",
+                "capture consumable media stream and consumer capabilities and replay negotiate_consumer_rtp_parameters",
             ),
         }
     }
 }
 
-/// Derive consumable RTP parameters from producer parameters and router capabilities.
+/// Derive consumable media stream data from a producer stream and router capabilities.
 ///
 /// # Errors
 ///
@@ -82,72 +76,71 @@ impl ParseDiagnostic for RtpNegotiationError {
 /// [`RtpNegotiationError::MissingAssociatedMediaCodecForRtx`] when a RTX codec references a media
 /// payload that is not part of the negotiated media codec set.
 pub fn derive_consumable_rtp_parameters(
-    producer_parameters: &RtpParameters,
-    router_capabilities: &RtpCapabilities,
-) -> Result<RtpParameters, RtpNegotiationError> {
-    let mut mapped_media_payload_by_original_payload = BTreeMap::new();
-    let mut consumable_codecs = Vec::new();
+    producer_parameters: &MediaStream,
+    router_capabilities: &MediaCapabilities,
+) -> Result<MediaStream, RtpNegotiationError> {
+    let mut mapped_media_payload_by_original_payload = Vec::<(PayloadType, PayloadType)>::new();
+    let mut consumable_formats = Vec::new();
 
-    for producer_codec in producer_parameters.codecs() {
-        if is_rtx_codec_name(producer_codec.codec_name()) {
+    for producer_format in producer_parameters.formats() {
+        if producer_format.codec().is_rtx() {
             continue;
         }
-        let Some(capability_codec) =
-            find_matching_media_capability(producer_codec, router_capabilities)
+        let Some(capability_format) =
+            find_matching_media_capability(producer_format, router_capabilities)
         else {
             return Err(RtpNegotiationError::UnsupportedProducerCodec {
-                codec_name: producer_codec.codec_name().to_owned(),
-                payload_type: producer_codec.payload_type(),
+                codec_name: producer_format.codec().as_wire_name().to_owned(),
+                payload_type: producer_format.payload_type(),
             });
         };
-        let mapped_payload_type = mapped_payload_type(capability_codec, producer_codec);
+        let mapped_payload_type = mapped_payload_type(capability_format, producer_format);
         mapped_media_payload_by_original_payload
-            .insert(producer_codec.payload_type(), mapped_payload_type);
+            .push((producer_format.payload_type_id(), mapped_payload_type));
         let feedback = intersect_feedback(
-            producer_codec.rtcp_feedback(),
-            capability_codec.rtcp_feedback(),
+            producer_format.rtcp_feedback(),
+            capability_format.rtcp_feedback(),
         );
-        consumable_codecs.push(clone_codec_with_overrides(
-            producer_codec,
+        consumable_formats.push(clone_format_with_overrides(
+            producer_format,
             mapped_payload_type,
             None,
             &feedback,
         ));
     }
 
-    for producer_codec in producer_parameters.codecs() {
-        if !is_rtx_codec_name(producer_codec.codec_name()) {
+    for producer_format in producer_parameters.formats() {
+        if !producer_format.codec().is_rtx() {
             continue;
         }
-        let associated_payload_type = parse_rtx_associated_payload(
-            producer_codec.codec_name(),
-            producer_codec.payload_type(),
-            producer_codec.parameters(),
-        )?;
-        let Some(mapped_associated_payload_type) =
-            mapped_media_payload_by_original_payload.get(&associated_payload_type)
+        let associated_payload_type = parse_rtx_associated_payload(producer_format)?;
+        let Some(mapped_associated_payload_type) = mapped_media_payload_by_original_payload
+            .iter()
+            .find_map(|(original, mapped)| {
+                (*original == associated_payload_type).then_some(*mapped)
+            })
         else {
             return Err(RtpNegotiationError::MissingAssociatedMediaCodecForRtx {
-                payload_type: producer_codec.payload_type(),
-                associated_payload_type,
+                payload_type: producer_format.payload_type(),
+                associated_payload_type: associated_payload_type.value(),
             });
         };
-        let Some(capability_codec) = find_matching_rtx_capability(
-            producer_codec,
-            *mapped_associated_payload_type,
+        let Some(capability_format) = find_matching_rtx_capability(
+            producer_format,
+            mapped_associated_payload_type,
             router_capabilities,
         ) else {
             continue;
         };
-        let mapped_payload_type = mapped_payload_type(capability_codec, producer_codec);
+        let mapped_payload_type = mapped_payload_type(capability_format, producer_format);
         let feedback = intersect_feedback(
-            producer_codec.rtcp_feedback(),
-            capability_codec.rtcp_feedback(),
+            producer_format.rtcp_feedback(),
+            capability_format.rtcp_feedback(),
         );
-        consumable_codecs.push(clone_codec_with_overrides(
-            producer_codec,
+        consumable_formats.push(clone_format_with_overrides(
+            producer_format,
             mapped_payload_type,
-            Some(*mapped_associated_payload_type),
+            Some(mapped_associated_payload_type),
             &feedback,
         ));
     }
@@ -156,294 +149,293 @@ pub fn derive_consumable_rtp_parameters(
         .header_extensions()
         .map(clone_header_extension)
         .collect::<Vec<_>>();
-    let encodings = producer_parameters
-        .encodings()
-        .map(|encoding| {
-            clone_encoding_with_payload_mapping(encoding, &mapped_media_payload_by_original_payload)
+    let bindings = producer_parameters
+        .bindings()
+        .map(|binding| {
+            clone_binding_with_payload_mapping(binding, &mapped_media_payload_by_original_payload)
         })
         .collect::<Vec<_>>();
 
-    let mut consumable = RtpParameters::new(consumable_codecs, header_extensions, encodings);
+    let mut consumable = MediaStream::new(consumable_formats, header_extensions, bindings);
     if let Some(mid) = producer_parameters.mid() {
-        consumable = consumable.with_mid(mid.to_owned());
+        consumable = consumable.with_mid(mid);
     }
     Ok(consumable)
 }
 
-/// Negotiate consumer RTP parameters from consumable parameters and consumer capabilities.
+/// Negotiate consumer media stream data from a consumable stream and consumer capabilities.
 ///
 /// # Errors
 ///
 /// Returns [`RtpNegotiationError::NoCompatibleConsumerCodec`] when no compatible media codec can
 /// be negotiated.
 pub fn negotiate_consumer_rtp_parameters(
-    consumable_parameters: &RtpParameters,
-    consumer_capabilities: &RtpCapabilities,
-) -> Result<RtpParameters, RtpNegotiationError> {
+    consumable_parameters: &MediaStream,
+    consumer_capabilities: &MediaCapabilities,
+) -> Result<MediaStream, RtpNegotiationError> {
     let negotiated_header_extensions =
         negotiate_header_extensions(consumable_parameters, consumer_capabilities);
     let feedback_policy = bwe_feedback_policy(&negotiated_header_extensions);
 
-    let mut negotiated_codecs = consumable_parameters
-        .codecs()
-        .filter_map(|codec| {
-            let capability_codec =
-                find_matching_media_or_rtx_capability(codec, consumer_capabilities)?;
+    let mut negotiated_formats = consumable_parameters
+        .formats()
+        .filter_map(|format| {
+            let capability_format =
+                find_matching_media_or_rtx_capability(format, consumer_capabilities)?;
             let feedback =
-                intersect_feedback(codec.rtcp_feedback(), capability_codec.rtcp_feedback());
+                intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
             let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
-            Some(clone_codec_with_overrides(
-                codec,
-                codec.payload_type(),
+            Some(clone_format_with_overrides(
+                format,
+                format.payload_type_id(),
                 None,
                 &feedback,
             ))
         })
         .collect::<Vec<_>>();
-    negotiated_codecs = drop_unpaired_rtx_codecs(negotiated_codecs);
+    negotiated_formats = drop_unpaired_rtx_formats(negotiated_formats);
 
-    if negotiated_codecs
+    if negotiated_formats
         .first()
-        .is_none_or(|codec| is_rtx_codec_name(codec.codec_name()))
+        .is_none_or(|format| format.codec().is_rtx())
     {
         return Err(RtpNegotiationError::NoCompatibleConsumerCodec);
     }
 
-    let encodings = consumable_parameters
-        .encodings()
-        .map(clone_encoding)
+    let bindings = consumable_parameters
+        .bindings()
+        .map(clone_binding)
         .collect::<Vec<_>>();
 
     let mut negotiated =
-        RtpParameters::new(negotiated_codecs, negotiated_header_extensions, encodings);
+        MediaStream::new(negotiated_formats, negotiated_header_extensions, bindings);
     if let Some(mid) = consumable_parameters.mid() {
-        negotiated = negotiated.with_mid(mid.to_owned());
+        negotiated = negotiated.with_mid(mid);
     }
     Ok(negotiated)
 }
 
 #[must_use]
 pub fn can_consume(
-    consumable_parameters: &RtpParameters,
-    consumer_capabilities: &RtpCapabilities,
+    consumable_parameters: &MediaStream,
+    consumer_capabilities: &MediaCapabilities,
 ) -> bool {
     negotiate_consumer_rtp_parameters(consumable_parameters, consumer_capabilities).is_ok()
 }
 
-fn is_rtx_codec_name(codec_name: &str) -> bool {
-    codec_name.eq_ignore_ascii_case(CODEC_NAME_RTX)
-}
-
 fn mapped_payload_type(
-    capability_codec: &RtpCodecCapability,
-    producer_codec: &RtpCodecParameters,
-) -> u8 {
-    capability_codec
-        .preferred_payload_type()
-        .unwrap_or(producer_codec.payload_type())
+    capability_format: &MediaCodecCapability,
+    producer_format: &MediaFormat,
+) -> PayloadType {
+    capability_format
+        .payload_type_id()
+        .unwrap_or(producer_format.payload_type_id())
 }
 
 fn find_matching_media_capability<'a>(
-    producer_codec: &RtpCodecParameters,
-    router_capabilities: &'a RtpCapabilities,
-) -> Option<&'a RtpCodecCapability> {
-    router_capabilities.codecs().find(|capability_codec| {
-        !is_rtx_codec_name(capability_codec.codec_name())
-            && codec_match_ignoring_payload_type(producer_codec, capability_codec)
+    producer_format: &MediaFormat,
+    router_capabilities: &'a MediaCapabilities,
+) -> Option<&'a MediaCodecCapability> {
+    router_capabilities.codecs().find(|capability_format| {
+        !capability_format.codec().is_rtx()
+            && codec_match_ignoring_payload_type(producer_format, capability_format)
     })
 }
 
 fn find_matching_rtx_capability<'a>(
-    producer_codec: &RtpCodecParameters,
-    mapped_associated_payload_type: u8,
-    router_capabilities: &'a RtpCapabilities,
-) -> Option<&'a RtpCodecCapability> {
-    router_capabilities.codecs().find(|capability_codec| {
-        if !is_rtx_codec_name(capability_codec.codec_name()) {
-            return false;
-        }
-        if !codec_match_ignoring_payload_type(producer_codec, capability_codec) {
-            return false;
-        }
-        parse_optional_u8_from_parameters(capability_codec.parameters(), RTP_PARAMETER_APT)
-            .is_some_and(|payload_type| payload_type == mapped_associated_payload_type)
+    producer_format: &MediaFormat,
+    mapped_associated_payload_type: PayloadType,
+    router_capabilities: &'a MediaCapabilities,
+) -> Option<&'a MediaCodecCapability> {
+    router_capabilities.codecs().find(|capability_format| {
+        capability_format.codec().is_rtx()
+            && codec_match_ignoring_payload_type(producer_format, capability_format)
+            && capability_format.settings().any(|setting| {
+                matches!(
+                    setting,
+                    CodecSetting::RtxAssociation(payload_type)
+                    if *payload_type == mapped_associated_payload_type
+                )
+            })
     })
 }
 
 fn find_matching_media_or_rtx_capability<'a>(
-    codec: &RtpCodecParameters,
-    capabilities: &'a RtpCapabilities,
-) -> Option<&'a RtpCodecCapability> {
+    format: &MediaFormat,
+    capabilities: &'a MediaCapabilities,
+) -> Option<&'a MediaCodecCapability> {
     capabilities
         .codecs()
-        .find(|capability_codec| codec_match_ignoring_payload_type(codec, capability_codec))
+        .find(|capability_format| codec_match_ignoring_payload_type(format, capability_format))
 }
 
 fn codec_match_ignoring_payload_type(
-    codec: &RtpCodecParameters,
-    capability_codec: &RtpCodecCapability,
+    format: &MediaFormat,
+    capability_format: &MediaCodecCapability,
 ) -> bool {
-    if codec.media_kind() != capability_codec.media_kind()
-        || !codec
-            .codec_name()
-            .eq_ignore_ascii_case(capability_codec.codec_name())
-        || codec.clock_rate() != capability_codec.clock_rate()
+    if format.media_kind() != capability_format.media_kind()
+        || format.codec() != capability_format.codec()
+        || format.clock_rate() != capability_format.clock_rate()
     {
         return false;
     }
-    if normalized_channels(codec.media_kind(), codec.channels())
-        != normalized_channels(capability_codec.media_kind(), capability_codec.channels())
+    if normalized_channels(format.media_kind(), format.channels())
+        != normalized_channels(capability_format.media_kind(), capability_format.channels())
     {
         return false;
     }
-    critical_codec_parameters_match(codec, capability_codec)
+    critical_codec_settings_match(format, capability_format)
 }
 
-fn critical_codec_parameters_match(
-    codec: &RtpCodecParameters,
-    capability_codec: &RtpCodecCapability,
+fn critical_codec_settings_match(
+    format: &MediaFormat,
+    capability_format: &MediaCodecCapability,
 ) -> bool {
-    if !codec.codec_name().eq_ignore_ascii_case(CODEC_NAME_H264) {
+    if !matches!(format.codec(), MediaCodec::H264) {
         return true;
     }
-    let codec_parameters = collect_parameter_map(codec.parameters());
-    let capability_parameters = collect_parameter_map(capability_codec.parameters());
-    let codec_packetization_mode = codec_parameters
-        .get(H264_PACKETIZATION_MODE_PARAMETER)
-        .map_or("0", String::as_str);
-    let capability_packetization_mode = capability_parameters
-        .get(H264_PACKETIZATION_MODE_PARAMETER)
-        .map_or("0", String::as_str);
-    if codec_packetization_mode != capability_packetization_mode {
+    let format_packetization_mode = format
+        .settings()
+        .find_map(|setting| match setting {
+            CodecSetting::H264PacketizationMode(mode) => Some(*mode),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let capability_packetization_mode = capability_format
+        .settings()
+        .find_map(|setting| match setting {
+            CodecSetting::H264PacketizationMode(mode) => Some(*mode),
+            _ => None,
+        })
+        .unwrap_or(0);
+    if format_packetization_mode != capability_packetization_mode {
         return false;
     }
     match (
-        codec_parameters.get(H264_PROFILE_LEVEL_ID_PARAMETER),
-        capability_parameters.get(H264_PROFILE_LEVEL_ID_PARAMETER),
+        format.settings().find_map(|setting| match setting {
+            CodecSetting::H264ProfileLevelId(profile_level_id) => Some(profile_level_id.as_str()),
+            _ => None,
+        }),
+        capability_format
+            .settings()
+            .find_map(|setting| match setting {
+                CodecSetting::H264ProfileLevelId(profile_level_id) => {
+                    Some(profile_level_id.as_str())
+                }
+                _ => None,
+            }),
     ) {
-        (Some(codec_profile_level_id), Some(capability_profile_level_id)) => {
-            codec_profile_level_id == capability_profile_level_id
+        (Some(format_profile_level_id), Some(capability_profile_level_id)) => {
+            format_profile_level_id == capability_profile_level_id
         }
         _ => true,
     }
 }
 
-fn parse_rtx_associated_payload<'a>(
-    codec_name: &str,
-    payload_type: u8,
-    parameters: impl Iterator<Item = (&'a str, &'a str)>,
-) -> Result<u8, RtpNegotiationError> {
-    parse_optional_u8_from_parameters(parameters, RTP_PARAMETER_APT).ok_or_else(|| {
-        RtpNegotiationError::InvalidAptParameter {
-            codec_name: codec_name.to_owned(),
-            payload_type,
-        }
-    })
+fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, RtpNegotiationError> {
+    format
+        .settings()
+        .find_map(|setting| match setting {
+            CodecSetting::RtxAssociation(payload_type) => Some(*payload_type),
+            _ => None,
+        })
+        .ok_or_else(|| RtpNegotiationError::InvalidAptParameter {
+            codec_name: format.codec().as_wire_name().to_owned(),
+            payload_type: format.payload_type(),
+        })
 }
 
-fn parse_optional_u8_from_parameters<'a>(
-    mut parameters: impl Iterator<Item = (&'a str, &'a str)>,
-    name: &str,
-) -> Option<u8> {
-    parameters.find_map(|(parameter_name, value): (&str, &str)| {
-        if parameter_name != name {
-            return None;
-        }
-        value.parse::<u8>().ok()
-    })
-}
-
-fn collect_parameter_map<'a>(
-    parameters: impl Iterator<Item = (&'a str, &'a str)>,
-) -> BTreeMap<String, String> {
-    parameters
-        .map(|(name, value): (&str, &str)| (name.to_owned(), value.to_owned()))
-        .collect()
-}
-
-fn clone_codec_with_overrides(
-    source: &RtpCodecParameters,
-    payload_type: u8,
-    apt_override: Option<u8>,
+fn clone_format_with_overrides(
+    source: &MediaFormat,
+    payload_type: PayloadType,
+    apt_override: Option<PayloadType>,
     feedback: &[RtcpFeedback],
-) -> RtpCodecParameters {
-    let mut codec = RtpCodecParameters::new(
+) -> MediaFormat {
+    let mut format = MediaFormat::new(
         source.media_kind(),
-        source.codec_name().to_owned(),
+        source.codec().clone(),
         payload_type,
         source.clock_rate(),
     );
     if let Some(channels) = source.channels() {
-        codec = codec.with_channels(channels);
+        format = format.with_channels(channels);
     }
-    let mut parameters = collect_parameter_map(source.parameters());
+    for setting in source
+        .settings()
+        .filter(|setting| !matches!(setting, CodecSetting::RtxAssociation(_)))
+        .cloned()
+    {
+        format = format.with_setting(setting);
+    }
     if let Some(apt) = apt_override {
-        parameters.insert(RTP_PARAMETER_APT.to_owned(), apt.to_string());
-    }
-    for (name, value) in parameters {
-        codec = codec.with_parameter(name, value);
+        format = format.with_setting(CodecSetting::RtxAssociation(apt));
+    } else if let Some(apt) = source.settings().find_map(|setting| match setting {
+        CodecSetting::RtxAssociation(payload_type) => Some(*payload_type),
+        _ => None,
+    }) {
+        format = format.with_setting(CodecSetting::RtxAssociation(apt));
     }
     for entry in feedback {
-        codec = codec.with_rtcp_feedback(entry.clone());
+        format = format.with_rtcp_feedback(entry.clone());
     }
-    codec
+    format
 }
 
-fn clone_header_extension(source: &RtpHeaderExtension) -> RtpHeaderExtension {
-    let mut extension = RtpHeaderExtension::new(source.uri().to_owned(), source.id());
+fn clone_header_extension(source: &HeaderExtension) -> HeaderExtension {
+    let mut extension = HeaderExtension::new(source.uri_kind().clone(), source.id());
     if source.encrypt() {
         extension = extension.with_encryption(true);
     }
     extension
 }
 
-fn clone_encoding(source: &RtpEncoding) -> RtpEncoding {
-    let mut encoding = RtpEncoding::new();
-    if let Some(ssrc) = source.ssrc() {
-        encoding = encoding.with_ssrc(ssrc);
+fn clone_binding(source: &StreamBinding) -> StreamBinding {
+    let mut binding = StreamBinding::new();
+    if let Some(ssrc) = source.ssrc_id() {
+        binding = binding.with_ssrc(ssrc);
     }
-    if let Some(rid) = source.rid() {
-        encoding = encoding.with_rid(rid.to_owned());
+    if let Some(rid) = source.rid_id() {
+        binding = binding.with_rid(rid.clone());
     }
-    if let Some(codec_payload_type) = source.codec_payload_type() {
-        encoding = encoding.with_codec_payload_type(codec_payload_type);
+    if let Some(payload_type) = source.payload_type_id() {
+        binding = binding.with_payload_type(payload_type);
     }
     if let Some(max_bitrate) = source.max_bitrate() {
-        encoding = encoding.with_max_bitrate(max_bitrate);
+        binding = binding.with_max_bitrate(max_bitrate);
     }
-    encoding
+    binding
 }
 
-fn clone_encoding_with_payload_mapping(
-    source: &RtpEncoding,
-    mapped_media_payload_by_original_payload: &BTreeMap<u8, u8>,
-) -> RtpEncoding {
-    let mut encoding = RtpEncoding::new();
-    if let Some(ssrc) = source.ssrc() {
-        encoding = encoding.with_ssrc(ssrc);
+fn clone_binding_with_payload_mapping(
+    source: &StreamBinding,
+    mapped_media_payload_by_original_payload: &[(PayloadType, PayloadType)],
+) -> StreamBinding {
+    let mut binding = StreamBinding::new();
+    if let Some(ssrc) = source.ssrc_id() {
+        binding = binding.with_ssrc(ssrc);
     }
-    if let Some(rid) = source.rid() {
-        encoding = encoding.with_rid(rid.to_owned());
+    if let Some(rid) = source.rid_id() {
+        binding = binding.with_rid(rid.clone());
     }
-    if let Some(codec_payload_type) = source.codec_payload_type() {
+    if let Some(payload_type) = source.payload_type_id() {
         let mapped_payload_type = mapped_media_payload_by_original_payload
-            .get(&codec_payload_type)
-            .copied()
-            .unwrap_or(codec_payload_type);
-        encoding = encoding.with_codec_payload_type(mapped_payload_type);
+            .iter()
+            .find_map(|(original, mapped)| (*original == payload_type).then_some(*mapped))
+            .unwrap_or(payload_type);
+        binding = binding.with_payload_type(mapped_payload_type);
     }
     if let Some(max_bitrate) = source.max_bitrate() {
-        encoding = encoding.with_max_bitrate(max_bitrate);
+        binding = binding.with_max_bitrate(max_bitrate);
     }
-    encoding
+    binding
 }
 
 fn intersect_feedback<'a>(
-    codec_feedback: impl Iterator<Item = &'a RtcpFeedback>,
+    format_feedback: impl Iterator<Item = &'a RtcpFeedback>,
     capability_feedback: impl Iterator<Item = &'a RtcpFeedback>,
 ) -> Vec<RtcpFeedback> {
     let capability_feedback = capability_feedback.cloned().collect::<Vec<_>>();
-    codec_feedback
+    format_feedback
         .filter(|feedback| capability_feedback.contains(feedback))
         .cloned()
         .collect()
@@ -458,12 +450,12 @@ fn normalized_channels(media_kind: MediaKind, channels: Option<u16>) -> Option<u
 }
 
 fn negotiate_header_extensions(
-    consumable_parameters: &RtpParameters,
-    consumer_capabilities: &RtpCapabilities,
-) -> Vec<RtpHeaderExtension> {
+    consumable_parameters: &MediaStream,
+    consumer_capabilities: &MediaCapabilities,
+) -> Vec<HeaderExtension> {
     let supported_uris = consumer_capabilities
         .header_extensions()
-        .map(RtpHeaderExtension::uri)
+        .map(|extension| extension.uri().to_owned())
         .collect::<BTreeSet<_>>();
     consumable_parameters
         .header_extensions()
@@ -479,15 +471,18 @@ enum BweFeedbackPolicy {
     DisableBoth,
 }
 
-fn bwe_feedback_policy(header_extensions: &[RtpHeaderExtension]) -> BweFeedbackPolicy {
+fn bwe_feedback_policy(header_extensions: &[HeaderExtension]) -> BweFeedbackPolicy {
     if header_extensions.iter().any(|extension| {
-        extension.uri() == webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01
+        matches!(
+            extension.uri_kind(),
+            HeaderExtensionUri::TransportWideCcDraft01
+        )
     }) {
         return BweFeedbackPolicy::PreferTransportCc;
     }
     if header_extensions
         .iter()
-        .any(|extension| extension.uri() == webrtc::rtp_header_extension_uri::ABS_SEND_TIME)
+        .any(|extension| matches!(extension.uri_kind(), HeaderExtensionUri::AbsSendTime))
     {
         return BweFeedbackPolicy::PreferGoogRemb;
     }
@@ -515,20 +510,25 @@ fn apply_bwe_feedback_policy(
         .collect()
 }
 
-fn drop_unpaired_rtx_codecs(codecs: Vec<RtpCodecParameters>) -> Vec<RtpCodecParameters> {
-    let media_payload_types = codecs
+fn drop_unpaired_rtx_formats(formats: Vec<MediaFormat>) -> Vec<MediaFormat> {
+    let media_payload_types = formats
         .iter()
-        .filter(|codec| !is_rtx_codec_name(codec.codec_name()))
-        .map(RtpCodecParameters::payload_type)
+        .filter(|format| !format.codec().is_rtx())
+        .map(MediaFormat::payload_type_id)
         .collect::<BTreeSet<_>>();
-    codecs
+    formats
         .into_iter()
-        .filter(|codec| {
-            if !is_rtx_codec_name(codec.codec_name()) {
+        .filter(|format| {
+            if !format.codec().is_rtx() {
                 return true;
             }
-            parse_optional_u8_from_parameters(codec.parameters(), RTP_PARAMETER_APT)
-                .is_some_and(|apt| media_payload_types.contains(&apt))
+            format.settings().any(|setting| {
+                matches!(
+                    setting,
+                    CodecSetting::RtxAssociation(payload_type)
+                    if media_payload_types.contains(payload_type)
+                )
+            })
         })
         .collect()
 }

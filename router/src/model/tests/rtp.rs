@@ -21,7 +21,7 @@ fn codec_capability_builder_keeps_optional_fields() {
     assert_eq!(capability.channels(), Some(2));
     assert_eq!(
         capability.parameters().collect::<Vec<_>>(),
-        vec![("useinbandfec", "1")]
+        vec![("useinbandfec".to_owned(), "1".to_owned())]
     );
     assert_eq!(capability.rtcp_feedback().count(), 1);
 }
@@ -46,7 +46,7 @@ fn header_extensions_and_capabilities_expose_entries() {
     assert_eq!(
         capabilities
             .header_extensions()
-            .map(|header| (header.uri(), header.id(), header.encrypt()))
+            .map(|header| (header.uri(), header.id().value(), header.encrypt()))
             .collect::<Vec<_>>(),
         vec![(webrtc::rtp_header_extension_uri::MID, 1, false)]
     );
@@ -143,7 +143,7 @@ fn derive_consumable_parameters_maps_payload_types_and_rtx_association() {
         second_codec
             .parameters()
             .find_map(|(name, value)| (name == "apt").then_some(value)),
-        Some("101")
+        Some("101".to_owned())
     );
     assert_eq!(consumable.mid(), Some("video-0"));
     let header_extension_uris = consumable

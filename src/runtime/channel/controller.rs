@@ -157,7 +157,7 @@ impl Channel {
         self.state.read().await.recording_state.clone()
     }
 
-    pub async fn router_rtp_capabilities(&self) -> o_sfu_router::RtpCapabilities {
+    pub async fn router_rtp_capabilities(&self) -> o_sfu_router::MediaCapabilities {
         self.state.read().await.topology.rtp_capabilities().clone()
     }
 

@@ -1,4 +1,6 @@
-use o_sfu_router::{MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCodecCapability};
+use o_sfu_router::{
+    MediaCapabilities, MediaCodecCapability, MediaKind, RtcpFeedback, RtcpFeedbackKind,
+};
 use serde_json::{Map, Value, json};
 
 use crate::signaling::{
@@ -22,7 +24,7 @@ const SCTP_MIS: u16 = 1_024;
 const SCTP_MAX_MESSAGE_SIZE: u32 = 262_144;
 
 pub(super) fn transport_bootstrap_payload(
-    router_capabilities: &o_sfu_router::RtpCapabilities,
+    router_capabilities: &MediaCapabilities,
     download_transport: TransportBootstrap,
     upload_transport: TransportBootstrap,
 ) -> CurrentTransportBootstrapPayload {
@@ -55,9 +57,7 @@ pub(super) fn default_sctp_parameters() -> SctpParameters {
     }))
 }
 
-pub(super) fn to_wire_rtp_capabilities(
-    router_capabilities: &o_sfu_router::RtpCapabilities,
-) -> RtpCapabilities {
+pub(super) fn to_wire_rtp_capabilities(router_capabilities: &MediaCapabilities) -> RtpCapabilities {
     let codecs = router_capabilities
         .codecs()
         .map(serialize_codec_capability)
@@ -72,7 +72,7 @@ pub(super) fn to_wire_rtp_capabilities(
     }))
 }
 
-fn serialize_codec_capability(codec: &RtpCodecCapability) -> Value {
+fn serialize_codec_capability(codec: &MediaCodecCapability) -> Value {
     let kind = media_kind_label(codec.media_kind());
     let mut codec_json = Map::new();
     codec_json.insert("kind".to_owned(), json!(kind));
@@ -92,7 +92,7 @@ fn serialize_codec_capability(codec: &RtpCodecCapability) -> Value {
         Value::Object(
             codec
                 .parameters()
-                .map(|(key, value)| (key.to_owned(), json!(value)))
+                .map(|(key, value)| (key, json!(value)))
                 .collect(),
         ),
     );
@@ -117,7 +117,7 @@ fn serialize_header_extension(
     json!({
         "kind": media_kind_label(media_kind),
         "uri": header_extension.uri(),
-        "preferredId": header_extension.id(),
+        "preferredId": header_extension.id().value(),
         "preferredEncrypt": header_extension.encrypt(),
         "direction": RTP_HEADER_DIRECTION_SEND_RECV,
     })

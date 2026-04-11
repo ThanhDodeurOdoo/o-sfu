@@ -2,17 +2,15 @@
 //! - RTP base protocol: <https://www.rfc-editor.org/rfc/rfc3550>
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
-//! - ORTC API dictionaries (for type-shape alignment): <https://www.w3.org/TR/ortc/>
 
-use std::collections::BTreeMap;
+use std::{borrow::Cow, fmt};
 
 use super::MediaKind;
 
-/// RTCP feedback categories used by RTP codec capabilities and parameters.
+/// RTCP feedback categories used by codec capabilities and negotiated formats.
 ///
 /// Reference:
 /// - RFC 3550 (RTP/RTCP)
-/// - ORTC API `RTCRtcpFeedback` dictionary
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RtcpFeedbackKind {
     Nack,
@@ -24,8 +22,6 @@ pub enum RtcpFeedbackKind {
 }
 
 /// A single RTCP feedback entry.
-///
-/// `parameter` allows feedback-specific payloads such as `"pli"` for NACK.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RtcpFeedback {
     kind: RtcpFeedbackKind,
@@ -49,114 +45,295 @@ impl RtcpFeedback {
     }
 }
 
-/// Router-supported RTP codec capability.
-///
-/// Reference:
-/// - RFC 3551 (RTP A/V profile payload and media clock conventions)
-/// - ORTC API `RTCRtpCodecCapability` dictionary
+/// Router-visible codec family.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RtpCodecCapability {
-    media_kind: MediaKind,
-    codec_name: String,
-    clock_rate: u32,
-    preferred_payload_type: Option<u8>,
-    channels: Option<u16>,
-    parameters: BTreeMap<String, String>,
-    rtcp_feedback: Vec<RtcpFeedback>,
+pub enum MediaCodec {
+    Opus,
+    Vp8,
+    H264,
+    Rtx,
+    Other(String),
 }
 
-impl RtpCodecCapability {
+impl MediaCodec {
     #[must_use]
-    pub fn new(media_kind: MediaKind, codec_name: impl Into<String>, clock_rate: u32) -> Self {
-        Self {
-            media_kind,
-            codec_name: codec_name.into(),
-            clock_rate,
-            preferred_payload_type: None,
-            channels: None,
-            parameters: BTreeMap::new(),
-            rtcp_feedback: Vec::new(),
+    pub fn as_wire_name(&self) -> &str {
+        match self {
+            Self::Opus => "opus",
+            Self::Vp8 => "VP8",
+            Self::H264 => "H264",
+            Self::Rtx => "rtx",
+            Self::Other(name) => name.as_str(),
         }
     }
 
     #[must_use]
-    pub fn with_preferred_payload_type(mut self, payload_type: u8) -> Self {
-        self.preferred_payload_type = Some(payload_type);
-        self
-    }
-
-    #[must_use]
-    pub fn with_channels(mut self, channels: u16) -> Self {
-        self.channels = Some(channels);
-        self
-    }
-
-    #[must_use]
-    pub fn with_parameter(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.parameters.insert(name.into(), value.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_rtcp_feedback(mut self, feedback: RtcpFeedback) -> Self {
-        self.rtcp_feedback.push(feedback);
-        self
-    }
-
-    #[must_use]
-    pub fn media_kind(&self) -> MediaKind {
-        self.media_kind
-    }
-
-    #[must_use]
-    pub fn codec_name(&self) -> &str {
-        &self.codec_name
-    }
-
-    #[must_use]
-    pub fn clock_rate(&self) -> u32 {
-        self.clock_rate
-    }
-
-    #[must_use]
-    pub fn preferred_payload_type(&self) -> Option<u8> {
-        self.preferred_payload_type
-    }
-
-    #[must_use]
-    pub fn channels(&self) -> Option<u16> {
-        self.channels
-    }
-
-    pub fn parameters(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.parameters
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-    }
-
-    pub fn rtcp_feedback(&self) -> impl Iterator<Item = &RtcpFeedback> {
-        self.rtcp_feedback.iter()
+    pub fn is_rtx(&self) -> bool {
+        matches!(self, Self::Rtx)
     }
 }
 
-/// RTP header extension capability.
-///
-/// Reference:
-/// - RFC 8285 (RTP header extensions)
-/// - ORTC API `RTCRtpHeaderExtensionCapability` dictionary
+impl From<&str> for MediaCodec {
+    fn from(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("opus") {
+            return Self::Opus;
+        }
+        if value.eq_ignore_ascii_case("vp8") {
+            return Self::Vp8;
+        }
+        if value.eq_ignore_ascii_case("h264") {
+            return Self::H264;
+        }
+        if value.eq_ignore_ascii_case("rtx") {
+            return Self::Rtx;
+        }
+        Self::Other(value.to_owned())
+    }
+}
+
+impl From<String> for MediaCodec {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl fmt::Display for MediaCodec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_wire_name())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PayloadType(u8);
+
+impl PayloadType {
+    #[must_use]
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for PayloadType {
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<PayloadType> for u8 {
+    fn from(value: PayloadType) -> Self {
+        value.value()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ssrc(u32);
+
+impl Ssrc {
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for Ssrc {
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Ssrc> for u32 {
+    fn from(value: Ssrc) -> Self {
+        value.value()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Rid(String);
+
+impl Rid {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&str> for Rid {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Rid {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Mid(String);
+
+impl Mid {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&str> for Mid {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Mid {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HeaderExtensionId(u8);
+
+impl HeaderExtensionId {
+    #[must_use]
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for HeaderExtensionId {
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<HeaderExtensionId> for u8 {
+    fn from(value: HeaderExtensionId) -> Self {
+        value.value()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RtpHeaderExtension {
-    uri: String,
-    id: u8,
+pub enum HeaderExtensionUri {
+    Mid,
+    AbsSendTime,
+    TransportWideCcDraft01,
+    SsrcAudioLevel,
+    Other(String),
+}
+
+impl HeaderExtensionUri {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Mid => "urn:ietf:params:rtp-hdrext:sdes:mid",
+            Self::AbsSendTime => "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+            Self::TransportWideCcDraft01 => {
+                "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+            }
+            Self::SsrcAudioLevel => "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+            Self::Other(uri) => uri.as_str(),
+        }
+    }
+}
+
+impl From<&str> for HeaderExtensionUri {
+    fn from(value: &str) -> Self {
+        match value {
+            "urn:ietf:params:rtp-hdrext:sdes:mid" => Self::Mid,
+            "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time" => Self::AbsSendTime,
+            "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01" => {
+                Self::TransportWideCcDraft01
+            }
+            "urn:ietf:params:rtp-hdrext:ssrc-audio-level" => Self::SsrcAudioLevel,
+            _ => Self::Other(value.to_owned()),
+        }
+    }
+}
+
+impl From<String> for HeaderExtensionUri {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl fmt::Display for HeaderExtensionUri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodecSetting {
+    RtxAssociation(PayloadType),
+    H264PacketizationMode(u8),
+    H264ProfileLevelId(String),
+    UseInBandFec(bool),
+    Other { key: String, value: String },
+}
+
+impl CodecSetting {
+    #[must_use]
+    pub fn key(&self) -> &str {
+        match self {
+            Self::RtxAssociation(_) => "apt",
+            Self::H264PacketizationMode(_) => "packetization-mode",
+            Self::H264ProfileLevelId(_) => "profile-level-id",
+            Self::UseInBandFec(_) => "useinbandfec",
+            Self::Other { key, .. } => key.as_str(),
+        }
+    }
+
+    #[must_use]
+    pub fn wire_value(&self) -> Cow<'_, str> {
+        match self {
+            Self::RtxAssociation(payload_type) => Cow::Owned(payload_type.value().to_string()),
+            Self::H264PacketizationMode(mode) => Cow::Owned(mode.to_string()),
+            Self::H264ProfileLevelId(profile_level_id) => Cow::Borrowed(profile_level_id.as_str()),
+            Self::UseInBandFec(enabled) => Cow::Borrowed(if *enabled { "1" } else { "0" }),
+            Self::Other { value, .. } => Cow::Borrowed(value.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderExtension {
+    uri: HeaderExtensionUri,
+    id: HeaderExtensionId,
     encrypt: bool,
 }
 
-impl RtpHeaderExtension {
+impl HeaderExtension {
     #[must_use]
-    pub fn new(uri: impl Into<String>, id: u8) -> Self {
+    pub fn new(uri: impl Into<HeaderExtensionUri>, id: impl Into<HeaderExtensionId>) -> Self {
         Self {
             uri: uri.into(),
-            id,
+            id: id.into(),
             encrypt: false,
         }
     }
@@ -168,13 +345,18 @@ impl RtpHeaderExtension {
     }
 
     #[must_use]
-    pub fn uri(&self) -> &str {
+    pub fn uri_kind(&self) -> &HeaderExtensionUri {
         &self.uri
     }
 
     #[must_use]
-    pub fn id(&self) -> u8 {
+    pub fn id(&self) -> HeaderExtensionId {
         self.id
+    }
+
+    #[must_use]
+    pub fn uri(&self) -> &str {
+        self.uri.as_str()
     }
 
     #[must_use]
@@ -183,69 +365,40 @@ impl RtpHeaderExtension {
     }
 }
 
-/// Router-level RTP capabilities used to gate producer/consumer compatibility.
-///
-/// Reference:
-/// - ORTC API `RTCRtpCapabilities` dictionary
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RtpCapabilities {
-    codecs: Vec<RtpCodecCapability>,
-    header_extensions: Vec<RtpHeaderExtension>,
-}
-
-impl RtpCapabilities {
-    #[must_use]
-    pub fn new(
-        codecs: Vec<RtpCodecCapability>,
-        header_extensions: Vec<RtpHeaderExtension>,
-    ) -> Self {
-        Self {
-            codecs,
-            header_extensions,
-        }
-    }
-
-    pub fn codecs(&self) -> impl Iterator<Item = &RtpCodecCapability> {
-        self.codecs.iter()
-    }
-
-    pub fn header_extensions(&self) -> impl Iterator<Item = &RtpHeaderExtension> {
-        self.header_extensions.iter()
-    }
-}
-
-/// Concrete RTP codec parameters for one negotiated RTP stream.
-///
-/// Reference:
-/// - ORTC API `RTCRtpCodecParameters` dictionary
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RtpCodecParameters {
+pub struct MediaCodecCapability {
     media_kind: MediaKind,
-    codec_name: String,
-    payload_type: u8,
+    codec: MediaCodec,
     clock_rate: u32,
+    payload_type: Option<PayloadType>,
     channels: Option<u16>,
-    parameters: BTreeMap<String, String>,
+    settings: Vec<CodecSetting>,
     rtcp_feedback: Vec<RtcpFeedback>,
 }
 
-impl RtpCodecParameters {
+impl MediaCodecCapability {
     #[must_use]
-    pub fn new(
-        media_kind: MediaKind,
-        codec_name: impl Into<String>,
-        payload_type: u8,
-        clock_rate: u32,
-    ) -> Self {
+    pub fn new(media_kind: MediaKind, codec: impl Into<MediaCodec>, clock_rate: u32) -> Self {
         Self {
             media_kind,
-            codec_name: codec_name.into(),
-            payload_type,
+            codec: codec.into(),
             clock_rate,
+            payload_type: None,
             channels: None,
-            parameters: BTreeMap::new(),
+            settings: Vec::new(),
             rtcp_feedback: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_payload_type(mut self, payload_type: impl Into<PayloadType>) -> Self {
+        self.payload_type = Some(payload_type.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_preferred_payload_type(self, payload_type: u8) -> Self {
+        self.with_payload_type(payload_type)
     }
 
     #[must_use]
@@ -255,9 +408,14 @@ impl RtpCodecParameters {
     }
 
     #[must_use]
-    pub fn with_parameter(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.parameters.insert(name.into(), value.into());
+    pub fn with_setting(mut self, setting: CodecSetting) -> Self {
+        self.settings.push(setting);
         self
+    }
+
+    #[must_use]
+    pub fn with_parameter(self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.with_setting(codec_setting_from_wire(name.into(), value.into()))
     }
 
     #[must_use]
@@ -272,13 +430,155 @@ impl RtpCodecParameters {
     }
 
     #[must_use]
+    pub fn codec(&self) -> &MediaCodec {
+        &self.codec
+    }
+
+    #[must_use]
     pub fn codec_name(&self) -> &str {
-        &self.codec_name
+        self.codec.as_wire_name()
+    }
+
+    #[must_use]
+    pub fn clock_rate(&self) -> u32 {
+        self.clock_rate
+    }
+
+    #[must_use]
+    pub fn payload_type_id(&self) -> Option<PayloadType> {
+        self.payload_type
+    }
+
+    #[must_use]
+    pub fn payload_type(&self) -> Option<u8> {
+        self.payload_type.map(PayloadType::value)
+    }
+
+    #[must_use]
+    pub fn preferred_payload_type(&self) -> Option<u8> {
+        self.payload_type()
+    }
+
+    #[must_use]
+    pub fn channels(&self) -> Option<u16> {
+        self.channels
+    }
+
+    pub fn settings(&self) -> impl Iterator<Item = &CodecSetting> {
+        self.settings.iter()
+    }
+
+    pub fn parameters(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        self.settings
+            .iter()
+            .map(|setting| (setting.key().to_owned(), setting.wire_value().into_owned()))
+    }
+
+    pub fn rtcp_feedback(&self) -> impl Iterator<Item = &RtcpFeedback> {
+        self.rtcp_feedback.iter()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaCapabilities {
+    codecs: Vec<MediaCodecCapability>,
+    header_extensions: Vec<HeaderExtension>,
+}
+
+impl MediaCapabilities {
+    #[must_use]
+    pub fn new(codecs: Vec<MediaCodecCapability>, header_extensions: Vec<HeaderExtension>) -> Self {
+        Self {
+            codecs,
+            header_extensions,
+        }
+    }
+
+    pub fn codecs(&self) -> impl Iterator<Item = &MediaCodecCapability> {
+        self.codecs.iter()
+    }
+
+    pub fn header_extensions(&self) -> impl Iterator<Item = &HeaderExtension> {
+        self.header_extensions.iter()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaFormat {
+    media_kind: MediaKind,
+    codec: MediaCodec,
+    payload_type: PayloadType,
+    clock_rate: u32,
+    channels: Option<u16>,
+    settings: Vec<CodecSetting>,
+    rtcp_feedback: Vec<RtcpFeedback>,
+}
+
+impl MediaFormat {
+    #[must_use]
+    pub fn new(
+        media_kind: MediaKind,
+        codec: impl Into<MediaCodec>,
+        payload_type: impl Into<PayloadType>,
+        clock_rate: u32,
+    ) -> Self {
+        Self {
+            media_kind,
+            codec: codec.into(),
+            payload_type: payload_type.into(),
+            clock_rate,
+            channels: None,
+            settings: Vec::new(),
+            rtcp_feedback: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_channels(mut self, channels: u16) -> Self {
+        self.channels = Some(channels);
+        self
+    }
+
+    #[must_use]
+    pub fn with_setting(mut self, setting: CodecSetting) -> Self {
+        self.settings.push(setting);
+        self
+    }
+
+    #[must_use]
+    pub fn with_parameter(self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.with_setting(codec_setting_from_wire(name.into(), value.into()))
+    }
+
+    #[must_use]
+    pub fn with_rtcp_feedback(mut self, feedback: RtcpFeedback) -> Self {
+        self.rtcp_feedback.push(feedback);
+        self
+    }
+
+    #[must_use]
+    pub fn media_kind(&self) -> MediaKind {
+        self.media_kind
+    }
+
+    #[must_use]
+    pub fn codec(&self) -> &MediaCodec {
+        &self.codec
+    }
+
+    #[must_use]
+    pub fn codec_name(&self) -> &str {
+        self.codec.as_wire_name()
+    }
+
+    #[must_use]
+    pub fn payload_type_id(&self) -> PayloadType {
+        self.payload_type
     }
 
     #[must_use]
     pub fn payload_type(&self) -> u8 {
-        self.payload_type
+        self.payload_type.value()
     }
 
     #[must_use]
@@ -291,10 +591,14 @@ impl RtpCodecParameters {
         self.channels
     }
 
-    pub fn parameters(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.parameters
+    pub fn settings(&self) -> impl Iterator<Item = &CodecSetting> {
+        self.settings.iter()
+    }
+
+    pub fn parameters(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        self.settings
             .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .map(|setting| (setting.key().to_owned(), setting.wire_value().into_owned()))
     }
 
     pub fn rtcp_feedback(&self) -> impl Iterator<Item = &RtcpFeedback> {
@@ -302,39 +606,35 @@ impl RtpCodecParameters {
     }
 }
 
-/// Per-encoding RTP settings.
-///
-/// Reference:
-/// - ORTC API `RTCRtpEncodingParameters` dictionary
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RtpEncoding {
-    ssrc: Option<u32>,
-    rid: Option<String>,
-    codec_payload_type: Option<u8>,
+pub struct StreamBinding {
+    ssrc: Option<Ssrc>,
+    rid: Option<Rid>,
+    payload_type: Option<PayloadType>,
     max_bitrate: Option<u64>,
 }
 
-impl RtpEncoding {
+impl StreamBinding {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     #[must_use]
-    pub fn with_ssrc(mut self, ssrc: u32) -> Self {
-        self.ssrc = Some(ssrc);
+    pub fn with_ssrc(mut self, ssrc: impl Into<Ssrc>) -> Self {
+        self.ssrc = Some(ssrc.into());
         self
     }
 
     #[must_use]
-    pub fn with_rid(mut self, rid: impl Into<String>) -> Self {
+    pub fn with_rid(mut self, rid: impl Into<Rid>) -> Self {
         self.rid = Some(rid.into());
         self
     }
 
     #[must_use]
-    pub fn with_codec_payload_type(mut self, codec_payload_type: u8) -> Self {
-        self.codec_payload_type = Some(codec_payload_type);
+    pub fn with_payload_type(mut self, payload_type: impl Into<PayloadType>) -> Self {
+        self.payload_type = Some(payload_type.into());
         self
     }
 
@@ -345,18 +645,43 @@ impl RtpEncoding {
     }
 
     #[must_use]
-    pub fn ssrc(&self) -> Option<u32> {
+    pub fn ssrc_id(&self) -> Option<Ssrc> {
         self.ssrc
     }
 
     #[must_use]
+    pub fn ssrc(&self) -> Option<u32> {
+        self.ssrc.map(Ssrc::value)
+    }
+
+    #[must_use]
+    pub fn rid_id(&self) -> Option<&Rid> {
+        self.rid.as_ref()
+    }
+
+    #[must_use]
     pub fn rid(&self) -> Option<&str> {
-        self.rid.as_deref()
+        self.rid.as_ref().map(Rid::as_str)
+    }
+
+    #[must_use]
+    pub fn payload_type_id(&self) -> Option<PayloadType> {
+        self.payload_type
+    }
+
+    #[must_use]
+    pub fn payload_type(&self) -> Option<u8> {
+        self.payload_type.map(PayloadType::value)
     }
 
     #[must_use]
     pub fn codec_payload_type(&self) -> Option<u8> {
-        self.codec_payload_type
+        self.payload_type()
+    }
+
+    #[must_use]
+    pub fn with_codec_payload_type(self, payload_type: u8) -> Self {
+        self.with_payload_type(payload_type)
     }
 
     #[must_use]
@@ -365,53 +690,82 @@ impl RtpEncoding {
     }
 }
 
-/// Full RTP parameters for a producer or consumer stream.
-///
-/// Reference:
-/// - ORTC API `RTCRtpParameters` dictionary
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RtpParameters {
-    codecs: Vec<RtpCodecParameters>,
-    header_extensions: Vec<RtpHeaderExtension>,
-    encodings: Vec<RtpEncoding>,
-    mid: Option<String>,
+pub struct MediaStream {
+    formats: Vec<MediaFormat>,
+    header_extensions: Vec<HeaderExtension>,
+    bindings: Vec<StreamBinding>,
+    mid: Option<Mid>,
 }
 
-impl RtpParameters {
+impl MediaStream {
     #[must_use]
     pub fn new(
-        codecs: Vec<RtpCodecParameters>,
-        header_extensions: Vec<RtpHeaderExtension>,
-        encodings: Vec<RtpEncoding>,
+        formats: Vec<MediaFormat>,
+        header_extensions: Vec<HeaderExtension>,
+        bindings: Vec<StreamBinding>,
     ) -> Self {
         Self {
-            codecs,
+            formats,
             header_extensions,
-            encodings,
+            bindings,
             mid: None,
         }
     }
 
     #[must_use]
-    pub fn with_mid(mut self, mid: impl Into<String>) -> Self {
+    pub fn with_mid(mut self, mid: impl Into<Mid>) -> Self {
         self.mid = Some(mid.into());
         self
     }
 
-    pub fn codecs(&self) -> impl Iterator<Item = &RtpCodecParameters> {
-        self.codecs.iter()
+    pub fn formats(&self) -> impl Iterator<Item = &MediaFormat> {
+        self.formats.iter()
     }
 
-    pub fn header_extensions(&self) -> impl Iterator<Item = &RtpHeaderExtension> {
+    pub fn codecs(&self) -> impl Iterator<Item = &MediaFormat> {
+        self.formats()
+    }
+
+    pub fn header_extensions(&self) -> impl Iterator<Item = &HeaderExtension> {
         self.header_extensions.iter()
     }
 
-    pub fn encodings(&self) -> impl Iterator<Item = &RtpEncoding> {
-        self.encodings.iter()
+    pub fn bindings(&self) -> impl Iterator<Item = &StreamBinding> {
+        self.bindings.iter()
+    }
+
+    pub fn encodings(&self) -> impl Iterator<Item = &StreamBinding> {
+        self.bindings()
+    }
+
+    #[must_use]
+    pub fn mid_id(&self) -> Option<&Mid> {
+        self.mid.as_ref()
     }
 
     #[must_use]
     pub fn mid(&self) -> Option<&str> {
-        self.mid.as_deref()
+        self.mid.as_ref().map(Mid::as_str)
+    }
+}
+
+fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
+    match key.as_str() {
+        "apt" => value.parse::<u8>().map(PayloadType::new).map_or(
+            CodecSetting::Other { key, value },
+            CodecSetting::RtxAssociation,
+        ),
+        "packetization-mode" => value.parse::<u8>().map_or(
+            CodecSetting::Other { key, value },
+            CodecSetting::H264PacketizationMode,
+        ),
+        "profile-level-id" => CodecSetting::H264ProfileLevelId(value),
+        "useinbandfec" => match value.as_str() {
+            "1" | "true" => CodecSetting::UseInBandFec(true),
+            "0" | "false" => CodecSetting::UseInBandFec(false),
+            _ => CodecSetting::Other { key, value },
+        },
+        _ => CodecSetting::Other { key, value },
     }
 }

@@ -1,29 +1,25 @@
-//! Conversions between signaling-layer opaque JSON RTP types and router-native typed RTP types.
+//! Conversions betwen JSON RTP types and router-native media models
 //!
 //! The signaling layer uses `RtpParameters(serde_json::Value)` and `RtpCapabilities(Value)`
 //! as opaque wrappers over the mediasoup/ORTC wire format. The router crate uses typed
-//! domain models (`o_sfu_router::RtpParameters`, `o_sfu_router::RtpCapabilities`).
+//! domain models (`o_sfu_router::MediaStream`, `o_sfu_router::MediaCapabilities`).
 //!
-//! These conversion functions live at the signaling edge so channel/runtime code can depend
-//! on typed router models without owning ORTC-shaped JSON translation concerns.
+//! These conversion are only for signaling compatitibility with ORTC, may remove later if
+//! it becomes useless
 //!
-//! Wire format reference:
 //! - ORTC API dictionaries: <https://draft.ortc.org/>
-//! - mediasoup `RtpParameters`, `RtpCapabilities` JSON shapes
 
 use o_sfu_router::{
-    MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities,
-    RtpCodecCapability, RtpCodecParameters, RtpEncoding, RtpHeaderExtension, RtpParameters,
+    HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat,
+    MediaKind as RouterMediaKind, MediaStream, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
 use serde_json::{Map, Value, json};
 
 // ---------------------------------------------------------------------------
-// Parse: wire JSON -> router types
+// Parse: ortc JSON -> router types
 // ---------------------------------------------------------------------------
 
-/// Parse signaling-layer `RtpParameters` JSON into the router-native typed form.
-///
-/// Expected wire shape (mediasoup/ORTC convention):
+/// Expected shape:
 /// ```json
 /// {
 ///   "mid": "0",
@@ -32,42 +28,40 @@ use serde_json::{Map, Value, json};
 ///   "encodings": [{ "ssrc": 12345, ... }]
 /// }
 /// ```
-pub(crate) fn parse_rtp_parameters(value: &Value) -> Option<RtpParameters> {
+pub(crate) fn parse_rtp_parameters(value: &Value) -> Option<MediaStream> {
     let obj = value.as_object()?;
     let codecs = parse_codec_parameters_array(obj.get("codecs")?)?;
     let header_extensions = parse_header_extension_array(obj.get("headerExtensions"));
     let encodings = parse_encoding_array(obj.get("encodings"));
-    let mut params = RtpParameters::new(codecs, header_extensions, encodings);
+    let mut params = MediaStream::new(codecs, header_extensions, encodings);
     if let Some(mid) = obj.get("mid").and_then(Value::as_str) {
         params = params.with_mid(mid.to_owned());
     }
     Some(params)
 }
 
-/// Parse signaling-layer `RtpCapabilities` JSON into the router-native typed form.
-///
-/// Expected wire shape:
+/// Expected shape:
 /// ```json
 /// {
 ///   "codecs": [{ "mimeType": "audio/opus", "kind": "audio", "preferredPayloadType": 111, ... }],
 ///   "headerExtensions": [{ "uri": "...", "preferredId": 1, "kind": "audio", ... }]
 /// }
 /// ```
-pub(crate) fn parse_rtp_capabilities(value: &Value) -> Option<RtpCapabilities> {
+pub(crate) fn parse_rtp_capabilities(value: &Value) -> Option<MediaCapabilities> {
     let obj = value.as_object()?;
     let codecs = parse_codec_capability_array(obj.get("codecs")?)?;
     let header_extensions = parse_header_extension_capability_array(obj.get("headerExtensions"));
-    Some(RtpCapabilities::new(codecs, header_extensions))
+    Some(MediaCapabilities::new(codecs, header_extensions))
 }
 
 // ---------------------------------------------------------------------------
-// Serialize: router types -> wire JSON
+// Serialize: router types -> ortc JSON
 // ---------------------------------------------------------------------------
 
-/// Serialize router-native `RtpParameters` to the mediasoup/ORTC wire JSON shape.
+/// Serialize router-native media stream data to the mediasoup/ORTC wire JSON shape.
 ///
 /// Used to build the `rtpParameters` field in `INIT_CONSUMER` payloads after negotiation.
-pub(crate) fn serialize_rtp_parameters(params: &RtpParameters) -> Value {
+pub(crate) fn serialize_rtp_parameters(params: &MediaStream) -> Value {
     let codecs: Vec<Value> = params.codecs().map(serialize_codec_parameters).collect();
     let header_extensions: Vec<Value> = params
         .header_extensions()
@@ -88,10 +82,10 @@ pub(crate) fn serialize_rtp_parameters(params: &RtpParameters) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Codec parameter parsing (for RtpParameters codecs)
+// Codec parameter parsing (for MediaStream formats)
 // ---------------------------------------------------------------------------
 
-fn parse_codec_parameters_array(value: &Value) -> Option<Vec<RtpCodecParameters>> {
+fn parse_codec_parameters_array(value: &Value) -> Option<Vec<MediaFormat>> {
     let arr = value.as_array()?;
     let mut codecs = Vec::with_capacity(arr.len());
     for entry in arr {
@@ -100,12 +94,12 @@ fn parse_codec_parameters_array(value: &Value) -> Option<Vec<RtpCodecParameters>
     Some(codecs)
 }
 
-fn parse_single_codec_parameters(value: &Value) -> Option<RtpCodecParameters> {
+fn parse_single_codec_parameters(value: &Value) -> Option<MediaFormat> {
     let obj = value.as_object()?;
     let (media_kind, codec_name) = parse_mime_type(obj)?;
     let payload_type = json_u8(obj, "payloadType")?;
     let clock_rate = json_u32(obj, "clockRate")?;
-    let mut codec = RtpCodecParameters::new(media_kind, codec_name, payload_type, clock_rate);
+    let mut codec = MediaFormat::new(media_kind, codec_name, payload_type, clock_rate);
     if let Some(channels) = json_u16(obj, "channels") {
         codec = codec.with_channels(channels);
     }
@@ -114,7 +108,7 @@ fn parse_single_codec_parameters(value: &Value) -> Option<RtpCodecParameters> {
     Some(codec)
 }
 
-fn apply_parameters(mut codec: RtpCodecParameters, obj: &Map<String, Value>) -> RtpCodecParameters {
+fn apply_parameters(mut codec: MediaFormat, obj: &Map<String, Value>) -> MediaFormat {
     if let Some(params) = obj.get("parameters").and_then(Value::as_object) {
         for (key, value) in params {
             let string_value = match value {
@@ -130,9 +124,9 @@ fn apply_parameters(mut codec: RtpCodecParameters, obj: &Map<String, Value>) -> 
 }
 
 fn apply_rtcp_feedback_to_parameters(
-    mut codec: RtpCodecParameters,
+    mut codec: MediaFormat,
     obj: &Map<String, Value>,
-) -> RtpCodecParameters {
+) -> MediaFormat {
     if let Some(feedback_arr) = obj.get("rtcpFeedback").and_then(Value::as_array) {
         for entry in feedback_arr {
             if let Some(feedback) = parse_rtcp_feedback(entry) {
@@ -144,10 +138,10 @@ fn apply_rtcp_feedback_to_parameters(
 }
 
 // ---------------------------------------------------------------------------
-// Codec capability parsing (for RtpCapabilities codecs)
+// Codec capability parsing (for MediaCapabilities codecs)
 // ---------------------------------------------------------------------------
 
-fn parse_codec_capability_array(value: &Value) -> Option<Vec<RtpCodecCapability>> {
+fn parse_codec_capability_array(value: &Value) -> Option<Vec<MediaCodecCapability>> {
     let arr = value.as_array()?;
     let mut codecs = Vec::with_capacity(arr.len());
     for entry in arr {
@@ -156,11 +150,11 @@ fn parse_codec_capability_array(value: &Value) -> Option<Vec<RtpCodecCapability>
     Some(codecs)
 }
 
-fn parse_single_codec_capability(value: &Value) -> Option<RtpCodecCapability> {
+fn parse_single_codec_capability(value: &Value) -> Option<MediaCodecCapability> {
     let obj = value.as_object()?;
     let (media_kind, codec_name) = parse_mime_type(obj)?;
     let clock_rate = json_u32(obj, "clockRate")?;
-    let mut codec = RtpCodecCapability::new(media_kind, codec_name, clock_rate);
+    let mut codec = MediaCodecCapability::new(media_kind, codec_name, clock_rate);
     if let Some(pt) = json_u8(obj, "preferredPayloadType") {
         codec = codec.with_preferred_payload_type(pt);
     }
@@ -192,8 +186,8 @@ fn parse_single_codec_capability(value: &Value) -> Option<RtpCodecCapability> {
 // Header extension parsing and serialization
 // ---------------------------------------------------------------------------
 
-/// from `RtpParameters` (uses `id` field).
-fn parse_header_extension_array(value: Option<&Value>) -> Vec<RtpHeaderExtension> {
+/// from `MediaStream` wire payloads (uses `id` field).
+fn parse_header_extension_array(value: Option<&Value>) -> Vec<RouterHeaderExtension> {
     let Some(arr) = value.and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -202,19 +196,19 @@ fn parse_header_extension_array(value: Option<&Value>) -> Vec<RtpHeaderExtension
         .collect()
 }
 
-fn parse_single_header_extension(value: &Value) -> Option<RtpHeaderExtension> {
+fn parse_single_header_extension(value: &Value) -> Option<RouterHeaderExtension> {
     let obj = value.as_object()?;
     let uri = obj.get("uri").and_then(Value::as_str)?;
     let id = json_u8(obj, "id")?;
-    let mut ext = RtpHeaderExtension::new(uri.to_owned(), id);
+    let mut ext = RouterHeaderExtension::new(uri.to_owned(), id);
     if obj.get("encrypt").and_then(Value::as_bool).unwrap_or(false) {
         ext = ext.with_encryption(true);
     }
     Some(ext)
 }
 
-/// Parse header extensions from `RtpCapabilities` (uses `preferredId` field).
-fn parse_header_extension_capability_array(value: Option<&Value>) -> Vec<RtpHeaderExtension> {
+/// Parse header extensions from `MediaCapabilities` payloads (uses `preferredId` field).
+fn parse_header_extension_capability_array(value: Option<&Value>) -> Vec<RouterHeaderExtension> {
     let Some(arr) = value.and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -223,11 +217,11 @@ fn parse_header_extension_capability_array(value: Option<&Value>) -> Vec<RtpHead
         .collect()
 }
 
-fn parse_single_header_extension_capability(value: &Value) -> Option<RtpHeaderExtension> {
+fn parse_single_header_extension_capability(value: &Value) -> Option<RouterHeaderExtension> {
     let obj = value.as_object()?;
     let uri = obj.get("uri").and_then(Value::as_str)?;
     let id = json_u8(obj, "preferredId")?;
-    let mut ext = RtpHeaderExtension::new(uri.to_owned(), id);
+    let mut ext = RouterHeaderExtension::new(uri.to_owned(), id);
     if obj
         .get("preferredEncrypt")
         .and_then(Value::as_bool)
@@ -238,10 +232,10 @@ fn parse_single_header_extension_capability(value: &Value) -> Option<RtpHeaderEx
     Some(ext)
 }
 
-fn serialize_header_extension(ext: &RtpHeaderExtension) -> Value {
+fn serialize_header_extension(ext: &RouterHeaderExtension) -> Value {
     json!({
         "uri": ext.uri(),
-        "id": ext.id(),
+        "id": ext.id().value(),
         "encrypt": ext.encrypt(),
     })
 }
@@ -250,16 +244,16 @@ fn serialize_header_extension(ext: &RtpHeaderExtension) -> Value {
 // Encoding parsing and serialization
 // ---------------------------------------------------------------------------
 
-fn parse_encoding_array(value: Option<&Value>) -> Vec<RtpEncoding> {
+fn parse_encoding_array(value: Option<&Value>) -> Vec<StreamBinding> {
     let Some(arr) = value.and_then(Value::as_array) else {
         return Vec::new();
     };
     arr.iter().filter_map(parse_single_encoding).collect()
 }
 
-fn parse_single_encoding(value: &Value) -> Option<RtpEncoding> {
+fn parse_single_encoding(value: &Value) -> Option<StreamBinding> {
     let obj = value.as_object()?;
-    let mut encoding = RtpEncoding::new();
+    let mut encoding = StreamBinding::new();
     if let Some(ssrc) = json_u32(obj, "ssrc") {
         encoding = encoding.with_ssrc(ssrc);
     }
@@ -275,7 +269,7 @@ fn parse_single_encoding(value: &Value) -> Option<RtpEncoding> {
     Some(encoding)
 }
 
-fn serialize_encoding(encoding: &RtpEncoding) -> Value {
+fn serialize_encoding(encoding: &StreamBinding) -> Value {
     let mut obj = Map::new();
     if let Some(ssrc) = encoding.ssrc() {
         obj.insert("ssrc".to_owned(), json!(ssrc));
@@ -336,7 +330,7 @@ fn serialize_rtcp_feedback(feedback: &RtcpFeedback) -> Value {
 // Codec parameter serialization
 // ---------------------------------------------------------------------------
 
-fn serialize_codec_parameters(codec: &RtpCodecParameters) -> Value {
+fn serialize_codec_parameters(codec: &MediaFormat) -> Value {
     let kind = media_kind_label(codec.media_kind());
     let mut obj = Map::new();
     obj.insert(
@@ -353,7 +347,7 @@ fn serialize_codec_parameters(codec: &RtpCodecParameters) -> Value {
         Value::Object(
             codec
                 .parameters()
-                .map(|(key, value)| (key.to_owned(), json!(value)))
+                .map(|(key, value)| (key, json!(value)))
                 .collect(),
         ),
     );
@@ -546,18 +540,18 @@ mod tests {
 
     #[test]
     fn serialize_rtp_parameters_preserves_all_fields() {
-        let params = RtpParameters::new(
+        let params = MediaStream::new(
             vec![
-                RtpCodecParameters::new(RouterMediaKind::Audio, "opus", 111, 48000)
+                MediaFormat::new(RouterMediaKind::Audio, "opus", 111, 48000)
                     .with_channels(2)
                     .with_parameter("useinbandfec", "1")
                     .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
             ],
-            vec![RtpHeaderExtension::new(
+            vec![RouterHeaderExtension::new(
                 "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
                 10,
             )],
-            vec![RtpEncoding::new().with_ssrc(12345)],
+            vec![StreamBinding::new().with_ssrc(12345)],
         )
         .with_mid("0");
 

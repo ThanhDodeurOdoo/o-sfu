@@ -25,8 +25,9 @@ pub use self::observer::{NoopRouterObserver, RouterEvent, RouterObserver};
 pub use self::producer::Producer;
 pub use self::router::Router;
 pub use self::rtp::{
-    RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability, RtpCodecParameters,
-    RtpEncoding, RtpHeaderExtension, RtpParameters,
+    CodecSetting, HeaderExtension, HeaderExtensionId, HeaderExtensionUri, MediaCapabilities,
+    MediaCodec, MediaCodecCapability, MediaFormat, MediaStream, Mid, PayloadType, Rid,
+    RtcpFeedback, RtcpFeedbackKind, Ssrc, StreamBinding,
 };
 pub use self::rtp_negotiation::{
     RtpNegotiationError, can_consume, derive_consumable_rtp_parameters,
