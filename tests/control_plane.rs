@@ -175,7 +175,7 @@ async fn websocket_timeout_is_reported_from_integration_test() {
 
     assert_eq!(
         client.read_close_code().await,
-        Some(CloseCode::Library(4107))
+        Some(CloseCode::Library(4002))
     );
 }
 
@@ -195,7 +195,7 @@ async fn invalid_jwt_is_rejected_from_integration_test() {
 
     assert_eq!(
         client.read_close_code().await,
-        Some(CloseCode::Library(4106))
+        Some(CloseCode::Library(4001))
     );
 }
 
@@ -455,7 +455,7 @@ async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integratio
     };
     assert_eq!(
         second_client.read_close_code().await,
-        Some(CloseCode::Library(4109)),
+        Some(CloseCode::Library(4004)),
     );
 
     assert!(first_client.close().await.is_some());
@@ -515,7 +515,7 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     .await;
     assert_eq!(status, Some(StatusCode::OK));
 
-    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
 
     let message = alice.read_server_message().await;
     assert!(message.is_some());
@@ -561,6 +561,6 @@ async fn mismatched_explicit_channel_uuid_is_rejected_from_integration_test() {
 
     assert_eq!(
         client.read_close_code().await,
-        Some(CloseCode::Library(4106))
+        Some(CloseCode::Library(4001))
     );
 }

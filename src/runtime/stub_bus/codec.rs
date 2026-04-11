@@ -4,7 +4,8 @@ use tracing::trace;
 
 use crate::signaling::{
     current_bus::{CurrentBusBatch, CurrentBusEnvelope},
-    current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
+    current_protocol::{CurrentServerMessage, CurrentServerRequest},
+    native_protocol::NativeWebSocketCloseCode,
 };
 
 pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
@@ -12,9 +13,9 @@ pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
 pub(crate) async fn send_server_message_batch(
     writer: &mut WsWriter,
     message: &CurrentServerMessage,
-) -> Result<(), CurrentWebSocketCloseCode> {
+) -> Result<(), NativeWebSocketCloseCode> {
     trace!(server_message = ?message, "encoding server message batch");
-    let value = serde_json::to_value(message).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+    let value = serde_json::to_value(message).map_err(|_error| NativeWebSocketCloseCode::Error)?;
     send_batch(
         writer,
         vec![CurrentBusEnvelope {
@@ -29,9 +30,9 @@ pub(crate) async fn send_server_message_batch(
 pub(crate) async fn send_server_request_batch(
     writer: &mut WsWriter,
     request: &CurrentServerRequest,
-) -> Result<(), CurrentWebSocketCloseCode> {
+) -> Result<(), NativeWebSocketCloseCode> {
     trace!(server_request = ?request, "encoding server request batch");
-    let value = serde_json::to_value(request).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+    let value = serde_json::to_value(request).map_err(|_error| NativeWebSocketCloseCode::Error)?;
     send_batch(
         writer,
         vec![CurrentBusEnvelope {
@@ -45,29 +46,29 @@ pub(crate) async fn send_server_request_batch(
 
 pub(super) fn parse_batch(
     message: Message,
-) -> Result<Option<CurrentBusBatch>, CurrentWebSocketCloseCode> {
+) -> Result<Option<CurrentBusBatch>, NativeWebSocketCloseCode> {
     trace!("parsing websocket bus frame");
     let payload = match message {
         Message::Text(payload) => payload.to_string(),
         Message::Binary(payload) => String::from_utf8(payload.to_vec())
-            .map_err(|_error| CurrentWebSocketCloseCode::Error)?,
+            .map_err(|_error| NativeWebSocketCloseCode::ProtocolError)?,
         Message::Close(_) => return Ok(None),
         Message::Ping(_) | Message::Pong(_) => return Ok(Some(Vec::new())),
     };
     serde_json::from_str::<CurrentBusBatch>(&payload)
         .map(Some)
-        .map_err(|_error| CurrentWebSocketCloseCode::Error)
+        .map_err(|_error| NativeWebSocketCloseCode::ProtocolError)
 }
 
 pub(super) async fn send_batch(
     writer: &mut WsWriter,
     batch: CurrentBusBatch,
-) -> Result<(), CurrentWebSocketCloseCode> {
+) -> Result<(), NativeWebSocketCloseCode> {
     trace!(batch_len = batch.len(), "sending websocket bus batch");
     let payload =
-        serde_json::to_string(&batch).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+        serde_json::to_string(&batch).map_err(|_error| NativeWebSocketCloseCode::Error)?;
     writer
         .send(Message::Text(payload.into()))
         .await
-        .map_err(|_error| CurrentWebSocketCloseCode::Error)
+        .map_err(|_error| NativeWebSocketCloseCode::Error)
 }

@@ -18,10 +18,10 @@ use crate::runtime::{
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
-    current_protocol::{CurrentWebSocketCloseCode, CurrentWebSocketCredentials},
+    current_protocol::CurrentWebSocketCredentials,
     native_protocol::{
         NativeAuthPayload, NativeClientEnvelope, NativeClientMessage, NativeEnvelopeBatch,
-        NativeServerMessage, NativeWelcomePayload,
+        NativeServerMessage, NativeWebSocketCloseCode, NativeWelcomePayload,
     },
     shared::SessionId,
 };
@@ -69,16 +69,16 @@ pub(super) async fn establish_session(
 async fn receive_auth(
     state: &RuntimeState,
     reader: &mut WsReader,
-) -> Result<Option<NativeAuthPayload>, Option<CurrentWebSocketCloseCode>> {
+) -> Result<Option<NativeAuthPayload>, Option<NativeWebSocketCloseCode>> {
     match timeout(
         Duration::from_millis(state.config.authentication_timeout_ms),
         reader.next(),
     )
     .await
     {
-        Err(_) => Err(Some(CurrentWebSocketCloseCode::Timeout)),
+        Err(_) => Err(Some(NativeWebSocketCloseCode::AuthTimeout)),
         Ok(None) => Ok(None),
-        Ok(Some(Err(_error))) => Err(Some(CurrentWebSocketCloseCode::Error)),
+        Ok(Some(Err(_error))) => Err(Some(NativeWebSocketCloseCode::Error)),
         Ok(Some(Ok(message))) => parse_auth_payload(message).map(Some).map_err(Some),
     }
 }
@@ -106,56 +106,58 @@ async fn receive_auth_or_reject(
     }
 }
 
-fn parse_auth_payload(message: Message) -> Result<NativeAuthPayload, CurrentWebSocketCloseCode> {
+fn parse_auth_payload(message: Message) -> Result<NativeAuthPayload, NativeWebSocketCloseCode> {
     let payload = match message {
         Message::Text(payload) => payload.to_string(),
         Message::Binary(payload) => String::from_utf8(payload.to_vec())
-            .map_err(|_error| CurrentWebSocketCloseCode::Error)?,
-        Message::Close(_) => return Err(CurrentWebSocketCloseCode::Clean),
-        Message::Ping(_) | Message::Pong(_) => return Err(CurrentWebSocketCloseCode::Error),
+            .map_err(|_error| NativeWebSocketCloseCode::ProtocolError)?,
+        Message::Close(_) => return Err(NativeWebSocketCloseCode::Clean),
+        Message::Ping(_) | Message::Pong(_) => {
+            return Err(NativeWebSocketCloseCode::ProtocolError);
+        }
     };
     let batch = serde_json::from_str::<NativeEnvelopeBatch>(&payload)
-        .map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+        .map_err(|_error| NativeWebSocketCloseCode::ProtocolError)?;
     if batch.len() != 1 {
-        return Err(CurrentWebSocketCloseCode::Error);
+        return Err(NativeWebSocketCloseCode::ProtocolError);
     }
     let Some(envelope) = batch.into_iter().next() else {
-        return Err(CurrentWebSocketCloseCode::Error);
+        return Err(NativeWebSocketCloseCode::ProtocolError);
     };
     match NativeClientEnvelope::decode(envelope)
-        .map_err(|_error| CurrentWebSocketCloseCode::Error)?
+        .map_err(|_error| NativeWebSocketCloseCode::ProtocolError)?
     {
         NativeClientEnvelope::Message(NativeClientMessage::Auth(auth_payload)) => Ok(auth_payload),
         NativeClientEnvelope::Message(_)
         | NativeClientEnvelope::Request { .. }
-        | NativeClientEnvelope::Response { .. } => Err(CurrentWebSocketCloseCode::Error),
+        | NativeClientEnvelope::Response { .. } => Err(NativeWebSocketCloseCode::ProtocolError),
     }
 }
 
 async fn authenticate(
     state: &RuntimeState,
     credentials: CurrentWebSocketCredentials,
-) -> Result<(Arc<Channel>, WebSocketConnectClaims), CurrentWebSocketCloseCode> {
+) -> Result<(Arc<Channel>, WebSocketConnectClaims), NativeWebSocketCloseCode> {
     if let Some(channel_uuid) = credentials.channel_uuid.as_deref() {
         let Some(channel) = state.channels.get_by_uuid(channel_uuid).await else {
-            return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+            return Err(NativeWebSocketCloseCode::AuthFailed);
         };
         let key = channel.key().unwrap_or(&state.config.auth_key);
         let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, key)
-            .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?;
+            .map_err(|_error| NativeWebSocketCloseCode::AuthFailed)?;
         if claims.sfu_channel_uuid != channel_uuid {
-            return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+            return Err(NativeWebSocketCloseCode::AuthFailed);
         }
         return Ok((channel, claims));
     }
 
     let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, &state.config.auth_key)
-        .map_err(|_error| CurrentWebSocketCloseCode::AuthenticationFailed)?;
+        .map_err(|_error| NativeWebSocketCloseCode::AuthFailed)?;
     let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
-        return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+        return Err(NativeWebSocketCloseCode::AuthFailed);
     };
     if channel.key().is_some() {
-        return Err(CurrentWebSocketCloseCode::AuthenticationFailed);
+        return Err(NativeWebSocketCloseCode::AuthFailed);
     }
     Ok((channel, claims))
 }
@@ -207,9 +209,9 @@ async fn join_authenticated_session(
         Ok((channel, connection_id)) => Some((session_id, outbound_rx, channel, connection_id)),
         Err(error) => {
             let close_code = match error {
-                ChannelManagerJoinError::ChannelFull => CurrentWebSocketCloseCode::ChannelFull,
+                ChannelManagerJoinError::ChannelFull => NativeWebSocketCloseCode::ChannelFull,
                 ChannelManagerJoinError::MissingChannel | ChannelManagerJoinError::RouterState => {
-                    CurrentWebSocketCloseCode::AuthenticationFailed
+                    NativeWebSocketCloseCode::AuthFailed
                 }
             };
             reject_handshake(
@@ -272,7 +274,7 @@ async fn cleanup_failed_session(
 async fn reject_handshake<T>(
     state: &RuntimeState,
     writer: Option<&mut WsWriter>,
-    close_code: Option<CurrentWebSocketCloseCode>,
+    close_code: Option<NativeWebSocketCloseCode>,
     message: &str,
 ) -> Option<T> {
     state.metrics.record_ws_handshake_rejection(close_code);

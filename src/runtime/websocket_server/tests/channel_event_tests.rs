@@ -39,7 +39,7 @@ async fn websocket_recreates_channel_after_last_disconnect_cleanup() {
     };
     assert_eq!(
         read_close_code(&mut second_websocket).await,
-        Some(CloseCode::Library(4109)),
+        Some(CloseCode::Library(4004)),
     );
 
     let close_result = first_websocket.close(None).await;

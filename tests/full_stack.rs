@@ -258,7 +258,7 @@ async fn fake_peers_cover_session_replacement_and_republish_deterministically() 
 
     assert_eq!(
         initial_publisher.read_close_code().await,
-        Some(CloseCode::Library(4108))
+        Some(CloseCode::Library(4003))
     );
     assert_departure_message(&mut subscriber, SessionId::Integer(40)).await;
 
@@ -446,7 +446,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
 
     assert_eq!(
         initial_publisher.read_close_code().await,
-        Some(CloseCode::Library(4108))
+        Some(CloseCode::Library(4003))
     );
     assert_departure_message(&mut subscriber, SessionId::Integer(80)).await;
 

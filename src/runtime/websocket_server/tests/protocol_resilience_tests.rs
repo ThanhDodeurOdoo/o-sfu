@@ -83,6 +83,6 @@ async fn websocket_rejects_invalid_json_payload() {
 
     assert_eq!(
         read_close_code(&mut websocket).await,
-        Some(CloseCode::Error),
+        Some(CloseCode::Protocol),
     );
 }

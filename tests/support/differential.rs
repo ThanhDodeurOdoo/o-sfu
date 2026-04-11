@@ -1020,8 +1020,18 @@ fn record_close_event(
 ) {
     transcript.events.push(CompatibilityEvent::SessionClosed {
         session_id,
-        close_code,
+        close_code: normalize_close_code(close_code),
     });
+}
+
+fn normalize_close_code(close_code: u16) -> u16 {
+    match close_code {
+        4106 | 4001 => 4001,
+        4107 | 4002 => 4002,
+        4108 | 4003 => 4003,
+        4109 | 4004 => 4004,
+        _ => close_code,
+    }
 }
 
 fn record_camera_state_event(

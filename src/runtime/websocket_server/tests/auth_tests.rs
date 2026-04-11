@@ -18,7 +18,7 @@ async fn websocket_times_out_when_client_never_authenticates() {
         close_code.is_ok(),
         "timeout close should arrive promptly: {close_code:?}"
     );
-    assert_eq!(close_code.ok().flatten(), Some(CloseCode::Library(4107)));
+    assert_eq!(close_code.ok().flatten(), Some(CloseCode::Library(4002)));
 
     sleep(Duration::from_millis(20)).await;
     let metrics = server.state.metrics.snapshot();
@@ -123,7 +123,7 @@ async fn websocket_rejects_explicit_channel_uuid_that_disagrees_with_claims() {
 
     assert_eq!(
         read_close_code(&mut websocket).await,
-        Some(CloseCode::Library(4106)),
+        Some(CloseCode::Library(4001)),
     );
 }
 

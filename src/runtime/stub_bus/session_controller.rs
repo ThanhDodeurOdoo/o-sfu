@@ -16,8 +16,8 @@ use crate::signaling::{
     current_protocol::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
         CurrentPublishTrackResponse, CurrentServerRequest, CurrentTransportConnectPayload,
-        CurrentWebSocketCloseCode,
     },
+    native_protocol::NativeWebSocketCloseCode,
     shared::SessionId,
     webrtc::RtpCapabilities,
 };
@@ -96,7 +96,7 @@ impl SessionController {
     pub(super) async fn send_ping(
         &mut self,
         writer: &mut WsWriter,
-    ) -> Result<(), CurrentWebSocketCloseCode> {
+    ) -> Result<(), NativeWebSocketCloseCode> {
         if self.pending_ping_request_id.is_some() {
             return Ok(());
         }
@@ -271,10 +271,10 @@ impl SessionController {
         &mut self,
         writer: &mut WsWriter,
         request: CurrentServerRequest,
-    ) -> Result<CurrentBusRequestId, CurrentWebSocketCloseCode> {
+    ) -> Result<CurrentBusRequestId, NativeWebSocketCloseCode> {
         let request_id = self.next_request_id();
         let message =
-            serde_json::to_value(request).map_err(|_error| CurrentWebSocketCloseCode::Error)?;
+            serde_json::to_value(request).map_err(|_error| NativeWebSocketCloseCode::Error)?;
         let batch = vec![CurrentBusEnvelope {
             message,
             need_response: Some(request_id.clone()),
@@ -286,7 +286,7 @@ impl SessionController {
             Ok(request_id)
         } else {
             self.metrics.record_ws_bus_send_failure();
-            Err(CurrentWebSocketCloseCode::Error)
+            Err(NativeWebSocketCloseCode::Error)
         }
     }
 
@@ -295,7 +295,7 @@ impl SessionController {
         writer: &mut WsWriter,
         request_id: CurrentBusRequestId,
         response: Value,
-    ) -> Result<(), CurrentWebSocketCloseCode> {
+    ) -> Result<(), NativeWebSocketCloseCode> {
         let result = codec::send_batch(
             writer,
             vec![CurrentBusEnvelope {

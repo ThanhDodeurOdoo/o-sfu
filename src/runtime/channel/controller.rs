@@ -22,8 +22,8 @@ use uuid::Uuid;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
-    current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
-    native_protocol::NativePeerSnapshot,
+    current_protocol::{CurrentServerMessage, CurrentServerRequest},
+    native_protocol::{NativePeerSnapshot, NativeWebSocketCloseCode},
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
 };
 
@@ -33,7 +33,7 @@ use super::state::ChannelState;
 pub enum SessionOutbound {
     Message(CurrentServerMessage),
     Request(Box<CurrentServerRequest>),
-    Close(CurrentWebSocketCloseCode),
+    Close(NativeWebSocketCloseCode),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

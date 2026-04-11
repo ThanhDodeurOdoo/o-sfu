@@ -143,7 +143,7 @@ fn expected_session_replacement_transcript() -> CompatibilityTranscript {
         events: vec![
             CompatibilityEvent::SessionClosed {
                 session_id: SessionId::Integer(40),
-                close_code: 4108,
+                close_code: 4003,
             },
             CompatibilityEvent::SessionDeparted {
                 observer_session_id: SessionId::Integer(50),

@@ -10,7 +10,7 @@ use super::{
 use crate::runtime::{
     channel::Channel, metrics::RuntimeMetrics, transport_adapter::RuntimeTransportAdapter,
 };
-use crate::signaling::{current_protocol::CurrentWebSocketCloseCode, shared::SessionId};
+use crate::signaling::{native_protocol::NativeWebSocketCloseCode, shared::SessionId};
 
 pub(crate) const STUB_SERVER_BUS_ID: u64 = 0;
 
@@ -18,7 +18,7 @@ pub(crate) const STUB_SERVER_BUS_ID: u64 = 0;
 pub(crate) enum StubBusOutcome {
     Continue,
     Break,
-    Close(CurrentWebSocketCloseCode),
+    Close(NativeWebSocketCloseCode),
 }
 
 #[derive(Debug)]
@@ -60,7 +60,7 @@ impl StubBusSession {
     pub(crate) async fn send_ping(
         &mut self,
         writer: &mut WsWriter,
-    ) -> Result<(), CurrentWebSocketCloseCode> {
+    ) -> Result<(), NativeWebSocketCloseCode> {
         self.controller.send_ping(writer).await
     }
 

@@ -223,7 +223,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
 
     assert_eq!(
         read_close_code(&mut first_socket).await,
-        Some(CloseCode::Library(4108))
+        Some(CloseCode::Library(4003))
     );
 
     let events = wait_for_stub_webrtc_events(&adapter, 3).await;
@@ -283,7 +283,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
         .disconnect_sessions(channel.uuid(), &[SessionId::Integer(1)])
         .await;
 
-    assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4108)));
+    assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4003)));
     let peer_message = read_server_message(bob).await;
     assert!(
         matches!(peer_message, Some(CurrentServerMessage::SessionDeparted(_))),

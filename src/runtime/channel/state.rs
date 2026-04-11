@@ -13,8 +13,9 @@ use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
     current_protocol::{
         CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
-        CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById, CurrentWebSocketCloseCode,
+        CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById,
     },
+    native_protocol::NativeWebSocketCloseCode,
     ortc_mapper,
     shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
     webrtc::{
@@ -146,7 +147,7 @@ pub(super) struct JoinSessionOutcome {
 impl JoinSessionOutcome {
     pub(super) fn emit(self) {
         if let Some(sender) = self.replaced_sender {
-            let _ = sender.send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
+            let _ = sender.send(SessionOutbound::Close(NativeWebSocketCloseCode::Kicked));
         }
         if let Some(fanout) = self.departure_fanout {
             fanout.emit();
@@ -185,7 +186,7 @@ pub(super) struct DisconnectSessionsOutcome {
 impl DisconnectSessionsOutcome {
     pub(super) fn emit(self) {
         for sender in self.kicked_senders {
-            let _ = sender.send(SessionOutbound::Close(CurrentWebSocketCloseCode::Kicked));
+            let _ = sender.send(SessionOutbound::Close(NativeWebSocketCloseCode::Kicked));
         }
         for fanout in self.departure_fanouts {
             fanout.emit();
