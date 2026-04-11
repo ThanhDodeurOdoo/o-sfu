@@ -90,7 +90,7 @@ pub fn derive_consumable_rtp_parameters(
             find_matching_media_capability(producer_format, router_capabilities)
         else {
             return Err(RtpNegotiationError::UnsupportedProducerCodec {
-                codec_name: producer_format.codec().as_wire_name().to_owned(),
+                codec_name: producer_format.codec().as_str().to_owned(),
                 payload_type: producer_format.payload_type(),
             });
         };
@@ -340,7 +340,7 @@ fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, Rtp
             _ => None,
         })
         .ok_or_else(|| RtpNegotiationError::InvalidAptParameter {
-            codec_name: format.codec().as_wire_name().to_owned(),
+            codec_name: format.codec().as_str().to_owned(),
             payload_type: format.payload_type(),
         })
 }
@@ -455,11 +455,11 @@ fn negotiate_header_extensions(
 ) -> Vec<HeaderExtension> {
     let supported_uris = consumer_capabilities
         .header_extensions()
-        .map(|extension| extension.uri().to_owned())
+        .map(|extension| extension.uri_kind().clone())
         .collect::<BTreeSet<_>>();
     consumable_parameters
         .header_extensions()
-        .filter(|extension| supported_uris.contains(extension.uri()))
+        .filter(|extension| supported_uris.contains(extension.uri_kind()))
         .map(clone_header_extension)
         .collect()
 }

@@ -3,10 +3,13 @@
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
 
-use std::{borrow::Cow, fmt};
+use std::borrow::Cow;
 
 use super::MediaKind;
 use crate::rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
+
+pub type MediaCodec = rfc_rtp::CodecName;
+pub type HeaderExtensionUri = rfc_webrtc::RtpHeaderExtensionUri;
 
 /// RTCP feedback categories used by codec capabilities and negotiated formats.
 ///
@@ -43,64 +46,6 @@ impl RtcpFeedback {
     #[must_use]
     pub fn parameter(&self) -> Option<&str> {
         self.parameter.as_deref()
-    }
-}
-
-/// Router-visible codec family.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MediaCodec {
-    Opus,
-    Vp8,
-    H264,
-    Rtx,
-    Other(String),
-}
-
-impl MediaCodec {
-    #[must_use]
-    pub fn as_wire_name(&self) -> &str {
-        match self {
-            Self::Opus => rfc_rtp::codec_name::OPUS,
-            Self::Vp8 => rfc_rtp::codec_name::VP8,
-            Self::H264 => rfc_rtp::codec_name::H264,
-            Self::Rtx => rfc_rtp::codec_name::RTX,
-            Self::Other(name) => name.as_str(),
-        }
-    }
-
-    #[must_use]
-    pub fn is_rtx(&self) -> bool {
-        matches!(self, Self::Rtx)
-    }
-}
-
-impl From<&str> for MediaCodec {
-    fn from(value: &str) -> Self {
-        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::OPUS) {
-            return Self::Opus;
-        }
-        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::VP8) {
-            return Self::Vp8;
-        }
-        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::H264) {
-            return Self::H264;
-        }
-        if value.eq_ignore_ascii_case(rfc_rtp::codec_name::RTX) {
-            return Self::Rtx;
-        }
-        Self::Other(value.to_owned())
-    }
-}
-
-impl From<String> for MediaCodec {
-    fn from(value: String) -> Self {
-        Self::from(value.as_str())
-    }
-}
-
-impl fmt::Display for MediaCodec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_wire_name())
     }
 }
 
@@ -236,56 +181,6 @@ impl From<u8> for HeaderExtensionId {
 impl From<HeaderExtensionId> for u8 {
     fn from(value: HeaderExtensionId) -> Self {
         value.value()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HeaderExtensionUri {
-    Mid,
-    AbsSendTime,
-    TransportWideCcDraft01,
-    SsrcAudioLevel,
-    Other(String),
-}
-
-impl HeaderExtensionUri {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Mid => rfc_webrtc::rtp_header_extension_uri::MID,
-            Self::AbsSendTime => rfc_webrtc::rtp_header_extension_uri::ABS_SEND_TIME,
-            Self::TransportWideCcDraft01 => {
-                rfc_webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01
-            }
-            Self::SsrcAudioLevel => rfc_webrtc::rtp_header_extension_uri::SSRC_AUDIO_LEVEL,
-            Self::Other(uri) => uri.as_str(),
-        }
-    }
-}
-
-impl From<&str> for HeaderExtensionUri {
-    fn from(value: &str) -> Self {
-        match value {
-            rfc_webrtc::rtp_header_extension_uri::MID => Self::Mid,
-            rfc_webrtc::rtp_header_extension_uri::ABS_SEND_TIME => Self::AbsSendTime,
-            rfc_webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01 => {
-                Self::TransportWideCcDraft01
-            }
-            rfc_webrtc::rtp_header_extension_uri::SSRC_AUDIO_LEVEL => Self::SsrcAudioLevel,
-            _ => Self::Other(value.to_owned()),
-        }
-    }
-}
-
-impl From<String> for HeaderExtensionUri {
-    fn from(value: String) -> Self {
-        Self::from(value.as_str())
-    }
-}
-
-impl fmt::Display for HeaderExtensionUri {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -441,7 +336,7 @@ impl MediaCodecCapability {
 
     #[must_use]
     pub fn codec_name(&self) -> &str {
-        self.codec.as_wire_name()
+        self.codec.as_str()
     }
 
     #[must_use]
@@ -573,7 +468,7 @@ impl MediaFormat {
 
     #[must_use]
     pub fn codec_name(&self) -> &str {
-        self.codec.as_wire_name()
+        self.codec.as_str()
     }
 
     #[must_use]

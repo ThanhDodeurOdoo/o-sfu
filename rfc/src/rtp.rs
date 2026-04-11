@@ -3,6 +3,8 @@
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
 
+use std::fmt;
+
 /// RTP version defined by RFC 3550 section 5.1.
 pub const RTP_VERSION: u8 = 2;
 
@@ -110,6 +112,70 @@ pub mod codec_name {
     ///
     /// Reference: RFC 4588.
     pub const RTX: &str = "rtx";
+}
+
+/// RTP payload-format MIME subtype names commonly used by WebRTC endpoints.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CodecName {
+    Opus,
+    Vp8,
+    H264,
+    Rtx,
+    Other(String),
+}
+
+impl CodecName {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Opus => codec_name::OPUS,
+            Self::Vp8 => codec_name::VP8,
+            Self::H264 => codec_name::H264,
+            Self::Rtx => codec_name::RTX,
+            Self::Other(name) => name.as_str(),
+        }
+    }
+
+    #[must_use]
+    pub fn is_rtx(&self) -> bool {
+        matches!(self, Self::Rtx)
+    }
+}
+
+impl From<&str> for CodecName {
+    fn from(value: &str) -> Self {
+        if value.eq_ignore_ascii_case(codec_name::OPUS) {
+            return Self::Opus;
+        }
+        if value.eq_ignore_ascii_case(codec_name::VP8) {
+            return Self::Vp8;
+        }
+        if value.eq_ignore_ascii_case(codec_name::H264) {
+            return Self::H264;
+        }
+        if value.eq_ignore_ascii_case(codec_name::RTX) {
+            return Self::Rtx;
+        }
+        Self::Other(value.to_owned())
+    }
+}
+
+impl From<String> for CodecName {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl AsRef<str> for CodecName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for CodecName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Codec `fmtp` parameter names and canonical valuse

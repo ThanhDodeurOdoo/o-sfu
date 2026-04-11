@@ -1,5 +1,6 @@
 use o_sfu_router::{
-    MediaCapabilities, MediaCodecCapability, MediaKind, RtcpFeedback, RtcpFeedbackKind,
+    CodecSetting, MediaCapabilities, MediaCodecCapability, MediaKind, RtcpFeedback,
+    RtcpFeedbackKind,
 };
 use serde_json::{Map, Value, json};
 
@@ -67,7 +68,7 @@ fn serialize_codec_capability(codec: &MediaCodecCapability) -> Value {
     codec_json.insert("kind".to_owned(), json!(kind));
     codec_json.insert(
         "mimeType".to_owned(),
-        json!(format!("{kind}/{}", codec.codec_name())),
+        json!(format!("{kind}/{}", codec.codec().as_str())),
     );
     codec_json.insert("clockRate".to_owned(), json!(codec.clock_rate()));
     if let Some(payload_type) = codec.preferred_payload_type() {
@@ -78,12 +79,7 @@ fn serialize_codec_capability(codec: &MediaCodecCapability) -> Value {
     }
     codec_json.insert(
         "parameters".to_owned(),
-        Value::Object(
-            codec
-                .parameters()
-                .map(|(key, value)| (key, json!(value)))
-                .collect(),
-        ),
+        serialize_codec_settings(codec.settings()),
     );
     codec_json.insert(
         "rtcpFeedback".to_owned(),
@@ -105,7 +101,7 @@ fn serialize_header_extension(
 ) -> Value {
     json!({
         "kind": media_kind_label(media_kind),
-        "uri": header_extension.uri(),
+        "uri": header_extension.uri_kind().as_str(),
         "preferredId": header_extension.id().value(),
         "preferredEncrypt": header_extension.encrypt(),
         "direction": webrtc::sdp::direction::SEND_RECV,
@@ -115,33 +111,41 @@ fn serialize_header_extension(
 fn serialize_rtcp_feedback(feedback: &RtcpFeedback) -> Value {
     let (feedback_type, parameter) = rtcp_feedback_wire_parts(feedback);
     let mut feedback_json = Map::new();
-    feedback_json.insert("type".to_owned(), Value::String(feedback_type));
+    feedback_json.insert("type".to_owned(), json!(feedback_type));
     if let Some(parameter) = parameter {
-        feedback_json.insert("parameter".to_owned(), Value::String(parameter));
+        feedback_json.insert("parameter".to_owned(), json!(parameter));
     }
     Value::Object(feedback_json)
 }
 
-fn rtcp_feedback_wire_parts(feedback: &RtcpFeedback) -> (String, Option<String>) {
+fn rtcp_feedback_wire_parts(feedback: &RtcpFeedback) -> (&str, Option<&str>) {
     match feedback.kind() {
-        RtcpFeedbackKind::Nack => (
-            webrtc::rtcp_feedback::kind::NACK.to_owned(),
-            feedback.parameter().map(str::to_owned),
-        ),
+        RtcpFeedbackKind::Nack => (webrtc::rtcp_feedback::kind::NACK, feedback.parameter()),
         RtcpFeedbackKind::NackPli => (
-            webrtc::rtcp_feedback::kind::NACK.to_owned(),
-            Some(webrtc::rtcp_feedback::parameter::PLI.to_owned()),
+            webrtc::rtcp_feedback::kind::NACK,
+            Some(webrtc::rtcp_feedback::parameter::PLI),
         ),
         RtcpFeedbackKind::CcmFir => (
-            webrtc::rtcp_feedback::kind::CCM.to_owned(),
-            Some(webrtc::rtcp_feedback::parameter::FIR.to_owned()),
+            webrtc::rtcp_feedback::kind::CCM,
+            Some(webrtc::rtcp_feedback::parameter::FIR),
         ),
-        RtcpFeedbackKind::GoogRemb => (webrtc::rtcp_feedback::kind::GOOG_REMB.to_owned(), None),
-        RtcpFeedbackKind::TransportCc => {
-            (webrtc::rtcp_feedback::kind::TRANSPORT_CC.to_owned(), None)
-        }
-        RtcpFeedbackKind::Other(name) => (name.clone(), feedback.parameter().map(str::to_owned)),
+        RtcpFeedbackKind::GoogRemb => (webrtc::rtcp_feedback::kind::GOOG_REMB, None),
+        RtcpFeedbackKind::TransportCc => (webrtc::rtcp_feedback::kind::TRANSPORT_CC, None),
+        RtcpFeedbackKind::Other(name) => (name.as_str(), feedback.parameter()),
     }
+}
+
+fn serialize_codec_settings<'a>(settings: impl Iterator<Item = &'a CodecSetting>) -> Value {
+    Value::Object(
+        settings
+            .map(|setting| {
+                (
+                    setting.key().to_owned(),
+                    json!(setting.wire_value().as_ref()),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn media_kind_label(media_kind: MediaKind) -> &'static str {

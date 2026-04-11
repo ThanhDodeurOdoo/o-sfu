@@ -22,20 +22,17 @@ pub(super) fn default_router_rtp_capabilities() -> RtpCapabilities {
             default_video_rtx_codec_capability(),
         ],
         vec![
+            RtpHeaderExtension::new(webrtc::RtpHeaderExtensionUri::Mid, HEADER_EXTENSION_ID_MID),
             RtpHeaderExtension::new(
-                webrtc::rtp_header_extension_uri::MID,
-                HEADER_EXTENSION_ID_MID,
-            ),
-            RtpHeaderExtension::new(
-                webrtc::rtp_header_extension_uri::ABS_SEND_TIME,
+                webrtc::RtpHeaderExtensionUri::AbsSendTime,
                 HEADER_EXTENSION_ID_ABS_SEND_TIME,
             ),
             RtpHeaderExtension::new(
-                webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+                webrtc::RtpHeaderExtensionUri::TransportWideCcDraft01,
                 HEADER_EXTENSION_ID_TRANSPORT_WIDE_CC,
             ),
             RtpHeaderExtension::new(
-                webrtc::rtp_header_extension_uri::SSRC_AUDIO_LEVEL,
+                webrtc::RtpHeaderExtensionUri::SsrcAudioLevel,
                 HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL,
             ),
         ],
@@ -43,7 +40,7 @@ pub(super) fn default_router_rtp_capabilities() -> RtpCapabilities {
 }
 
 fn default_audio_codec_capability() -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Audio, rtp::codec_name::OPUS, 48_000)
+    RtpCodecCapability::new(MediaKind::Audio, rtp::CodecName::Opus, 48_000)
         .with_preferred_payload_type(AUDIO_PAYLOAD_TYPE_OPUS)
         .with_channels(2)
         .with_setting(CodecSetting::UseInBandFec(true))
@@ -51,7 +48,7 @@ fn default_audio_codec_capability() -> RtpCodecCapability {
 }
 
 fn default_video_codec_capability() -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Video, rtp::codec_name::VP8, 90_000)
+    RtpCodecCapability::new(MediaKind::Video, rtp::CodecName::Vp8, 90_000)
         .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
@@ -61,7 +58,7 @@ fn default_video_codec_capability() -> RtpCodecCapability {
 }
 
 fn default_video_rtx_codec_capability() -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Video, rtp::codec_name::RTX, 90_000)
+    RtpCodecCapability::new(MediaKind::Video, rtp::CodecName::Rtx, 90_000)
         .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8_RTX)
         .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8.into()))
 }

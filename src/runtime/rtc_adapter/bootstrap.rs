@@ -67,7 +67,7 @@ pub(super) fn ensure_session_rtc_state(
         return Ok(());
     }
     let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
-    let candidate = Candidate::host(candidate_addr, webrtc::ice::transport::UDP)
+    let candidate = Candidate::host(candidate_addr, webrtc::IceTransport::Udp.as_str())
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
         return Err(TransportAdapterError::TransportUnavailable);
@@ -112,7 +112,7 @@ pub(super) fn build_transport_bootstrap(
         ice_parameters: build_ice_parameters(local_ice_credentials),
         ice_candidates: vec![build_host_candidate(candidate_addr)],
         dtls_parameters: DtlsParameters {
-            role: String::from("auto"),
+            role: webrtc::DtlsRole::Auto.as_str().to_owned(),
             fingerprints: vec![wire_dtls_fingerprint(local_dtls_fingerprint)],
         },
         sctp_parameters: transport_bootstrap::default_sctp_parameters(),
@@ -132,15 +132,17 @@ fn build_host_candidate(candidate_addr: SocketAddr) -> IceCandidate {
         foundation: String::from(HOST_CANDIDATE_FOUNDATION),
         priority: host_candidate_priority(),
         ip: candidate_addr.ip().to_string(),
-        protocol: String::from(webrtc::ice::transport::UDP),
+        protocol: webrtc::IceTransport::Udp.as_str().to_owned(),
         port: u64::from(candidate_addr.port()),
-        candidate_type: String::from(webrtc::ice::candidate_type::HOST),
+        candidate_type: webrtc::IceCandidateType::Host.as_str().to_owned(),
     }
 }
 
 fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> DtlsFingerprint {
     let rendered = fingerprint.to_string();
-    let (algorithm, value) = rendered.split_once(' ').unwrap_or(("sha-256", ""));
+    let (algorithm, value) = rendered
+        .split_once(' ')
+        .unwrap_or((webrtc::DtlsFingerprintAlgorithm::Sha256.as_str(), ""));
     DtlsFingerprint {
         algorithm: algorithm.to_owned(),
         value: value.to_owned(),

@@ -36,14 +36,14 @@ fn stub_transport_bootstrap(id: &str) -> TransportBootstrap {
             foundation: String::from("foundation"),
             priority: 1,
             ip: String::from("203.0.113.10"),
-            protocol: String::from(webrtc::ice::transport::UDP),
+            protocol: webrtc::IceTransport::Udp.as_str().to_owned(),
             port: 40_000,
-            candidate_type: String::from(webrtc::ice::candidate_type::HOST),
+            candidate_type: webrtc::IceCandidateType::Host.as_str().to_owned(),
         }],
         dtls_parameters: DtlsParameters {
-            role: String::from("auto"),
+            role: webrtc::DtlsRole::Auto.as_str().to_owned(),
             fingerprints: vec![DtlsFingerprint {
-                algorithm: String::from("sha-256"),
+                algorithm: webrtc::DtlsFingerprintAlgorithm::Sha256.as_str().to_owned(),
                 value: String::from("AA:BB:CC"),
             }],
         },

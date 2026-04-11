@@ -1,12 +1,15 @@
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 use tracing::{error, trace, warn};
 
-use crate::signaling::webrtc::{DtlsFingerprint, DtlsParameters};
+use crate::{
+    rfc::webrtc as rfc_webrtc,
+    signaling::webrtc::{DtlsFingerprint, DtlsParameters},
+};
 use o_sfu_router::RfcReference;
 
 const ROLE_PATH: &str = "$.role";
 const FINGERPRINTS_PATH: &str = "$.fingerprints";
-const SUPPORTED_FINGERPRINT_ALGORITHM: &str = "sha-256";
+const SUPPORTED_FINGERPRINT_ALGORITHM: &str = rfc_webrtc::DtlsFingerprintAlgorithm::Sha256.as_str();
 const SUPPORTED_SHA256_FINGERPRINT_BYTE_LEN: usize = 32;
 const VALID_BUT_UNSUPPORTED_FINGERPRINT_ALGORITHMS: [&str; 4] =
     ["sha-1", "sha-224", "sha-384", "sha-512"];
@@ -43,16 +46,11 @@ pub(super) struct DtlsUnsupportedContext {
     raw_dtls_parameters: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ParsedDtlsRole {
-    Auto,
-    Client,
-    Server,
-}
+pub(super) type ParsedDtlsRole = rfc_webrtc::DtlsRole;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParsedDtlsFingerprint {
-    algorithm: String,
+    algorithm: rfc_webrtc::DtlsFingerprintAlgorithm,
     value: String,
 }
 
@@ -76,8 +74,8 @@ impl ParsedDtlsParameters {
 
 impl ParsedDtlsFingerprint {
     #[must_use]
-    pub(super) fn algorithm(&self) -> &str {
-        &self.algorithm
+    pub(super) fn algorithm(&self) -> rfc_webrtc::DtlsFingerprintAlgorithm {
+        self.algorithm
     }
 
     #[must_use]
@@ -120,24 +118,18 @@ pub(super) fn parse_dtls_parameters(
 }
 
 fn parse_role(role_token: &str, raw_json: &str) -> DtlsParseResult<ParsedDtlsRole> {
-    let role = match role_token {
-        "auto" => ParsedDtlsRole::Auto,
-        "client" => ParsedDtlsRole::Client,
-        "server" => ParsedDtlsRole::Server,
-        _ => {
-            let diagnostic = invalid_input(
-                "DTLS role is invalid",
-                String::from("auto|client|server"),
-                role_token.to_owned(),
-                ROLE_PATH,
-                RFC_5763_SECTION_5,
-                raw_json,
-            );
-            log_diagnostic(&diagnostic);
-            return Err(Box::new(diagnostic));
-        }
-    };
-    Ok(role)
+    rfc_webrtc::DtlsRole::parse(role_token).ok_or_else(|| {
+        let diagnostic = invalid_input(
+            "DTLS role is invalid",
+            String::from("auto|client|server"),
+            role_token.to_owned(),
+            ROLE_PATH,
+            RFC_5763_SECTION_5,
+            raw_json,
+        );
+        log_diagnostic(&diagnostic);
+        Box::new(diagnostic)
+    })
 }
 
 fn parse_fingerprint(
@@ -153,10 +145,13 @@ fn parse_fingerprint(
     })
 }
 
-fn parse_fingerprint_algorithm(algorithm_token: &str, raw_json: &str) -> DtlsParseResult<String> {
+fn parse_fingerprint_algorithm(
+    algorithm_token: &str,
+    raw_json: &str,
+) -> DtlsParseResult<rfc_webrtc::DtlsFingerprintAlgorithm> {
     let normalized = algorithm_token.to_ascii_lowercase();
-    if normalized == SUPPORTED_FINGERPRINT_ALGORITHM {
-        return Ok(normalized);
+    if let Some(algorithm) = rfc_webrtc::DtlsFingerprintAlgorithm::parse(normalized.as_str()) {
+        return Ok(algorithm);
     }
     if VALID_BUT_UNSUPPORTED_FINGERPRINT_ALGORITHMS.contains(&normalized.as_str()) {
         let diagnostic = unsupported_feature(
@@ -171,7 +166,7 @@ fn parse_fingerprint_algorithm(algorithm_token: &str, raw_json: &str) -> DtlsPar
     }
     let diagnostic = invalid_input(
         "DTLS fingerprint algorithm token is invalid",
-        String::from("sha-256"),
+        String::from(SUPPORTED_FINGERPRINT_ALGORITHM),
         algorithm_token.to_owned(),
         "$.fingerprints[*].algorithm",
         RFC_4572_SECTION_5,

@@ -9,6 +9,8 @@
 //! - SDP `setup` roles for connection-oriented media: <https://www.rfc-editor.org/rfc/rfc4145>
 //! - DTLS-SRTP offer/answer usage of `setup`: <https://www.rfc-editor.org/rfc/rfc5763>
 
+use std::fmt;
+
 /// WebRTC RTP profile name.
 ///
 /// Reference: RFC 8834 section 4.2.
@@ -52,6 +54,98 @@ pub mod ice {
     pub mod transport {
         pub const UDP: &str = "udp";
         pub const TCP: &str = "tcp";
+    }
+}
+
+/// ICE transport tokens used in SDP candidate lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IceTransport {
+    Udp,
+    Tcp,
+}
+
+impl IceTransport {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => ice::transport::UDP,
+            Self::Tcp => ice::transport::TCP,
+        }
+    }
+
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        if token.eq_ignore_ascii_case(ice::transport::UDP) {
+            return Some(Self::Udp);
+        }
+        if token.eq_ignore_ascii_case(ice::transport::TCP) {
+            return Some(Self::Tcp);
+        }
+        None
+    }
+}
+
+impl AsRef<str> for IceTransport {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Udp => ice::transport::UDP,
+            Self::Tcp => ice::transport::TCP,
+        }
+    }
+}
+
+impl fmt::Display for IceTransport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+/// ICE candidate type tokens used in SDP candidate attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IceCandidateType {
+    Host,
+    ServerReflexive,
+    PeerReflexive,
+    Relayed,
+}
+
+impl IceCandidateType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => ice::candidate_type::HOST,
+            Self::ServerReflexive => ice::candidate_type::SERVER_REFLEXIVE,
+            Self::PeerReflexive => ice::candidate_type::PEER_REFLEXIVE,
+            Self::Relayed => ice::candidate_type::RELAYED,
+        }
+    }
+
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            ice::candidate_type::HOST => Some(Self::Host),
+            ice::candidate_type::SERVER_REFLEXIVE => Some(Self::ServerReflexive),
+            ice::candidate_type::PEER_REFLEXIVE => Some(Self::PeerReflexive),
+            ice::candidate_type::RELAYED => Some(Self::Relayed),
+            _ => None,
+        }
+    }
+}
+
+impl AsRef<str> for IceCandidateType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Host => ice::candidate_type::HOST,
+            Self::ServerReflexive => ice::candidate_type::SERVER_REFLEXIVE,
+            Self::PeerReflexive => ice::candidate_type::PEER_REFLEXIVE,
+            Self::Relayed => ice::candidate_type::RELAYED,
+        }
+    }
+}
+
+impl fmt::Display for IceCandidateType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -132,6 +226,88 @@ pub mod sdp {
         ///
         /// Reference: RFC 8866 section 6.7.
         pub const SEND_RECV: &str = "sendrecv";
+    }
+}
+
+/// DTLS `setup` roles used by current WebRTC transport payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DtlsRole {
+    Auto,
+    Client,
+    Server,
+}
+
+impl DtlsRole {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Client => "client",
+            Self::Server => "server",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            "auto" => Some(Self::Auto),
+            "client" => Some(Self::Client),
+            "server" => Some(Self::Server),
+            _ => None,
+        }
+    }
+}
+
+impl AsRef<str> for DtlsRole {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Auto => "auto",
+            Self::Client => "client",
+            Self::Server => "server",
+        }
+    }
+}
+
+impl fmt::Display for DtlsRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+/// DTLS fingerprint algorithms currently supported by the runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DtlsFingerprintAlgorithm {
+    Sha256,
+}
+
+impl DtlsFingerprintAlgorithm {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sha256 => "sha-256",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        if token.eq_ignore_ascii_case("sha-256") {
+            return Some(Self::Sha256);
+        }
+        None
+    }
+}
+
+impl AsRef<str> for DtlsFingerprintAlgorithm {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Sha256 => "sha-256",
+        }
+    }
+}
+
+impl fmt::Display for DtlsFingerprintAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -229,6 +405,59 @@ pub mod rtp_header_extension_uri {
     /// <https://www.ietf.org/archive/id/draft-holmer-rmcat-transport-wide-cc-extensions-01.txt>
     pub const TRANSPORT_WIDE_CC_DRAFT_01: &str =
         "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01";
+}
+
+/// RTP header-extension URIs commonly needed by WebRTC endpoints.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RtpHeaderExtensionUri {
+    Mid,
+    AbsSendTime,
+    TransportWideCcDraft01,
+    SsrcAudioLevel,
+    Other(String),
+}
+
+impl RtpHeaderExtensionUri {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Mid => rtp_header_extension_uri::MID,
+            Self::AbsSendTime => rtp_header_extension_uri::ABS_SEND_TIME,
+            Self::TransportWideCcDraft01 => rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+            Self::SsrcAudioLevel => rtp_header_extension_uri::SSRC_AUDIO_LEVEL,
+            Self::Other(uri) => uri.as_str(),
+        }
+    }
+}
+
+impl From<&str> for RtpHeaderExtensionUri {
+    fn from(value: &str) -> Self {
+        match value {
+            rtp_header_extension_uri::MID => Self::Mid,
+            rtp_header_extension_uri::ABS_SEND_TIME => Self::AbsSendTime,
+            rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01 => Self::TransportWideCcDraft01,
+            rtp_header_extension_uri::SSRC_AUDIO_LEVEL => Self::SsrcAudioLevel,
+            _ => Self::Other(value.to_owned()),
+        }
+    }
+}
+
+impl From<String> for RtpHeaderExtensionUri {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl AsRef<str> for RtpHeaderExtensionUri {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for RtpHeaderExtensionUri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// RTCP SDES item type defined for MID.

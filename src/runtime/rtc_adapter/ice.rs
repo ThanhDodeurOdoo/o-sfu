@@ -38,28 +38,15 @@ pub(super) struct IceUnsupportedContext {
     raw_candidate: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum IceTransportProtocol {
-    Udp,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum IceCandidateType {
-    Host,
-    ServerReflexive,
-    PeerReflexive,
-    Relayed,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParsedIceCandidate {
     foundation: String,
     component_id: u16,
-    transport_protocol: IceTransportProtocol,
+    transport_protocol: webrtc::IceTransport,
     priority: u32,
     address: IpAddr,
     port: u16,
-    candidate_type: IceCandidateType,
+    candidate_type: webrtc::IceCandidateType,
 }
 
 #[cfg(test)]
@@ -70,12 +57,12 @@ impl ParsedIceCandidate {
     }
 
     #[must_use]
-    pub(super) fn transport_protocol(&self) -> IceTransportProtocol {
+    pub(super) fn transport_protocol(&self) -> webrtc::IceTransport {
         self.transport_protocol
     }
 
     #[must_use]
-    pub(super) fn candidate_type(&self) -> IceCandidateType {
+    pub(super) fn candidate_type(&self) -> webrtc::IceCandidateType {
         self.candidate_type
     }
 }
@@ -266,11 +253,10 @@ fn parse_component_id(token: &str, raw_candidate: &str) -> IceParseResult<u16> {
     Ok(component_id)
 }
 
-fn parse_transport(token: &str, raw_candidate: &str) -> IceParseResult<IceTransportProtocol> {
-    let lower = token.to_ascii_lowercase();
-    match lower.as_str() {
-        webrtc::ice::transport::UDP => Ok(IceTransportProtocol::Udp),
-        webrtc::ice::transport::TCP => {
+fn parse_transport(token: &str, raw_candidate: &str) -> IceParseResult<webrtc::IceTransport> {
+    match webrtc::IceTransport::parse(token) {
+        Some(webrtc::IceTransport::Udp) => Ok(webrtc::IceTransport::Udp),
+        Some(webrtc::IceTransport::Tcp) => {
             let diagnostic = unsupported_feature(
                 "ICE TCP candidates are not supported yet",
                 token,
@@ -280,7 +266,7 @@ fn parse_transport(token: &str, raw_candidate: &str) -> IceParseResult<IceTransp
             log_diagnostic(&diagnostic);
             Err(Box::new(diagnostic))
         }
-        _ => {
+        None => {
             let diagnostic = invalid_input(
                 "ICE candidate transport token is invalid",
                 String::from("udp"),
@@ -350,13 +336,12 @@ fn ensure_type_label(token: &str, raw_candidate: &str) -> IceParseResult<()> {
     Err(Box::new(diagnostic))
 }
 
-fn parse_candidate_type(token: &str, raw_candidate: &str) -> IceParseResult<IceCandidateType> {
-    match token {
-        webrtc::ice::candidate_type::HOST => Ok(IceCandidateType::Host),
-        webrtc::ice::candidate_type::SERVER_REFLEXIVE => Ok(IceCandidateType::ServerReflexive),
-        webrtc::ice::candidate_type::PEER_REFLEXIVE => Ok(IceCandidateType::PeerReflexive),
-        webrtc::ice::candidate_type::RELAYED => Ok(IceCandidateType::Relayed),
-        _ => {
+fn parse_candidate_type(
+    token: &str,
+    raw_candidate: &str,
+) -> IceParseResult<webrtc::IceCandidateType> {
+    webrtc::IceCandidateType::parse(token).map_or_else(
+        || {
             let diagnostic = unsupported_feature(
                 "ICE candidate type is valid but not supported yet",
                 token,
@@ -365,8 +350,9 @@ fn parse_candidate_type(token: &str, raw_candidate: &str) -> IceParseResult<IceC
             );
             log_diagnostic(&diagnostic);
             Err(Box::new(diagnostic))
-        }
-    }
+        },
+        Ok,
+    )
 }
 
 fn ensure_supported_extensions(tokens: &[&str], raw_candidate: &str) -> IceParseResult<()> {
@@ -449,7 +435,8 @@ fn log_diagnostic(diagnostic: &IceParseDiagnostic) {
 mod tests {
     use o_sfu_router::ParseDiagnosticKind;
 
-    use super::{IceCandidateType, IceTransportProtocol, parse_ice_candidate};
+    use super::parse_ice_candidate;
+    use crate::rfc::webrtc;
 
     #[test]
     fn parse_ice_candidate_accepts_supported_udp_host_candidate() {
@@ -460,8 +447,8 @@ mod tests {
             return;
         };
         assert_eq!(parsed.component_id(), 1);
-        assert_eq!(parsed.transport_protocol(), IceTransportProtocol::Udp);
-        assert_eq!(parsed.candidate_type(), IceCandidateType::Host);
+        assert_eq!(parsed.transport_protocol(), webrtc::IceTransport::Udp);
+        assert_eq!(parsed.candidate_type(), webrtc::IceCandidateType::Host);
     }
 
     #[test]

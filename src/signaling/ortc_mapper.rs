@@ -10,8 +10,9 @@
 //! - ORTC API dictionaries: <https://draft.ortc.org/>
 
 use o_sfu_router::{
-    HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat,
-    MediaKind as RouterMediaKind, MediaStream, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
+    CodecSetting, HeaderExtension as RouterHeaderExtension, MediaCapabilities,
+    MediaCodecCapability, MediaFormat, MediaKind as RouterMediaKind, MediaStream, RtcpFeedback,
+    RtcpFeedbackKind, StreamBinding,
 };
 use serde_json::{Map, Value, json};
 
@@ -236,7 +237,7 @@ fn parse_single_header_extension_capability(value: &Value) -> Option<RouterHeade
 
 fn serialize_header_extension(ext: &RouterHeaderExtension) -> Value {
     json!({
-        "uri": ext.uri(),
+        "uri": ext.uri_kind().as_str(),
         "id": ext.id().value(),
         "encrypt": ext.encrypt(),
     })
@@ -347,7 +348,7 @@ fn serialize_codec_parameters(codec: &MediaFormat) -> Value {
     let mut obj = Map::new();
     obj.insert(
         "mimeType".to_owned(),
-        json!(format!("{kind}/{}", codec.codec_name())),
+        json!(format!("{kind}/{}", codec.codec().as_str())),
     );
     obj.insert("payloadType".to_owned(), json!(codec.payload_type()));
     obj.insert("clockRate".to_owned(), json!(codec.clock_rate()));
@@ -356,18 +357,26 @@ fn serialize_codec_parameters(codec: &MediaFormat) -> Value {
     }
     obj.insert(
         "parameters".to_owned(),
-        Value::Object(
-            codec
-                .parameters()
-                .map(|(key, value)| (key, json!(value)))
-                .collect(),
-        ),
+        serialize_codec_settings(codec.settings()),
     );
     obj.insert(
         "rtcpFeedback".to_owned(),
         Value::Array(codec.rtcp_feedback().map(serialize_rtcp_feedback).collect()),
     );
     Value::Object(obj)
+}
+
+fn serialize_codec_settings<'a>(settings: impl Iterator<Item = &'a CodecSetting>) -> Value {
+    Value::Object(
+        settings
+            .map(|setting| {
+                (
+                    setting.key().to_owned(),
+                    json!(setting.wire_value().as_ref()),
+                )
+            })
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------
