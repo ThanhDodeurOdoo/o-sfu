@@ -16,6 +16,7 @@ pub mod benchmark_support;
 pub(crate) mod channel;
 mod http_server;
 mod metrics;
+mod recording;
 mod rtc_adapter;
 mod stub_bus;
 #[doc(hidden)]
@@ -27,6 +28,7 @@ mod websocket_server;
 use channel::ChannelManager;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
+use recording::MediaTap;
 use transport_adapter::RuntimeTransportAdapter;
 
 #[derive(Debug)]
@@ -49,12 +51,16 @@ pub(super) struct RuntimeState {
 impl Runtime {
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let transport_adapter = build_transport_adapter(&config);
+        let recording_media_tap = Arc::new(MediaTap::default());
+        let transport_adapter = build_transport_adapter(&config, Arc::clone(&recording_media_tap));
         let rtc_media_worker_count = config.rtc_media_worker_count;
         Self {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
-            channels: Arc::new(ChannelManager::with_media_workers(rtc_media_worker_count)),
+            channels: Arc::new(ChannelManager::with_media_workers_and_recording_tap(
+                rtc_media_worker_count,
+                recording_media_tap,
+            )),
             metrics: Arc::new(RuntimeMetrics::default()),
             transport_adapter,
         }
@@ -96,13 +102,17 @@ pub fn run() -> Result<()> {
         .block_on(runtime.run_until_stopped())
 }
 
-fn build_transport_adapter(config: &Config) -> RuntimeTransportAdapter {
+fn build_transport_adapter(
+    config: &Config,
+    recording_media_tap: Arc<MediaTap>,
+) -> RuntimeTransportAdapter {
     match config.transport_backend {
         TransportBackend::Stub => RuntimeTransportAdapter::stub(),
         TransportBackend::Rtc => RuntimeTransportAdapter::rtc(
             config.public_ip,
             config.rtc_port_range,
             config.rtc_media_worker_count,
+            recording_media_tap,
         ),
     }
 }

@@ -15,6 +15,7 @@ use std::{
 use std::net::SocketAddr;
 
 use crate::config::RtcPortRange;
+use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportBitrateSnapshot, TransportConnectDirection, TransportMediaId,
     TransportSessionKey,
@@ -53,16 +54,22 @@ pub(crate) struct RtcWorkerHandle {
 pub(crate) struct RtcTransportAdapter {
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    media_tap: Arc<MediaTap>,
     worker_handle: Mutex<Option<RtcWorkerHandle>>,
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
     pub(crate) packet_loop_started: Arc<AtomicBool>,
 }
 
 impl RtcTransportAdapter {
-    pub(crate) fn new(public_ip: IpAddr, rtc_port_range: RtcPortRange) -> Self {
+    pub(crate) fn new(
+        public_ip: IpAddr,
+        rtc_port_range: RtcPortRange,
+        media_tap: Arc<MediaTap>,
+    ) -> Self {
         Self {
             public_ip,
             rtc_port_range,
+            media_tap,
             worker_handle: Mutex::new(None),
             transport_states: Arc::new(Mutex::new(BTreeMap::new())),
             packet_loop_started: Arc::new(AtomicBool::new(false)),
@@ -277,6 +284,7 @@ impl RtcTransportAdapter {
             self.public_ip,
             self.rtc_port_range,
             snapshot_state,
+            Arc::clone(&self.media_tap),
             command_rx,
             shutdown_token,
         ));
@@ -581,6 +589,7 @@ impl Default for RtcTransportAdapter {
         Self::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             RtcPortRange::new(40_000, 49_999),
+            Arc::new(MediaTap::default()),
         )
     }
 }

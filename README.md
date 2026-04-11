@@ -41,4 +41,7 @@ The router and rfc sections may be split into separate crates later (but too ann
 
 ## random thoughts
 
-  
+## Recording:
+
+the o-sfu architecture helps a lot with recording compared to odoo/sfu, since we now have complete control over the rtp packet dispatch, don't have to pipe streams through a transport layer and use ports and ffmpeg (at the real time recording step). we can just write packet frames to the disk directly and bypass all that old boilerplate.
+another advantage is the router/recording topology, we have recording nodes that should just act as "opaque" media consuming "entities" and their locality shouldn't matter much

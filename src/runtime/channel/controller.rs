@@ -12,11 +12,13 @@
 //! - signaling edge owns RTP/ORTC wire mapping through `crate::signaling::ortc_mapper`
 
 use std::fmt;
+use std::sync::Arc;
 
 use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest, CurrentWebSocketCloseCode},
@@ -90,6 +92,11 @@ pub struct Channel {
     pub(super) web_rtc_enabled: bool,
     #[allow(dead_code, reason = "stored for future recording pipeline integration")]
     pub(super) recording_address: Option<String>,
+    #[allow(
+        dead_code,
+        reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
+    )]
+    pub(super) recording_service: Arc<RecordingService>,
     pub(super) state: RwLock<ChannelState>,
 }
 
@@ -101,7 +108,10 @@ impl Channel {
         issuer: String,
         key: Option<String>,
         config: ChannelConfig,
+        recording_media_tap: Arc<MediaTap>,
     ) -> Self {
+        let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
+        let recording_service = Arc::new(RecordingService::new(runtime_id, recording_media_source));
         Self {
             runtime_id,
             media_worker_id,
@@ -110,7 +120,8 @@ impl Channel {
             key,
             web_rtc_enabled: config.web_rtc_enabled,
             recording_address: config.recording_address,
-            state: RwLock::new(ChannelState::new(router_id)),
+            recording_service: Arc::clone(&recording_service),
+            state: RwLock::new(ChannelState::new(router_id, recording_service)),
         }
     }
 

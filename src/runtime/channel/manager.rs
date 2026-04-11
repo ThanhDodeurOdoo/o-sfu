@@ -8,6 +8,7 @@ use super::{
     Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelSessionStatsSnapshot,
     SessionOutbound,
 };
+use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::shared::{SessionId, SessionPermissions};
 use crate::utils::rfc3339_now;
@@ -27,6 +28,7 @@ pub(crate) struct RuntimeChannelStatsSnapshot {
 pub struct ChannelManager {
     state: RwLock<ChannelManagerState>,
     media_worker_count: usize,
+    recording_media_tap: Arc<MediaTap>,
 }
 
 #[derive(Debug, Default)]
@@ -46,16 +48,29 @@ struct ChannelEntry {
 }
 
 impl ChannelManager {
+    #[cfg(test)]
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_media_workers(1)
     }
 
     #[must_use]
     pub fn with_media_workers(media_worker_count: usize) -> Self {
+        Self::with_media_workers_and_recording_tap(
+            media_worker_count,
+            Arc::new(MediaTap::default()),
+        )
+    }
+
+    #[must_use]
+    pub fn with_media_workers_and_recording_tap(
+        media_worker_count: usize,
+        recording_media_tap: Arc<MediaTap>,
+    ) -> Self {
         Self {
             state: RwLock::new(ChannelManagerState::default()),
             media_worker_count: media_worker_count.max(1),
+            recording_media_tap,
         }
     }
 
@@ -98,6 +113,7 @@ impl ChannelManager {
             issuer.to_owned(),
             key.map(str::to_owned),
             config.clone(),
+            Arc::clone(&self.recording_media_tap),
         ));
         let channel_uuid = channel.uuid().to_owned();
         state

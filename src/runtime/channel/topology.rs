@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 #[cfg(test)]
 use o_sfu_router::SessionPermissions as RouterSessionPermissions;
@@ -9,6 +12,9 @@ use o_sfu_router::{
 };
 
 use super::router_state::ChannelRouterState;
+use crate::runtime::recording::RecordingService;
+#[cfg(test)]
+use crate::runtime::recording::{MediaSource, MediaTap};
 use crate::signaling::shared::{
     SessionId, SessionInfo as SignalingSessionInfo,
     SessionPermissions as SignalingSessionPermissions,
@@ -76,11 +82,23 @@ pub(super) struct ChannelTopology {
 }
 
 impl ChannelTopology {
+    #[cfg(test)]
     pub(super) fn new(primary_router_id: RouterId) -> Self {
+        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+        Self::new_with_recording_service(
+            primary_router_id,
+            Arc::new(RecordingService::new(0, media_source)),
+        )
+    }
+
+    pub(super) fn new_with_recording_service(
+        primary_router_id: RouterId,
+        recording_service: Arc<RecordingService>,
+    ) -> Self {
         let mut routers = BTreeMap::new();
         routers.insert(
             primary_router_id,
-            ChannelRouterState::new(primary_router_id),
+            ChannelRouterState::new_with_recording_service(primary_router_id, recording_service),
         );
         Self {
             primary_router: primary_router_id,

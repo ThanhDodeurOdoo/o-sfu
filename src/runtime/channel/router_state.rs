@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind,
@@ -10,6 +11,7 @@ use o_sfu_router::{
 };
 
 use super::rtp_capabilities::default_router_rtp_capabilities;
+use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
 use crate::signaling::shared::{
     SessionId, SessionInfo as SignalingSessionInfo,
     SessionPermissions as SignalingSessionPermissions,
@@ -18,7 +20,7 @@ const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
 #[derive(Debug)]
 pub(super) struct ChannelRouterState {
-    router: Router,
+    router: Router<RecordingRouterObserver>,
     rtp_capabilities: RtpCapabilities,
     router_session_ids_by_session_id: BTreeMap<SessionId, RouterSessionId>,
     transport_ids_by_session_id: BTreeMap<SessionId, SessionTransportIds>,
@@ -34,9 +36,15 @@ struct SessionTransportIds {
 }
 
 impl ChannelRouterState {
-    pub(super) fn new(router_id: RouterId) -> Self {
+    pub(super) fn new_with_recording_service(
+        router_id: RouterId,
+        recording_service: Arc<RecordingService>,
+    ) -> Self {
         Self {
-            router: Router::new(router_id),
+            router: Router::new_with_observer(
+                router_id,
+                RecordingRouterObserver::new(recording_service),
+            ),
             rtp_capabilities: default_router_rtp_capabilities(),
             router_session_ids_by_session_id: BTreeMap::new(),
             transport_ids_by_session_id: BTreeMap::new(),

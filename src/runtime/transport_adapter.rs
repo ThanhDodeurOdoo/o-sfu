@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc};
 
 use super::{rtc_adapter::RtcTransportAdapter, stub_bus::StubWebRtcAdapter};
+use crate::runtime::recording::MediaTap;
 
 use crate::config::RtcPortRange;
 use crate::signaling::{
@@ -108,24 +109,47 @@ pub(crate) struct RtcTransportAdapterShardSet {
 }
 
 impl RtcTransportAdapterShardSet {
-    fn new(public_ip: IpAddr, rtc_port_range: RtcPortRange, worker_count: usize) -> Self {
+    fn new(
+        public_ip: IpAddr,
+        rtc_port_range: RtcPortRange,
+        worker_count: usize,
+        media_tap: Arc<MediaTap>,
+    ) -> Self {
         let Some(shard_ranges) = rtc_port_range.split_for_workers(worker_count) else {
             return Self {
-                primary_shard: Arc::new(RtcTransportAdapter::new(public_ip, rtc_port_range)),
+                primary_shard: Arc::new(RtcTransportAdapter::new(
+                    public_ip,
+                    rtc_port_range,
+                    media_tap,
+                )),
                 extra_shards: Vec::new(),
             };
         };
         let mut shard_ranges = shard_ranges.into_iter();
         let Some(primary_range) = shard_ranges.next() else {
             return Self {
-                primary_shard: Arc::new(RtcTransportAdapter::new(public_ip, rtc_port_range)),
+                primary_shard: Arc::new(RtcTransportAdapter::new(
+                    public_ip,
+                    rtc_port_range,
+                    media_tap,
+                )),
                 extra_shards: Vec::new(),
             };
         };
         Self {
-            primary_shard: Arc::new(RtcTransportAdapter::new(public_ip, primary_range)),
+            primary_shard: Arc::new(RtcTransportAdapter::new(
+                public_ip,
+                primary_range,
+                Arc::clone(&media_tap),
+            )),
             extra_shards: shard_ranges
-                .map(|range| Arc::new(RtcTransportAdapter::new(public_ip, range)))
+                .map(|range| {
+                    Arc::new(RtcTransportAdapter::new(
+                        public_ip,
+                        range,
+                        Arc::clone(&media_tap),
+                    ))
+                })
                 .collect(),
         }
     }
@@ -190,11 +214,13 @@ impl RuntimeTransportAdapter {
         public_ip: IpAddr,
         rtc_port_range: RtcPortRange,
         worker_count: usize,
+        media_tap: Arc<MediaTap>,
     ) -> Self {
         Self::Rtc(Arc::new(RtcTransportAdapterShardSet::new(
             public_ip,
             rtc_port_range,
             worker_count,
+            media_tap,
         )))
     }
 
@@ -444,10 +470,12 @@ fn signaling_to_str0m_media_kind(kind: SignalingMediaKind) -> Str0mMediaKind {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
 
     use super::RuntimeTransportAdapter;
     use crate::{
-        config::RtcPortRange, runtime::transport_adapter::TransportSessionKey,
+        config::RtcPortRange,
+        runtime::{recording::MediaTap, transport_adapter::TransportSessionKey},
         signaling::shared::SessionId,
     };
     use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
@@ -462,6 +490,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             RtcPortRange::new(46_000, 46_003),
             2,
+            Arc::new(MediaTap::default()),
         );
         let first_channel_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));
         let second_channel_session = TransportSessionKey::new(11, 1, 1, SessionId::Integer(2));

@@ -6,11 +6,13 @@
 use std::{
     hint::black_box,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
 };
 
 use tokio::runtime::Builder;
 
 use super::{
+    recording::MediaTap,
     rtc_adapter::RtcTransportAdapter,
     transport_adapter::{TransportAdapterError, TransportSessionKey},
 };
@@ -44,7 +46,11 @@ impl RtcUdpDemuxBenchmarkFixture {
         }
         let runtime = Builder::new_current_thread().enable_all().build().ok()?;
         let _runtime_guard = runtime.enter();
-        let adapter = RtcTransportAdapter::new(BENCHMARK_PUBLIC_IP, BENCHMARK_PORT_RANGE);
+        let adapter = RtcTransportAdapter::new(
+            BENCHMARK_PUBLIC_IP,
+            BENCHMARK_PORT_RANGE,
+            Arc::new(MediaTap::default()),
+        );
         let mut session_keys = Vec::with_capacity(session_count);
         let mut probe_addrs = Vec::with_capacity(session_count);
         for idx in 0..session_count {

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use o_sfu_router::{
     MediaKind as RouterMediaKind, RouterId, RtpParameters as RouterRtpParameters,
@@ -7,6 +8,7 @@ use o_sfu_router::{
 use tokio::sync::mpsc;
 use tracing::{error, warn};
 
+use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
     current_protocol::{
@@ -198,7 +200,7 @@ pub(super) enum ConsumerBootstrapOrigin {
 }
 
 impl ChannelState {
-    pub(super) fn new(router_id: RouterId) -> Self {
+    pub(super) fn new(router_id: RouterId, recording_service: Arc<RecordingService>) -> Self {
         Self {
             sessions: BTreeMap::new(),
             next_connection_id: 0,
@@ -212,7 +214,7 @@ impl ChannelState {
             },
             producers: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
-            topology: ChannelTopology::new(router_id),
+            topology: ChannelTopology::new_with_recording_service(router_id, recording_service),
         }
     }
 

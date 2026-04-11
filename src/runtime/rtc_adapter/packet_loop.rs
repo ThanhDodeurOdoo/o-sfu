@@ -19,6 +19,7 @@ use super::{
     worker::handle_worker_command,
 };
 use crate::config::RtcPortRange;
+use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
 const RECEIVE_BUFFER_LEN: usize = 2000;
@@ -106,6 +107,7 @@ pub(super) async fn run_packet_loop(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    media_tap: Arc<MediaTap>,
     mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
     shutdown_token: CancellationToken,
 ) {
@@ -122,7 +124,12 @@ pub(super) async fn run_packet_loop(
                 command,
             );
         }
-        let snapshot = snapshot_and_pump(&mut bootstrap_state, &snapshot_state, &mut buffers);
+        let snapshot = snapshot_and_pump(
+            &mut bootstrap_state,
+            &snapshot_state,
+            &media_tap,
+            &mut buffers,
+        );
         if let Some(info) = snapshot.as_ref() {
             for pending_transmit in buffers.pending_transmits() {
                 if info
@@ -256,6 +263,7 @@ fn handle_socket_receive_result(
 fn record_incoming_stats(
     state: &RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    media_tap: &MediaTap,
     buffers: &PacketLoopBuffers,
     now: Instant,
 ) {
@@ -272,6 +280,7 @@ fn record_incoming_stats(
                 now,
                 media.data.len(),
             );
+            media_tap.write_frame(source_session, transport_media_id, now, &media.data);
         }
     }
 }
@@ -279,6 +288,7 @@ fn record_incoming_stats(
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    media_tap: &MediaTap,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<SnapshotInfo> {
     buffers.clear();
@@ -303,7 +313,7 @@ fn snapshot_and_pump(
 
     // Two-pass: collect matching routes, then write to destination sessions
     let media_stats_now = Instant::now();
-    record_incoming_stats(state, snapshot_state, buffers, media_stats_now);
+    record_incoming_stats(state, snapshot_state, media_tap, buffers, media_stats_now);
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
         if let Some(route_entry) = state
             .media_route_index
