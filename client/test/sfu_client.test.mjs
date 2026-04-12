@@ -151,6 +151,14 @@ class FakeProtocolCore {
                         sdp: "offer-sdp"
                     }
                 ];
+            case "track-inactive":
+                this.trackBindings.set("0", {
+                    active: false,
+                    mid: "0",
+                    sessionId: 42,
+                    type: "camera"
+                });
+                return [];
             case "recording-ok":
                 return [{ kind: "resolvePendingRequest", ok: true, requestId: "record-1" }];
             default:
@@ -326,6 +334,78 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
         }
     ]);
     assert.equal(client._consumers.get(42).camera.track, track);
+});
+
+test("track metadata updates re-emit track state for existing remote tracks", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const track = {
+        enabled: true,
+        id: "track-1",
+        kind: "video",
+        muted: false
+    };
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    sockets[0].emitMessage("track-inactive");
+    await tick();
+
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        },
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: false,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.get(42).camera.paused, true);
 });
 
 test("updateUpload rejects stream-kind mismatches", () => {

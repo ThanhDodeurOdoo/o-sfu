@@ -21,6 +21,7 @@ import {
     type ProtocolCoreBindings,
     type ProtocolCoreFactory
 } from "./runtime_contract.js";
+import type { TrackBinding } from "./protocol.js";
 
 type TrackLike = MediaStreamTrack & { muted?: boolean };
 
@@ -42,6 +43,8 @@ type ConsumersCompat = {
     camera: ConsumerCompat | null;
     screen: ConsumerCompat | null;
 };
+
+type AppliedTrackBinding = Pick<TrackBinding, "active" | "sessionId" | "type">;
 
 type WebSocketLike = {
     close(code?: number): void;
@@ -122,6 +125,8 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private _localTracks = new Map<StreamType, TrackLike | null>();
     private _peerConnection: PeerConnectionLike | null = null;
     private _pendingRequestResolvers = new Map<string, PendingRequestCallbacks>();
+    private _remoteTrackBindings = new Map<string, AppliedTrackBinding>();
+    private _remoteTracksByMid = new Map<string, TrackLike>();
     private _requestWaiters: Record<PendingRequestKind, PendingRequestCallbacks[]> = {
         [PENDING_REQUEST_KIND.START_RECORDING]: [],
         [PENDING_REQUEST_KIND.STOP_RECORDING]: []
@@ -233,14 +238,21 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     private async _processCommands(commands: HostCommand[]): Promise<void> {
         const pending = [...commands];
+        let processedAnyCommand = false;
         while (pending.length > 0) {
             const command = pending.shift();
             if (!command) {
                 continue;
             }
+            processedAnyCommand = true;
             const followUp = await this._executeCommand(command);
             this._syncSnapshot();
+            this._syncRemoteTracks();
             pending.push(...followUp);
+        }
+        if (!processedAnyCommand) {
+            this._syncSnapshot();
+            this._syncRemoteTracks();
         }
     }
 
@@ -369,6 +381,8 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             this._peerConnection.close();
         }
         this._peerConnection = null;
+        this._remoteTrackBindings.clear();
+        this._remoteTracksByMid.clear();
         this._senderMidByType.clear();
     }
 
@@ -433,30 +447,8 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         if (!mid) {
             return;
         }
-        const binding = this._protocolCore.trackBinding(mid);
-        if (!binding) {
-            return;
-        }
-        const consumers = this._consumers.get(binding.sessionId) ?? EMPTY_CONSUMERS();
-        consumers[binding.type] = {
-            closed: false,
-            paused: !binding.active,
-            track: event.track
-        };
-        this._consumers.set(binding.sessionId, consumers);
-        this.dispatchEvent(
-            new CustomEvent("update", {
-                detail: {
-                    name: CLIENT_UPDATE.TRACK,
-                    payload: {
-                        active: binding.active,
-                        sessionId: binding.sessionId,
-                        track: event.track,
-                        type: binding.type
-                    }
-                }
-            })
-        );
+        this._remoteTracksByMid.set(mid, event.track);
+        this._syncRemoteTrack(mid);
     }
 
     private _applyCompatUpdate(update: { name: string; payload: unknown }): void {
@@ -464,6 +456,12 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             case CLIENT_UPDATE.DISCONNECT: {
                 const payload = update.payload as { sessionId: SessionId };
                 this._consumers.delete(payload.sessionId);
+                for (const [mid, binding] of this._remoteTrackBindings) {
+                    if (binding.sessionId === payload.sessionId) {
+                        this._remoteTrackBindings.delete(mid);
+                        this._remoteTracksByMid.delete(mid);
+                    }
+                }
                 break;
             }
             case CLIENT_UPDATE.CHANNEL_INFO_CHANGE: {
@@ -482,6 +480,76 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._state = this._protocolCore.state;
         this.availableFeatures = this._protocolCore.features;
         this.recordingState = this._protocolCore.recordingState;
+    }
+
+    private _syncRemoteTracks(): void {
+        for (const mid of this._remoteTracksByMid.keys()) {
+            this._syncRemoteTrack(mid);
+        }
+    }
+
+    private _syncRemoteTrack(mid: string): void {
+        const track = this._remoteTracksByMid.get(mid);
+        if (!track) {
+            return;
+        }
+        const binding = this._protocolCore.trackBinding(mid);
+        const previousBinding = this._remoteTrackBindings.get(mid);
+        if (!binding) {
+            if (previousBinding) {
+                this._clearConsumer(previousBinding.sessionId, previousBinding.type);
+                this._remoteTrackBindings.delete(mid);
+            }
+            return;
+        }
+        if (
+            previousBinding &&
+            previousBinding.active === binding.active &&
+            previousBinding.sessionId === binding.sessionId &&
+            previousBinding.type === binding.type &&
+            this._consumers.get(binding.sessionId)?.[binding.type]?.track === track
+        ) {
+            return;
+        }
+        if (previousBinding) {
+            this._clearConsumer(previousBinding.sessionId, previousBinding.type);
+        }
+        const consumers = this._consumers.get(binding.sessionId) ?? EMPTY_CONSUMERS();
+        consumers[binding.type] = {
+            closed: false,
+            paused: !binding.active,
+            track
+        };
+        this._consumers.set(binding.sessionId, consumers);
+        this._remoteTrackBindings.set(mid, {
+            active: binding.active,
+            sessionId: binding.sessionId,
+            type: binding.type
+        });
+        this.dispatchEvent(
+            new CustomEvent("update", {
+                detail: {
+                    name: CLIENT_UPDATE.TRACK,
+                    payload: {
+                        active: binding.active,
+                        sessionId: binding.sessionId,
+                        track,
+                        type: binding.type
+                    }
+                }
+            })
+        );
+    }
+
+    private _clearConsumer(sessionId: SessionId, streamType: StreamType): void {
+        const consumers = this._consumers.get(sessionId);
+        if (!consumers) {
+            return;
+        }
+        consumers[streamType] = null;
+        if (!consumers.audio && !consumers.camera && !consumers.screen) {
+            this._consumers.delete(sessionId);
+        }
     }
 
     private _cancelTimer(id: number): void {
