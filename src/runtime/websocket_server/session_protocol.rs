@@ -49,7 +49,7 @@ pub(super) enum SessionProtocol {
     LegacyStubBus(StubBusSession),
     #[allow(
         dead_code,
-        reason = "the native post-auth session path is being introduced incrementally and is not wired into handshake selection yet"
+        reason = "the native post-auth session path is still gated to the stub transport while the real RTC backend finishes the remaining renegotiation migration"
     )]
     Native(NativeSessionProtocol),
 }
@@ -148,8 +148,6 @@ impl SessionProtocol {
     }
 }
 
-const STUB_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingNegotiationAction {
     EstablishSession {
@@ -223,7 +221,14 @@ impl NativeSessionProtocol {
             .transport_bootstrap_payload(&session_key, &router_capabilities)
             .await
             .map_err(|_error| WebSocketCloseCode::Error)?;
-        let offer_request = ServerRequest::Offer(stub_session_description());
+        let offer = self
+            .transport_adapter
+            .create_initial_session_offer(&session_key)
+            .await
+            .map_err(|_error| WebSocketCloseCode::Error)?;
+        let offer_request = ServerRequest::Offer(SessionDescriptionPayload {
+            sdp: offer.into_sdp(),
+        });
         self.issue_negotiation_request(
             writer,
             offer_request,
@@ -260,9 +265,19 @@ impl NativeSessionProtocol {
         match &mut self.negotiation_phase {
             NegotiationPhase::BeforeInitialOffer => Ok(false),
             NegotiationPhase::Stable => {
+                let session_key = self
+                    .channel
+                    .transport_session_key(&self.session_id, self.connection_id);
+                let offer = self
+                    .transport_adapter
+                    .create_session_renegotiation_offer(&session_key)
+                    .await
+                    .map_err(|_error| WebSocketCloseCode::Error)?;
                 self.issue_negotiation_request(
                     writer,
-                    ServerRequest::Renegotiate(stub_session_description()),
+                    ServerRequest::Renegotiate(SessionDescriptionPayload {
+                        sdp: offer.into_sdp(),
+                    }),
                     PendingNegotiationAction::RefreshSession,
                 )
                 .await?;
@@ -496,6 +511,17 @@ impl NativeSessionProtocol {
         if pending_negotiation.request_id != response_to {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        if self
+            .transport_adapter
+            .apply_session_answer(&session_key, &answer.sdp)
+            .await
+            .is_err()
+        {
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::Error);
+        }
         self.negotiation_phase = NegotiationPhase::Stable;
         match pending_negotiation.action {
             PendingNegotiationAction::EstablishSession {
@@ -714,12 +740,6 @@ impl TranslatedServerMessage {
             messages,
             needs_renegotiation: false,
         }
-    }
-}
-
-fn stub_session_description() -> SessionDescriptionPayload {
-    SessionDescriptionPayload {
-        sdp: STUB_NEGOTIATION_OFFER_SDP.to_owned(),
     }
 }
 

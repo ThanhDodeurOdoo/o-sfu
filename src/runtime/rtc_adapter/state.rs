@@ -9,7 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use str0m::change::SdpPendingOffer;
 use str0m::config::Fingerprint;
+use str0m::media::Mid;
 use str0m::{IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
@@ -55,6 +57,14 @@ pub(super) struct RtcSessionState {
     pub(super) remote_dtls_fingerprint: Option<String>,
     pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
     pub(super) dtls_started: bool,
+    pub(super) sdp_negotiation: SessionSdpNegotiationState,
+}
+
+#[derive(Default)]
+pub(super) struct SessionSdpNegotiationState {
+    pub(super) bootstrap_mid: Option<Mid>,
+    pub(super) pending_offer: Option<SdpPendingOffer>,
+    pub(super) initial_offer_applied: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

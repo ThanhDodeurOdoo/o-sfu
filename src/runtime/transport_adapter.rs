@@ -111,6 +111,24 @@ impl TransportMediaId {
     }
 }
 
+/// Transitional server-authored SDP offer returned by the transport boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionOffer {
+    sdp: String,
+}
+
+impl SessionOffer {
+    #[must_use]
+    pub(crate) fn new(sdp: String) -> Self {
+        Self { sdp }
+    }
+
+    #[must_use]
+    pub(crate) fn into_sdp(self) -> String {
+        self.sdp
+    }
+}
+
 /// Runtime boundary between signaling/session orchestration and transport-specific behavior.
 ///
 /// Implementations provide transport bootstrap payloads and transport connection handling
@@ -252,6 +270,59 @@ impl RuntimeTransportAdapter {
     #[must_use]
     pub(crate) const fn supports_native_session_protocol(&self) -> bool {
         matches!(self, Self::Stub(_))
+    }
+
+    /// Create the first server-authored SDP offer for the native signaling path.
+    pub(crate) async fn create_initial_session_offer(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => adapter.create_initial_session_offer(session_key).await,
+            Self::Rtc(adapter) => {
+                adapter
+                    .shard_for_session(session_key)
+                    .create_initial_session_offer(session_key)
+                    .await
+            }
+        }
+    }
+
+    /// Create a follow-up renegotiation offer for the native signaling path.
+    pub(crate) async fn create_session_renegotiation_offer(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .create_session_renegotiation_offer(session_key)
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .shard_for_session(session_key)
+                    .create_session_renegotiation_offer(session_key)
+                    .await
+            }
+        }
+    }
+
+    /// Apply the remote answer to the outstanding native session offer.
+    pub(crate) async fn apply_session_answer(
+        &self,
+        session_key: &TransportSessionKey,
+        answer_sdp: &str,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => adapter.apply_session_answer(session_key, answer_sdp).await,
+            Self::Rtc(adapter) => {
+                adapter
+                    .shard_for_session(session_key)
+                    .apply_session_answer(session_key, answer_sdp)
+                    .await
+            }
+        }
     }
 
     /// Build the `INIT_TRANSPORTS` payload for a newly authenticated session.

@@ -95,6 +95,12 @@ impl RtcBootstrapState {
             .any(|handle| handle.is_producer_for(session_key, mid))
     }
 
+    pub(super) fn session_has_registered_media(&self, session_key: &TransportSessionKey) -> bool {
+        self.mid_registry
+            .values()
+            .any(|handle| handle.session_key() == session_key)
+    }
+
     pub(super) fn transport_media_id_for_source(
         &self,
         source_session_key: &TransportSessionKey,

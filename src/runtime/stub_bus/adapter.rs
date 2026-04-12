@@ -5,7 +5,8 @@ use std::{
 
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportConnectDirection, TransportMediaId, TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportConnectDirection, TransportMediaId,
+    TransportSessionKey,
 };
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
@@ -15,6 +16,8 @@ use crate::signaling::{
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
+
+const STUB_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StubWebRtcEvent {
@@ -136,6 +139,44 @@ impl StubWebRtcAdapter {
 }
 
 impl StubWebRtcAdapter {
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn create_initial_session_offer(
+        &self,
+        _session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        Ok(SessionOffer::new(String::from(
+            STUB_SESSION_NEGOTIATION_OFFER_SDP,
+        )))
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn create_session_renegotiation_offer(
+        &self,
+        _session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        Ok(SessionOffer::new(String::from(
+            STUB_SESSION_NEGOTIATION_OFFER_SDP,
+        )))
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn apply_session_answer(
+        &self,
+        _session_key: &TransportSessionKey,
+        _answer_sdp: &str,
+    ) -> Result<(), TransportAdapterError> {
+        Ok(())
+    }
+
     #[allow(
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"

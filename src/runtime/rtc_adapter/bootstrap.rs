@@ -10,7 +10,9 @@ use str0m::config::Fingerprint;
 use str0m::{Candidate, IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
-use super::state::{RtcSessionState, SessionTransportIds, SharedRtcSocket};
+use super::state::{
+    RtcSessionState, SessionSdpNegotiationState, SessionTransportIds, SharedRtcSocket,
+};
 use crate::config::RtcPortRange;
 use crate::rfc::webrtc;
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
@@ -94,6 +96,7 @@ pub(super) fn ensure_session_rtc_state(
             remote_dtls_fingerprint: None,
             remote_ice_credentials: None,
             dtls_started: false,
+            sdp_negotiation: SessionSdpNegotiationState::default(),
         },
     );
     Ok(())

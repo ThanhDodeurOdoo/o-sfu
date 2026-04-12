@@ -17,8 +17,8 @@ use std::net::SocketAddr;
 use crate::config::RtcPortRange;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportBitrateSnapshot, TransportConnectDirection, TransportMediaId,
-    TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportBitrateSnapshot, TransportConnectDirection,
+    TransportMediaId, TransportSessionKey,
 };
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
@@ -91,6 +91,43 @@ impl RtcTransportAdapter {
         validation::validate_bootstrap_payload(&payload)?;
         self.mark_bootstrap_sent(session_key)?;
         Ok(payload)
+    }
+
+    pub(crate) async fn create_initial_session_offer(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        self.request_worker(|response| RtcWorkerCommand::CreateInitialSessionOffer {
+            session_key: session_key.clone(),
+            response,
+        })
+        .await
+    }
+
+    pub(crate) async fn create_session_renegotiation_offer(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        self.request_worker(
+            |response| RtcWorkerCommand::CreateSessionRenegotiationOffer {
+                session_key: session_key.clone(),
+                response,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn apply_session_answer(
+        &self,
+        session_key: &TransportSessionKey,
+        answer_sdp: &str,
+    ) -> Result<(), TransportAdapterError> {
+        self.request_worker(|response| RtcWorkerCommand::ApplySessionAnswer {
+            session_key: session_key.clone(),
+            answer_sdp: answer_sdp.to_owned(),
+            response,
+        })
+        .await
     }
 
     pub(crate) async fn connect_transport(

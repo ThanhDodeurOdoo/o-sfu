@@ -12,7 +12,7 @@ use super::{
         commands::RtcWorkerCommand,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
-    bootstrap, media, session,
+    bootstrap, media, negotiation, session,
 };
 
 pub(crate) fn handle_worker_command(
@@ -82,10 +82,63 @@ fn handle_core_worker_command(
             remote_ice_credentials.as_ref(),
             response,
         ),
+        RtcWorkerCommand::CreateInitialSessionOffer { .. }
+        | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
+        | RtcWorkerCommand::ApplySessionAnswer { .. } => {
+            handle_negotiation_command(state, snapshot_state, public_ip, rtc_port_range, command);
+        }
         RtcWorkerCommand::CloseSession {
             session_key,
             response,
         } => session::respond_close_session(state, snapshot_state, &session_key, response),
+        RtcWorkerCommand::RemoveMedia { .. }
+        | RtcWorkerCommand::AddRecvMedia { .. }
+        | RtcWorkerCommand::AddSendMedia { .. }
+        | RtcWorkerCommand::SetProducerActive { .. }
+        | RtcWorkerCommand::SetConsumerActive { .. } => {
+            handle_media_command(state, command);
+        }
+        #[cfg(test)]
+        RtcWorkerCommand::Debug(_command) => {}
+        #[cfg(feature = "internal-benchmarks")]
+        RtcWorkerCommand::RememberRemoteAddr { .. } => {}
+    }
+}
+
+fn handle_negotiation_command(
+    state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    public_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+    command: RtcWorkerCommand,
+) {
+    match command {
+        RtcWorkerCommand::CreateInitialSessionOffer {
+            session_key,
+            response,
+        } => negotiation::respond_create_initial_session_offer(
+            state,
+            snapshot_state,
+            public_ip,
+            rtc_port_range,
+            &session_key,
+            response,
+        ),
+        RtcWorkerCommand::CreateSessionRenegotiationOffer {
+            session_key,
+            response,
+        } => negotiation::respond_create_session_renegotiation_offer(state, &session_key, response),
+        RtcWorkerCommand::ApplySessionAnswer {
+            session_key,
+            answer_sdp,
+            response,
+        } => negotiation::respond_apply_session_answer(state, &session_key, &answer_sdp, response),
+        _ => {}
+    }
+}
+
+fn handle_media_command(state: &mut RtcBootstrapState, command: RtcWorkerCommand) {
+    match command {
         RtcWorkerCommand::RemoveMedia {
             session_key,
             transport_media_id,
@@ -147,9 +200,6 @@ fn handle_core_worker_command(
             active,
             response,
         ),
-        #[cfg(test)]
-        RtcWorkerCommand::Debug(_command) => {}
-        #[cfg(feature = "internal-benchmarks")]
-        RtcWorkerCommand::RememberRemoteAddr { .. } => {}
+        _ => {}
     }
 }

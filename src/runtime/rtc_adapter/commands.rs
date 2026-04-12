@@ -10,7 +10,8 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportConnectDirection, TransportMediaId, TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportConnectDirection, TransportMediaId,
+    TransportSessionKey,
 };
 use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
 
@@ -27,6 +28,19 @@ pub(super) enum RtcWorkerCommand {
         session_key: TransportSessionKey,
         router_capabilities: RtpCapabilities,
         response: oneshot::Sender<Result<CurrentTransportBootstrapPayload, TransportAdapterError>>,
+    },
+    CreateInitialSessionOffer {
+        session_key: TransportSessionKey,
+        response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
+    },
+    CreateSessionRenegotiationOffer {
+        session_key: TransportSessionKey,
+        response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
+    },
+    ApplySessionAnswer {
+        session_key: TransportSessionKey,
+        answer_sdp: String,
+        response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
     ConnectTransport {
         session_key: TransportSessionKey,
