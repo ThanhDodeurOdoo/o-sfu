@@ -19,7 +19,8 @@ import {
     type HostCommand,
     type PendingRequestKind,
     type ProtocolCoreBindings,
-    type ProtocolCoreFactory
+    type ProtocolCoreFactory,
+    wrapProtocolCoreBindings
 } from "./runtime_contract.js";
 import type { TrackBinding } from "./protocol.js";
 
@@ -139,7 +140,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     constructor(dependencies: SfuClientDependencies = {}) {
         super();
         this._protocolCore = dependencies.createProtocolCore
-            ? dependencies.createProtocolCore()
+            ? wrapProtocolCoreBindings(dependencies.createProtocolCore())
             : createProtocolCore();
         this._createWebSocket =
             dependencies.createWebSocket ?? ((url) => new WebSocket(url) as WebSocketLike);

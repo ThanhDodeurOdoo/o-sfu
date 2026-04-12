@@ -1,13 +1,14 @@
-import type {
-    AvailableFeatures,
-    ClientUpdateDetail,
-    ConnectionState,
-    DownloadStates,
-    RecordingOptions,
-    RecordingState,
-    SessionId,
-    SessionInfo,
-    StreamType
+import {
+    CLIENT_UPDATE,
+    type AvailableFeatures,
+    type ClientUpdateDetail,
+    type ConnectionState,
+    type DownloadStates,
+    type RecordingOptions,
+    type RecordingState,
+    type SessionId,
+    type SessionInfo,
+    type StreamType
 } from "./public_api.js";
 import type { TrackBinding } from "./protocol.js";
 import { defaultProtocolCoreFactory } from "./wasm_runtime.js";
@@ -85,6 +86,340 @@ export function configureProtocolCoreFactory(factory: ProtocolCoreFactory): void
     protocolCoreFactory = factory;
 }
 
+export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
+    return {
+        get state(): ConnectionState {
+            return validateConnectionState(bindings.state, "protocol core state");
+        },
+        get features(): AvailableFeatures {
+            return validateAvailableFeatures(bindings.features, "protocol core features");
+        },
+        get recordingState(): RecordingState {
+            return validateRecordingState(bindings.recordingState, "protocol core recordingState");
+        },
+        connect(url: string, jwt: string, channel?: string | null): HostCommand[] {
+            return validateHostCommands(
+                bindings.connect(url, jwt, channel),
+                "protocol core connect()"
+            );
+        },
+        onWsOpen(): HostCommand[] {
+            return validateHostCommands(bindings.onWsOpen(), "protocol core onWsOpen()");
+        },
+        onWsMessage(frame: string): HostCommand[] {
+            return validateHostCommands(bindings.onWsMessage(frame), "protocol core onWsMessage()");
+        },
+        onTransportReady(): HostCommand[] {
+            return validateHostCommands(
+                bindings.onTransportReady(),
+                "protocol core onTransportReady()"
+            );
+        },
+        onWsClose(code: number): HostCommand[] {
+            return validateHostCommands(bindings.onWsClose(code), "protocol core onWsClose()");
+        },
+        onTimer(timerId: number): HostCommand[] {
+            return validateHostCommands(bindings.onTimer(timerId), "protocol core onTimer()");
+        },
+        updateUpload(type: StreamType, active: boolean): HostCommand[] {
+            return validateHostCommands(
+                bindings.updateUpload(type, active),
+                "protocol core updateUpload()"
+            );
+        },
+        updateDownload(sessionId: SessionId, states: DownloadStates): HostCommand[] {
+            return validateHostCommands(
+                bindings.updateDownload(sessionId, states),
+                "protocol core updateDownload()"
+            );
+        },
+        updateInfo(info: SessionInfo): HostCommand[] {
+            return validateHostCommands(bindings.updateInfo(info), "protocol core updateInfo()");
+        },
+        broadcast(message: unknown): HostCommand[] {
+            return validateHostCommands(bindings.broadcast(message), "protocol core broadcast()");
+        },
+        startRecording(options?: RecordingOptions): HostCommand[] {
+            return validateHostCommands(
+                bindings.startRecording(options),
+                "protocol core startRecording()"
+            );
+        },
+        stopRecording(): HostCommand[] {
+            return validateHostCommands(bindings.stopRecording(), "protocol core stopRecording()");
+        },
+        submitNegotiationAnswer(
+            requestId: string,
+            negotiationKind: NegotiationKind,
+            sdp: string
+        ): HostCommand[] {
+            return validateHostCommands(
+                bindings.submitNegotiationAnswer(requestId, negotiationKind, sdp),
+                "protocol core submitNegotiationAnswer()"
+            );
+        },
+        disconnect(): HostCommand[] {
+            return validateHostCommands(bindings.disconnect(), "protocol core disconnect()");
+        },
+        trackBinding(mid: string): TrackBinding | null | undefined {
+            return validateOptionalTrackBinding(
+                bindings.trackBinding(mid),
+                "protocol core trackBinding()"
+            );
+        }
+    };
+}
+
 export function createProtocolCore(): ProtocolCoreBindings {
-    return (protocolCoreFactory ?? defaultProtocolCoreFactory)();
+    return wrapProtocolCoreBindings((protocolCoreFactory ?? defaultProtocolCoreFactory)());
+}
+
+function validateHostCommands(value: unknown, context: string): HostCommand[] {
+    if (!Array.isArray(value)) {
+        throw new Error(`${context} must return an array of host commands`);
+    }
+    value.forEach((command, index) => {
+        validateHostCommand(command, `${context} command #${index}`);
+    });
+    return value as HostCommand[];
+}
+
+function validateHostCommand(value: unknown, context: string): void {
+    const command = asRecord(value, context);
+    const kind = requireString(command.kind, `${context}.kind`);
+    switch (kind) {
+        case "sendWebSocket":
+            requireString(command.frame, `${context}.frame`);
+            return;
+        case "applyNegotiation":
+            requireString(command.requestId, `${context}.requestId`);
+            validateNegotiationKind(command.negotiationKind, `${context}.negotiationKind`);
+            requireString(command.sdp, `${context}.sdp`);
+            return;
+        case "attachTrack":
+            requireString(command.mid, `${context}.mid`);
+            validateStreamType(command.streamType, `${context}.streamType`);
+            return;
+        case "detachTrack":
+            validateStreamType(command.streamType, `${context}.streamType`);
+            return;
+        case "createPeerConnection":
+        case "closePeerConnection":
+            return;
+        case "closeWebSocket":
+            requireInteger(command.code, `${context}.code`);
+            return;
+        case "emitStateChange":
+            validateConnectionState(command.state, `${context}.state`);
+            requireOptionalString(command.cause, `${context}.cause`);
+            return;
+        case "emitUpdate":
+            validateClientUpdate(command.update, `${context}.update`);
+            return;
+        case "registerPendingRequest":
+            requireString(command.requestId, `${context}.requestId`);
+            validatePendingRequestKind(command.requestKind, `${context}.requestKind`);
+            return;
+        case "resolvePendingRequest":
+            requireString(command.requestId, `${context}.requestId`);
+            requireBoolean(command.ok, `${context}.ok`);
+            return;
+        case "scheduleTimer":
+            requireInteger(command.id, `${context}.id`);
+            requireInteger(command.ms, `${context}.ms`);
+            return;
+        case "cancelTimer":
+            requireInteger(command.id, `${context}.id`);
+            return;
+        case "connect":
+            requireString(command.url, `${context}.url`);
+            return;
+        default:
+            throw new Error(`${context}.kind is invalid: ${String(kind)}`);
+    }
+}
+
+function validateClientUpdate(value: unknown, context: string): ClientUpdateDetail {
+    const update = asRecord(value, context);
+    const name = requireString(update.name, `${context}.name`);
+    switch (name) {
+        case CLIENT_UPDATE.TRACK: {
+            const payload = asRecord(update.payload, `${context}.payload`);
+            validateSessionId(payload.sessionId, `${context}.payload.sessionId`);
+            validateStreamType(payload.type, `${context}.payload.type`);
+            requireBoolean(payload.active, `${context}.payload.active`);
+            if (payload.track === null || typeof payload.track !== "object") {
+                throw new Error(`${context}.payload.track must be an object`);
+            }
+            return update as ClientUpdateDetail;
+        }
+        case CLIENT_UPDATE.DISCONNECT: {
+            const payload = asRecord(update.payload, `${context}.payload`);
+            validateSessionId(payload.sessionId, `${context}.payload.sessionId`);
+            return update as ClientUpdateDetail;
+        }
+        case CLIENT_UPDATE.INFO_CHANGE: {
+            const payload = asRecord(update.payload, `${context}.payload`);
+            for (const [sessionId, info] of Object.entries(payload)) {
+                validateSessionInfo(info, `${context}.payload.${sessionId}`);
+            }
+            return update as ClientUpdateDetail;
+        }
+        case CLIENT_UPDATE.BROADCAST: {
+            const payload = asRecord(update.payload, `${context}.payload`);
+            validateSessionId(payload.senderId, `${context}.payload.senderId`);
+            return update as ClientUpdateDetail;
+        }
+        case CLIENT_UPDATE.CHANNEL_INFO_CHANGE: {
+            const payload = asRecord(update.payload, `${context}.payload`);
+            validateRecordingState(payload.state, `${context}.payload.state`);
+            if (payload.stopCode !== undefined) {
+                validateRecordingStopCode(payload.stopCode, `${context}.payload.stopCode`);
+            }
+            return update as ClientUpdateDetail;
+        }
+        default:
+            throw new Error(`${context}.name is invalid: ${String(name)}`);
+    }
+}
+
+function validateOptionalTrackBinding(
+    value: TrackBinding | null | undefined,
+    context: string
+): TrackBinding | null | undefined {
+    if (value === null || value === undefined) {
+        return value;
+    }
+    const binding = asRecord(value, context);
+    requireString(binding.mid, `${context}.mid`);
+    validateSessionId(binding.sessionId, `${context}.sessionId`);
+    validateStreamType(binding.type, `${context}.type`);
+    requireBoolean(binding.active, `${context}.active`);
+    return value;
+}
+
+function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {
+    const features = asRecord(value, context);
+    requireBoolean(features.rtc, `${context}.rtc`);
+    requireBoolean(features.transcription, `${context}.transcription`);
+    requireBoolean(features.audioRecording, `${context}.audioRecording`);
+    requireBoolean(features.videoRecording, `${context}.videoRecording`);
+    return value as AvailableFeatures;
+}
+
+function validateRecordingState(value: unknown, context: string): RecordingState {
+    const state = asRecord(value, context);
+    requireOptionalBoolean(state.recording, `${context}.recording`);
+    requireOptionalBoolean(state.audio, `${context}.audio`);
+    requireOptionalBoolean(state.video, `${context}.video`);
+    requireOptionalBoolean(state.transcription, `${context}.transcription`);
+    return value as RecordingState;
+}
+
+function validateSessionInfo(value: unknown, context: string): SessionInfo {
+    const info = asRecord(value, context);
+    requireOptionalBoolean(info.isTalking, `${context}.isTalking`);
+    requireOptionalBoolean(info.isCameraOn, `${context}.isCameraOn`);
+    requireOptionalBoolean(info.isScreenSharingOn, `${context}.isScreenSharingOn`);
+    requireOptionalBoolean(info.isSelfMuted, `${context}.isSelfMuted`);
+    requireOptionalBoolean(info.isDeaf, `${context}.isDeaf`);
+    requireOptionalBoolean(info.isRaisingHand, `${context}.isRaisingHand`);
+    return value as SessionInfo;
+}
+
+function validateConnectionState(value: unknown, context: string): ConnectionState {
+    if (
+        value !== "disconnected" &&
+        value !== "connecting" &&
+        value !== "authenticated" &&
+        value !== "connected" &&
+        value !== "recovering" &&
+        value !== "closed"
+    ) {
+        throw new Error(`${context} is invalid: ${String(value)}`);
+    }
+    return value;
+}
+
+function validateNegotiationKind(value: unknown, context: string): NegotiationKind {
+    if (value !== NEGOTIATION_KIND.OFFER && value !== NEGOTIATION_KIND.RENEGOTIATE) {
+        throw new Error(`${context} is invalid: ${String(value)}`);
+    }
+    return value;
+}
+
+function validatePendingRequestKind(value: unknown, context: string): PendingRequestKind {
+    if (
+        value !== PENDING_REQUEST_KIND.START_RECORDING &&
+        value !== PENDING_REQUEST_KIND.STOP_RECORDING
+    ) {
+        throw new Error(`${context} is invalid: ${String(value)}`);
+    }
+    return value;
+}
+
+function validateStreamType(value: unknown, context: string): StreamType {
+    if (value !== "audio" && value !== "camera" && value !== "screen") {
+        throw new Error(`${context} is invalid: ${String(value)}`);
+    }
+    return value;
+}
+
+function validateSessionId(value: unknown, context: string): SessionId {
+    if (typeof value !== "string" && typeof value !== "number") {
+        throw new Error(`${context} must be a string or number session ID`);
+    }
+    return value;
+}
+
+function validateRecordingStopCode(value: unknown, context: string): void {
+    if (
+        value !== "user_request" &&
+        value !== "channel_closed" &&
+        value !== "recording_timeout" &&
+        value !== "recording_failed" &&
+        value !== "disk_space_exhausted"
+    ) {
+        throw new Error(`${context} is invalid: ${String(value)}`);
+    }
+}
+
+function asRecord(value: unknown, context: string): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`${context} must be an object`);
+    }
+    return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, context: string): string {
+    if (typeof value !== "string") {
+        throw new Error(`${context} must be a string`);
+    }
+    return value;
+}
+
+function requireOptionalString(value: unknown, context: string): void {
+    if (value !== undefined && typeof value !== "string") {
+        throw new Error(`${context} must be a string when provided`);
+    }
+}
+
+function requireBoolean(value: unknown, context: string): boolean {
+    if (typeof value !== "boolean") {
+        throw new Error(`${context} must be a boolean`);
+    }
+    return value;
+}
+
+function requireOptionalBoolean(value: unknown, context: string): void {
+    if (value !== undefined && typeof value !== "boolean") {
+        throw new Error(`${context} must be a boolean when provided`);
+    }
+}
+
+function requireInteger(value: unknown, context: string): number {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw new Error(`${context} must be a non-negative integer`);
+    }
+    return value;
 }
