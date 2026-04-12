@@ -9,12 +9,9 @@ use super::{close_writer, controller::WsReader};
 use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
-    stub_bus::{WsWriter, send_server_message_batch, send_server_request_batch},
+    stub_bus::WsWriter,
 };
-use crate::signaling::{
-    current_protocol::{CurrentServerMessage, CurrentServerRequest},
-    protocol::WebSocketCloseCode,
-};
+use crate::signaling::protocol::WebSocketCloseCode;
 
 use super::session_protocol::{SessionProtocol, SessionProtocolOutcome};
 
@@ -65,7 +62,7 @@ pub(super) async fn run(
                 }
             }
             outbound = outbound_rx.recv() => {
-                if let Some(reason) = handle_outbound_event(writer, outbound, metrics).await {
+                if let Some(reason) = handle_outbound_event(writer, outbound, session_protocol, metrics).await {
                     return reason;
                 }
             }
@@ -132,61 +129,56 @@ async fn handle_incoming_frame(
 async fn handle_outbound_event(
     writer: &mut WsWriter,
     outbound: Option<SessionOutbound>,
+    session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
-    match outbound {
-        Some(SessionOutbound::Message(message)) => {
-            handle_outbound_message(writer, message, metrics).await
-        }
-        Some(SessionOutbound::Request(request)) => {
-            handle_outbound_request(writer, *request, metrics).await
-        }
-        Some(SessionOutbound::Close(code)) => handle_outbound_close(writer, code).await,
-        None => {
-            info!("session outbound channel closed");
-            Some(WsSessionLoopExitReason::OutboundChannelClosed)
-        }
+    if let Some(outbound) = outbound {
+        handle_outbound_payload(writer, outbound, session_protocol, metrics).await
+    } else {
+        info!("session outbound channel closed");
+        Some(WsSessionLoopExitReason::OutboundChannelClosed)
     }
 }
 
-async fn handle_outbound_message(
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "outbound handling keeps protocol send, close-signal handling, and metrics in one explicit session-loop branch"
+)]
+async fn handle_outbound_payload(
     writer: &mut WsWriter,
-    message: CurrentServerMessage,
+    outbound: SessionOutbound,
+    session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
-    debug!(server_message = ?message, "sending outbound server message");
-    if send_server_message_batch(writer, &message).await.is_err() {
-        metrics.record_ws_bus_send_failure();
-        info!("failed to send outbound server message");
-        return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
+    debug!(?outbound, "sending outbound session event");
+    match session_protocol.send_outbound(writer, outbound).await {
+        Ok(batch_len) => {
+            metrics.record_ws_bus_batch_sent(batch_len);
+            None
+        }
+        Err(WebSocketCloseCode::Kicked) => {
+            info!(close_code = 4003, "closing websocket from outbound signal");
+            close_writer(writer, WebSocketCloseCode::Kicked).await;
+            Some(WsSessionLoopExitReason::OutboundCloseSignal)
+        }
+        Err(code) => {
+            metrics.record_ws_bus_send_failure();
+            info!(
+                close_code = u16::from(code),
+                "failed to send outbound session event"
+            );
+            if matches!(
+                code,
+                WebSocketCloseCode::Clean
+                    | WebSocketCloseCode::Leaving
+                    | WebSocketCloseCode::Kicked
+                    | WebSocketCloseCode::ChannelFull
+                    | WebSocketCloseCode::AuthFailed
+                    | WebSocketCloseCode::AuthTimeout
+            ) {
+                close_writer(writer, code).await;
+            }
+            Some(WsSessionLoopExitReason::OutboundMessageSendFailure)
+        }
     }
-    metrics.record_ws_bus_batch_sent(1);
-    None
-}
-
-async fn handle_outbound_request(
-    writer: &mut WsWriter,
-    request: CurrentServerRequest,
-    metrics: &RuntimeMetrics,
-) -> Option<WsSessionLoopExitReason> {
-    debug!(server_request = ?request, "sending outbound server request");
-    if send_server_request_batch(writer, &request).await.is_err() {
-        metrics.record_ws_bus_send_failure();
-        info!("failed to send outbound server request");
-        return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
-    }
-    metrics.record_ws_bus_batch_sent(1);
-    None
-}
-
-async fn handle_outbound_close(
-    writer: &mut WsWriter,
-    code: WebSocketCloseCode,
-) -> Option<WsSessionLoopExitReason> {
-    info!(
-        close_code = u16::from(code),
-        "closing websocket from outbound signal"
-    );
-    close_writer(writer, code).await;
-    Some(WsSessionLoopExitReason::OutboundCloseSignal)
 }

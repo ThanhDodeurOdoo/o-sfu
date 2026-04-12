@@ -1,22 +1,30 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::extract::ws::Message;
 use futures_util::SinkExt;
 
 use crate::runtime::{
-    channel::Channel,
+    channel::{Channel, SessionOutbound},
     metrics::RuntimeMetrics,
-    stub_bus::{StubBusOutcome, StubBusSession, WsWriter},
+    stub_bus::{
+        StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch,
+        send_server_request_batch,
+    },
     transport_adapter::RuntimeTransportAdapter,
     transport_adapter::TransportConnectDirection,
 };
 use crate::signaling::{
+    current_protocol::{
+        CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
+        CurrentSessionInfoSnapshotById,
+    },
     protocol::{
         ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
-        EnvelopeBatch, RecordingActionResult, RequestId, ServerEnvelope, ServerRequest,
-        ServerResponse, SessionDescriptionPayload, WebSocketCloseCode,
+        EnvelopeBatch, PeerInfoPayload, PeerLeftPayload, RecordingActionResult, RequestId,
+        ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
+        SessionDescriptionPayload, TrackBinding, WebSocketCloseCode,
     },
-    shared::SessionId,
+    shared::{SessionId, SessionInfo, StreamType},
     webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
 
@@ -115,6 +123,30 @@ impl SessionProtocol {
             Self::Native(session) => session.handle_frame(writer, message).await,
         }
     }
+
+    pub(super) async fn send_outbound(
+        &mut self,
+        writer: &mut WsWriter,
+        outbound: SessionOutbound,
+    ) -> Result<usize, WebSocketCloseCode> {
+        match (self, outbound) {
+            (Self::LegacyStubBus(_), SessionOutbound::Message(message)) => {
+                send_server_message_batch(writer, &message).await?;
+                Ok(1)
+            }
+            (Self::LegacyStubBus(_), SessionOutbound::Request(request)) => {
+                send_server_request_batch(writer, &request).await?;
+                Ok(1)
+            }
+            (Self::LegacyStubBus(_) | Self::Native(_), SessionOutbound::Close(code)) => Err(code),
+            (Self::Native(session), SessionOutbound::Message(message)) => {
+                session.send_outbound_message(writer, message).await
+            }
+            (Self::Native(session), SessionOutbound::Request(request)) => {
+                session.send_outbound_request(writer, *request).await
+            }
+        }
+    }
 }
 
 const STUB_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n";
@@ -132,6 +164,7 @@ pub(super) struct NativeSessionProtocol {
     connection_id: u64,
     channel: Arc<Channel>,
     transport_adapter: RuntimeTransportAdapter,
+    remote_track_bindings: BTreeMap<String, TrackBinding>,
     next_request_counter: u64,
     pending_ping_request_id: Option<RequestId>,
     pending_negotiation_request: Option<PendingNegotiationRequest>,
@@ -149,6 +182,7 @@ impl NativeSessionProtocol {
             connection_id,
             channel,
             transport_adapter,
+            remote_track_bindings: BTreeMap::new(),
             next_request_counter: 0,
             pending_ping_request_id: None,
             pending_negotiation_request: None,
@@ -312,6 +346,28 @@ impl NativeSessionProtocol {
                 self.channel.broadcast(&self.session_id, message).await;
                 SessionProtocolOutcome::Continue
             }
+            ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
+                self.channel
+                    .update_download_state(
+                        &self.session_id,
+                        &payload.session_id,
+                        &payload.states,
+                        &self.transport_adapter,
+                    )
+                    .await;
+                SessionProtocolOutcome::Continue
+            }
+            ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
+                self.channel
+                    .update_upload_state(
+                        &self.session_id,
+                        payload.stream_type,
+                        false,
+                        &self.transport_adapter,
+                    )
+                    .await;
+                SessionProtocolOutcome::Continue
+            }
             ClientEnvelope::Response {
                 response_to,
                 response: ClientResponse::Ping,
@@ -354,12 +410,9 @@ impl NativeSessionProtocol {
                 Err(code) => SessionProtocolOutcome::Close(code),
             },
             ClientEnvelope::Response { .. }
-            | ClientEnvelope::Message(
-                ClientMessage::Auth(_)
-                | ClientMessage::Publish(_)
-                | ClientMessage::Unpublish(_)
-                | ClientMessage::Subscribe(_),
-            ) => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
+            | ClientEnvelope::Message(ClientMessage::Auth(_) | ClientMessage::Publish(_)) => {
+                SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
+            }
         }
     }
 
@@ -418,8 +471,162 @@ impl NativeSessionProtocol {
             ServerRequest::Ping => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
         }
     }
+
+    async fn send_outbound_message(
+        &mut self,
+        writer: &mut WsWriter,
+        message: CurrentServerMessage,
+    ) -> Result<usize, WebSocketCloseCode> {
+        let translated_messages = self.translate_server_message(message);
+        self.send_server_messages(writer, translated_messages).await
+    }
+
+    async fn send_outbound_request(
+        &mut self,
+        writer: &mut WsWriter,
+        request: CurrentServerRequest,
+    ) -> Result<usize, WebSocketCloseCode> {
+        match request {
+            CurrentServerRequest::BootstrapRemoteTrack(payload) => {
+                self.apply_remote_track_bootstrap(payload)?;
+                self.send_server_messages(
+                    writer,
+                    vec![ServerMessage::Tracks(self.remote_track_snapshot())],
+                )
+                .await
+            }
+            CurrentServerRequest::BootstrapTransports(_) | CurrentServerRequest::Ping => {
+                Err(WebSocketCloseCode::Error)
+            }
+        }
+    }
+
+    async fn send_server_messages(
+        &self,
+        writer: &mut WsWriter,
+        messages: Vec<ServerMessage>,
+    ) -> Result<usize, WebSocketCloseCode> {
+        if messages.is_empty() {
+            return Ok(0);
+        }
+        let mut batch = Vec::with_capacity(messages.len());
+        for message in messages {
+            batch.push(
+                ServerEnvelope::Message(message)
+                    .into_envelope()
+                    .map_err(|_error| WebSocketCloseCode::Error)?,
+            );
+        }
+        let frame = serialize_native_batch(&batch)?;
+        writer
+            .send(Message::Text(frame.into()))
+            .await
+            .map_err(|_error| WebSocketCloseCode::Error)?;
+        Ok(batch.len())
+    }
+
+    fn translate_server_message(&mut self, message: CurrentServerMessage) -> Vec<ServerMessage> {
+        match message {
+            CurrentServerMessage::Broadcast(payload) => {
+                vec![ServerMessage::Broadcast(ServerBroadcastPayload {
+                    sender_id: payload.sender_id,
+                    message: payload.message,
+                })]
+            }
+            CurrentServerMessage::SessionDeparted(payload) => {
+                self.remote_track_bindings
+                    .retain(|_mid, binding| binding.session_id != payload.session_id);
+                vec![ServerMessage::PeerLeft(PeerLeftPayload {
+                    session_id: payload.session_id,
+                })]
+            }
+            CurrentServerMessage::SessionInfoChanged(snapshot) => {
+                self.translate_session_info_snapshot(snapshot)
+            }
+            CurrentServerMessage::ChannelStateChanged(state) => {
+                vec![ServerMessage::RecordingChange(state)]
+            }
+        }
+    }
+
+    fn translate_session_info_snapshot(
+        &mut self,
+        snapshot: CurrentSessionInfoSnapshotById,
+    ) -> Vec<ServerMessage> {
+        let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
+        let mut track_snapshot_changed = false;
+        for (bundle_key, info) in snapshot {
+            let session_id = parse_bundle_session_info_key(&bundle_key);
+            track_snapshot_changed |= self.apply_session_info_to_tracks(&session_id, &info);
+            messages.push(ServerMessage::PeerInfo(PeerInfoPayload {
+                session_id,
+                info,
+            }));
+        }
+        if track_snapshot_changed {
+            messages.push(ServerMessage::Tracks(self.remote_track_snapshot()));
+        }
+        messages
+    }
+
+    fn apply_remote_track_bootstrap(
+        &mut self,
+        payload: CurrentRemoteTrackBootstrapPayload,
+    ) -> Result<(), WebSocketCloseCode> {
+        let Some(mid) = payload
+            .rtp_parameters
+            .0
+            .get("mid")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Err(WebSocketCloseCode::Error);
+        };
+        self.remote_track_bindings.insert(
+            mid.to_owned(),
+            TrackBinding {
+                mid: mid.to_owned(),
+                session_id: payload.session_id,
+                stream_type: payload.stream_type,
+                active: payload.active,
+            },
+        );
+        Ok(())
+    }
+
+    fn apply_session_info_to_tracks(&mut self, session_id: &SessionId, info: &SessionInfo) -> bool {
+        let mut changed = false;
+        for binding in self.remote_track_bindings.values_mut() {
+            if &binding.session_id != session_id {
+                continue;
+            }
+            let next_active = match binding.stream_type {
+                StreamType::Camera => info.is_camera_on,
+                StreamType::Screen => info.is_screen_sharing_on,
+                StreamType::Audio => None,
+            };
+            let Some(next_active) = next_active else {
+                continue;
+            };
+            if binding.active != next_active {
+                binding.active = next_active;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn remote_track_snapshot(&self) -> Vec<TrackBinding> {
+        self.remote_track_bindings.values().cloned().collect()
+    }
 }
 
 fn serialize_native_batch(batch: &EnvelopeBatch) -> Result<String, WebSocketCloseCode> {
     serde_json::to_string(&batch).map_err(|_error| WebSocketCloseCode::Error)
+}
+
+fn parse_bundle_session_info_key(key: &str) -> SessionId {
+    match key.parse::<i64>() {
+        Ok(value) => SessionId::Integer(value),
+        Err(_error) => SessionId::String(key.to_owned()),
+    }
 }
