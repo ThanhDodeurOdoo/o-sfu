@@ -211,6 +211,55 @@ const tick = async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
+const buildWelcomeFrame = (peers = []) =>
+    JSON.stringify([
+        {
+            t: "welcome",
+            p: {
+                features: {
+                    rtc: true,
+                    transcription: false,
+                    audioRecording: false,
+                    videoRecording: true
+                },
+                recording: {
+                    recording: false,
+                    audio: false,
+                    transcription: false,
+                    video: false
+                },
+                peers
+            }
+        }
+    ]);
+
+const decodeSentFrame = (socket, index) => JSON.parse(socket.sent[index]);
+
+const createManualTimers = () => {
+    let nextHandleId = 1;
+    const handles = new Map();
+    return {
+        clearTimer(handle) {
+            handles.delete(handle.id);
+        },
+        fireByDelay(ms) {
+            const handle = [...handles.values()].find((candidate) => candidate.ms === ms);
+            assert.ok(handle, `expected timer with delay ${ms}`);
+            handles.delete(handle.id);
+            handle.callback();
+        },
+        setTimer(callback, ms) {
+            const handle = {
+                callback,
+                id: nextHandleId++,
+                ms
+            };
+            handles.set(handle.id, handle);
+            return handle;
+        }
+    };
+};
+
 test("connect normalizes the URL and sends auth on WebSocket open", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
@@ -280,6 +329,155 @@ test("default runtime creates the protocol core from generated wasm bindings", (
             p: {
                 channel: "channel-a",
                 jwt: "jwt-token"
+            }
+        }
+    ]);
+});
+
+test("real protocol core replays sticky intents after recovery welcome", async () => {
+    const sockets = [];
+    const timers = createManualTimers();
+    const client = new SfuClient({
+        clearTimer: (handle) => timers.clearTimer(handle),
+        createProtocolCore: () => createProtocolCore(),
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        },
+        setTimer: (callback, ms) => timers.setTimer(callback, ms)
+    });
+
+    const cameraTrack = {
+        enabled: true,
+        id: "camera-track-1",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token", {
+        channelUUID: "channel-a"
+    });
+    await tick();
+
+    sockets[0].open();
+    await tick();
+    sockets[0].emitMessage(buildWelcomeFrame());
+    await tick();
+
+    client.updateUpload("camera", cameraTrack);
+    client.updateDownload(7, { audio: true, camera: false });
+    client.updateInfo({ isCameraOn: true, isRaisingHand: true });
+    await tick();
+
+    assert.equal(sockets[0].sent.length, 1);
+
+    sockets[0].close(1011);
+    await tick();
+    timers.fireByDelay(1000);
+    await tick();
+
+    assert.equal(sockets.length, 2);
+    sockets[1].open();
+    await tick();
+    sockets[1].emitMessage(buildWelcomeFrame());
+    await tick();
+
+    assert.deepEqual(decodeSentFrame(sockets[1], 0), [
+        {
+            t: "auth",
+            p: {
+                jwt: "jwt-token",
+                channel: "channel-a"
+            }
+        }
+    ]);
+    assert.deepEqual(decodeSentFrame(sockets[1], 1), [
+        {
+            t: "publish",
+            p: {
+                type: "camera"
+            }
+        },
+        {
+            t: "subscribe",
+            p: {
+                sessionId: 7,
+                audio: true,
+                camera: false
+            }
+        },
+        {
+            t: "info",
+            p: {
+                isCameraOn: true,
+                isRaisingHand: true
+            }
+        }
+    ]);
+});
+
+test("real protocol core replays the latest sticky intents changed while recovering", async () => {
+    const sockets = [];
+    const timers = createManualTimers();
+    const client = new SfuClient({
+        clearTimer: (handle) => timers.clearTimer(handle),
+        createProtocolCore: () => createProtocolCore(),
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        },
+        setTimer: (callback, ms) => timers.setTimer(callback, ms)
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+
+    sockets[0].open();
+    await tick();
+    sockets[0].emitMessage(buildWelcomeFrame());
+    await tick();
+
+    client.updateUpload("camera", {
+        enabled: true,
+        id: "camera-track-2",
+        kind: "video",
+        muted: false
+    });
+    client.updateDownload(7, { audio: true });
+    await tick();
+
+    sockets[0].close(1011);
+    await tick();
+
+    client.updateUpload("camera", null);
+    client.updateDownload(7, { audio: false, camera: true });
+    client.updateInfo({ isSelfMuted: true });
+    await tick();
+
+    timers.fireByDelay(1000);
+    await tick();
+
+    assert.equal(sockets.length, 2);
+    sockets[1].open();
+    await tick();
+    sockets[1].emitMessage(buildWelcomeFrame());
+    await tick();
+
+    assert.deepEqual(decodeSentFrame(sockets[1], 1), [
+        {
+            t: "subscribe",
+            p: {
+                sessionId: 7,
+                audio: false,
+                camera: true
+            }
+        },
+        {
+            t: "info",
+            p: {
+                isSelfMuted: true
             }
         }
     ]);
