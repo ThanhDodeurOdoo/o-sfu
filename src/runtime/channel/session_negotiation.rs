@@ -13,6 +13,7 @@ use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
 /// 1. Transport Connection: None, Upload only, Download only, or Both.
 /// 2. RTP Capabilities: Not yet received, or Ready.
 ///
+/// ```text
 ///                      TRANSPORT CONNECTION
 ///               None        Upload (P)  Download    Both (P)
 ///            ┌─────────────┬───────────┬────────────┬────────────┐
@@ -21,6 +22,7 @@ use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
 /// CAPS READY │ `CapsReady` │ `UpReady` │ `DownReady`│  `Ready`   │
 ///            └─────────────┴───────────┴────────────┴────────────┘
 ///                            (P)        (C)        (P, C)
+/// ```
 ///
 /// (P) = `can_publish()` is true
 /// (C) = `can_consume()` is true

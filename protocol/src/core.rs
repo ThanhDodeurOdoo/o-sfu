@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, mem::take};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::take,
+};
 
 use crate::{
     bundle_api::{
@@ -13,7 +16,7 @@ use crate::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
         ClientResponse, Envelope, EnvelopeBatch, PeerSnapshot, RecordingOptions, RequestId,
         ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload,
-        StreamIntentPayload, SubscribePayload, WebSocketCloseCode, WelcomePayload,
+        StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
     },
 };
 
@@ -127,6 +130,10 @@ pub struct ProtocolCore {
     state: ConnectionState,
     features: AvailableFeatures,
     recording_state: RecordingState,
+    track_bindings: BTreeMap<String, TrackBinding>,
+    active_uploads: BTreeSet<StreamType>,
+    desired_downloads: BTreeMap<SessionId, DownloadStates>,
+    desired_info: Option<SessionInfo>,
     connect_context: Option<ConnectContext>,
     recovery_delay_ms: u32,
     pending_batch: EnvelopeBatch,
@@ -151,6 +158,10 @@ impl ProtocolCore {
             state: BundleConnectionState::Disconnected,
             features: empty_features(),
             recording_state: RecordingState::default(),
+            track_bindings: BTreeMap::new(),
+            active_uploads: BTreeSet::new(),
+            desired_downloads: BTreeMap::new(),
+            desired_info: None,
             connect_context: None,
             recovery_delay_ms: INITIAL_RECOVERY_DELAY_MS,
             pending_batch: Vec::new(),
@@ -178,6 +189,11 @@ impl ProtocolCore {
         &self.recording_state
     }
 
+    #[must_use]
+    pub fn track_binding(&self, mid: &str) -> Option<&TrackBinding> {
+        self.track_bindings.get(mid)
+    }
+
     pub fn connect(
         &mut self,
         url: impl Into<String>,
@@ -199,6 +215,7 @@ impl ProtocolCore {
         self.features = empty_features();
         self.recording_state = RecordingState::default();
         self.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
+        self.clear_sticky_state();
         self.clear_runtime_state();
         self.state = BundleConnectionState::Connecting;
         vec![
@@ -254,6 +271,7 @@ impl ProtocolCore {
         }
         self.features = payload.features;
         self.recording_state = payload.recording;
+        self.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
         self.state = BundleConnectionState::Authenticated;
 
         let mut commands = vec![Command::EmitStateChange {
@@ -266,6 +284,7 @@ impl ProtocolCore {
                 update: BundleUpdate::SessionInfoChange(snapshot),
             });
         }
+        commands.extend(self.replay_sticky_state());
         commands
     }
 
@@ -281,6 +300,11 @@ impl ProtocolCore {
     }
 
     pub fn update_upload(&mut self, stream_type: StreamType, active: bool) -> Vec<Command> {
+        if active {
+            self.active_uploads.insert(stream_type);
+        } else {
+            self.active_uploads.remove(&stream_type);
+        }
         if !self.can_send_client_messages() {
             return Vec::new();
         }
@@ -301,6 +325,7 @@ impl ProtocolCore {
         session_id: SessionId,
         states: DownloadStates,
     ) -> Vec<Command> {
+        self.remember_download_states(&session_id, &states);
         if !self.can_send_client_messages() {
             return Vec::new();
         }
@@ -316,6 +341,7 @@ impl ProtocolCore {
     }
 
     pub fn update_info(&mut self, info: SessionInfo) -> Vec<Command> {
+        self.remember_info(&info);
         if !self.can_send_client_messages() {
             return Vec::new();
         }
@@ -403,6 +429,7 @@ impl ProtocolCore {
         self.features = empty_features();
         self.recording_state = RecordingState::default();
         self.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
+        self.clear_sticky_state();
 
         let mut commands = vec![Command::CancelTimer {
             id: RECOVERY_TIMER_ID,
@@ -529,7 +556,10 @@ impl ProtocolCore {
     fn handle_server_message(&mut self, message: ServerMessage) -> Vec<Command> {
         match message {
             ServerMessage::Welcome(payload) => self.on_welcome(payload),
-            ServerMessage::Tracks(_bindings) => Vec::new(),
+            ServerMessage::Tracks(bindings) => {
+                self.replace_track_bindings(bindings);
+                Vec::new()
+            }
             ServerMessage::PeerInfo(payload) | ServerMessage::PeerJoined(payload) => {
                 vec![Command::EmitUpdate {
                     update: BundleUpdate::SessionInfoChange(single_peer_update(
@@ -538,11 +568,14 @@ impl ProtocolCore {
                     )),
                 }]
             }
-            ServerMessage::PeerLeft(payload) => vec![Command::EmitUpdate {
-                update: BundleUpdate::Disconnect(BundleDisconnectUpdate {
-                    session_id: payload.session_id,
-                }),
-            }],
+            ServerMessage::PeerLeft(payload) => {
+                self.remove_track_bindings_for_session(&payload.session_id);
+                vec![Command::EmitUpdate {
+                    update: BundleUpdate::Disconnect(BundleDisconnectUpdate {
+                        session_id: payload.session_id,
+                    }),
+                }]
+            }
             ServerMessage::Broadcast(payload) => vec![Command::EmitUpdate {
                 update: BundleUpdate::Broadcast(BundleBroadcastUpdate {
                     sender_id: payload.sender_id,
@@ -747,6 +780,7 @@ impl ProtocolCore {
     }
 
     fn clear_runtime_state(&mut self) {
+        self.track_bindings.clear();
         self.pending_batch.clear();
         self.batch_flush_scheduled = false;
         self.pending_requests.clear();
@@ -780,8 +814,95 @@ impl ProtocolCore {
 
         self.pending_batch.clear();
         self.batch_flush_scheduled = false;
+        self.track_bindings.clear();
         self.pending_negotiation = None;
         commands
+    }
+
+    fn clear_sticky_state(&mut self) {
+        self.active_uploads.clear();
+        self.desired_downloads.clear();
+        self.desired_info = None;
+    }
+
+    fn replay_sticky_state(&mut self) -> Vec<Command> {
+        if !self.can_send_client_messages() {
+            return Vec::new();
+        }
+
+        let mut replay_batch = Vec::new();
+
+        for &stream_type in &self.active_uploads {
+            let Some(envelope) =
+                ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
+                    stream_type,
+                }))
+                .into_envelope()
+                .ok()
+            else {
+                continue;
+            };
+            replay_batch.push(envelope);
+        }
+
+        for (session_id, states) in &self.desired_downloads {
+            let Some(envelope) =
+                ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
+                    session_id: session_id.clone(),
+                    states: states.clone(),
+                }))
+                .into_envelope()
+                .ok()
+            else {
+                continue;
+            };
+            replay_batch.push(envelope);
+        }
+
+        if let Some(info) = self.desired_info.clone() {
+            let Some(envelope) = ClientEnvelope::Message(ClientMessage::Info(info))
+                .into_envelope()
+                .ok()
+            else {
+                return Vec::new();
+            };
+            replay_batch.push(envelope);
+        }
+
+        if replay_batch.is_empty() {
+            return Vec::new();
+        }
+
+        self.pending_batch.extend(replay_batch);
+        self.flush_pending_batch(true)
+    }
+
+    fn remember_download_states(&mut self, session_id: &SessionId, states: &DownloadStates) {
+        let existing_states = self
+            .desired_downloads
+            .entry(session_id.clone())
+            .or_default();
+        merge_download_states(existing_states, states);
+        if download_states_are_empty(existing_states) {
+            self.desired_downloads.remove(session_id);
+        }
+    }
+
+    fn remember_info(&mut self, info: &SessionInfo) {
+        let existing_info = self.desired_info.get_or_insert_with(SessionInfo::default);
+        merge_session_info(existing_info, info);
+    }
+
+    fn replace_track_bindings(&mut self, bindings: Vec<TrackBinding>) {
+        self.track_bindings = bindings
+            .into_iter()
+            .map(|binding| (binding.mid.clone(), binding))
+            .collect();
+    }
+
+    fn remove_track_bindings_for_session(&mut self, session_id: &SessionId) {
+        self.track_bindings
+            .retain(|_, binding| &binding.session_id != session_id);
     }
 
     fn has_pending_request(&self, kind: PendingRequestKind) -> bool {
@@ -825,6 +946,43 @@ fn empty_features() -> AvailableFeatures {
         transcription: false,
         audio_recording: false,
         video_recording: false,
+    }
+}
+
+fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {
+    if let Some(audio) = update.audio {
+        target.audio = Some(audio);
+    }
+    if let Some(camera) = update.camera {
+        target.camera = Some(camera);
+    }
+    if let Some(screen) = update.screen {
+        target.screen = Some(screen);
+    }
+}
+
+fn download_states_are_empty(states: &DownloadStates) -> bool {
+    states.audio.is_none() && states.camera.is_none() && states.screen.is_none()
+}
+
+fn merge_session_info(target: &mut SessionInfo, update: &SessionInfo) {
+    if let Some(is_talking) = update.is_talking {
+        target.is_talking = Some(is_talking);
+    }
+    if let Some(is_camera_on) = update.is_camera_on {
+        target.is_camera_on = Some(is_camera_on);
+    }
+    if let Some(is_screen_sharing_on) = update.is_screen_sharing_on {
+        target.is_screen_sharing_on = Some(is_screen_sharing_on);
+    }
+    if let Some(is_self_muted) = update.is_self_muted {
+        target.is_self_muted = Some(is_self_muted);
+    }
+    if let Some(is_deaf) = update.is_deaf {
+        target.is_deaf = Some(is_deaf);
+    }
+    if let Some(is_raising_hand) = update.is_raising_hand {
+        target.is_raising_hand = Some(is_raising_hand);
     }
 }
 
@@ -888,13 +1046,17 @@ mod tests {
     };
     use crate::{
         bundle_api::{BundleBroadcastUpdate, BundleDisconnectUpdate, BundleUpdate},
-        shared::{AvailableFeatures, RecordingState, RecordingStateUpdate, SessionInfo, StopCode},
+        shared::{
+            AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionInfo,
+            StopCode, StreamType,
+        },
         signaling::{
             AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
             ClientResponse, EnvelopeBatch, PeerInfoPayload, PeerLeftPayload, PeerSnapshot,
             RecordingActionResult, RecordingOptions, RequestId, ServerBroadcastPayload,
             ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
-            SessionDescriptionPayload, WebSocketCloseCode, WelcomePayload,
+            SessionDescriptionPayload, StreamIntentPayload, SubscribePayload, TrackBinding,
+            WebSocketCloseCode, WelcomePayload,
         },
     };
 
@@ -930,6 +1092,13 @@ mod tests {
             return Vec::new();
         };
         serde_json::from_str(frame).unwrap_or_default()
+    }
+
+    fn decode_sent_client_envelopes(commands: &[Command]) -> Vec<ClientEnvelope> {
+        decode_sent_batch(commands)
+            .into_iter()
+            .filter_map(|envelope| ClientEnvelope::decode(envelope).ok())
+            .collect()
     }
 
     fn encode_server_batch(envelope: ServerEnvelope) -> String {
@@ -1123,6 +1292,111 @@ mod tests {
                 response: ClientResponse::Ping,
             })
         );
+    }
+
+    #[test]
+    fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() {
+        let mut core = ProtocolCore::new();
+        let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+        let _ = core.on_welcome(sample_welcome_payload());
+
+        let first_tracks =
+            encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
+                TrackBinding {
+                    mid: String::from("0"),
+                    session_id: String::from("peer-1").into(),
+                    stream_type: StreamType::Audio,
+                    active: true,
+                },
+                TrackBinding {
+                    mid: String::from("1"),
+                    session_id: String::from("peer-2").into(),
+                    stream_type: StreamType::Camera,
+                    active: true,
+                },
+            ])));
+        let second_tracks =
+            encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
+                TrackBinding {
+                    mid: String::from("2"),
+                    session_id: String::from("peer-2").into(),
+                    stream_type: StreamType::Camera,
+                    active: false,
+                },
+            ])));
+
+        assert!(core.on_ws_message(&first_tracks).is_empty());
+        assert_eq!(
+            core.track_binding("0"),
+            Some(&TrackBinding {
+                mid: String::from("0"),
+                session_id: String::from("peer-1").into(),
+                stream_type: StreamType::Audio,
+                active: true,
+            })
+        );
+        assert_eq!(
+            core.track_binding("1"),
+            Some(&TrackBinding {
+                mid: String::from("1"),
+                session_id: String::from("peer-2").into(),
+                stream_type: StreamType::Camera,
+                active: true,
+            })
+        );
+
+        assert!(core.on_ws_message(&second_tracks).is_empty());
+        assert_eq!(core.track_binding("0"), None);
+        assert_eq!(core.track_binding("1"), None);
+        assert_eq!(
+            core.track_binding("2"),
+            Some(&TrackBinding {
+                mid: String::from("2"),
+                session_id: String::from("peer-2").into(),
+                stream_type: StreamType::Camera,
+                active: false,
+            })
+        );
+    }
+
+    #[test]
+    fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
+        let mut core = ProtocolCore::new();
+        let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+        let _ = core.on_welcome(sample_welcome_payload());
+
+        let tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
+            TrackBinding {
+                mid: String::from("0"),
+                session_id: String::from("peer-1").into(),
+                stream_type: StreamType::Audio,
+                active: true,
+            },
+            TrackBinding {
+                mid: String::from("1"),
+                session_id: String::from("peer-2").into(),
+                stream_type: StreamType::Camera,
+                active: true,
+            },
+        ])));
+        let _ = core.on_ws_message(&tracks);
+
+        let peer_left = encode_server_batch(ServerEnvelope::Message(ServerMessage::PeerLeft(
+            PeerLeftPayload {
+                session_id: String::from("peer-1").into(),
+            },
+        )));
+
+        assert_eq!(
+            core.on_ws_message(&peer_left),
+            vec![Command::EmitUpdate {
+                update: BundleUpdate::Disconnect(BundleDisconnectUpdate {
+                    session_id: String::from("peer-1").into(),
+                }),
+            }]
+        );
+        assert_eq!(core.track_binding("0"), None);
+        assert!(core.track_binding("1").is_some());
     }
 
     #[test]
@@ -1463,6 +1737,116 @@ mod tests {
     }
 
     #[test]
+    fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
+        let mut core = ProtocolCore::new();
+        let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+        let _ = core.on_welcome(sample_welcome_payload());
+        let _ = core.on_transport_ready();
+        let _ = core.update_upload(StreamType::Camera, true);
+        let _ = core.update_download(
+            String::from("peer-7").into(),
+            DownloadStates {
+                audio: Some(true),
+                camera: Some(false),
+                screen: None,
+            },
+        );
+        let _ = core.update_info(SessionInfo {
+            is_camera_on: Some(true),
+            is_raising_hand: Some(true),
+            ..SessionInfo::default()
+        });
+        let _ = core.on_ws_close(1011);
+        let _ = core.on_timer(RECOVERY_TIMER_ID);
+
+        let commands = core.on_welcome(sample_welcome_payload());
+        let envelopes = decode_sent_client_envelopes(&commands);
+
+        assert_eq!(core.state(), ConnectionState::Authenticated);
+        assert_eq!(
+            commands.first(),
+            Some(&Command::EmitStateChange {
+                state: ConnectionState::Authenticated,
+                cause: None,
+            })
+        );
+        assert_eq!(
+            envelopes,
+            vec![
+                ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
+                    stream_type: StreamType::Camera,
+                })),
+                ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
+                    session_id: String::from("peer-7").into(),
+                    states: DownloadStates {
+                        audio: Some(true),
+                        camera: Some(false),
+                        screen: None,
+                    },
+                })),
+                ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
+                    is_camera_on: Some(true),
+                    is_raising_hand: Some(true),
+                    ..SessionInfo::default()
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
+        let mut core = ProtocolCore::new();
+        let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+        let _ = core.on_welcome(sample_welcome_payload());
+        let _ = core.on_transport_ready();
+        let _ = core.update_upload(StreamType::Camera, true);
+        let _ = core.update_download(
+            String::from("peer-7").into(),
+            DownloadStates {
+                audio: Some(true),
+                camera: None,
+                screen: None,
+            },
+        );
+        let _ = core.on_ws_close(1011);
+        let _ = core.update_upload(StreamType::Camera, false);
+        let _ = core.update_download(
+            String::from("peer-7").into(),
+            DownloadStates {
+                audio: Some(false),
+                camera: Some(true),
+                screen: None,
+            },
+        );
+        let _ = core.update_info(SessionInfo {
+            is_self_muted: Some(true),
+            ..SessionInfo::default()
+        });
+        let _ = core.on_timer(RECOVERY_TIMER_ID);
+
+        let commands = core.on_welcome(sample_welcome_payload());
+        let envelopes = decode_sent_client_envelopes(&commands);
+
+        assert_eq!(
+            envelopes,
+            vec![
+                ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
+                    session_id: String::from("peer-7").into(),
+                    states: DownloadStates {
+                        audio: Some(false),
+                        camera: Some(true),
+                        screen: None,
+                    },
+                })),
+                ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
+                    is_self_muted: Some(true),
+                    ..SessionInfo::default()
+                })),
+            ]
+        );
+    }
+
+    #[test]
     fn protocol_core_recovery_timer_retries_the_saved_url() {
         let mut core = ProtocolCore::new();
         let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
@@ -1482,6 +1866,34 @@ mod tests {
                 },
                 Command::Connect {
                     url: String::from("wss://sfu.example.com/socket"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn protocol_core_successful_recovery_resets_backoff_delay() {
+        let mut core = ProtocolCore::new();
+        let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+        let _ = core.on_welcome(sample_welcome_payload());
+        let _ = core.on_transport_ready();
+        let _ = core.on_ws_close(1011);
+        let _ = core.on_timer(RECOVERY_TIMER_ID);
+        let _ = core.on_welcome(sample_welcome_payload());
+
+        let commands = core.on_ws_close(1011);
+
+        assert_eq!(
+            commands,
+            vec![
+                Command::ClosePeerConnection,
+                Command::EmitStateChange {
+                    state: ConnectionState::Recovering,
+                    cause: None,
+                },
+                Command::ScheduleTimer {
+                    id: RECOVERY_TIMER_ID,
+                    ms: 1_000,
                 },
             ]
         );
