@@ -5,7 +5,7 @@
 # o-sfu
 
 WORK IN PROGRESS, MAY CHANGE, MAY BE OPUT OF DATE
-- `protocol/`: shared bundle and signaling contract crate that will feed both the server and the future client/WASM core
+- `protocol/`: shraed bundle and signaling contract crate that feeds the server today and expose the first `wasm-bindgen` entry point for the future browser client layer (what odoo will interact with, like current odoo/sfu)
 - `client/`: TypeScript browser-shell groundwork for the future bundle that can replace the current odoo sfu bundle
 - `router/`: isolated router crate
 - `src/runtime.rs`: application bootstrap shell around the core crates.
