@@ -2,10 +2,9 @@ use serde_json::json;
 
 pub(super) use super::{
     BATCH_FLUSH_TIMER_ID, Command, ConnectionState, NegotiationKind, PendingRequestKind,
-    ProtocolCore, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS,
+    ProtocolCore, ProtocolEvent, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS,
 };
 pub(super) use crate::{
-    bundle_api::{BundleBroadcastUpdate, BundleDisconnectUpdate, BundleUpdate},
     shared::{
         AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionInfo,
         StopCode, StreamType,

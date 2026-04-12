@@ -79,18 +79,16 @@ fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() 
                 state: ConnectionState::Authenticated,
                 cause: None,
             },
-            Command::EmitUpdate {
-                update: BundleUpdate::SessionInfoChange(
-                    [(
-                        String::from("7"),
-                        SessionInfo {
+            Command::EmitEvent {
+                event: ProtocolEvent::PeerSnapshot {
+                    peers: vec![PeerSnapshot {
+                        session_id: 7_i64.into(),
+                        info: SessionInfo {
                             is_talking: Some(true),
                             ..SessionInfo::default()
-                        }
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
+                        },
+                    }],
+                },
             },
         ]
     );

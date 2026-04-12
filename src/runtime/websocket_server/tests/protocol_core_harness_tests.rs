@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, VecDeque};
 use o_sfu_protocol::{
     bundle_api::{BundleConnectionState, BundleStateChange, BundleUpdate, bundle_session_info_key},
     core::{Command, ProtocolCore},
+    host_bridge::HostCommand,
     shared::{
         AvailableFeatures, RecordingState, SessionId as ProtocolSessionId,
         SessionInfo as ProtocolSessionInfo,
@@ -58,10 +59,13 @@ impl ProtocolHarnessPeer {
                     self.state_changes.push(BundleStateChange { state, cause });
                     Vec::new()
                 }
-                Command::EmitUpdate { update } => {
-                    self.updates.push(update);
-                    Vec::new()
-                }
+                command @ Command::EmitEvent { .. } => match HostCommand::from(command) {
+                    HostCommand::EmitUpdate { update } => {
+                        self.updates.push(update);
+                        Vec::new()
+                    }
+                    _ => return None,
+                },
                 Command::ScheduleTimer { id, ms } => {
                     self.timers.insert(id, ms);
                     Vec::new()

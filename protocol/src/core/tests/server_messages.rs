@@ -93,10 +93,10 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
 
     assert_eq!(
         core.on_ws_message(&peer_left),
-        vec![Command::EmitUpdate {
-            update: BundleUpdate::Disconnect(BundleDisconnectUpdate {
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::PeerLeft {
                 session_id: String::from("peer-1").into(),
-            }),
+            },
         }]
     );
     assert_eq!(core.track_binding("0"), None);
@@ -143,49 +143,47 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
 
     assert_eq!(
         core.on_ws_message(&peer_info_frame),
-        vec![Command::EmitUpdate {
-            update: BundleUpdate::SessionInfoChange(
-                [(
-                    String::from("peer-1"),
-                    SessionInfo {
-                        is_camera_on: Some(true),
-                        ..SessionInfo::default()
-                    }
-                )]
-                .into_iter()
-                .collect(),
-            ),
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::PeerInfo {
+                session_id: String::from("peer-1").into(),
+                info: SessionInfo {
+                    is_camera_on: Some(true),
+                    ..SessionInfo::default()
+                },
+            },
         }]
     );
     assert_eq!(
         core.on_ws_message(&peer_left_frame),
-        vec![Command::EmitUpdate {
-            update: BundleUpdate::Disconnect(BundleDisconnectUpdate {
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::PeerLeft {
                 session_id: String::from("peer-1").into(),
-            }),
+            },
         }]
     );
     assert_eq!(
         core.on_ws_message(&broadcast_frame),
-        vec![Command::EmitUpdate {
-            update: BundleUpdate::Broadcast(BundleBroadcastUpdate {
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::Broadcast {
                 sender_id: String::from("peer-2").into(),
                 message: serde_json::json!({ "body": "hello" }),
-            }),
+            },
         }]
     );
     assert_eq!(
         core.on_ws_message(&recording_frame),
-        vec![Command::EmitUpdate {
-            update: BundleUpdate::ChannelInfoChange(RecordingStateUpdate {
-                state: RecordingState {
-                    recording: Some(false),
-                    audio: Some(false),
-                    transcription: Some(false),
-                    video: Some(false),
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::RecordingStateChanged {
+                state: RecordingStateUpdate {
+                    state: RecordingState {
+                        recording: Some(false),
+                        audio: Some(false),
+                        transcription: Some(false),
+                        video: Some(false),
+                    },
+                    stop_code: Some(StopCode::UserRequest),
                 },
-                stop_code: Some(StopCode::UserRequest),
-            }),
+            },
         }]
     );
 }

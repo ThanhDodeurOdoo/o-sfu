@@ -1,8 +1,13 @@
 use serde::Serialize;
 
 use crate::{
-    bundle_api::{BundleConnectionState, BundleUpdate},
-    core::{Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore},
+    bundle_api::{
+        BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate,
+        BundleSessionInfoSnapshotById, BundleUpdate, bundle_session_info_key,
+    },
+    core::{
+        Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
+    },
     shared::{AvailableFeatures, RecordingState, StreamType},
     signaling::{RequestId, TrackBinding},
 };
@@ -136,7 +141,9 @@ impl From<Command> for HostCommand {
                 state: connection_state_tag(state).to_owned(),
                 cause,
             },
-            Command::EmitUpdate { update } => Self::EmitUpdate { update },
+            Command::EmitEvent { event } => Self::EmitUpdate {
+                update: project_bundle_update(event),
+            },
             Command::RegisterPendingRequest { request_id, kind } => Self::RegisterPendingRequest {
                 request_id,
                 request_kind: kind.into(),
@@ -171,6 +178,29 @@ pub fn connection_state_tag(state: ConnectionState) -> &'static str {
 #[must_use]
 pub fn cloned_track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBinding> {
     core.track_binding(mid).cloned()
+}
+
+fn project_bundle_update(event: ProtocolEvent) -> BundleUpdate {
+    match event {
+        ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
+            peers
+                .into_iter()
+                .map(|peer| (bundle_session_info_key(&peer.session_id), peer.info))
+                .collect::<BundleSessionInfoSnapshotById>(),
+        ),
+        ProtocolEvent::PeerInfo { session_id, info } => BundleUpdate::SessionInfoChange(
+            [(bundle_session_info_key(&session_id), info)]
+                .into_iter()
+                .collect::<BundleSessionInfoSnapshotById>(),
+        ),
+        ProtocolEvent::PeerLeft { session_id } => {
+            BundleUpdate::Disconnect(BundleDisconnectUpdate { session_id })
+        }
+        ProtocolEvent::Broadcast { sender_id, message } => {
+            BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
+        }
+        ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
+    }
 }
 
 #[cfg(test)]
