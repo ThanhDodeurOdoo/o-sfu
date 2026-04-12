@@ -1,17 +1,19 @@
-name: Client
+name: Client Browser
 
 on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  client-checks:
+  client-browser-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     defaults:
       run:
@@ -42,11 +44,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run ESLint
-        run: npm run lint
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
 
-      - name: Run TypeScript checks
-        run: npm run typscript
-
-      - name: Run client tests
-        run: npm test
+      - name: Run Playwright browser tests
+        run: npm run test:browser

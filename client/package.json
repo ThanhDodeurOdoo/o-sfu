@@ -8,20 +8,22 @@
     "build:wasm": "node ./scripts/build_wasm_runtime.mjs",
     "check:wasm-size": "node ./scripts/check_wasm_size.mjs",
     "build": "npm run build:wasm && tsc -p tsconfig.json && npm run check:wasm-size",
-    "lint": "eslint src scripts test eslint.config.mjs",
+    "lint": "eslint src scripts test playwright eslint.config.mjs",
     "test": "npm run build && node --test ./test/**/*.mjs",
+    "test:browser": "npm run build && playwright test",
     "typscript": "tsc --noEmit -p tsconfig.json",
-    "verify": "npm run lint && npm run typscript && npm run test"
+    "verify": "npm run lint && npm run typscript && npm run test && npm run test:browser"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.59.1",
     "eslint": "^10.2.0",
-    "eslint-plugin-n": "^17.23.1",
-    "globals": "^17.5.0",
-    "typescript": "^6.0.2",
-    "typescript-eslint": "^8.58.1",
-    "prettier": "^3.5.3",
     "eslint-config-prettier": "^10.1.0",
-    "eslint-plugin-prettier": "^5.5.5"
+    "eslint-plugin-n": "^17.23.1",
+    "eslint-plugin-prettier": "^5.5.5",
+    "globals": "^17.5.0",
+    "prettier": "^3.5.3",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.58.1"
   }
 }

@@ -1,12 +1,16 @@
 # o-sfu client
 
-`npm run build` now generate the default `ProtocolCoreWasm` runtime into `client/generated/` and
+`npm run build` now generates the default `ProtocolCoreWasm` runtime into `client/generated/` and
 compiles the TypeScript part.
 
-requires `wasm-pack`:
+`npm run test:browser` runs the headless Chromium Playwright suite against the built browser bundle.
+
+Requires `wasm-pack`:
 
 ```bash
 cargo install wasm-pack
 ```
 
-will format the readme in a more pretty way later
+```bash
+npm exec playwright install chromium
+```
