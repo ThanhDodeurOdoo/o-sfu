@@ -24,6 +24,7 @@ We follow standard Rust idioms and enforce strict safety.
 cargo fmt
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+npm --prefix client run verify
 ```
 
 ## Kani proofs
