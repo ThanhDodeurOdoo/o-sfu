@@ -38,10 +38,10 @@ export interface AvailableFeatures {
 }
 
 export interface RecordingState {
-    recording: boolean;
-    audio: boolean;
-    video: boolean;
-    transcription: boolean;
+    recording?: boolean;
+    audio?: boolean;
+    video?: boolean;
+    transcription?: boolean;
 }
 
 export interface RecordingOptions {

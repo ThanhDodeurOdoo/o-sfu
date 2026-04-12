@@ -129,6 +129,8 @@ pub struct StreamIntentPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribePayload {
+    /// Wire shape is intentionally flat: `{ sessionId, audio?, camera?, screen? }`.
+    /// Adding fields to `DownloadStates` implicitly changes the subscribe payload shape.
     pub session_id: SessionId,
     #[serde(flatten)]
     pub states: DownloadStates,
@@ -380,6 +382,19 @@ pub enum ClientEnvelope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerEnvelope {
+    Message(ServerMessage),
+    Request {
+        request_id: RequestId,
+        request: ServerRequest,
+    },
+    Response {
+        response_to: RequestId,
+        response: ServerResponse,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvelopeDecodeError {
     InvalidRoutingMetadata,
     UnknownTag(String),
@@ -435,6 +450,46 @@ impl ClientEnvelope {
                 decode_client_request(request_id, &envelope.tag, envelope.payload)
             }
             (None, None) => decode_client_message(&envelope.tag, envelope.payload),
+        }
+    }
+}
+
+impl ServerEnvelope {
+    /// Serialize a typed server-side envelope into the protocol websocket shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload cannot be serialized to JSON.
+    pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
+        match self {
+            Self::Message(message) => message.into_envelope(),
+            Self::Request {
+                request_id,
+                request,
+            } => request.into_envelope(request_id),
+            Self::Response {
+                response_to,
+                response,
+            } => response.into_envelope(response_to),
+        }
+    }
+
+    /// Decode a raw websocket envelope into the typed native server contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the routing metadata is invalid, the tag is unknown,
+    /// or the payload does not match the declared message shape.
+    pub fn decode(envelope: Envelope) -> Result<Self, EnvelopeDecodeError> {
+        match (envelope.request_id, envelope.response_to) {
+            (Some(_), Some(_)) => Err(EnvelopeDecodeError::InvalidRoutingMetadata),
+            (None, Some(response_to)) => {
+                decode_server_response(response_to, &envelope.tag, envelope.payload)
+            }
+            (Some(request_id), None) => {
+                decode_server_request(request_id, &envelope.tag, envelope.payload)
+            }
+            (None, None) => decode_server_message(&envelope.tag, envelope.payload),
         }
     }
 }
@@ -507,6 +562,72 @@ fn decode_client_response(
     })
 }
 
+fn decode_server_message(
+    tag: &str,
+    payload: Option<Value>,
+) -> Result<ServerEnvelope, EnvelopeDecodeError> {
+    match tag {
+        "welcome" => Ok(ServerEnvelope::Message(ServerMessage::Welcome(
+            parse_payload(tag, payload)?,
+        ))),
+        "tracks" => Ok(ServerEnvelope::Message(ServerMessage::Tracks(
+            parse_payload(tag, payload)?,
+        ))),
+        "peerinfo" => Ok(ServerEnvelope::Message(ServerMessage::PeerInfo(
+            parse_payload(tag, payload)?,
+        ))),
+        "peerjoined" => Ok(ServerEnvelope::Message(ServerMessage::PeerJoined(
+            parse_payload(tag, payload)?,
+        ))),
+        "peerleft" => Ok(ServerEnvelope::Message(ServerMessage::PeerLeft(
+            parse_payload(tag, payload)?,
+        ))),
+        "broadcast" => Ok(ServerEnvelope::Message(ServerMessage::Broadcast(
+            parse_payload(tag, payload)?,
+        ))),
+        "recordingchange" => Ok(ServerEnvelope::Message(ServerMessage::RecordingChange(
+            parse_payload(tag, payload)?,
+        ))),
+        _ => Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
+    }
+}
+
+fn decode_server_request(
+    request_id: RequestId,
+    tag: &str,
+    payload: Option<Value>,
+) -> Result<ServerEnvelope, EnvelopeDecodeError> {
+    let request = match tag {
+        "offer" => ServerRequest::Offer(parse_payload(tag, payload)?),
+        "renegotiate" => ServerRequest::Renegotiate(parse_payload(tag, payload)?),
+        "ping" => {
+            ensure_empty_payload(tag, payload.as_ref())?;
+            ServerRequest::Ping
+        }
+        _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
+    };
+    Ok(ServerEnvelope::Request {
+        request_id,
+        request,
+    })
+}
+
+fn decode_server_response(
+    response_to: RequestId,
+    tag: &str,
+    payload: Option<Value>,
+) -> Result<ServerEnvelope, EnvelopeDecodeError> {
+    let response = match tag {
+        "startrecording" => ServerResponse::StartRecording(parse_payload(tag, payload)?),
+        "stoprecording" => ServerResponse::StopRecording(parse_payload(tag, payload)?),
+        _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
+    };
+    Ok(ServerEnvelope::Response {
+        response_to,
+        response,
+    })
+}
+
 fn parse_payload<T: DeserializeOwned>(
     tag: &str,
     payload: Option<Value>,
@@ -531,9 +652,9 @@ mod tests {
     use super::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse, Envelope,
         EnvelopeDecodeError, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
-        RecordingOptions, RequestId, ServerBroadcastPayload, ServerMessage, ServerRequest,
-        ServerResponse, SessionDescriptionPayload, StreamIntentPayload, SubscribePayload,
-        TrackBinding, WebSocketCloseCode, WelcomePayload,
+        RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage,
+        ServerRequest, ServerResponse, SessionDescriptionPayload, StreamIntentPayload,
+        SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
     };
     use crate::shared::{
         AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
@@ -781,6 +902,101 @@ mod tests {
                 "p": {
                     "sessionId": 9,
                 },
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_server_welcome_message_decodes_without_routing_metadata() {
+        let decoded = ServerEnvelope::decode(Envelope {
+            tag: String::from("welcome"),
+            payload: Some(json!({
+                "features": {
+                    "rtc": true,
+                    "transcription": false,
+                    "audioRecording": true,
+                    "videoRecording": false,
+                },
+                "recording": {
+                    "recording": true,
+                },
+                "peers": [{
+                    "sessionId": 7,
+                    "info": {
+                        "isTalking": false,
+                    },
+                }],
+            })),
+            request_id: None,
+            response_to: None,
+        });
+
+        assert_eq!(
+            decoded,
+            Ok(ServerEnvelope::Message(ServerMessage::Welcome(
+                WelcomePayload {
+                    features: AvailableFeatures {
+                        rtc: true,
+                        transcription: false,
+                        audio_recording: true,
+                        video_recording: false,
+                    },
+                    recording: RecordingState {
+                        recording: Some(true),
+                        audio: None,
+                        transcription: None,
+                        video: None,
+                    },
+                    peers: vec![PeerSnapshot {
+                        session_id: SessionId::Integer(7),
+                        info: SessionInfo {
+                            is_talking: Some(false),
+                            ..SessionInfo::default()
+                        },
+                    }],
+                }
+            )))
+        );
+    }
+
+    #[test]
+    fn protocol_server_offer_request_round_trips_through_server_envelope() -> serde_json::Result<()>
+    {
+        let envelope = ServerEnvelope::Request {
+            request_id: RequestId::new("offer-1"),
+            request: ServerRequest::Offer(SessionDescriptionPayload {
+                sdp: String::from("v=0\r\n"),
+            }),
+        }
+        .into_envelope()?;
+
+        assert_eq!(
+            ServerEnvelope::decode(envelope),
+            Ok(ServerEnvelope::Request {
+                request_id: RequestId::new("offer-1"),
+                request: ServerRequest::Offer(SessionDescriptionPayload {
+                    sdp: String::from("v=0\r\n"),
+                }),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_server_stop_recording_response_round_trips_through_server_envelope()
+    -> serde_json::Result<()> {
+        let envelope = ServerEnvelope::Response {
+            response_to: RequestId::new("recording-1"),
+            response: ServerResponse::StopRecording(RecordingActionResult { ok: true }),
+        }
+        .into_envelope()?;
+
+        assert_eq!(
+            ServerEnvelope::decode(envelope),
+            Ok(ServerEnvelope::Response {
+                response_to: RequestId::new("recording-1"),
+                response: ServerResponse::StopRecording(RecordingActionResult { ok: true }),
             })
         );
         Ok(())
