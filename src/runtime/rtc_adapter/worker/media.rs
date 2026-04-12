@@ -127,7 +127,11 @@ fn worker_remove_media(
             if let Some(session_state) = state.sessions.get_mut(&session_key)
                 && should_remove_media
             {
-                session_state.rtc.direct_api().remove_media(mid);
+                if session_state.sdp_negotiation.initial_offer_applied {
+                    worker_stage_native_media_removal(session_state, mid)?;
+                } else {
+                    session_state.rtc.direct_api().remove_media(mid);
+                }
             }
             if let Some(route_entry) = state
                 .media_route_index
@@ -147,6 +151,33 @@ fn worker_remove_media(
             state.mark_session_dirty(&session_key);
         }
     }
+    Ok(())
+}
+
+fn worker_stage_native_media_removal(
+    session_state: &mut super::super::state::RtcSessionState,
+    mid: Mid,
+) -> Result<(), TransportAdapterError> {
+    if session_state.sdp_negotiation.pending_offer.is_some()
+        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
+    {
+        return Err(TransportAdapterError::InvalidInput);
+    }
+    if session_state.rtc.media(mid).is_none() {
+        return Err(TransportAdapterError::InvalidInput);
+    }
+
+    let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
+    let mut sdp_api = session_state.rtc.sdp_api();
+    if let Some(pending_offer) = existing_pending_offer {
+        sdp_api.merge(pending_offer);
+    }
+    sdp_api.set_direction(mid, Direction::Inactive);
+    let Some((offer, pending_offer)) = sdp_api.apply() else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
+    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
     Ok(())
 }
 

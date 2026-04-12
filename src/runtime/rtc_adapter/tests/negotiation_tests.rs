@@ -140,9 +140,105 @@ async fn rtc_session_renegotiation_offer_stages_native_consumer_additions() {
 }
 
 #[tokio::test]
+async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
+    let adapter = RtcTransportAdapter::default();
+    let source_session_key = transport_key(1, 39, SessionId::Integer(39));
+    let consumer_session_key = transport_key(1, 40, SessionId::Integer(40));
+
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&source_session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    let source_media_id = adapter
+        .add_recv_media(
+            &source_session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("source-up-remove", 83_000),
+        )
+        .await
+        .expect("source media should register");
+    let source_mid = adapter
+        .debug_resolve_mid(source_media_id)
+        .await
+        .expect("source media should expose its mid");
+
+    let mut remote = build_remote_rtc(55_004);
+    let initial_offer = adapter
+        .create_initial_session_offer(&consumer_session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &consumer_session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let consumer_media_id = adapter
+        .add_send_media(
+            &consumer_session_key,
+            Str0mMediaKind::Video,
+            &source_session_key,
+            source_media_id,
+            &sample_router_rtp_parameters("compat-mid-remove", 84_000),
+        )
+        .await
+        .expect("native consumer media should stage a renegotiation offer");
+    let consumer_mid = adapter
+        .debug_resolve_mid(consumer_media_id)
+        .await
+        .expect("consumer media should expose its staged mid");
+
+    let addition_offer = adapter
+        .create_session_renegotiation_offer(&consumer_session_key)
+        .await
+        .expect("staged addition offer should be available");
+    apply_offer_answer(
+        &adapter,
+        &consumer_session_key,
+        &mut remote,
+        addition_offer.into_sdp(),
+    )
+    .await;
+
+    assert_eq!(
+        adapter
+            .remove_media(&consumer_session_key, consumer_media_id)
+            .await,
+        Ok(())
+    );
+    assert_eq!(
+        adapter
+            .debug_route_entry(&source_session_key, source_mid)
+            .await,
+        None
+    );
+
+    let removal_offer = adapter
+        .create_session_renegotiation_offer(&consumer_session_key)
+        .await
+        .expect("removal should stage a renegotiation offer");
+    let removal_sdp = removal_offer.into_sdp();
+    let removal_section = media_section_for_mid(&removal_sdp, &format!("{consumer_mid}"))
+        .expect("removed consumer mid should remain in the renegotiation offer");
+    assert!(removal_section.contains("a=inactive"));
+
+    apply_offer_answer(&adapter, &consumer_session_key, &mut remote, removal_sdp).await;
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&consumer_session_key)
+            .await,
+        Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 38, SessionId::Integer(38));
+    let session_key = transport_key(1, 41, SessionId::Integer(41));
 
     let offer = adapter
         .create_initial_session_offer(&session_key)
@@ -156,6 +252,18 @@ async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
     );
+}
+
+fn media_section_for_mid<'a>(sdp: &'a str, mid: &str) -> Option<&'a str> {
+    let marker = format!("a=mid:{mid}");
+    let marker_start = sdp.find(&marker)?;
+    let section_start = sdp[..marker_start]
+        .rfind("\r\nm=")
+        .map_or(0, |index| index + 2);
+    let section_end = sdp[marker_start..]
+        .find("\r\nm=")
+        .map_or(sdp.len(), |offset| marker_start + offset + 2);
+    Some(&sdp[section_start..section_end])
 }
 
 fn build_remote_rtc(port: u16) -> Rtc {
