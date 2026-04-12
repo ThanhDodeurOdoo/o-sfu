@@ -1,29 +1,68 @@
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
 
+/// Tracks the two independent axes of session readiness: **transport connections**
+/// (upload / download ICE) and **RTP capability exchange**.
+///
+/// A session can only publihs once its upload transport is conected, and can only
+/// consume once *both* the download transport is conected *and* RTP capabilities
+/// have been received. The two axes can advance in any order; the state machine
+/// merges them into a single enum so every legal combination is represented.
+///
+/// Each state is a combination of two independents axes:
+/// 1. Transport Connection: None, Upload only, Download only, or Both.
+/// 2. RTP Capabilities: Not yet received, or Ready.
+///
+///                      TRANSPORT CONNECTION
+///               None        Upload (P)  Download    Both (P)
+///            ┌─────────────┬───────────┬────────────┬────────────┐
+/// NO CAPS    │ `Awaiting`  │ `UpConn`  │ `DownConn` │ `TransConn`│
+///            ├─────────────┼───────────┼────────────┼────────────┤
+/// CAPS READY │ `CapsReady` │ `UpReady` │ `DownReady`│  `Ready`   │
+///            └─────────────┴───────────┴────────────┴────────────┘
+///                            (P)        (C)        (P, C)
+///
+/// (P) = `can_publish()` is true
+/// (C) = `can_consume()` is true
+///
+/// **Gate conditions:**
+/// - `can_publish()`: true when the upload transport is connected (regardeless of whether capabilities have arrived).
+/// - `can_consume()`: true only when *both* the download transport is connected *and* capabilities are available (`DownloadReady` or `Ready`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SessionNegotiationState {
+    /// Neither transport connected nor capabilities received.
     AwaitingCapabilities,
+    /// Capabilities received, but no transport connected yet.
     CapabilitiesReady {
         client_rtp_capabilities: SignalingRtpCapabilities,
     },
+    /// Upload transport connected; still waiting for capabilities.
     UploadConnectedAwaitingCapabilities,
+    /// Download transport connected; still waiting for capabilities.
     DownloadConnectedAwaitingCapabilities,
+    /// Both transports connected; still waiting for capabilities.
     TransportsConnectedAwaitingCapabilities,
+    /// Upload transport connected and capabilities received; download pending.
     UploadReady {
         client_rtp_capabilities: SignalingRtpCapabilities,
     },
+    /// Download transport connected and capabilities received; upload pending.
     DownloadReady {
         client_rtp_capabilities: SignalingRtpCapabilities,
     },
+    /// Fully negotiated: both transports conected and capabilities received.
     Ready {
         client_rtp_capabilities: SignalingRtpCapabilities,
     },
 }
 
+/// Returned after each state transition to tell the caller what changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SessionNegotiationUpdate {
+    /// Whether the session was found and the transition was applied.
     pub(crate) session_present: bool,
+    /// True only on the exact transition that crosses the `can_consume()` threshold,
+    /// so the channel knows to start creating consumers for this session.
     pub(crate) became_consumer_ready: bool,
 }
 

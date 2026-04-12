@@ -32,18 +32,49 @@ use super::{
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::bundle_api::bundle_session_info_key;
 
+/// Core mutable state for a single SFU channel (room).
+///
+/// Owns all session, producer, and consumer bookkeeping. Every mutation returns
+/// an `*Outcome` value that carries deferred side-effects (fan-out messages,
+/// kicked senders). The caller is responsible for calling `.emit()` on outcomes
+/// **after** releasing any lock on this state, this keep the critical section
+/// pure and non-blocking.
+///
+/// The two-phase patterns (`prepare_*` / `commit_*`) allow async transport work
+/// (e.g. DTLS, SRTP setup) to happen between the phases without holding the
+/// state lock.
+///
+/// ```text
+///   ┌───────────────┐
+///   │ ChannelState  │
+///   ├───────────────┤
+///   │ sessions      │──> per-session negotiation + outbound sender
+///   │ producers     │──> published media tracks (keyed by wire id)
+///   │ consumer_index│──> (consumer, producer, stream) → routed consumer
+///   │ topology      │──> mirrors state itno the pure o-sfu-router core
+///   └───────────────┘
+/// ```
 #[derive(Debug)]
 pub(super) struct ChannelState {
     pub(super) sessions: BTreeMap<SessionId, ActiveSession>,
+    /// Monotonically increasing, each join (including re-joins) gets a fresh id
+    /// so stale async callbacks from a previous connection are rejected.
     pub(super) next_connection_id: u64,
     next_producer_id: u64,
     next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
+    /// Keyed by wire-format producer id (e.g. `"producer-3"`).
     pub(super) producers: BTreeMap<String, PublishedProducer>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
+    /// Shadow of session/producer/consumer state inside the pure router core.
+    /// Must be kept in sync with the maps above -- every mutating method updates
+    /// both or rolls back.
     pub(super) topology: ChannelTopology,
 }
 
+/// Uniquely identifies a consumer subscription: which session is consuming
+/// which other session's stream of a given type. Used as the key into
+/// `ChannelState::consumer_index`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ConsumerKey {
     pub(super) consumer_session_id: SessionId,
@@ -51,6 +82,9 @@ pub(super) struct ConsumerKey {
     pub(super) stream_type: StreamType,
 }
 
+/// A connected participant in the channel. Tracks negotiation progress
+/// (RTP capabilities, transport readiness), permissions, and the outbound
+/// message sender for pushing server events to this session's WebSocket.
 #[derive(Debug)]
 pub(super) struct ActiveSession {
     #[allow(

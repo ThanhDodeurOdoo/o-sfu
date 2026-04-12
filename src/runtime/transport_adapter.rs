@@ -12,15 +12,28 @@ use crate::signaling::{
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind as Str0mMediaKind;
 
-/// Channel-scoped transport-adapter session identity.
+/// Channel-scooped transport-adapter session identity.
 ///
-/// the transport boundary must distinguish identical session ids that are active in
-/// different channels at the same time.
+/// A `SessionId` alone is not unique across the server (sfu can have multiple odoo servers connected to it),
+/// the same id can appear in different channels simmultaneously. This composite key allows to uniquely
+/// dentify one session with:
+///
+///   +-- `channel_runtime`    - which channel
+///   +-- `media_worker`       - which worker thread / shard
+///   +-- `connection`         - which signaling connection
+///   +-- `session`            - the session within that connection
+///
+/// The key is `Ord` so it can be used in `BTreeMap` lookups keyed by shard index.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TransportSessionKey {
+    /// Monotonic id of the channel runtime that owns this session.
     channel_runtime: u64,
+    /// index of the media worker this session is pinned to (determines shard).
     media_worker: usize,
+    /// Signaling-layer conection identifier (signaling connection instanance),
+    /// this prevents stale connections from being processed (it change if the connection is re-established)
     connection: u64,
+    /// Arc-wrapped to allow cheap cloning when the key is stored in multiple maps
     session: Arc<SessionId>,
 }
 
@@ -56,9 +69,12 @@ impl TransportSessionKey {
     }
 }
 
+/// Direction of a WebRTC transport from the client's perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TransportConnectDirection {
+    /// Client sends media to the SFU (producer / upload transport).
     Upload,
+    /// Client receives media from the SFU (consumer / download transport).
     Download,
 }
 
@@ -69,9 +85,12 @@ pub(crate) enum TransportAdapterError {
     UnsupportedFeature,
 }
 
+/// Point-in-time bitrate measurement aggregated across one or more transport sessions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TransportBitrateSnapshot {
+    /// Sum of all per-media bitrates (bits/s).
     pub(crate) total: u64,
+    /// Individual bitrate for each active media line.
     pub(crate) per_media: Vec<(TransportMediaId, u64)>,
 }
 

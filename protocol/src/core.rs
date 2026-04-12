@@ -9,18 +9,28 @@ use crate::{
 
 pub use crate::bundle_api::BundleConnectionState as ConnectionState;
 
+/// Timer id used by the recovery backoff scheduler.
 pub const RECOVERY_TIMER_ID: u32 = 1;
 const INITIAL_RECOVERY_DELAY_MS: u32 = 1_000;
 const MAX_RECOVERY_DELAY_MS: u32 = 30_000;
 
+/// Side-effect command returned by [`ProtocolCore`] methods.
+///
+/// The state machine itself is pure: it never touches I/O. Instead each
+/// transition returns a `Vec<Command>` that the host (wasm glue, native
+/// driver, test harness) must execute in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// Serialize and send a JSON frame over the WebSocket.
     SendWebSocket(String),
+    /// Apply a remote SDP offer to the local `RTCPeerConnection`.
     ApplyOffer(String),
+    /// Bind an incoming RTP track (identified by its SDP mid) to a stream type.
     AttachTrack {
         mid: String,
         stream_type: StreamType,
     },
+    /// Remove the local track for the given stream type.
     DetachTrack {
         stream_type: StreamType,
     },
@@ -29,13 +39,18 @@ pub enum Command {
     CloseWebSocket {
         code: u16,
     },
+    /// Notify listeners of a connection-state transition, with an optional
+    /// human-readable cause (e.g. `"kicked"`, `"full"`).
     EmitStateChange {
         state: ConnectionState,
         cause: Option<String>,
     },
+    /// Push a [`BundleUpdate`] event to the Odoo bundle compatibility layer.
     EmitUpdate {
         update: BundleUpdate,
     },
+    /// Start a one-shot timer; the host must call [`ProtocolCore::on_timer`]
+    /// when it fires.
     ScheduleTimer {
         id: u32,
         ms: u32,
@@ -43,6 +58,7 @@ pub enum Command {
     CancelTimer {
         id: u32,
     },
+    /// Open a new WebSocket to the given URL.
     Connect {
         url: String,
     },
