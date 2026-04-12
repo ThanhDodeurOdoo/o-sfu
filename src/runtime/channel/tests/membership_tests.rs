@@ -190,6 +190,123 @@ async fn replacing_a_session_notifies_remaining_peers() {
     assert_eq!(channel.session_count().await, 2);
 }
 
+async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, u64) {
+    let (tx1, _rx1) = test_sender();
+    let (tx2, _rx2) = test_sender();
+    let first_connection = channel
+        .join_session(
+            SessionId::Integer(1),
+            None,
+            SessionPermissions::default(),
+            tx1,
+            10,
+        )
+        .await
+        .unwrap_or(u64::MAX);
+    let second_connection = channel
+        .join_session(
+            SessionId::Integer(1),
+            None,
+            SessionPermissions::default(),
+            tx2,
+            10,
+        )
+        .await
+        .unwrap_or(u64::MAX);
+    (first_connection, second_connection)
+}
+
+async fn publish_camera(
+    channel: &Arc<super::super::Channel>,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> Option<String> {
+    channel
+        .publish_track(
+            &SessionId::Integer(1),
+            StreamType::Camera,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            transport_adapter,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
+    let manager = ChannelManager::new();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let (transport_adapter, _stub) = stub_adapter();
+    let (first_connection, second_connection) = join_same_session_twice(&channel).await;
+
+    assert_ne!(first_connection, second_connection);
+    assert_eq!(
+        channel.session_connection_id(&SessionId::Integer(1)).await,
+        Some(second_connection)
+    );
+
+    assert!(
+        !channel
+            .apply_transport_connected(
+                &SessionId::Integer(1),
+                first_connection,
+                TransportConnectDirection::Upload,
+                &transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        !channel
+            .apply_client_rtp_capabilities(
+                &SessionId::Integer(1),
+                first_connection,
+                test_client_rtp_capabilities(),
+                &transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        !channel
+            .apply_session_negotiated(
+                &SessionId::Integer(1),
+                first_connection,
+                test_client_rtp_capabilities(),
+                &transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        !channel
+            .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(1))
+            .await
+    );
+    assert!(
+        publish_camera(&channel, &transport_adapter).await.is_none(),
+        "stale negotiation callbacks must not make the replacement session publish-ready"
+    );
+
+    assert!(
+        channel
+            .apply_session_negotiated(
+                &SessionId::Integer(1),
+                second_connection,
+                test_client_rtp_capabilities(),
+                &transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        channel
+            .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(1))
+            .await
+    );
+    assert!(
+        publish_camera(&channel, &transport_adapter).await.is_some(),
+        "the current connection should become publish-ready after its own negotiation answer"
+    );
+}
+
 #[tokio::test]
 async fn broadcast_reaches_all_except_sender() {
     let manager = ChannelManager::new();

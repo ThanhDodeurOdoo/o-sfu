@@ -526,12 +526,25 @@ impl ChannelState {
         }
     }
 
+    fn session_mut_for_connection(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> Option<&mut ActiveSession> {
+        let session = self.sessions.get_mut(session_id)?;
+        if session.connection_id != connection_id {
+            return None;
+        }
+        Some(session)
+    }
+
     pub(super) fn set_client_rtp_capabilities(
         &mut self,
         session_id: &SessionId,
+        connection_id: u64,
         capabilities: SignalingRtpCapabilities,
     ) -> SessionNegotiationUpdate {
-        let Some(session) = self.sessions.get_mut(session_id) else {
+        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
         session.parsed_client_rtp_capabilities =
@@ -544,12 +557,27 @@ impl ChannelState {
     pub(super) fn set_transport_connected(
         &mut self,
         session_id: &SessionId,
+        connection_id: u64,
         direction: TransportConnectDirection,
     ) -> SessionNegotiationUpdate {
-        let Some(session) = self.sessions.get_mut(session_id) else {
+        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
         session.negotiation.set_transport_connected(direction)
+    }
+
+    pub(super) fn set_session_negotiated(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+        capabilities: SignalingRtpCapabilities,
+    ) -> SessionNegotiationUpdate {
+        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
+            return SessionNegotiationUpdate::default();
+        };
+        session.parsed_client_rtp_capabilities =
+            ortc_mapper::parse_rtp_capabilities(&capabilities.0);
+        session.negotiation.set_session_negotiated(capabilities)
     }
 
     pub(super) fn publish_consumer_targets(

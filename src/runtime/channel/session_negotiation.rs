@@ -206,6 +206,20 @@ impl SessionNegotiation {
             became_consumer_ready: !was_consumer_ready && self.can_consume(),
         }
     }
+
+    pub(super) fn set_session_negotiated(
+        &mut self,
+        client_rtp_capabilities: SignalingRtpCapabilities,
+    ) -> SessionNegotiationUpdate {
+        let was_consumer_ready = self.can_consume();
+        self.state = SessionNegotiationState::Ready {
+            client_rtp_capabilities,
+        };
+        SessionNegotiationUpdate {
+            session_present: true,
+            became_consumer_ready: !was_consumer_ready && self.can_consume(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -279,6 +293,22 @@ mod tests {
         assert!(matches!(
             negotiation.state(),
             SessionNegotiationState::DownloadReady { .. }
+        ));
+    }
+
+    #[test]
+    fn session_negotiation_set_session_negotiated_jumps_directly_to_ready() {
+        let mut negotiation = SessionNegotiation::default();
+
+        let update = negotiation.set_session_negotiated(test_client_rtp_capabilities());
+
+        assert!(update.session_present);
+        assert!(update.became_consumer_ready);
+        assert!(negotiation.can_publish());
+        assert!(negotiation.can_consume());
+        assert!(matches!(
+            negotiation.state(),
+            SessionNegotiationState::Ready { .. }
         ));
     }
 }

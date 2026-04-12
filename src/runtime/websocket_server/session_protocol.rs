@@ -11,7 +11,6 @@ use crate::runtime::{
         send_server_request_batch,
     },
     transport_adapter::RuntimeTransportAdapter,
-    transport_adapter::TransportConnectDirection,
 };
 use crate::signaling::{
     current_protocol::{
@@ -504,31 +503,10 @@ impl NativeSessionProtocol {
             } => {
                 if !self
                     .channel
-                    .apply_client_rtp_capabilities(
+                    .apply_session_negotiated(
                         &self.session_id,
+                        self.connection_id,
                         client_rtp_capabilities,
-                        &self.transport_adapter,
-                    )
-                    .await
-                {
-                    return SessionProtocolOutcome::Continue;
-                }
-                if !self
-                    .channel
-                    .apply_transport_connected(
-                        &self.session_id,
-                        TransportConnectDirection::Upload,
-                        &self.transport_adapter,
-                    )
-                    .await
-                {
-                    return SessionProtocolOutcome::Continue;
-                }
-                if !self
-                    .channel
-                    .apply_transport_connected(
-                        &self.session_id,
-                        TransportConnectDirection::Download,
                         &self.transport_adapter,
                     )
                     .await

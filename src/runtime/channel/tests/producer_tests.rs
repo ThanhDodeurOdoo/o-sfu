@@ -641,6 +641,10 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
         channel
             .apply_client_rtp_capabilities(
                 &SessionId::Integer(2),
+                channel
+                    .session_connection_id(&SessionId::Integer(2))
+                    .await
+                    .unwrap_or(u64::MAX),
                 test_client_rtp_capabilities(),
                 &transport_adapter,
             )
@@ -694,6 +698,10 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
         channel
             .apply_transport_connected(
                 &SessionId::Integer(2),
+                channel
+                    .session_connection_id(&SessionId::Integer(2))
+                    .await
+                    .unwrap_or(u64::MAX),
                 TransportConnectDirection::Download,
                 &transport_adapter,
             )

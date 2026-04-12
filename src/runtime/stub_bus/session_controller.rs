@@ -225,7 +225,12 @@ impl SessionController {
         };
         if self
             .channel
-            .apply_client_rtp_capabilities(&self.session_id, capabilities, &self.transport_adapter)
+            .apply_client_rtp_capabilities(
+                &self.session_id,
+                self.connection_id,
+                capabilities,
+                &self.transport_adapter,
+            )
             .await
         {
             debug!(
@@ -354,7 +359,12 @@ impl SessionController {
         }
         if !self
             .channel
-            .apply_transport_connected(&self.session_id, direction, &self.transport_adapter)
+            .apply_transport_connected(
+                &self.session_id,
+                self.connection_id,
+                direction,
+                &self.transport_adapter,
+            )
             .await
         {
             debug!(

@@ -83,12 +83,13 @@ impl Channel {
     pub(crate) async fn apply_client_rtp_capabilities(
         &self,
         session_id: &SessionId,
+        connection_id: u64,
         capabilities: SignalingRtpCapabilities,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_client_rtp_capabilities(session_id, capabilities)
+            state.set_client_rtp_capabilities(session_id, connection_id, capabilities)
         };
         self.apply_negotiation_update(session_id, update, transport_adapter)
             .await
@@ -97,12 +98,28 @@ impl Channel {
     pub(crate) async fn apply_transport_connected(
         &self,
         session_id: &SessionId,
+        connection_id: u64,
         direction: TransportConnectDirection,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_transport_connected(session_id, direction)
+            state.set_transport_connected(session_id, connection_id, direction)
+        };
+        self.apply_negotiation_update(session_id, update, transport_adapter)
+            .await
+    }
+
+    pub(crate) async fn apply_session_negotiated(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        capabilities: SignalingRtpCapabilities,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let update = {
+            let mut state = self.state.write().await;
+            state.set_session_negotiated(session_id, connection_id, capabilities)
         };
         self.apply_negotiation_update(session_id, update, transport_adapter)
             .await
@@ -131,7 +148,11 @@ impl Channel {
         capabilities: SignalingRtpCapabilities,
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
-        state.set_client_rtp_capabilities(session_id, capabilities)
+        let connection_id = state
+            .sessions
+            .get(session_id)
+            .map_or(u64::MAX, |session| session.connection_id);
+        state.set_client_rtp_capabilities(session_id, connection_id, capabilities)
     }
 
     #[cfg(test)]
@@ -141,7 +162,11 @@ impl Channel {
         direction: TransportConnectDirection,
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
-        state.set_transport_connected(session_id, direction)
+        let connection_id = state
+            .sessions
+            .get(session_id)
+            .map_or(u64::MAX, |session| session.connection_id);
+        state.set_transport_connected(session_id, connection_id, direction)
     }
 
     #[cfg(test)]
@@ -171,6 +196,16 @@ impl Channel {
             .read()
             .await
             .session_has_parsed_client_rtp_capabilities(session_id)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn session_connection_id(&self, session_id: &SessionId) -> Option<u64> {
+        self.state
+            .read()
+            .await
+            .sessions
+            .get(session_id)
+            .map(|session| session.connection_id)
     }
 
     #[cfg(test)]
