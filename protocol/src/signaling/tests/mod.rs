@@ -18,6 +18,15 @@ fn protocol_close_codes_follow_phase_nine_contract() {
     assert_eq!(u16::from(WebSocketCloseCode::AuthTimeout), 4002);
     assert_eq!(u16::from(WebSocketCloseCode::Kicked), 4003);
     assert_eq!(u16::from(WebSocketCloseCode::ChannelFull), 4004);
+    assert_eq!(
+        WebSocketCloseCode::from_u16(4001),
+        Some(WebSocketCloseCode::AuthFailed)
+    );
+    assert_eq!(
+        WebSocketCloseCode::from_u16(4004),
+        Some(WebSocketCloseCode::ChannelFull)
+    );
+    assert_eq!(WebSocketCloseCode::from_u16(4999), None);
 }
 
 #[test]

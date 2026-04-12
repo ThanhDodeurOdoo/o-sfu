@@ -78,6 +78,23 @@ pub enum WebSocketCloseCode {
     ChannelFull = 4004,
 }
 
+impl WebSocketCloseCode {
+    #[must_use]
+    pub const fn from_u16(value: u16) -> Option<Self> {
+        match value {
+            1000 => Some(Self::Clean),
+            1001 => Some(Self::Leaving),
+            1002 => Some(Self::ProtocolError),
+            1011 => Some(Self::Error),
+            4001 => Some(Self::AuthFailed),
+            4002 => Some(Self::AuthTimeout),
+            4003 => Some(Self::Kicked),
+            4004 => Some(Self::ChannelFull),
+            _ => None,
+        }
+    }
+}
+
 impl From<WebSocketCloseCode> for u16 {
     fn from(value: WebSocketCloseCode) -> Self {
         match value {

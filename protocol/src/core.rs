@@ -1,3 +1,25 @@
+//! Pure client-side signaling state machine for the `o-sfu` protocol.
+//!
+//! `ProtocolCore` never perform I/O directly. Every public transition returns
+//! [`Commands`], an ordered batch of side effects for the host to execute in
+//! sequence. The host owns the actual WebSocket, peer-connection, and timer
+//! integration, then feeds the resulting events back into the core.
+//!
+//! we have to coordinate transport lifecycle, negotiation, timers,
+//! and host-visible state changes without hiding side effects inside the state machine itself.
+//! Returning commands allow three things that are hard to keep at the same time otherwise:
+//!
+//! 1. Deterministic tests: transitions can be asserted as pure input/output
+//!    steps without a live socket, browser API, or async runtime.
+//! 2. Runtime independence: the same core can drive wasm, native, and test
+//!    hosts because it describes *what* must happen, not *how* that host does it.
+//! 3. Explicit ordering and cleanup: reconnects, request timeouts, and teardown
+//!    paths expose every required side effect, which avoids hidden partial work
+//!    and makes it obvious when the host still owes a timer cancel or close.
+//!
+//! The command system is more cumbersome than inlining I/O calls, but that
+//! cost is what keeps the protocol verifiable and portable.
+
 use std::collections::BTreeMap;
 
 mod connection_lifecycle;
@@ -36,11 +58,13 @@ const BATCH_FLUSH_DELAY_MS: u32 = 100;
 const REQUEST_TIMEOUT_MS: u32 = 5_000;
 const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 
-/// Side-effect command returned by [`ProtocolCore`] methods.
+/// One side-effect intent emitted by [`ProtocolCore`].
 ///
 /// The state machine itself is pure: it never touches I/O. Instead each
-/// transition returns a `Vec<Command>` that the host (wasm glue, native
-/// driver, test harness) must execute in order.
+/// transition returns [`Commands`] that the host (wasm glue, native driver,
+/// test harness) must execute in order. That keeps transport work, timers, and
+/// projection updates visible at the protocol boundary instead of being buried
+/// in host-specific control flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Serialize and send a JSON frame over the WebSocket.
@@ -97,6 +121,13 @@ pub enum Command {
         url: String,
     },
 }
+
+/// Ordered side effects emitted by one protocol-core transition.
+///
+/// A command batch is the full host work produced by applying one input to the
+/// protocol state machine. The host must execute the commands in order before
+/// feeding any resulting transport or timer events back into [`ProtocolCore`].
+pub type Commands = Vec<Command>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolEvent {
@@ -165,6 +196,11 @@ impl Default for ProtocolCore {
 }
 
 impl ProtocolCore {
+    /// Builds a fresh protocol state machine with no remembered session intent.
+    ///
+    /// Reconnect replay is opt-in through the mutating APIs below, so a new
+    /// core starts from a fully fresh state instead of assuming any previous room,
+    /// publication, or subscription state.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -201,16 +237,25 @@ impl ProtocolCore {
         self.track_bindings.get(mid)
     }
 
+    /// Starts a fresh connection attempt and replaces any earlier session context.
+    ///
+    /// This is intentionally stricter than a reconnect path: it clears sticky
+    /// replay and runtime state so a caller switching rooms or credentials cannot
+    /// accidentally leak the previous session intent into the new connection.
     pub fn connect(
         &mut self,
         url: impl Into<String>,
         jwt: impl Into<String>,
         channel: Option<String>,
-    ) -> Vec<Command> {
+    ) -> Commands {
         connection_lifecycle::connect(self, url.into(), jwt.into(), channel)
     }
 
-    pub fn on_ws_open(&mut self) -> Vec<Command> {
+    /// Authenticates a newly opened socket with the stored connect context.
+    ///
+    /// Recovery reuses the same JWT and optional channel that `connect` captured,
+    /// which keeps every socket attempt tied to one explicit admission context.
+    pub fn on_ws_open(&mut self) -> Commands {
         if !matches!(
             self.state,
             BundleConnectionState::Connecting | BundleConnectionState::Recovering
@@ -231,7 +276,12 @@ impl ProtocolCore {
         self.enqueue_envelope(envelope, FlushMode::Immediate)
     }
 
-    pub fn on_ws_message(&mut self, frame: &str) -> Vec<Command> {
+    /// handle ws message
+    ///
+    /// Malformed batches or envelopes are treated as protocol violations and
+    /// close the socket immediately so partially-applied server state cannot
+    /// survive atfer a framing error.
+    pub fn on_ws_message(&mut self, frame: &str) -> Commands {
         let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(frame) else {
             return protocol_error_commands();
         };
@@ -245,7 +295,12 @@ impl ProtocolCore {
         commands
     }
 
-    pub fn on_welcome(&mut self, payload: WelcomePayload) -> Vec<Command> {
+    /// Commits the authenticated server snapshot and "replays" client wanted state
+    ///
+    /// The welcome payload is the point where feature flags and recording state
+    /// become authoritative again after a reconnect. Only after that snapshot is
+    /// accepted do we replay remembered uploads, downloads, and session info.
+    pub fn on_welcome(&mut self, payload: WelcomePayload) -> Commands {
         if !matches!(
             self.state,
             BundleConnectionState::Connecting | BundleConnectionState::Recovering
@@ -272,11 +327,20 @@ impl ProtocolCore {
         commands
     }
 
-    pub fn on_transport_ready(&mut self) -> Vec<Command> {
+    /// Marks the local transport layer as ready after the initial negotiation.
+    ///
+    /// The host should call this only once the peer connection is usable for
+    /// media, because it is what upgrades the core from authenticated signaling
+    /// state to a fully connected session.
+    pub fn on_transport_ready(&mut self) -> Commands {
         connection_lifecycle::on_transport_ready(self)
     }
 
-    pub fn update_upload(&mut self, stream_type: StreamType, active: bool) -> Vec<Command> {
+    /// Stores the desired publication state and sends it when signaling is ready.
+    ///
+    /// Upload intent is sticky across reconnects, which lets UI toggles be issued
+    /// before authentication completes without losing the latest desired state.
+    pub fn update_upload(&mut self, stream_type: StreamType, active: bool) -> Commands {
         self.sticky_replay.set_upload_active(stream_type, active);
         if !self.can_send_client_messages() {
             return Vec::new();
@@ -293,11 +357,14 @@ impl ProtocolCore {
         self.enqueue_envelope(envelope, FlushMode::Batched)
     }
 
-    pub fn update_download(
-        &mut self,
-        session_id: SessionId,
-        states: DownloadStates,
-    ) -> Vec<Command> {
+    /// Remembers the latest per-peer subscription intent for reconnect replay.
+    ///
+    /// Repeated updates merge at the sticky layer, so callers can send partial
+    /// audio/camera/screen adjustments without rebuilding the full preference set
+    /// on every change or after recovery.
+    /// NOTE: yes these functions do not follow the "industry-standard" publish/subscribe
+    /// naming pattern, but we keep the same naming as the old odoo sfu.
+    pub fn update_download(&mut self, session_id: SessionId, states: DownloadStates) -> Commands {
         self.sticky_replay
             .remember_download_states(&session_id, &states);
         if !self.can_send_client_messages() {
@@ -314,7 +381,12 @@ impl ProtocolCore {
         self.enqueue_envelope(envelope, FlushMode::Batched)
     }
 
-    pub fn update_info(&mut self, info: SessionInfo) -> Vec<Command> {
+    /// Persists the laetst local session metadata patch for the current room.
+    ///
+    /// Session info is replayed after reconnect so transient transport failures do
+    /// not silently reset presence indicators such as mute, hand raise, or camera
+    /// state back to server defaults.
+    pub fn update_info(&mut self, info: SessionInfo) -> Commands {
         self.sticky_replay.remember_info(&info);
         if !self.can_send_client_messages() {
             return Vec::new();
@@ -328,7 +400,12 @@ impl ProtocolCore {
         self.enqueue_envelope(envelope, FlushMode::Batched)
     }
 
-    pub fn broadcast(&mut self, message: JsonPayload) -> Vec<Command> {
+    /// Sends a best-effort broadcast to the current room.
+    ///
+    /// Broadcast payloads are intentionally not sticky: if the client is not yet
+    /// authenticated, the message is dropped instead of being replayed later out
+    /// of its original conversational contexte.
+    pub fn broadcast(&mut self, message: JsonPayload) -> Commands {
         if !self.can_send_client_messages() {
             return Vec::new();
         }
@@ -342,32 +419,41 @@ impl ProtocolCore {
         self.enqueue_envelope(envelope, FlushMode::Batched)
     }
 
-    pub fn start_recording(&mut self, options: RecordingOptions) -> Vec<Command> {
+    pub fn start_recording(&mut self, options: RecordingOptions) -> Commands {
         request_flow::start_recording(self, options)
     }
-
-    pub fn stop_recording(&mut self) -> Vec<Command> {
+    pub fn stop_recording(&mut self) -> Commands {
         request_flow::stop_recording(self)
     }
 
+    /// Replies to the currently pending negotiation request.
+    ///
+    /// The host must echo the exact `request_id` and `kind` from
+    /// [`Command::ApplyNegotiation`]; mismatches are ignored so a stale or
+    /// reordered SDP answer cannot accidentally resolve the wrong negotiation.
     pub fn submit_negotiation_answer(
         &mut self,
         request_id: &RequestId,
         kind: NegotiationKind,
         sdp: impl Into<String>,
-    ) -> Vec<Command> {
+    ) -> Commands {
         request_flow::submit_negotiation_answer(self, request_id, kind, sdp.into())
     }
 
-    pub fn disconnect(&mut self) -> Vec<Command> {
+    pub fn disconnect(&mut self) -> Commands {
         connection_lifecycle::disconnect(self)
     }
 
-    pub fn on_ws_close(&mut self, code: u16) -> Vec<Command> {
+    pub fn on_ws_close(&mut self, code: u16) -> Commands {
         connection_lifecycle::on_ws_close(self, code)
     }
 
-    pub fn on_timer(&mut self, timer_id: u32) -> Vec<Command> {
+    /// Dispatches all timer callbacks through one entry point.
+    ///
+    /// Timer ids are part of the protocol-core contract: recovery, outbound batch
+    /// flushing, and request timeouts each reserve their own namespace and must be
+    /// routed back here by the host in the order they fire.
+    pub fn on_timer(&mut self, timer_id: u32) -> Commands {
         if timer_id == RECOVERY_TIMER_ID {
             return self.handle_recovery_timer();
         }
@@ -380,11 +466,11 @@ impl ProtocolCore {
         Vec::new()
     }
 
-    fn handle_recovery_timer(&mut self) -> Vec<Command> {
+    fn handle_recovery_timer(&mut self) -> Commands {
         connection_lifecycle::handle_recovery_timer(self)
     }
 
-    fn handle_server_envelope(&mut self, envelope: ServerEnvelope) -> Vec<Command> {
+    fn handle_server_envelope(&mut self, envelope: ServerEnvelope) -> Commands {
         match envelope {
             ServerEnvelope::Message(message) => self.handle_server_message(message),
             ServerEnvelope::Request {
@@ -398,15 +484,11 @@ impl ProtocolCore {
         }
     }
 
-    fn handle_server_message(&mut self, message: ServerMessage) -> Vec<Command> {
+    fn handle_server_message(&mut self, message: ServerMessage) -> Commands {
         server_events::handle_server_message(self, message)
     }
 
-    fn handle_server_request(
-        &mut self,
-        request_id: RequestId,
-        request: ServerRequest,
-    ) -> Vec<Command> {
+    fn handle_server_request(&mut self, request_id: RequestId, request: ServerRequest) -> Commands {
         request_flow::handle_server_request(self, request_id, request)
     }
 
@@ -414,15 +496,15 @@ impl ProtocolCore {
         &mut self,
         response_to: &RequestId,
         response: ServerResponse,
-    ) -> Vec<Command> {
+    ) -> Commands {
         request_flow::handle_server_response(self, response_to, response)
     }
 
-    fn enqueue_envelope(&mut self, envelope: Envelope, mode: FlushMode) -> Vec<Command> {
+    fn enqueue_envelope(&mut self, envelope: Envelope, mode: FlushMode) -> Commands {
         self.outbound_batch.enqueue(envelope, mode)
     }
 
-    fn flush_pending_batch(&mut self, cancel_timer: bool) -> Vec<Command> {
+    fn flush_pending_batch(&mut self, cancel_timer: bool) -> Commands {
         self.outbound_batch.flush(cancel_timer)
     }
 
@@ -433,7 +515,12 @@ impl ProtocolCore {
         self.pending_negotiation = None;
     }
 
-    fn clear_runtime_state_with_commands(&mut self) -> Vec<Command> {
+    /// Tears down runtime state while emitting the cleanup commands the host still owes.
+    ///
+    /// This is used on disconnect and terminal close paths where queued batches,
+    /// timeout timers, and pending requests must be cancelled explicitly instead of
+    /// being forgotten inside the pure state machine.
+    fn clear_runtime_state_with_commands(&mut self) -> Commands {
         let mut commands = self.outbound_batch.clear_with_commands();
         commands.extend(self.request_tracker.clear_with_commands());
         self.track_bindings.clear();
@@ -445,7 +532,12 @@ impl ProtocolCore {
         self.sticky_replay.clear();
     }
 
-    fn replay_sticky_state(&mut self) -> Vec<Command> {
+    /// Flushes remembered client intent immediately after the server snapshot is known.
+    ///
+    /// Replayed envelopes bypass the normal batching delay so recovery converges on
+    /// the last desired publish/subscribe/info state before new incremental updates
+    /// start to accumulate again.
+    fn replay_sticky_state(&mut self) -> Commands {
         if !self.can_send_client_messages() {
             return Vec::new();
         }
@@ -474,12 +566,16 @@ fn empty_features() -> AvailableFeatures {
     }
 }
 
-fn protocol_error_commands() -> Vec<Command> {
+fn protocol_error_commands() -> Commands {
     vec![Command::CloseWebSocket {
         code: u16::from(WebSocketCloseCode::ProtocolError),
     }]
 }
 
+/// Grows reconnect delay by 1.5x while keeping the backoff bounded.
+///
+/// The sequence is intentionally modest so short-lived outages recover quickly,
+/// but repeated failures still spread out retries and avoid hot-loop reconnects.
 fn next_recovery_delay(current_delay_ms: u32) -> u32 {
     current_delay_ms
         .saturating_mul(3)
@@ -488,22 +584,8 @@ fn next_recovery_delay(current_delay_ms: u32) -> u32 {
         .min(MAX_RECOVERY_DELAY_MS)
 }
 
-fn web_socket_close_code(code: u16) -> Option<WebSocketCloseCode> {
-    match code {
-        1000 => Some(WebSocketCloseCode::Clean),
-        1001 => Some(WebSocketCloseCode::Leaving),
-        1002 => Some(WebSocketCloseCode::ProtocolError),
-        1011 => Some(WebSocketCloseCode::Error),
-        4001 => Some(WebSocketCloseCode::AuthFailed),
-        4002 => Some(WebSocketCloseCode::AuthTimeout),
-        4003 => Some(WebSocketCloseCode::Kicked),
-        4004 => Some(WebSocketCloseCode::ChannelFull),
-        _ => None,
-    }
-}
-
 fn close_cause(code: u16) -> Option<&'static str> {
-    match web_socket_close_code(code) {
+    match WebSocketCloseCode::from_u16(code) {
         Some(WebSocketCloseCode::AuthFailed) => Some("auth_failed"),
         Some(WebSocketCloseCode::Kicked) => Some("kicked"),
         Some(WebSocketCloseCode::ChannelFull) => Some("full"),

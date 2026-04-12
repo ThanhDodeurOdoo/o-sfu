@@ -5,12 +5,9 @@ use crate::{
     signaling::{PeerInfoPayload, ServerBroadcastPayload, ServerMessage, TrackBinding},
 };
 
-use super::{Command, ProtocolCore, ProtocolEvent};
+use super::{Command, Commands, ProtocolCore, ProtocolEvent};
 
-pub(super) fn handle_server_message(
-    core: &mut ProtocolCore,
-    message: ServerMessage,
-) -> Vec<Command> {
+pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMessage) -> Commands {
     match message {
         ServerMessage::Welcome(payload) => core.on_welcome(payload),
         ServerMessage::Tracks(bindings) => {
@@ -50,7 +47,7 @@ fn remove_track_bindings_for_session(core: &mut ProtocolCore, session_id: &Sessi
         .retain(|_, binding| &binding.session_id != session_id);
 }
 
-fn peer_info_commands(payload: PeerInfoPayload) -> Vec<Command> {
+fn peer_info_commands(payload: PeerInfoPayload) -> Commands {
     vec![Command::EmitEvent {
         event: ProtocolEvent::PeerInfo {
             session_id: payload.session_id,
@@ -59,7 +56,7 @@ fn peer_info_commands(payload: PeerInfoPayload) -> Vec<Command> {
     }]
 }
 
-fn broadcast_commands(payload: ServerBroadcastPayload) -> Vec<Command> {
+fn broadcast_commands(payload: ServerBroadcastPayload) -> Commands {
     vec![Command::EmitEvent {
         event: ProtocolEvent::Broadcast {
             sender_id: payload.sender_id,

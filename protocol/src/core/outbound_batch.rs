@@ -2,7 +2,9 @@ use std::mem::take;
 
 use crate::signaling::{Envelope, EnvelopeBatch};
 
-use super::{BATCH_FLUSH_DELAY_MS, BATCH_FLUSH_TIMER_ID, Command, MAX_OUTBOUND_BATCH_LEN};
+use super::{
+    BATCH_FLUSH_DELAY_MS, BATCH_FLUSH_TIMER_ID, Command, Commands, MAX_OUTBOUND_BATCH_LEN,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FlushMode {
@@ -21,7 +23,7 @@ impl OutboundBatcher {
         Self::default()
     }
 
-    pub(super) fn enqueue(&mut self, envelope: Envelope, mode: FlushMode) -> Vec<Command> {
+    pub(super) fn enqueue(&mut self, envelope: Envelope, mode: FlushMode) -> Commands {
         match mode {
             FlushMode::Immediate => {
                 self.pending_batch.push(envelope);
@@ -48,7 +50,7 @@ impl OutboundBatcher {
         self.pending_batch.extend(envelopes);
     }
 
-    pub(super) fn flush(&mut self, cancel_timer: bool) -> Vec<Command> {
+    pub(super) fn flush(&mut self, cancel_timer: bool) -> Commands {
         if self.pending_batch.is_empty() {
             self.flush_scheduled = false;
             return Vec::new();
@@ -75,7 +77,7 @@ impl OutboundBatcher {
         self.flush_scheduled = false;
     }
 
-    pub(super) fn clear_with_commands(&mut self) -> Vec<Command> {
+    pub(super) fn clear_with_commands(&mut self) -> Commands {
         let commands = if self.flush_scheduled {
             vec![Command::CancelTimer {
                 id: BATCH_FLUSH_TIMER_ID,

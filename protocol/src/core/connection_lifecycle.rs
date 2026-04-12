@@ -3,8 +3,8 @@ use crate::{
 };
 
 use super::{
-    Command, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
-    close_cause, empty_features, next_recovery_delay, web_socket_close_code,
+    Command, Commands, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
+    close_cause, empty_features, next_recovery_delay,
 };
 
 pub(super) fn connect(
@@ -12,7 +12,7 @@ pub(super) fn connect(
     url: String,
     jwt: String,
     channel: Option<String>,
-) -> Vec<Command> {
+) -> Commands {
     if !matches!(
         core.state,
         BundleConnectionState::Disconnected | BundleConnectionState::Closed
@@ -39,7 +39,7 @@ pub(super) fn connect(
     ]
 }
 
-pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Vec<Command> {
+pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Commands {
     if core.state != BundleConnectionState::Authenticated {
         return Vec::new();
     }
@@ -50,7 +50,7 @@ pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Vec<Command> {
     }]
 }
 
-pub(super) fn disconnect(core: &mut ProtocolCore) -> Vec<Command> {
+pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
     if matches!(
         core.state,
         BundleConnectionState::Disconnected | BundleConnectionState::Closed
@@ -81,7 +81,7 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Vec<Command> {
     commands
 }
 
-pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Vec<Command> {
+pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands {
     if matches!(
         core.state,
         BundleConnectionState::Disconnected | BundleConnectionState::Closed
@@ -96,7 +96,7 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Vec<Comma
         WebSocketCloseCode::AuthFailed
         | WebSocketCloseCode::Kicked
         | WebSocketCloseCode::ChannelFull,
-    ) = web_socket_close_code(close_code)
+    ) = WebSocketCloseCode::from_u16(close_code)
     {
         core.state = BundleConnectionState::Closed;
         core.connect_context = None;
@@ -140,7 +140,7 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Vec<Comma
     commands
 }
 
-pub(super) fn handle_recovery_timer(core: &mut ProtocolCore) -> Vec<Command> {
+pub(super) fn handle_recovery_timer(core: &mut ProtocolCore) -> Commands {
     if core.state != BundleConnectionState::Recovering {
         return Vec::new();
     }

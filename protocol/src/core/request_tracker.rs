@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::signaling::RequestId;
 
-use super::{Command, PendingRequestKind, REQUEST_TIMEOUT_TIMER_ID_BASE};
+use super::{Command, Commands, PendingRequestKind, REQUEST_TIMEOUT_TIMER_ID_BASE};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingRequestState {
@@ -69,7 +69,7 @@ impl RequestTracker {
         response_to: &RequestId,
         expected_kind: PendingRequestKind,
         ok: bool,
-    ) -> Vec<Command> {
+    ) -> Commands {
         let Some(pending_request) = self.pending_requests.remove(response_to) else {
             return Vec::new();
         };
@@ -91,7 +91,7 @@ impl RequestTracker {
         ]
     }
 
-    pub(super) fn resolve_timeout(&mut self, timer_id: u32) -> Option<Vec<Command>> {
+    pub(super) fn resolve_timeout(&mut self, timer_id: u32) -> Option<Commands> {
         let request_id = self.request_timeouts.remove(&timer_id)?;
         let commands = if self.pending_requests.remove(&request_id).is_some() {
             vec![Command::ResolvePendingRequest {
@@ -109,7 +109,7 @@ impl RequestTracker {
         self.request_timeouts.clear();
     }
 
-    pub(super) fn clear_with_commands(&mut self) -> Vec<Command> {
+    pub(super) fn clear_with_commands(&mut self) -> Commands {
         let pending_request_ids: Vec<RequestId> = self.pending_requests.keys().cloned().collect();
         let mut commands = Vec::new();
         for request_id in pending_request_ids {

@@ -7,11 +7,11 @@ use crate::{
 };
 
 use super::{
-    Command, FlushMode, NegotiationKind, PendingNegotiation, PendingRequestKind, ProtocolCore,
-    REQUEST_TIMEOUT_MS, protocol_error_commands,
+    Command, Commands, FlushMode, NegotiationKind, PendingNegotiation, PendingRequestKind,
+    ProtocolCore, REQUEST_TIMEOUT_MS, protocol_error_commands,
 };
 
-pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions) -> Vec<Command> {
+pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions) -> Commands {
     begin_request(
         core,
         ClientRequest::StartRecording(options),
@@ -19,7 +19,7 @@ pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions
     )
 }
 
-pub(super) fn stop_recording(core: &mut ProtocolCore) -> Vec<Command> {
+pub(super) fn stop_recording(core: &mut ProtocolCore) -> Commands {
     begin_request(
         core,
         ClientRequest::StopRecording,
@@ -32,7 +32,7 @@ pub(super) fn submit_negotiation_answer(
     request_id: &RequestId,
     kind: NegotiationKind,
     sdp: String,
-) -> Vec<Command> {
+) -> Commands {
     if !core.can_send_client_messages() {
         return Vec::new();
     }
@@ -64,7 +64,7 @@ pub(super) fn handle_server_request(
     core: &mut ProtocolCore,
     request_id: RequestId,
     request: ServerRequest,
-) -> Vec<Command> {
+) -> Commands {
     match request {
         ServerRequest::Offer(payload) => {
             handle_negotiation_request(core, request_id, NegotiationKind::Offer, payload)
@@ -90,7 +90,7 @@ pub(super) fn handle_server_response(
     core: &mut ProtocolCore,
     response_to: &RequestId,
     response: ServerResponse,
-) -> Vec<Command> {
+) -> Commands {
     match response {
         ServerResponse::StartRecording(payload) => resolve_request(
             core,
@@ -112,7 +112,7 @@ fn handle_negotiation_request(
     request_id: RequestId,
     kind: NegotiationKind,
     payload: SessionDescriptionPayload,
-) -> Vec<Command> {
+) -> Commands {
     if !matches!(
         core.state,
         BundleConnectionState::Authenticated | BundleConnectionState::Connected
@@ -140,7 +140,7 @@ fn begin_request(
     core: &mut ProtocolCore,
     request: ClientRequest,
     kind: PendingRequestKind,
-) -> Vec<Command> {
+) -> Commands {
     if !core.can_send_client_messages() || core.request_tracker.has_pending_kind(kind) {
         return Vec::new();
     }
@@ -173,7 +173,7 @@ fn resolve_request(
     response_to: &RequestId,
     expected_kind: PendingRequestKind,
     ok: bool,
-) -> Vec<Command> {
+) -> Commands {
     core.request_tracker
         .resolve_response(response_to, expected_kind, ok)
 }
