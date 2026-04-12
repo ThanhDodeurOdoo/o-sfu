@@ -22,3 +22,22 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+
+  - package-ecosystem: "cargo"
+    directory: "/protocol"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "cargo"
+      - "AI"
+
+
+  - package-ecosystem: "npm"
+    directory: "/client"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "npm"
+      - "AI"

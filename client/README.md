@@ -6,7 +6,7 @@ Current scope:
 - Odoo-facing public API types
 - signaling envelope and payload catalog
 
-Deferred until the next slices:
+TODO/LATER:
 
 - `ProtocolCore` WASM wiring
 - `WebSocket` orchestration
