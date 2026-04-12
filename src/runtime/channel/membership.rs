@@ -117,6 +117,17 @@ impl Channel {
     }
 
     #[cfg(test)]
+    pub(super) async fn session_has_parsed_client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+    ) -> bool {
+        self.state
+            .read()
+            .await
+            .session_has_parsed_client_rtp_capabilities(session_id)
+    }
+
+    #[cfg(test)]
     pub(super) async fn has_session(&self, session_id: &SessionId) -> bool {
         self.state.read().await.sessions.contains_key(session_id)
     }

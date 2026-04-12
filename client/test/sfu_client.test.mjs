@@ -98,6 +98,7 @@ class FakeProtocolCore {
         this.features = { ...EMPTY_FEATURES };
         this.recordingState = {};
         this.state = "disconnected";
+        this.disconnectCalls = 0;
         this.submittedAnswers = [];
         this.trackBindings = new Map();
     }
@@ -113,7 +114,11 @@ class FakeProtocolCore {
     }
 
     disconnect() {
+        this.disconnectCalls += 1;
         this.state = "disconnected";
+        this.features = { ...EMPTY_FEATURES };
+        this.recordingState = {};
+        this.trackBindings.clear();
         return [{ kind: "emitStateChange", state: "disconnected" }];
     }
 
@@ -161,6 +166,8 @@ class FakeProtocolCore {
                 return [];
             case "recording-ok":
                 return [{ kind: "resolvePendingRequest", ok: true, requestId: "record-1" }];
+            case "explode":
+                throw new Error("boom");
             default:
                 return [];
         }
@@ -627,6 +634,46 @@ test("track metadata updates re-emit track state for existing remote tracks", as
         }
     ]);
     assert.equal(client._consumers.get(42).camera.paused, true);
+});
+
+test("fatal runtime errors reset the public client surface", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const client = new SfuClient({
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].open();
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    client._consumers.set(42, {
+        audio: null,
+        camera: {
+            closed: false,
+            paused: false,
+            track: { id: "track-1", kind: "video" }
+        },
+        screen: null
+    });
+
+    sockets[0].emitMessage("explode");
+    await tick();
+
+    assert.equal(core.disconnectCalls, 1);
+    assert.equal(client.state, "disconnected");
+    assert.deepEqual(client.availableFeatures, EMPTY_FEATURES);
+    assert.deepEqual(client.recordingState, {});
+    assert.equal(client._consumers.size, 0);
+    assert.equal(sockets[0].readyState, 3);
 });
 
 test("updateUpload rejects stream-kind mismatches", () => {

@@ -89,28 +89,6 @@ impl SessionNegotiation {
     }
 
     #[must_use]
-    pub(super) fn client_rtp_capabilities(&self) -> Option<&SignalingRtpCapabilities> {
-        match &self.state {
-            SessionNegotiationState::AwaitingCapabilities
-            | SessionNegotiationState::UploadConnectedAwaitingCapabilities
-            | SessionNegotiationState::DownloadConnectedAwaitingCapabilities
-            | SessionNegotiationState::TransportsConnectedAwaitingCapabilities => None,
-            SessionNegotiationState::CapabilitiesReady {
-                client_rtp_capabilities,
-            }
-            | SessionNegotiationState::UploadReady {
-                client_rtp_capabilities,
-            }
-            | SessionNegotiationState::DownloadReady {
-                client_rtp_capabilities,
-            }
-            | SessionNegotiationState::Ready {
-                client_rtp_capabilities,
-            } => Some(client_rtp_capabilities),
-        }
-    }
-
-    #[must_use]
     pub(super) fn can_publish(&self) -> bool {
         matches!(
             self.state,

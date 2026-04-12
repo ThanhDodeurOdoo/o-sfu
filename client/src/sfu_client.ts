@@ -158,19 +158,19 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     connect(url: string, jwt: string, options: ConnectOptions = {}): void {
         validateConnectOptions(options);
         this._iceServers = cloneIceServers(options.iceServers);
-        this._enqueue(
+        this._enqueueProtocolCommands(() =>
             this._protocolCore.connect(normalizeWebSocketUrl(url), jwt, options.channelUUID ?? null)
         );
     }
 
     disconnect(): void {
-        this._enqueue(this._protocolCore.disconnect());
+        this._enqueueProtocolCommands(() => this._protocolCore.disconnect());
     }
 
     updateUpload(type: StreamType, track: MediaStreamTrack | null): void {
         validateTrackForStreamType(type, track);
         this._localTracks.set(type, track);
-        this._enqueue(this._protocolCore.updateUpload(type, Boolean(track)));
+        this._enqueueProtocolCommands(() => this._protocolCore.updateUpload(type, Boolean(track)));
     }
 
     updateDownload(sessionId: SessionId, states: DownloadStates): void {
@@ -187,35 +187,42 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 consumers.screen.paused = !states.screen;
             }
         }
-        this._enqueue(this._protocolCore.updateDownload(sessionId, states));
+        this._enqueueProtocolCommands(() => this._protocolCore.updateDownload(sessionId, states));
     }
 
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
-        this._enqueue(this._protocolCore.updateInfo(info));
+        this._enqueueProtocolCommands(() => this._protocolCore.updateInfo(info));
     }
 
     broadcast(message: unknown): void {
-        this._enqueue(this._protocolCore.broadcast(message));
+        this._enqueueProtocolCommands(() => this._protocolCore.broadcast(message));
     }
 
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
         return this._beginPendingRequest(
-            this._protocolCore.startRecording(options),
+            () => this._protocolCore.startRecording(options),
             PENDING_REQUEST_KIND.START_RECORDING
         );
     }
 
     stopRecording(): Promise<boolean> {
         return this._beginPendingRequest(
-            this._protocolCore.stopRecording(),
+            () => this._protocolCore.stopRecording(),
             PENDING_REQUEST_KIND.STOP_RECORDING
         );
     }
 
     private _beginPendingRequest(
-        commands: HostCommand[],
+        getCommands: () => HostCommand[],
         requestKind: PendingRequestKind
     ): Promise<boolean> {
+        let commands: HostCommand[];
+        try {
+            commands = getCommands();
+        } catch (error) {
+            this._handleRuntimeError(error);
+            return Promise.reject(error);
+        }
         if (!commands.some((command) => command.kind === "registerPendingRequest")) {
             this._enqueue(commands);
             return Promise.resolve(false);
@@ -224,6 +231,14 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             this._requestWaiters[requestKind].push({ resolve, reject });
             this._enqueue(commands);
         });
+    }
+
+    private _enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
+        try {
+            this._enqueue(getCommands());
+        } catch (error) {
+            this._handleRuntimeError(error);
+        }
     }
 
     private _enqueue(commands: HostCommand[]): void {
@@ -327,7 +342,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 this._timerHandles.set(
                     command.id,
                     this._setTimer(() => {
-                        this._enqueue(this._protocolCore.onTimer(command.id));
+                        this._enqueueProtocolCommands(() => this._protocolCore.onTimer(command.id));
                     }, command.ms)
                 );
                 return [];
@@ -346,20 +361,21 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         }
         const socket = this._createWebSocket(url);
         socket.onopen = () => {
-            this._enqueue(this._protocolCore.onWsOpen());
+            this._enqueueProtocolCommands(() => this._protocolCore.onWsOpen());
         };
         socket.onmessage = (event) => {
             if (typeof event.data !== "string") {
                 socket.close(1002);
                 return;
             }
-            this._enqueue(this._protocolCore.onWsMessage(event.data));
+            const frame = event.data;
+            this._enqueueProtocolCommands(() => this._protocolCore.onWsMessage(frame));
         };
         socket.onclose = (event) => {
             if (this._webSocket === socket) {
                 this._webSocket = null;
             }
-            this._enqueue(this._protocolCore.onWsClose(event.code));
+            this._enqueueProtocolCommands(() => this._protocolCore.onWsClose(event.code));
         };
         socket.onerror = () => undefined;
         this._webSocket = socket;
@@ -563,6 +579,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     private _handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
+        this._protocolCore.disconnect();
         for (const callbacks of this._pendingRequestResolvers.values()) {
             callbacks.reject(resolvedError);
         }
@@ -582,6 +599,8 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             this._webSocket.close(1011);
         }
         this._webSocket = null;
+        this._consumers.clear();
+        this._syncSnapshot();
         this.dispatchEvent(
             new CustomEvent("handledError", {
                 detail: {

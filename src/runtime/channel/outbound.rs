@@ -51,10 +51,3 @@ pub(super) fn fanout_all_except(
         message: message.clone(),
     }
 }
-
-pub(super) fn send_to_all(
-    sessions: &BTreeMap<SessionId, ActiveSession>,
-    message: &CurrentServerMessage,
-) {
-    fanout_all(sessions, message).emit();
-}

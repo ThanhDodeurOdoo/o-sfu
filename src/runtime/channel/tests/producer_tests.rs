@@ -111,6 +111,56 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
 }
 
 #[tokio::test]
+async fn session_replacement_purges_stale_published_media_state() {
+    let (channel, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_sessions().await;
+
+    let producer_id = channel
+        .publish_track(
+            &SessionId::Integer(1),
+            StreamType::Camera,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &adapter,
+        )
+        .await;
+    assert!(producer_id.is_some());
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(
+        drain_outbound(&mut subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, SessionOutbound::Request(_)))
+    );
+
+    {
+        let state = channel.state.read().await;
+        assert_eq!(state.producers.len(), 1);
+        assert_eq!(state.consumer_index.len(), 1);
+        drop(state);
+    }
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    assert!(
+        channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                replacement_tx,
+                10,
+            )
+            .await
+            .is_ok()
+    );
+
+    {
+        let state = channel.state.read().await;
+        assert!(state.producers.is_empty());
+        assert!(state.consumer_index.is_empty());
+        drop(state);
+    }
+}
+
+#[tokio::test]
 async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
     let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     let (stub_adapter, _) = stub_adapter();
@@ -557,6 +607,11 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
         .await;
     assert!(capabilities_update.session_present);
     assert!(capabilities_update.became_consumer_ready);
+    assert!(
+        channel
+            .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(2))
+            .await
+    );
 
     channel
         .bootstrap_late_join_consumers(&SessionId::Integer(2), &transport_adapter)

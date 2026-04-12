@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use o_sfu_router::{
-    MediaKind as RouterMediaKind, RouterId, RtpParameters as RouterRtpParameters,
-    StreamType as RouterStreamType, can_consume, negotiate_consumer_rtp_parameters,
+    MediaCapabilities as RouterRtpCapabilities, MediaKind as RouterMediaKind, RouterId,
+    RtpParameters as RouterRtpParameters, StreamType as RouterStreamType, can_consume,
+    negotiate_consumer_rtp_parameters,
 };
 use tokio::sync::mpsc;
 use tracing::{error, warn};
@@ -96,6 +97,7 @@ pub(super) struct ActiveSession {
     pub(super) permissions: SessionPermissions,
     pub(super) info: SessionInfo,
     pub(super) negotiation: SessionNegotiation,
+    pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub(super) connection_id: u64,
     pub(super) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
@@ -112,7 +114,7 @@ pub(super) struct PublishedProducer {
     pub(super) active: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ConsumerState {
     pub(super) routed_consumer_id: RoutedConsumerId,
     pub(super) consumer_connection_id: u64,
@@ -306,6 +308,16 @@ impl ChannelState {
         }
         let connection_id = self.next_connection_id;
         self.next_connection_id = self.next_connection_id.saturating_add(1);
+        if !is_new {
+            if self.topology.apply_client_leave(session_id).is_err() {
+                error!(
+                    ?session_id,
+                    "failed to reset replaced session in channel router"
+                );
+                return Err(super::ChannelJoinError::RouterState);
+            }
+            self.purge_session_media_state(session_id);
+        }
         if self
             .topology
             .apply_client_join(session_id, connection_id, &permissions)
@@ -324,6 +336,7 @@ impl ChannelState {
             session.permissions.clone_from(&permissions);
             session.info = SessionInfo::default();
             session.negotiation = SessionNegotiation::default();
+            session.parsed_client_rtp_capabilities = None;
             session.connection_id = connection_id;
             session.sender = sender;
             Some(old_sender)
@@ -335,6 +348,7 @@ impl ChannelState {
                     permissions,
                     info: SessionInfo::default(),
                     negotiation: SessionNegotiation::default(),
+                    parsed_client_rtp_capabilities: None,
                     connection_id,
                     sender,
                 },
@@ -477,6 +491,8 @@ impl ChannelState {
         let Some(session) = self.sessions.get_mut(session_id) else {
             return SessionNegotiationUpdate::default();
         };
+        session.parsed_client_rtp_capabilities =
+            ortc_mapper::parse_rtp_capabilities(&capabilities.0);
         session
             .negotiation
             .set_client_rtp_capabilities(capabilities)
@@ -653,7 +669,7 @@ impl ChannelState {
             }
             (
                 session.sender.clone(),
-                session.negotiation.client_rtp_capabilities().cloned()?,
+                session.parsed_client_rtp_capabilities.as_ref()?,
             )
         };
         let producer = self.producers.get(&target.producer_wire_id)?;
@@ -672,13 +688,12 @@ impl ChannelState {
         let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
         let producer_active = producer.active;
 
-        let parsed_capabilities = ortc_mapper::parse_rtp_capabilities(&client_capabilities.0)?;
-        if !can_consume(&producer_consumable_rtp_parameters, &parsed_capabilities) {
+        if !can_consume(&producer_consumable_rtp_parameters, client_capabilities) {
             return None;
         }
         let negotiated_rtp_parameters = negotiate_consumer_rtp_parameters(
             &producer_consumable_rtp_parameters,
-            &parsed_capabilities,
+            client_capabilities,
         )
         .ok()?;
         let consumer_wire_rtp_parameters = RtpParameters(ortc_mapper::serialize_rtp_parameters(
@@ -761,6 +776,17 @@ impl ChannelState {
         session_id: &SessionId,
     ) -> Option<o_sfu_router::SessionPermissions> {
         self.topology.session_permissions(session_id)
+    }
+
+    #[cfg(test)]
+    pub(super) fn session_has_parsed_client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+    ) -> bool {
+        self.sessions
+            .get(session_id)
+            .and_then(|session| session.parsed_client_rtp_capabilities.as_ref())
+            .is_some()
     }
 }
 
