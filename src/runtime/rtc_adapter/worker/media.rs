@@ -1,5 +1,5 @@
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-use str0m::media::{MediaKind, Mid, Rid};
+use str0m::media::{Direction, MediaKind, Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -202,18 +202,14 @@ fn worker_add_send_media(
     let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
-    let has_media = session_state.rtc.media(mid).is_some();
-    {
-        let mut api = session_state.rtc.direct_api();
-        if !has_media {
-            api.declare_media(mid, media_kind);
-        }
-        let (ssrc, rid) = primary_encoding_identity(consumer_rtp_parameters)
-            .unwrap_or_else(|| (api.new_ssrc(), None));
-        api.declare_stream_tx(ssrc, None, mid, rid);
-    }
-    state.mark_session_dirty(consumer_session_key);
+    let mid = if session_state.sdp_negotiation.initial_offer_applied {
+        worker_stage_native_send_media(session_state, media_kind)?
+    } else {
+        let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
+        declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
+        state.mark_session_dirty(consumer_session_key);
+        mid
+    };
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session_key.clone(),
         mid,
@@ -244,6 +240,46 @@ fn worker_add_send_media(
         "declared send-only media and registered media route for consumer"
     );
     Ok(transport_media_id)
+}
+
+fn worker_stage_native_send_media(
+    session_state: &mut super::super::state::RtcSessionState,
+    media_kind: MediaKind,
+) -> Result<Mid, TransportAdapterError> {
+    if session_state.sdp_negotiation.pending_offer.is_some()
+        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
+    {
+        return Err(TransportAdapterError::InvalidInput);
+    }
+
+    let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
+    let mut sdp_api = session_state.rtc.sdp_api();
+    if let Some(pending_offer) = existing_pending_offer {
+        sdp_api.merge(pending_offer);
+    }
+    let mid = sdp_api.add_media(media_kind, Direction::SendOnly, None, None, None);
+    let Some((offer, pending_offer)) = sdp_api.apply() else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
+    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    Ok(mid)
+}
+
+fn declare_direct_send_media(
+    session_state: &mut super::super::state::RtcSessionState,
+    mid: Mid,
+    media_kind: MediaKind,
+    consumer_rtp_parameters: &RouterRtpParameters,
+) {
+    let has_media = session_state.rtc.media(mid).is_some();
+    let mut api = session_state.rtc.direct_api();
+    if !has_media {
+        api.declare_media(mid, media_kind);
+    }
+    let (ssrc, rid) = primary_encoding_identity(consumer_rtp_parameters)
+        .unwrap_or_else(|| (api.new_ssrc(), None));
+    api.declare_stream_tx(ssrc, None, mid, rid);
 }
 
 fn worker_set_producer_active(

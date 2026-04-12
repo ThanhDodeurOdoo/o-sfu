@@ -40,7 +40,7 @@ pub(super) fn respond_create_initial_session_offer(
 }
 
 pub(super) fn respond_create_session_renegotiation_offer(
-    state: &RtcBootstrapState,
+    state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
 ) {
@@ -105,23 +105,27 @@ fn worker_create_initial_session_offer(
 
     session_state.sdp_negotiation.bootstrap_mid = bootstrap_mid;
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
+    session_state.sdp_negotiation.staged_offer_sdp = None;
     Ok(SessionOffer::new(offer.to_sdp_string()))
 }
 
 fn worker_create_session_renegotiation_offer(
-    state: &RtcBootstrapState,
+    state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    let Some(session_state) = state.sessions.get(session_key) else {
+    let Some(session_state) = state.sessions.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    if session_state.sdp_negotiation.pending_offer.is_some() {
-        return Err(TransportAdapterError::InvalidInput);
-    }
     if !session_state.sdp_negotiation.initial_offer_applied {
         return Err(TransportAdapterError::InvalidInput);
     }
-    Err(TransportAdapterError::UnsupportedFeature)
+    let Some(offer_sdp) = session_state.sdp_negotiation.staged_offer_sdp.take() else {
+        if session_state.sdp_negotiation.pending_offer.is_some() {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        return Err(TransportAdapterError::UnsupportedFeature);
+    };
+    Ok(SessionOffer::new(offer_sdp))
 }
 
 fn worker_apply_session_answer(
@@ -143,6 +147,7 @@ fn worker_apply_session_answer(
         .accept_answer(pending_offer, answer)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     session_state.sdp_negotiation.initial_offer_applied = true;
+    session_state.sdp_negotiation.staged_offer_sdp = None;
     session_state.dtls_started = true;
     state.mark_session_dirty(session_key);
     Ok(())
