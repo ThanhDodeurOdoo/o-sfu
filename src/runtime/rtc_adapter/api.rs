@@ -416,6 +416,7 @@ impl RtcTransportAdapter {
             return false;
         };
         snapshot_state
+            .remote_addr_demux
             .session_key_for_remote_addr(source_addr)
             .is_some_and(|session_key| snapshot_state.live_sessions.contains(session_key))
     }
@@ -428,8 +429,8 @@ impl RtcTransportAdapter {
             return false;
         };
         snapshot_state
-            .remote_addrs_by_session
-            .iter()
+            .remote_addr_demux
+            .session_entries()
             .any(|(session_key, session_addrs)| {
                 snapshot_state.live_sessions.contains(session_key)
                     && session_addrs.contains(&source_addr)

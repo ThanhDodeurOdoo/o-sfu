@@ -355,11 +355,6 @@ impl MediaCodecCapability {
     }
 
     #[must_use]
-    pub fn preferred_payload_type(&self) -> Option<u8> {
-        self.payload_type()
-    }
-
-    #[must_use]
     pub fn channels(&self) -> Option<u16> {
         self.channels
     }
@@ -545,7 +540,7 @@ impl StreamBinding {
     }
 
     #[must_use]
-    pub fn ssrc_id(&self) -> Option<Ssrc> {
+    pub(super) fn ssrc_id(&self) -> Option<Ssrc> {
         self.ssrc
     }
 
@@ -555,7 +550,7 @@ impl StreamBinding {
     }
 
     #[must_use]
-    pub fn rid_id(&self) -> Option<&Rid> {
+    pub(super) fn rid_id(&self) -> Option<&Rid> {
         self.rid.as_ref()
     }
 
@@ -572,11 +567,6 @@ impl StreamBinding {
     #[must_use]
     pub fn payload_type(&self) -> Option<u8> {
         self.payload_type.map(PayloadType::value)
-    }
-
-    #[must_use]
-    pub fn codec_payload_type(&self) -> Option<u8> {
-        self.payload_type()
     }
 
     #[must_use]
@@ -637,11 +627,6 @@ impl MediaStream {
 
     pub fn encodings(&self) -> impl Iterator<Item = &StreamBinding> {
         self.bindings()
-    }
-
-    #[must_use]
-    pub fn mid_id(&self) -> Option<&Mid> {
-        self.mid.as_ref()
     }
 
     #[must_use]

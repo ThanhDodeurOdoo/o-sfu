@@ -94,8 +94,6 @@ pub(super) fn ensure_session_rtc_state(
             remote_dtls_fingerprint: None,
             remote_ice_credentials: None,
             dtls_started: false,
-            recv_mids: Vec::new(),
-            send_mids: Vec::new(),
         },
     );
     Ok(())

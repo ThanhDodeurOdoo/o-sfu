@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     mem::take,
     net::SocketAddr,
     sync::Arc,
@@ -10,7 +10,6 @@ use std::{
 };
 
 use str0m::config::Fingerprint;
-use str0m::media::Mid;
 use str0m::{IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
@@ -18,7 +17,7 @@ use crate::runtime::transport_adapter::{
     TransportBitrateSnapshot, TransportConnectDirection, TransportMediaId, TransportSessionKey,
 };
 
-use super::demux::{MediaRouteEntry, MediaRouteKey};
+use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::media_registry::RegisteredMediaHandle;
 
 pub(super) const BITRATE_WINDOW: Duration = Duration::from_secs(1);
@@ -56,8 +55,6 @@ pub(super) struct RtcSessionState {
     pub(super) remote_dtls_fingerprint: Option<String>,
     pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
     pub(super) dtls_started: bool,
-    pub(super) recv_mids: Vec<Mid>,
-    pub(super) send_mids: Vec<Mid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,8 +163,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     pub(super) recv_media_ids: BTreeMap<MediaRouteKey, TransportMediaId>,
-    pub(super) remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
-    pub(super) remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
+    pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     pub(super) dirty_sessions: BTreeSet<TransportSessionKey>,
     pub(super) session_timeouts: BTreeMap<TransportSessionKey, Instant>,
@@ -244,8 +240,7 @@ impl RtcBootstrapState {
 #[derive(Debug, Default)]
 pub(crate) struct RtcSnapshotState {
     pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
-    pub(super) remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
-    pub(super) remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
+    pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
 }
 
@@ -256,7 +251,8 @@ impl RtcSnapshotState {
 
     pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) {
         self.live_sessions.remove(session_key);
-        self.forget_session_remote_addrs(session_key);
+        self.remote_addr_demux
+            .forget_session_remote_addrs(session_key);
         self.incoming_bitrates_by_session.remove(session_key);
     }
 

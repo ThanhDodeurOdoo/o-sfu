@@ -8,28 +8,37 @@ fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
     let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
     let second_session_key = transport_key_on_worker(2, 1, 30, SessionId::Integer(30));
 
-    bootstrap_state.remember_remote_addr(source_addr, &first_session_key);
+    bootstrap_state
+        .remote_addr_demux
+        .remember_remote_addr(source_addr, &first_session_key);
     assert_eq!(
-        bootstrap_state.session_key_for_remote_addr(source_addr),
+        bootstrap_state
+            .remote_addr_demux
+            .session_key_for_remote_addr(source_addr),
         Some(&first_session_key)
     );
 
-    bootstrap_state.remember_remote_addr(source_addr, &second_session_key);
+    bootstrap_state
+        .remote_addr_demux
+        .remember_remote_addr(source_addr, &second_session_key);
 
     assert_eq!(
-        bootstrap_state.session_key_for_remote_addr(source_addr),
+        bootstrap_state
+            .remote_addr_demux
+            .session_key_for_remote_addr(source_addr),
         Some(&second_session_key)
     );
     assert!(
-        !bootstrap_state
-            .remote_addrs_by_session
-            .contains_key(&first_session_key)
+        bootstrap_state
+            .remote_addr_demux
+            .session_addrs_for(&first_session_key)
+            .is_none()
     );
     assert_eq!(
         bootstrap_state
-            .remote_addrs_by_session
-            .get(&second_session_key),
-        Some(&vec![source_addr])
+            .remote_addr_demux
+            .session_addrs_for(&second_session_key),
+        Some([source_addr].as_slice())
     );
 }
 

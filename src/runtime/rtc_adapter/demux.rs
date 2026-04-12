@@ -1,16 +1,13 @@
 //! IP hash-indexed demux and media route entries for the RTC transport adapter.
 
-use std::net::SocketAddr;
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::SocketAddr,
+};
 
 use str0m::media::Mid;
 
 use crate::runtime::transport_adapter::TransportSessionKey;
-
-use super::state::{RtcBootstrapState, RtcSnapshotState};
-
-// ---------------------------------------------------------------------------
-// Media route types
-// ---------------------------------------------------------------------------
 
 /// A single forwarding destination within the media route index.
 #[derive(Debug, Clone)]
@@ -29,80 +26,13 @@ pub(super) struct MediaRouteEntry {
 /// Media route source key: `(producer session, producer mid)`.
 pub(super) type MediaRouteKey = (TransportSessionKey, Mid);
 
-// ---------------------------------------------------------------------------
-// Remote address demux on RtcBootstrapState
-// ---------------------------------------------------------------------------
-
-impl RtcBootstrapState {
-    pub(super) fn session_key_for_remote_addr(
-        &self,
-        source_addr: SocketAddr,
-    ) -> Option<&TransportSessionKey> {
-        self.remote_addr_index.get(&source_addr)
-    }
-
-    pub(super) fn remember_remote_addr(
-        &mut self,
-        source_addr: SocketAddr,
-        session_key: &TransportSessionKey,
-    ) {
-        let previous_session = self
-            .remote_addr_index
-            .insert(source_addr, session_key.clone());
-        if let Some(previous_session) = previous_session {
-            self.remove_remote_addr_from_session(&previous_session, source_addr);
-        }
-        let session_addrs = self
-            .remote_addrs_by_session
-            .entry(session_key.clone())
-            .or_default();
-        if !session_addrs.contains(&source_addr) {
-            session_addrs.push(source_addr);
-        }
-    }
-
-    pub(super) fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
-        let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
-            return;
-        };
-        self.remove_remote_addr_from_session(&session_key, source_addr);
-    }
-
-    pub(super) fn forget_session_remote_addrs(&mut self, session_key: &TransportSessionKey) {
-        let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
-            return;
-        };
-        for source_addr in session_addrs {
-            self.remote_addr_index.remove(&source_addr);
-        }
-    }
-
-    fn remove_remote_addr_from_session(
-        &mut self,
-        session_key: &TransportSessionKey,
-        source_addr: SocketAddr,
-    ) {
-        let should_remove_session_entry = self
-            .remote_addrs_by_session
-            .get_mut(session_key)
-            .is_some_and(|session_addrs| {
-                if let Some(position) = session_addrs.iter().position(|addr| *addr == source_addr) {
-                    session_addrs.swap_remove(position);
-                }
-                session_addrs.is_empty()
-            });
-        if should_remove_session_entry {
-            self.remote_addrs_by_session.remove(session_key);
-        }
-    }
+#[derive(Debug, Default)]
+pub(super) struct RemoteAddrDemux {
+    remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
+    remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
 }
 
-// ---------------------------------------------------------------------------
-// Remote address demux on RtcSnapshotState
-// ---------------------------------------------------------------------------
-
-impl RtcSnapshotState {
-    #[cfg(any(test, feature = "internal-benchmarks"))]
+impl RemoteAddrDemux {
     pub(super) fn session_key_for_remote_addr(
         &self,
         source_addr: SocketAddr,
@@ -144,6 +74,30 @@ impl RtcSnapshotState {
         for source_addr in session_addrs {
             self.remote_addr_index.remove(&source_addr);
         }
+    }
+
+    #[cfg(feature = "internal-benchmarks")]
+    pub(super) fn session_entries(
+        &self,
+    ) -> impl Iterator<Item = (&TransportSessionKey, &[SocketAddr])> {
+        self.remote_addrs_by_session
+            .iter()
+            .map(|(session_key, addrs)| (session_key, addrs.as_slice()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn session_addrs_for(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<&[SocketAddr]> {
+        self.remote_addrs_by_session
+            .get(session_key)
+            .map(Vec::as_slice)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.remote_addrs_by_session.is_empty()
     }
 
     fn remove_remote_addr_from_session(

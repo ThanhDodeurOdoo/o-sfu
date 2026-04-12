@@ -87,10 +87,12 @@ fn respond_debug_remote_addr_owner(
     source_addr: SocketAddr,
     response: oneshot::Sender<Option<TransportSessionKey>>,
 ) {
-    let value = snapshot_state
-        .lock()
-        .ok()
-        .and_then(|snapshot| snapshot.session_key_for_remote_addr(source_addr).cloned());
+    let value = snapshot_state.lock().ok().and_then(|snapshot| {
+        snapshot
+            .remote_addr_demux
+            .session_key_for_remote_addr(source_addr)
+            .cloned()
+    });
     let _ = response.send(value);
 }
 
@@ -101,7 +103,7 @@ fn respond_debug_has_any_remote_addr_session(
     let value = snapshot_state
         .lock()
         .ok()
-        .is_some_and(|snapshot| !snapshot.remote_addrs_by_session.is_empty());
+        .is_some_and(|snapshot| !snapshot.remote_addr_demux.is_empty());
     let _ = response.send(value);
 }
 
@@ -112,9 +114,13 @@ fn respond_debug_remember_remote_addr(
     session_key: &TransportSessionKey,
     response: oneshot::Sender<()>,
 ) {
-    state.remember_remote_addr(source_addr, session_key);
+    state
+        .remote_addr_demux
+        .remember_remote_addr(source_addr, session_key);
     if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.remember_remote_addr(source_addr, session_key);
+        snapshot
+            .remote_addr_demux
+            .remember_remote_addr(source_addr, session_key);
     }
     let _ = response.send(());
 }

@@ -66,12 +66,10 @@ impl MediaTap {
 
 impl MediaSource for MediaTap {
     fn activate_channel(&self, channel_runtime_id: u64, sink: Arc<dyn MediaFrameSink>) {
-        let mut active_channels = self
-            .active_channels
+        self.active_channels
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        active_channels.insert(channel_runtime_id, sink);
-        drop(active_channels);
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(channel_runtime_id, sink);
         self.any_active.store(true, Ordering::Release);
     }
 

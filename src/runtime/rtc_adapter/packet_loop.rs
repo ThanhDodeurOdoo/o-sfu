@@ -516,13 +516,17 @@ fn route_packet_with_cached_session(
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) -> bool {
-    let Some(session_key) = state.session_key_for_remote_addr(source_addr).cloned() else {
+    let Some(session_key) = state
+        .remote_addr_demux
+        .session_key_for_remote_addr(source_addr)
+        .cloned()
+    else {
         return false;
     };
     let Some(session_state) = state.sessions.get_mut(&session_key) else {
-        state.forget_remote_addr(source_addr);
+        state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
-            snapshot.forget_remote_addr(source_addr);
+            snapshot.remote_addr_demux.forget_remote_addr(source_addr);
         }
         return false;
     };
@@ -535,9 +539,9 @@ fn route_packet_with_cached_session(
     let accepts_input = session_state.rtc.accepts(&input);
     if !accepts_input {
         let _ = session_state;
-        state.forget_remote_addr(source_addr);
+        state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
-            snapshot.forget_remote_addr(source_addr);
+            snapshot.remote_addr_demux.forget_remote_addr(source_addr);
         }
         return false;
     }
@@ -552,9 +556,13 @@ fn route_packet_with_cached_session(
     } else {
         state.mark_session_dirty(&session_key);
     }
-    state.remember_remote_addr(source_addr, &session_key);
+    state
+        .remote_addr_demux
+        .remember_remote_addr(source_addr, &session_key);
     if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.remember_remote_addr(source_addr, &session_key);
+        snapshot
+            .remote_addr_demux
+            .remember_remote_addr(source_addr, &session_key);
     }
     true
 }
@@ -635,8 +643,12 @@ fn route_packet_by_scan(
     } else {
         state.mark_session_dirty(&session_key);
     }
-    state.remember_remote_addr(source_addr, &session_key);
+    state
+        .remote_addr_demux
+        .remember_remote_addr(source_addr, &session_key);
     if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.remember_remote_addr(source_addr, &session_key);
+        snapshot
+            .remote_addr_demux
+            .remember_remote_addr(source_addr, &session_key);
     }
 }

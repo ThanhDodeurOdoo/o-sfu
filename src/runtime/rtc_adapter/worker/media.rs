@@ -106,11 +106,10 @@ fn worker_remove_media(
         RegisteredMediaHandle::Producer { session_key, mid } => {
             let should_remove_media = !state.session_has_mid(&session_key, mid);
             let should_remove_stream_type = !state.session_has_producer_mid(&session_key, mid);
-            if let Some(session_state) = state.sessions.get_mut(&session_key) {
-                remove_mid_once(&mut session_state.recv_mids, mid);
-                if should_remove_media {
-                    session_state.rtc.direct_api().remove_media(mid);
-                }
+            if let Some(session_state) = state.sessions.get_mut(&session_key)
+                && should_remove_media
+            {
+                session_state.rtc.direct_api().remove_media(mid);
             }
             if should_remove_stream_type {
                 state.recv_media_ids.remove(&(session_key.clone(), mid));
@@ -125,11 +124,10 @@ fn worker_remove_media(
             source_mid,
         } => {
             let should_remove_media = !state.session_has_mid(&session_key, mid);
-            if let Some(session_state) = state.sessions.get_mut(&session_key) {
-                remove_mid_once(&mut session_state.send_mids, mid);
-                if should_remove_media {
-                    session_state.rtc.direct_api().remove_media(mid);
-                }
+            if let Some(session_state) = state.sessions.get_mut(&session_key)
+                && should_remove_media
+            {
+                session_state.rtc.direct_api().remove_media(mid);
             }
             if let Some(route_entry) = state
                 .media_route_index
@@ -172,7 +170,6 @@ fn worker_add_recv_media(
             api.expect_stream_rx(ssrc, None, mid, rid);
         }
     }
-    session_state.recv_mids.push(mid);
     state.mark_session_dirty(session_key);
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
@@ -216,7 +213,6 @@ fn worker_add_send_media(
             .unwrap_or_else(|| (api.new_ssrc(), None));
         api.declare_stream_tx(ssrc, None, mid, rid);
     }
-    session_state.send_mids.push(mid);
     state.mark_session_dirty(consumer_session_key);
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session_key.clone(),
@@ -308,10 +304,4 @@ fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ss
     let ssrc = encoding.ssrc().map(Ssrc::from)?;
     let rid = encoding.rid().map(Into::into);
     Some((ssrc, rid))
-}
-
-fn remove_mid_once(mids: &mut Vec<Mid>, mid: Mid) {
-    if let Some(position) = mids.iter().position(|current_mid| *current_mid == mid) {
-        mids.remove(position);
-    }
 }

@@ -47,16 +47,6 @@ impl From<CurrentWebSocketCloseCode> for u16 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CurrentWebSocketLifecycleState {
-    Accepted,
-    AwaitingCredentials,
-    CredentialsVerified,
-    SessionCreated,
-    StartupDataSent,
-    MessageLoop,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CurrentStartupPayload {
     #[serde(rename = "availableFeatures")]
@@ -164,8 +154,6 @@ pub struct CurrentPublishTrackResponse {
     pub id: String,
 }
 
-pub type CurrentRecordingActionResult = bool;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "payload")]
 pub enum CurrentClientMessage {
@@ -238,7 +226,6 @@ mod tests {
         CurrentSessionInfoUpdatePayload, CurrentStartRecordingPayload, CurrentStartupPayload,
         CurrentTransportBootstrapPayload, CurrentTransportConnectPayload,
         CurrentUploadStateChangePayload, CurrentWebSocketCloseCode, CurrentWebSocketCredentials,
-        CurrentWebSocketLifecycleState,
     };
     use crate::signaling::shared::{
         AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
@@ -342,10 +329,6 @@ mod tests {
         assert_eq!(
             u16::from(CurrentWebSocketCloseCode::AuthenticationFailed),
             4106
-        );
-        assert_eq!(
-            CurrentWebSocketLifecycleState::MessageLoop,
-            CurrentWebSocketLifecycleState::MessageLoop
         );
         Ok(())
     }

@@ -17,7 +17,7 @@ fn codec_capability_builder_keeps_optional_fields() {
     assert_eq!(capability.media_kind(), MediaKind::Audio);
     assert_eq!(capability.codec_name(), "opus");
     assert_eq!(capability.clock_rate(), 48_000);
-    assert_eq!(capability.preferred_payload_type(), Some(111));
+    assert_eq!(capability.payload_type(), Some(111));
     assert_eq!(capability.channels(), Some(2));
     assert_eq!(
         capability.parameters().collect::<Vec<_>>(),
@@ -162,7 +162,7 @@ fn derive_consumable_parameters_maps_payload_types_and_rtx_association() {
     let Some(first_encoding) = first_encoding else {
         return;
     };
-    assert_eq!(first_encoding.codec_payload_type(), Some(101));
+    assert_eq!(first_encoding.payload_type(), Some(101));
 }
 
 #[test]

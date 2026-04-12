@@ -8,7 +8,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::StatusCode;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -525,17 +524,6 @@ pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode>
             return frame.map(|frame| frame.code);
         }
     }
-}
-
-pub fn decode_bus_response<T>(envelope: &CurrentBusEnvelope) -> Option<T>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_value(envelope.message.clone()).ok()
-}
-
-pub fn is_empty_bus_response(envelope: &CurrentBusEnvelope) -> bool {
-    matches!(&envelope.message, Value::Object(object) if object.is_empty())
 }
 
 pub(crate) fn supported_client_rtp_capabilities() -> Value {

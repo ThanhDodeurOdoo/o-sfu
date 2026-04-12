@@ -10,13 +10,13 @@
 //! - ORTC API dictionaries: <https://draft.ortc.org/>
 
 use o_sfu_router::{
-    CodecSetting, HeaderExtension as RouterHeaderExtension, MediaCapabilities,
-    MediaCodecCapability, MediaFormat, MediaKind as RouterMediaKind, MediaStream, RtcpFeedback,
-    RtcpFeedbackKind, StreamBinding,
+    HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat,
+    MediaKind as RouterMediaKind, MediaStream, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
 use serde_json::{Map, Value, json};
 
 use crate::rfc::webrtc;
+use crate::signaling::webrtc::{serialize_codec_settings, serialize_rtcp_feedback};
 
 // ---------------------------------------------------------------------------
 // Parse: ortc JSON -> router types
@@ -280,7 +280,7 @@ fn serialize_encoding(encoding: &StreamBinding) -> Value {
     if let Some(rid) = encoding.rid() {
         obj.insert("rid".to_owned(), json!(rid));
     }
-    if let Some(pt) = encoding.codec_payload_type() {
+    if let Some(pt) = encoding.payload_type() {
         obj.insert("codecPayloadType".to_owned(), json!(pt));
     }
     if let Some(max_bitrate) = encoding.max_bitrate() {
@@ -290,7 +290,7 @@ fn serialize_encoding(encoding: &StreamBinding) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// RTCP feedback parsing and serialization
+// RTCP feedback parsing
 // ---------------------------------------------------------------------------
 
 fn parse_rtcp_feedback(value: &Value) -> Option<RtcpFeedback> {
@@ -314,29 +314,6 @@ fn parse_rtcp_feedback(value: &Value) -> Option<RtcpFeedback> {
         _ => None,
     };
     Some(RtcpFeedback::new(kind, rtcp_parameter))
-}
-
-fn serialize_rtcp_feedback(feedback: &RtcpFeedback) -> Value {
-    let (feedback_type, parameter) = match feedback.kind() {
-        RtcpFeedbackKind::Nack => (webrtc::rtcp_feedback::kind::NACK, feedback.parameter()),
-        RtcpFeedbackKind::NackPli => (
-            webrtc::rtcp_feedback::kind::NACK,
-            Some(webrtc::rtcp_feedback::parameter::PLI),
-        ),
-        RtcpFeedbackKind::CcmFir => (
-            webrtc::rtcp_feedback::kind::CCM,
-            Some(webrtc::rtcp_feedback::parameter::FIR),
-        ),
-        RtcpFeedbackKind::GoogRemb => (webrtc::rtcp_feedback::kind::GOOG_REMB, None),
-        RtcpFeedbackKind::TransportCc => (webrtc::rtcp_feedback::kind::TRANSPORT_CC, None),
-        RtcpFeedbackKind::Other(name) => (name.as_str(), feedback.parameter()),
-    };
-    let mut obj = Map::new();
-    obj.insert("type".to_owned(), json!(feedback_type));
-    if let Some(param) = parameter {
-        obj.insert("parameter".to_owned(), json!(param));
-    }
-    Value::Object(obj)
 }
 
 // ---------------------------------------------------------------------------
@@ -364,19 +341,6 @@ fn serialize_codec_parameters(codec: &MediaFormat) -> Value {
         Value::Array(codec.rtcp_feedback().map(serialize_rtcp_feedback).collect()),
     );
     Value::Object(obj)
-}
-
-fn serialize_codec_settings<'a>(settings: impl Iterator<Item = &'a CodecSetting>) -> Value {
-    Value::Object(
-        settings
-            .map(|setting| {
-                (
-                    setting.key().to_owned(),
-                    json!(setting.wire_value().as_ref()),
-                )
-            })
-            .collect(),
-    )
 }
 
 // ---------------------------------------------------------------------------

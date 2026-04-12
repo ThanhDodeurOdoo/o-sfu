@@ -31,9 +31,13 @@ pub(super) fn respond_remember_remote_addr(
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
     let result = if state.sessions.contains_key(session_key) {
-        state.remember_remote_addr(source_addr, session_key);
+        state
+            .remote_addr_demux
+            .remember_remote_addr(source_addr, session_key);
         if let Ok(mut snapshot) = snapshot_state.lock() {
-            snapshot.remember_remote_addr(source_addr, session_key);
+            snapshot
+                .remote_addr_demux
+                .remember_remote_addr(source_addr, session_key);
         }
         Ok(())
     } else {
@@ -49,7 +53,9 @@ fn worker_close_session(
 ) -> CloseSessionOutcome {
     state.sessions.remove(session_key);
     state.clear_session_schedule(session_key);
-    state.forget_session_remote_addrs(session_key);
+    state
+        .remote_addr_demux
+        .forget_session_remote_addrs(session_key);
     state
         .mid_registry
         .retain(|_id, handle| handle.session_key() != session_key);

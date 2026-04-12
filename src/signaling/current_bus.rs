@@ -4,9 +4,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CURRENT_WIRE_BATCH_DELAY_MS: u64 = 200;
-pub const CURRENT_WIRE_REQUEST_TIMEOUT_MS: u64 = 5_000;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurrentBusOrigin {
     Client,
@@ -53,10 +50,7 @@ pub type CurrentBusBatch = Vec<CurrentBusEnvelope>;
 mod tests {
     use serde_json::json;
 
-    use super::{
-        CURRENT_WIRE_BATCH_DELAY_MS, CURRENT_WIRE_REQUEST_TIMEOUT_MS, CurrentBusBatch,
-        CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
-    };
+    use super::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId};
 
     #[test]
     fn request_id_format_matches_current_bus_contract() {
@@ -68,8 +62,6 @@ mod tests {
             CurrentBusRequestId::new(CurrentBusOrigin::Server, 2, 0).as_str(),
             "s_2_0"
         );
-        assert_eq!(CURRENT_WIRE_BATCH_DELAY_MS, 200);
-        assert_eq!(CURRENT_WIRE_REQUEST_TIMEOUT_MS, 5_000);
     }
 
     #[test]
