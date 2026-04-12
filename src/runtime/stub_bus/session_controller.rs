@@ -203,10 +203,6 @@ impl SessionController {
         self.handle_ping_response(&response_to)
     }
 
-    #[allow(
-        clippy::cognitive_complexity,
-        reason = "the bootstrap response path keeps request matching, capability storage, and delayed late-join bootstrap in one linear flow"
-    )]
     async fn handle_transport_bootstrap_response(
         &mut self,
         response_to: &CurrentBusRequestId,
@@ -227,20 +223,15 @@ impl SessionController {
             );
             return true;
         };
-        let update = self
+        if self
             .channel
-            .set_client_rtp_capabilities(&self.session_id, capabilities)
-            .await;
-        if update.session_present {
+            .apply_client_rtp_capabilities(&self.session_id, capabilities, &self.transport_adapter)
+            .await
+        {
             debug!(
                 response_to = %response_to.as_str(),
                 "stored client RTP capabilities from bootstrap response"
             );
-            if update.became_consumer_ready {
-                self.channel
-                    .bootstrap_late_join_consumers(&self.session_id, &self.transport_adapter)
-                    .await;
-            }
         } else {
             debug!(
                 response_to = %response_to.as_str(),
@@ -341,10 +332,6 @@ impl SessionController {
         }
     }
 
-    #[allow(
-        clippy::cognitive_complexity,
-        reason = "transport connect + late-join bootstrap is a linear sequence that reads better in one method"
-    )]
     async fn handle_transport_connect_request(
         &self,
         payload: &CurrentTransportConnectPayload,
@@ -365,21 +352,16 @@ impl SessionController {
             debug!(?direction, "transport adapter failed to connect transport");
             return empty_object();
         }
-        let update = self
+        if !self
             .channel
-            .set_transport_connected(&self.session_id, direction)
-            .await;
-        if !update.session_present {
+            .apply_transport_connected(&self.session_id, direction, &self.transport_adapter)
+            .await
+        {
             debug!(
                 ?direction,
                 "channel no longer tracks session during transport connect"
             );
             return empty_object();
-        }
-        if update.became_consumer_ready {
-            self.channel
-                .bootstrap_late_join_consumers(&self.session_id, &self.transport_adapter)
-                .await;
         }
         debug!(?direction, "handled transport connect request");
         empty_object()

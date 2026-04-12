@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use crate::runtime::transport_adapter::TransportConnectDirection;
+use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
 use crate::signaling::{
     current_protocol::{CurrentBroadcastPayload, CurrentServerMessage},
     shared::{SessionId, SessionInfo, SessionPermissions},
@@ -80,7 +80,52 @@ impl Channel {
         outcome.emit();
     }
 
-    pub async fn set_client_rtp_capabilities(
+    pub(crate) async fn apply_client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+        capabilities: SignalingRtpCapabilities,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let update = {
+            let mut state = self.state.write().await;
+            state.set_client_rtp_capabilities(session_id, capabilities)
+        };
+        self.apply_negotiation_update(session_id, update, transport_adapter)
+            .await
+    }
+
+    pub(crate) async fn apply_transport_connected(
+        &self,
+        session_id: &SessionId,
+        direction: TransportConnectDirection,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let update = {
+            let mut state = self.state.write().await;
+            state.set_transport_connected(session_id, direction)
+        };
+        self.apply_negotiation_update(session_id, update, transport_adapter)
+            .await
+    }
+
+    async fn apply_negotiation_update(
+        &self,
+        session_id: &SessionId,
+        update: SessionNegotiationUpdate,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        if !update.session_present {
+            return false;
+        }
+        if update.became_consumer_ready {
+            self.bootstrap_late_join_consumers(session_id, transport_adapter)
+                .await;
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) async fn set_client_rtp_capabilities(
         &self,
         session_id: &SessionId,
         capabilities: SignalingRtpCapabilities,
@@ -89,7 +134,8 @@ impl Channel {
         state.set_client_rtp_capabilities(session_id, capabilities)
     }
 
-    pub async fn set_transport_connected(
+    #[cfg(test)]
+    pub(super) async fn set_transport_connected(
         &self,
         session_id: &SessionId,
         direction: TransportConnectDirection,
