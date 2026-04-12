@@ -1,0 +1,150 @@
+use super::*;
+
+#[test]
+fn protocol_core_connect_emits_connecting_state_and_socket_command() {
+    let mut core = ProtocolCore::new();
+
+    let commands = core.connect(
+        "wss://sfu.example.com/socket",
+        "signed-token",
+        Some(String::from("channel-1")),
+    );
+
+    assert_eq!(core.state(), ConnectionState::Connecting);
+    assert_eq!(
+        commands,
+        vec![
+            Command::EmitStateChange {
+                state: ConnectionState::Connecting,
+                cause: None,
+            },
+            Command::Connect {
+                url: String::from("wss://sfu.example.com/socket"),
+            },
+        ]
+    );
+}
+
+#[test]
+fn protocol_core_ignores_connect_while_session_is_active() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+
+    let commands = core.connect("wss://other.example.com/socket", "other-token", None);
+
+    assert!(commands.is_empty());
+    assert_eq!(core.state(), ConnectionState::Connecting);
+}
+
+#[test]
+fn protocol_core_ws_open_sends_auth_frame_immediately() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect(
+        "wss://sfu.example.com/socket",
+        "signed-token",
+        Some(String::from("channel-1")),
+    );
+
+    let commands = core.on_ws_open();
+
+    assert!(matches!(commands.as_slice(), [Command::SendWebSocket(_)]));
+    let batch = decode_sent_batch(&commands);
+    assert_eq!(batch.len(), 1);
+    let Some(envelope) = batch.into_iter().next() else {
+        return;
+    };
+    assert_eq!(
+        ClientEnvelope::decode(envelope),
+        Ok(ClientEnvelope::Message(ClientMessage::Auth(AuthPayload {
+            jwt: String::from("signed-token"),
+            channel: Some(String::from("channel-1")),
+        })))
+    );
+}
+
+#[test]
+fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+
+    let commands = core.on_welcome(sample_welcome_payload());
+
+    assert_eq!(core.state(), ConnectionState::Authenticated);
+    assert!(core.features().video_recording);
+    assert_eq!(core.recording_state().recording, Some(false));
+    assert_eq!(
+        commands,
+        vec![
+            Command::EmitStateChange {
+                state: ConnectionState::Authenticated,
+                cause: None,
+            },
+            Command::EmitUpdate {
+                update: BundleUpdate::SessionInfoChange(
+                    [(
+                        String::from("7"),
+                        SessionInfo {
+                            is_talking: Some(true),
+                            ..SessionInfo::default()
+                        }
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            },
+        ]
+    );
+}
+
+#[test]
+fn protocol_core_transport_ready_transitions_to_connected() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+
+    let commands = core.on_transport_ready();
+
+    assert_eq!(core.state(), ConnectionState::Connected);
+    assert_eq!(
+        commands,
+        vec![Command::EmitStateChange {
+            state: ConnectionState::Connected,
+            cause: None,
+        }]
+    );
+}
+
+#[test]
+fn protocol_core_rejects_illegal_authenticated_transition() {
+    let mut core = ProtocolCore::new();
+
+    let commands = core.on_welcome(sample_welcome_payload());
+
+    assert!(commands.is_empty());
+    assert_eq!(core.state(), ConnectionState::Disconnected);
+}
+
+#[test]
+fn protocol_core_closes_on_invalid_server_batch() {
+    let mut core = ProtocolCore::new();
+
+    let commands = core.on_ws_message("{not json");
+
+    assert_eq!(
+        commands,
+        vec![Command::CloseWebSocket {
+            code: u16::from(WebSocketCloseCode::ProtocolError),
+        }]
+    );
+}
+
+#[test]
+fn protocol_core_ignores_unknown_or_stale_timers() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+
+    let commands = core.on_timer(99);
+
+    assert!(commands.is_empty());
+    assert_eq!(core.state(), ConnectionState::Connecting);
+}
