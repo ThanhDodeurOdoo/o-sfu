@@ -10,6 +10,7 @@ import type {
     StreamType
 } from "./public_api.js";
 import type { TrackBinding } from "./protocol.js";
+import { defaultProtocolCoreFactory } from "./wasm_runtime.js";
 
 export const NEGOTIATION_KIND = {
     OFFER: "offer",
@@ -85,10 +86,5 @@ export function configureProtocolCoreFactory(factory: ProtocolCoreFactory): void
 }
 
 export function createProtocolCore(): ProtocolCoreBindings {
-    if (!protocolCoreFactory) {
-        throw new Error(
-            "o-sfu client runtime is not configured: call configureProtocolCoreFactory() with the generated ProtocolCoreWasm factory before instantiating SfuClient"
-        );
-    }
-    return protocolCoreFactory();
+    return (protocolCoreFactory ?? defaultProtocolCoreFactory)();
 }

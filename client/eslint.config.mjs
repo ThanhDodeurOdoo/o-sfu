@@ -68,7 +68,7 @@ export default defineConfig([
         }
     },
     {
-        files: ["test/**/*.mjs", "eslint.config.mjs"],
+        files: ["scripts/**/*.mjs", "test/**/*.mjs", "eslint.config.mjs"],
         languageOptions: {
             globals: {
                 ...globals.browser,

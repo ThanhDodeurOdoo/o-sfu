@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLIENT_UPDATE, SfuClient } from "../dist/index.js";
+import { CLIENT_UPDATE, SfuClient, createProtocolCore } from "../dist/index.js";
 
 const EMPTY_FEATURES = {
     rtc: false,
@@ -260,6 +260,29 @@ test("startRecording resolves through the protocol request lifecycle", async () 
     sockets[0].emitMessage("recording-ok");
 
     assert.equal(await resultPromise, true);
+});
+
+test("default runtime creates the protocol core from generated wasm bindings", () => {
+    const core = createProtocolCore();
+
+    const connectCommands = core.connect("ws://example.test/ws", "jwt-token", "channel-a");
+    const authCommands = core.onWsOpen();
+
+    assert.deepEqual(connectCommands, [
+        { kind: "emitStateChange", cause: undefined, state: "connecting" },
+        { kind: "connect", url: "ws://example.test/ws" }
+    ]);
+    assert.equal(authCommands.length, 1);
+    assert.equal(authCommands[0].kind, "sendWebSocket");
+    assert.deepEqual(JSON.parse(authCommands[0].frame), [
+        {
+            t: "auth",
+            p: {
+                channel: "channel-a",
+                jwt: "jwt-token"
+            }
+        }
+    ]);
 });
 
 test("negotiation creates a peer connection and emits lowercase track updates", async () => {

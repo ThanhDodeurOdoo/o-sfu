@@ -1,3 +1,12 @@
 # o-sfu client
 
-Will do at the end of the project when experimenting is done
+`npm run build` now generate the default `ProtocolCoreWasm` runtime into `client/generated/` and
+compiles the TypeScript part.
+
+requires `wasm-pack`:
+
+```bash
+cargo install wasm-pack
+```
+
+will format the readme in a more pretty way later

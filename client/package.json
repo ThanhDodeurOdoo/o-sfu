@@ -5,8 +5,10 @@
   "type": "module",
   "description": "Browser shell groundwork for o-sfu",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "lint": "eslint src test eslint.config.mjs",
+    "build:wasm": "node ./scripts/build_wasm_runtime.mjs",
+    "check:wasm-size": "node ./scripts/check_wasm_size.mjs",
+    "build": "npm run build:wasm && tsc -p tsconfig.json && npm run check:wasm-size",
+    "lint": "eslint src scripts test eslint.config.mjs",
     "test": "npm run build && node --test ./test/**/*.mjs",
     "typscript": "tsc --noEmit -p tsconfig.json",
     "verify": "npm run lint && npm run typscript && npm run test"
