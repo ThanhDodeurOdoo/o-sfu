@@ -66,6 +66,11 @@ pub(super) struct ChannelState {
     pub(super) recording_state: RecordingState,
     /// Keyed by wire-format producer id (e.g. `"producer-3"`).
     pub(super) producers: BTreeMap<String, PublishedProducer>,
+    /// Producer lookup keyed by the publisher session and stream type.
+    producer_wire_ids_by_owner_stream: BTreeMap<ProducerKey, String>,
+    /// Control-plane lookup for bitrate snapshots keyed by transport-owned media ids.
+    /// This keeps stats and other bookkeeping out of linear scans over `producers`.
+    producer_stream_types_by_transport_media_id: BTreeMap<TransportMediaId, StreamType>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     /// Shadow of session/producer/consumer state inside the pure router core.
     /// Must be kept in sync with the maps above -- every mutating method updates
@@ -81,6 +86,12 @@ pub(super) struct ConsumerKey {
     pub(super) consumer_session_id: SessionId,
     pub(super) producer_session_id: SessionId,
     pub(super) stream_type: StreamType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ProducerKey {
+    owner_session_id: SessionId,
+    stream_type: StreamType,
 }
 
 /// A connected participant in the channel. Tracks negotiation progress
@@ -121,6 +132,14 @@ pub(super) struct ConsumerState {
     pub(super) source_connection_id: u64,
     pub(super) source_media: TransportMediaId,
     pub(super) consumer_media: TransportMediaId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProducerRouteTarget {
+    pub(super) producer_wire_id: String,
+    pub(super) owner_connection_id: u64,
+    pub(super) routed_producer_id: RoutedProducerId,
+    pub(super) transport_media_id: TransportMediaId,
 }
 
 #[derive(Debug, Clone)]
@@ -249,14 +268,34 @@ impl ChannelState {
                 video: Some(false),
             },
             producers: BTreeMap::new(),
+            producer_wire_ids_by_owner_stream: BTreeMap::new(),
+            producer_stream_types_by_transport_media_id: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             topology: ChannelTopology::new_with_recording_service(router_id, recording_service),
         }
     }
 
     pub(super) fn purge_session_media_state(&mut self, session_id: &SessionId) {
+        let removed_producers = self
+            .producers
+            .values()
+            .filter(|producer| producer.owner_session_id == *session_id)
+            .map(|producer| {
+                (
+                    ProducerKey::new(&producer.owner_session_id, producer.stream_type),
+                    producer.transport_media_id,
+                )
+            })
+            .collect::<Vec<_>>();
         self.producers
             .retain(|_wire_id, producer| producer.owner_session_id != *session_id);
+        for (producer_key, transport_media_id) in removed_producers {
+            self.producer_wire_ids_by_owner_stream.remove(&producer_key);
+            if let Some(transport_media_id) = transport_media_id {
+                self.producer_stream_types_by_transport_media_id
+                    .remove(&transport_media_id);
+            }
+        }
         self.consumer_index.retain(|key, _consumer_id| {
             key.consumer_session_id != *session_id && key.producer_session_id != *session_id
         });
@@ -599,6 +638,12 @@ impl ChannelState {
                 active: true,
             },
         );
+        self.producer_wire_ids_by_owner_stream.insert(
+            ProducerKey::new(&pending.owner_session_id, pending.stream_type),
+            pending.producer_wire_id.clone(),
+        );
+        self.producer_stream_types_by_transport_media_id
+            .insert(transport_media_id, pending.stream_type);
         let consumer_targets = self.publish_consumer_targets(
             &pending.owner_session_id,
             pending.owner_connection_id,
@@ -608,6 +653,39 @@ impl ChannelState {
             transport_media_id,
         );
         Some((pending.producer_wire_id, consumer_targets))
+    }
+
+    #[must_use]
+    pub(super) fn producer_stream_type_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<StreamType> {
+        self.producer_stream_types_by_transport_media_id
+            .get(&transport_media_id)
+            .copied()
+    }
+
+    #[must_use]
+    pub(super) fn producer_route_target(
+        &self,
+        owner_session_id: &SessionId,
+        owner_connection_id: u64,
+        stream_type: StreamType,
+    ) -> Option<ProducerRouteTarget> {
+        let producer_wire_id = self
+            .producer_wire_ids_by_owner_stream
+            .get(&ProducerKey::new(owner_session_id, stream_type))?;
+        let producer = self.producers.get(producer_wire_id)?;
+        if producer.owner_connection_id != owner_connection_id {
+            return None;
+        }
+        let transport_media_id = producer.transport_media_id?;
+        Some(ProducerRouteTarget {
+            producer_wire_id: producer_wire_id.clone(),
+            owner_connection_id: producer.owner_connection_id,
+            routed_producer_id: producer.routed_producer_id,
+            transport_media_id,
+        })
     }
 
     pub(super) fn prepare_consumer_bootstrap_transaction(
@@ -814,5 +892,14 @@ fn to_router_stream_type(stream_type: StreamType) -> RouterStreamType {
         StreamType::Audio => RouterStreamType::Audio,
         StreamType::Camera => RouterStreamType::Camera,
         StreamType::Screen => RouterStreamType::Screen,
+    }
+}
+
+impl ProducerKey {
+    fn new(owner_session_id: &SessionId, stream_type: StreamType) -> Self {
+        Self {
+            owner_session_id: owner_session_id.clone(),
+            stream_type,
+        }
     }
 }

@@ -130,11 +130,24 @@ async fn session_replacement_purges_stale_published_media_state() {
             .iter()
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
+    let published_transport_media_id = {
+        let state = channel.state.read().await;
+        state
+            .producers
+            .values()
+            .find_map(|producer| producer.transport_media_id)
+    };
+    assert!(published_transport_media_id.is_some());
 
     {
         let state = channel.state.read().await;
         assert_eq!(state.producers.len(), 1);
         assert_eq!(state.consumer_index.len(), 1);
+        assert!(
+            state
+                .producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+                .is_some()
+        );
         drop(state);
     }
 
@@ -156,6 +169,19 @@ async fn session_replacement_purges_stale_published_media_state() {
         let state = channel.state.read().await;
         assert!(state.producers.is_empty());
         assert!(state.consumer_index.is_empty());
+        assert!(
+            state
+                .producer_stream_type_for_transport_media_id(
+                    published_transport_media_id
+                        .expect("published track should have a transport id")
+                )
+                .is_none()
+        );
+        assert!(
+            state
+                .producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+                .is_none()
+        );
         drop(state);
     }
 }
@@ -274,11 +300,20 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
     {
         let state = channel.state.read().await;
         assert_eq!(state.producers.len(), 1);
+        let transport_media_id = state
+            .producers
+            .values()
+            .find_map(|producer| producer.transport_media_id);
+        assert!(transport_media_id.is_some());
+        assert_eq!(
+            transport_media_id.and_then(|transport_media_id| state
+                .producer_stream_type_for_transport_media_id(transport_media_id)),
+            Some(StreamType::Camera)
+        );
         assert!(
             state
-                .producers
-                .values()
-                .all(|producer| producer.transport_media_id.is_some())
+                .producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+                .is_some()
         );
         drop(state);
     }

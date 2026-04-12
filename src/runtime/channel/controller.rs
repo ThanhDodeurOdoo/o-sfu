@@ -200,12 +200,7 @@ impl Channel {
             .sessions
             .iter()
             .map(|(session_id, session)| {
-                TransportSessionKey::new(
-                    self.runtime_id,
-                    self.media_worker_id,
-                    session.connection_id,
-                    session_id.clone(),
-                )
+                self.transport_session_key(session_id, session.connection_id)
             })
             .collect::<Vec<_>>();
         let transport_snapshot = transport_adapter.transport_bitrate_snapshot(&session_keys);
@@ -214,13 +209,9 @@ impl Channel {
             ..Default::default()
         };
         for (transport_media_id, bits) in transport_snapshot.per_media {
-            let Some(stream_type) = state.producers.values().find_map(|producer| {
-                if producer.transport_media_id == Some(transport_media_id) {
-                    Some(producer.stream_type)
-                } else {
-                    None
-                }
-            }) else {
+            let Some(stream_type) =
+                state.producer_stream_type_for_transport_media_id(transport_media_id)
+            else {
                 continue;
             };
             match stream_type {

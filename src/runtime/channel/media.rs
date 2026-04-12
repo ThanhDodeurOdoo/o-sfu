@@ -207,32 +207,22 @@ impl Channel {
         active: bool,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let Some((producer_id, owner_connection_id, routed_producer_id, transport_media_id)) = ({
+        let Some(producer_target) = ({
             let state = self.state.read().await;
-            let current_connection_id = state
-                .sessions
-                .get(session_id)
-                .map(|session| session.connection_id);
-            state.producers.iter().find_map(|(producer_id, producer)| {
-                (producer.owner_session_id == *session_id
-                    && Some(producer.owner_connection_id) == current_connection_id
-                    && producer.stream_type == stream_type)
-                    .then_some((
-                        producer_id.clone(),
-                        producer.owner_connection_id,
-                        producer.routed_producer_id,
-                        producer.transport_media_id,
-                    ))
+            state.sessions.get(session_id).and_then(|session| {
+                state.producer_route_target(session_id, session.connection_id, stream_type)
             })
         }) else {
             return;
         };
-        let Some(transport_media_id) = transport_media_id else {
-            return;
-        };
-        let transport_session_key = self.transport_session_key(session_id, owner_connection_id);
+        let transport_session_key =
+            self.transport_session_key(session_id, producer_target.owner_connection_id);
         if transport_adapter
-            .set_producer_active(&transport_session_key, transport_media_id, active)
+            .set_producer_active(
+                &transport_session_key,
+                producer_target.transport_media_id,
+                active,
+            )
             .await
             .is_err()
         {
@@ -250,13 +240,13 @@ impl Channel {
                 .sessions
                 .get(session_id)
                 .map(|session| session.connection_id);
-            let Some(producer) = state.producers.get_mut(&producer_id) else {
+            let Some(producer) = state.producers.get_mut(&producer_target.producer_wire_id) else {
                 return;
             };
-            if producer.owner_connection_id != owner_connection_id
+            if producer.owner_connection_id != producer_target.owner_connection_id
                 || Some(producer.owner_connection_id) != current_connection_id
-                || producer.routed_producer_id != routed_producer_id
-                || producer.transport_media_id != Some(transport_media_id)
+                || producer.routed_producer_id != producer_target.routed_producer_id
+                || producer.transport_media_id != Some(producer_target.transport_media_id)
             {
                 return;
             }
@@ -264,7 +254,7 @@ impl Channel {
             let paused = !active;
             if state
                 .topology
-                .set_producer_paused(routed_producer_id, paused)
+                .set_producer_paused(producer_target.routed_producer_id, paused)
                 .is_err()
             {
                 error!(
