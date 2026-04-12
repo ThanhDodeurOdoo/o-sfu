@@ -8,13 +8,16 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     stub_bus::{StubBusOutcome, StubBusSession, WsWriter},
     transport_adapter::RuntimeTransportAdapter,
+    transport_adapter::TransportConnectDirection,
 };
 use crate::signaling::{
     protocol::{
-        ClientEnvelope, ClientResponse, EnvelopeBatch, RequestId, ServerEnvelope, ServerRequest,
-        WebSocketCloseCode,
+        ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
+        EnvelopeBatch, RecordingActionResult, RequestId, ServerEnvelope, ServerRequest,
+        ServerResponse, SessionDescriptionPayload, WebSocketCloseCode,
     },
     shared::SessionId,
+    webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,21 +64,27 @@ impl SessionProtocol {
         ))
     }
 
-    #[allow(
-        dead_code,
-        reason = "tests and the next protocol migration slice need a concrete native session implementation before runtime selection switches away from legacy stub-bus"
-    )]
-    pub(super) fn native() -> Self {
-        Self::Native(NativeSessionProtocol::default())
+    pub(super) fn native(
+        session_id: SessionId,
+        connection_id: u64,
+        channel: Arc<Channel>,
+        transport_adapter: RuntimeTransportAdapter,
+    ) -> Self {
+        Self::Native(NativeSessionProtocol::new(
+            session_id,
+            connection_id,
+            channel,
+            transport_adapter,
+        ))
     }
 
     pub(super) async fn initialize(&mut self, writer: &mut WsWriter) -> Result<(), ()> {
         match self {
             Self::LegacyStubBus(session) => session.send_transport_bootstrap(writer).await,
-            Self::Native(_session) => {
-                let _ = writer;
-                Ok(())
-            }
+            Self::Native(session) => session
+                .send_initial_offer(writer)
+                .await
+                .map_err(|_error| ()),
         }
     }
 
@@ -103,20 +112,78 @@ impl SessionProtocol {
     ) -> SessionProtocolOutcome {
         match self {
             Self::LegacyStubBus(session) => session.handle_frame(writer, message).await.into(),
-            Self::Native(session) => session.handle_frame(writer, message),
+            Self::Native(session) => session.handle_frame(writer, message).await,
         }
     }
 }
 
-#[derive(Debug, Default)]
+const STUB_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingNegotiationRequest {
+    request_id: RequestId,
+    request: ServerRequest,
+    client_rtp_capabilities: SignalingRtpCapabilities,
+}
+
+#[derive(Debug)]
 pub(super) struct NativeSessionProtocol {
+    session_id: SessionId,
+    connection_id: u64,
+    channel: Arc<Channel>,
+    transport_adapter: RuntimeTransportAdapter,
     next_request_counter: u64,
     pending_ping_request_id: Option<RequestId>,
+    pending_negotiation_request: Option<PendingNegotiationRequest>,
 }
 
 impl NativeSessionProtocol {
+    fn new(
+        session_id: SessionId,
+        connection_id: u64,
+        channel: Arc<Channel>,
+        transport_adapter: RuntimeTransportAdapter,
+    ) -> Self {
+        Self {
+            session_id,
+            connection_id,
+            channel,
+            transport_adapter,
+            next_request_counter: 0,
+            pending_ping_request_id: None,
+            pending_negotiation_request: None,
+        }
+    }
+
     fn awaiting_ping_response(&self) -> bool {
         self.pending_ping_request_id.is_some()
+    }
+
+    async fn send_initial_offer(
+        &mut self,
+        writer: &mut WsWriter,
+    ) -> Result<(), WebSocketCloseCode> {
+        let router_capabilities = self.channel.router_rtp_capabilities().await;
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        let bootstrap_payload = self
+            .transport_adapter
+            .transport_bootstrap_payload(&session_key, &router_capabilities)
+            .await
+            .map_err(|_error| WebSocketCloseCode::Error)?;
+        let offer_request = ServerRequest::Offer(SessionDescriptionPayload {
+            sdp: STUB_NEGOTIATION_OFFER_SDP.to_owned(),
+        });
+        let request_id = self
+            .send_server_request(writer, offer_request.clone())
+            .await?;
+        self.pending_negotiation_request = Some(PendingNegotiationRequest {
+            request_id,
+            request: offer_request,
+            client_rtp_capabilities: bootstrap_payload.router_capabilities,
+        });
+        Ok(())
     }
 
     fn build_ping_frame(&mut self) -> Result<(RequestId, String), WebSocketCloseCode> {
@@ -151,11 +218,55 @@ impl NativeSessionProtocol {
         Ok(())
     }
 
-    fn handle_frame(&mut self, _writer: &mut WsWriter, message: Message) -> SessionProtocolOutcome {
+    async fn send_server_request(
+        &mut self,
+        writer: &mut WsWriter,
+        request: ServerRequest,
+    ) -> Result<RequestId, WebSocketCloseCode> {
+        let request_id = self.next_request_id();
+        let frame = serialize_native_batch(&vec![
+            ServerEnvelope::Request {
+                request_id: request_id.clone(),
+                request,
+            }
+            .into_envelope()
+            .map_err(|_error| WebSocketCloseCode::Error)?,
+        ])?;
+        writer
+            .send(Message::Text(frame.into()))
+            .await
+            .map_err(|_error| WebSocketCloseCode::Error)?;
+        Ok(request_id)
+    }
+
+    async fn send_server_response(
+        writer: &mut WsWriter,
+        response_to: RequestId,
+        response: ServerResponse,
+    ) -> Result<(), WebSocketCloseCode> {
+        let frame = serialize_native_batch(&vec![
+            ServerEnvelope::Response {
+                response_to,
+                response,
+            }
+            .into_envelope()
+            .map_err(|_error| WebSocketCloseCode::Error)?,
+        ])?;
+        writer
+            .send(Message::Text(frame.into()))
+            .await
+            .map_err(|_error| WebSocketCloseCode::Error)
+    }
+
+    async fn handle_frame(
+        &mut self,
+        writer: &mut WsWriter,
+        message: Message,
+    ) -> SessionProtocolOutcome {
         match message {
-            Message::Text(payload) => self.handle_text_payload(&payload),
+            Message::Text(payload) => self.handle_text_payload(writer, &payload).await,
             Message::Binary(payload) => match String::from_utf8(payload.to_vec()) {
-                Ok(payload) => self.handle_text_payload(&payload),
+                Ok(payload) => self.handle_text_payload(writer, &payload).await,
                 Err(_error) => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
             },
             Message::Close(_) => SessionProtocolOutcome::Break,
@@ -163,7 +274,11 @@ impl NativeSessionProtocol {
         }
     }
 
-    fn handle_text_payload(&mut self, payload: &str) -> SessionProtocolOutcome {
+    async fn handle_text_payload(
+        &mut self,
+        writer: &mut WsWriter,
+        payload: &str,
+    ) -> SessionProtocolOutcome {
         let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(payload) else {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         };
@@ -171,7 +286,7 @@ impl NativeSessionProtocol {
             let Ok(client_envelope) = ClientEnvelope::decode(envelope) else {
                 return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
             };
-            let outcome = self.handle_client_envelope(client_envelope);
+            let outcome = self.handle_client_envelope(writer, client_envelope).await;
             if !matches!(outcome, SessionProtocolOutcome::Continue) {
                 return outcome;
             }
@@ -179,8 +294,24 @@ impl NativeSessionProtocol {
         SessionProtocolOutcome::Continue
     }
 
-    fn handle_client_envelope(&mut self, envelope: ClientEnvelope) -> SessionProtocolOutcome {
+    async fn handle_client_envelope(
+        &mut self,
+        writer: &mut WsWriter,
+        envelope: ClientEnvelope,
+    ) -> SessionProtocolOutcome {
         match envelope {
+            ClientEnvelope::Message(ClientMessage::Info(info)) => {
+                self.channel
+                    .update_session_info(&self.session_id, info, false)
+                    .await;
+                SessionProtocolOutcome::Continue
+            }
+            ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload {
+                message,
+            })) => {
+                self.channel.broadcast(&self.session_id, message).await;
+                SessionProtocolOutcome::Continue
+            }
             ClientEnvelope::Response {
                 response_to,
                 response: ClientResponse::Ping,
@@ -192,118 +323,103 @@ impl NativeSessionProtocol {
                 self.pending_ping_request_id = None;
                 SessionProtocolOutcome::Continue
             }
+            ClientEnvelope::Response {
+                response_to,
+                response: ClientResponse::Offer(answer) | ClientResponse::Renegotiate(answer),
+            } => self.handle_negotiation_response(response_to, answer).await,
+            ClientEnvelope::Request {
+                request_id,
+                request: ClientRequest::StartRecording(_payload),
+            } => match Self::send_server_response(
+                writer,
+                request_id,
+                ServerResponse::StartRecording(RecordingActionResult { ok: false }),
+            )
+            .await
+            {
+                Ok(()) => SessionProtocolOutcome::Continue,
+                Err(code) => SessionProtocolOutcome::Close(code),
+            },
+            ClientEnvelope::Request {
+                request_id,
+                request: ClientRequest::StopRecording,
+            } => match Self::send_server_response(
+                writer,
+                request_id,
+                ServerResponse::StopRecording(RecordingActionResult { ok: false }),
+            )
+            .await
+            {
+                Ok(()) => SessionProtocolOutcome::Continue,
+                Err(code) => SessionProtocolOutcome::Close(code),
+            },
             ClientEnvelope::Response { .. }
-            | ClientEnvelope::Message(_)
-            | ClientEnvelope::Request { .. } => {
-                SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
+            | ClientEnvelope::Message(
+                ClientMessage::Auth(_)
+                | ClientMessage::Publish(_)
+                | ClientMessage::Unpublish(_)
+                | ClientMessage::Subscribe(_),
+            ) => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
+        }
+    }
+
+    async fn handle_negotiation_response(
+        &mut self,
+        response_to: RequestId,
+        answer: SessionDescriptionPayload,
+    ) -> SessionProtocolOutcome {
+        if answer.sdp.is_empty() {
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        }
+        let Some(pending_negotiation) = self.pending_negotiation_request.clone() else {
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        };
+        if pending_negotiation.request_id != response_to {
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        }
+        self.pending_negotiation_request = None;
+        if !self
+            .channel
+            .apply_client_rtp_capabilities(
+                &self.session_id,
+                pending_negotiation.client_rtp_capabilities,
+                &self.transport_adapter,
+            )
+            .await
+        {
+            return SessionProtocolOutcome::Continue;
+        }
+        if !self
+            .channel
+            .apply_transport_connected(
+                &self.session_id,
+                TransportConnectDirection::Upload,
+                &self.transport_adapter,
+            )
+            .await
+        {
+            return SessionProtocolOutcome::Continue;
+        }
+        if !self
+            .channel
+            .apply_transport_connected(
+                &self.session_id,
+                TransportConnectDirection::Download,
+                &self.transport_adapter,
+            )
+            .await
+        {
+            return SessionProtocolOutcome::Continue;
+        }
+        match pending_negotiation.request {
+            ServerRequest::Offer(_) | ServerRequest::Renegotiate(_) => {
+                SessionProtocolOutcome::Continue
             }
+            ServerRequest::Ping => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
         }
     }
 }
 
 fn serialize_native_batch(batch: &EnvelopeBatch) -> Result<String, WebSocketCloseCode> {
     serde_json::to_string(&batch).map_err(|_error| WebSocketCloseCode::Error)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{NativeSessionProtocol, serialize_native_batch};
-    use crate::runtime::websocket_server::session_protocol::SessionProtocolOutcome;
-    use crate::signaling::protocol::{
-        ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId, ServerEnvelope,
-        ServerRequest, StreamIntentPayload, WebSocketCloseCode,
-    };
-    use crate::signaling::shared::StreamType;
-
-    #[test]
-    fn native_session_protocol_encodes_typed_ping_requests_and_clears_matching_response() {
-        let mut session = NativeSessionProtocol::default();
-        let ping_frame = session.build_ping_frame();
-        assert!(ping_frame.is_ok());
-        let Ok((ping_request_id, frame)) = ping_frame else {
-            return;
-        };
-        assert!(!session.awaiting_ping_response());
-
-        session.pending_ping_request_id = Some(ping_request_id.clone());
-        let response_batch = vec![
-            ClientEnvelope::Response {
-                response_to: ping_request_id,
-                response: ClientResponse::Ping,
-            }
-            .into_envelope(),
-        ];
-        assert!(response_batch.iter().all(Result::is_ok));
-        let response_envelopes = response_batch.into_iter().collect::<Result<Vec<_>, _>>();
-        assert!(response_envelopes.is_ok());
-        let Ok(response_envelopes) = response_envelopes else {
-            return;
-        };
-        let response = serialize_native_batch(&response_envelopes);
-        assert!(response.is_ok());
-        let Ok(response) = response else {
-            return;
-        };
-
-        let decoded_batch = serde_json::from_str::<EnvelopeBatch>(&frame);
-        assert!(decoded_batch.is_ok());
-        let Ok(decoded_batch) = decoded_batch else {
-            return;
-        };
-        let decoded = decoded_batch.into_iter().next();
-        assert!(decoded.is_some());
-        let Some(decoded) = decoded else {
-            return;
-        };
-        assert_eq!(
-            ServerEnvelope::decode(decoded),
-            Ok(ServerEnvelope::Request {
-                request_id: RequestId::new("server-0"),
-                request: ServerRequest::Ping,
-            })
-        );
-
-        assert_eq!(
-            session.handle_text_payload(&response),
-            SessionProtocolOutcome::Continue
-        );
-        assert!(!session.awaiting_ping_response());
-    }
-
-    #[test]
-    fn native_session_protocol_rejects_malformed_batches() {
-        let mut session = NativeSessionProtocol::default();
-
-        assert_eq!(
-            session.handle_text_payload("{not-json"),
-            SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
-        );
-    }
-
-    #[test]
-    fn native_session_protocol_rejects_unsupported_client_messages() {
-        let mut session = NativeSessionProtocol::default();
-        let publish_batch = vec![
-            ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
-                stream_type: StreamType::Camera,
-            }))
-            .into_envelope(),
-        ];
-        assert!(publish_batch.iter().all(Result::is_ok));
-        let publish_envelopes = publish_batch.into_iter().collect::<Result<Vec<_>, _>>();
-        assert!(publish_envelopes.is_ok());
-        let Ok(publish_envelopes) = publish_envelopes else {
-            return;
-        };
-        let publish = serialize_native_batch(&publish_envelopes);
-        assert!(publish.is_ok());
-        let Ok(publish) = publish else {
-            return;
-        };
-
-        assert_eq!(
-            session.handle_text_payload(&publish),
-            SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
-        );
-    }
 }

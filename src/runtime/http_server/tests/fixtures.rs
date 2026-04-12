@@ -42,6 +42,7 @@ pub(super) fn test_config() -> Config {
         channel_size: 100,
         session_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
+        enable_native_protocol: false,
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,

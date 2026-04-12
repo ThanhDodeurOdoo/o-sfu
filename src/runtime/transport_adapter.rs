@@ -249,6 +249,11 @@ impl RuntimeTransportAdapter {
         Self::Stub(adapter)
     }
 
+    #[must_use]
+    pub(crate) const fn supports_native_session_protocol(&self) -> bool {
+        matches!(self, Self::Stub(_))
+    }
+
     /// Build the `INIT_TRANSPORTS` payload for a newly authenticated session.
     pub(crate) async fn transport_bootstrap_payload(
         &self,

@@ -42,13 +42,24 @@ pub(super) async fn establish_session(
         join_authenticated_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut session_protocol = SessionProtocol::legacy_stub_bus(
-        session_id.clone(),
-        connection_id,
-        Arc::clone(&channel),
-        Arc::clone(&state.metrics),
-        state.transport_adapter.clone(),
-    );
+    let mut session_protocol = if state.config.enable_native_protocol
+        && state.transport_adapter.supports_native_session_protocol()
+    {
+        SessionProtocol::native(
+            session_id.clone(),
+            connection_id,
+            Arc::clone(&channel),
+            state.transport_adapter.clone(),
+        )
+    } else {
+        SessionProtocol::legacy_stub_bus(
+            session_id.clone(),
+            connection_id,
+            Arc::clone(&channel),
+            Arc::clone(&state.metrics),
+            state.transport_adapter.clone(),
+        )
+    };
     initialize_session(
         state,
         writer,

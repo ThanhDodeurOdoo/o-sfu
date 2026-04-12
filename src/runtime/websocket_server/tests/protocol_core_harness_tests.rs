@@ -66,6 +66,20 @@ impl ProtocolHarnessPeer {
                     }
                     _ => return None,
                 },
+                Command::CreatePeerConnection | Command::ClosePeerConnection => Vec::new(),
+                Command::ApplyNegotiation {
+                    request_id,
+                    kind,
+                    sdp: _sdp,
+                } => {
+                    let mut follow_up = self.core.submit_negotiation_answer(
+                        &request_id,
+                        kind,
+                        "v=0\r\ns=protocol-core-answer\r\n",
+                    );
+                    follow_up.extend(self.core.on_transport_ready());
+                    follow_up
+                }
                 Command::ScheduleTimer { id, ms } => {
                     self.timers.insert(id, ms);
                     Vec::new()
@@ -78,13 +92,10 @@ impl ProtocolHarnessPeer {
                     self.websocket.as_mut()?.close(None).await.ok()?;
                     Vec::new()
                 }
-                Command::ClosePeerConnection => Vec::new(),
                 Command::RegisterPendingRequest { .. }
                 | Command::ResolvePendingRequest { .. }
-                | Command::CreatePeerConnection
                 | Command::AttachTrack { .. }
-                | Command::DetachTrack { .. }
-                | Command::ApplyNegotiation { .. } => return None,
+                | Command::DetachTrack { .. } => return None,
             };
             pending.extend(follow_up);
         }
@@ -226,4 +237,50 @@ async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
         ]
     );
     assert!(peer.timers.is_empty());
+}
+
+#[tokio::test]
+async fn protocol_core_answers_real_server_native_offer_when_enabled() {
+    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(33));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+
+    let mut peer = ProtocolHarnessPeer::default();
+    let connected = peer
+        .connect(&format!("ws://{}/", server.addr), &token, None)
+        .await;
+    assert!(
+        connected.is_some(),
+        "protocol core should connect to native test server"
+    );
+    assert!(
+        peer.read_server_frame().await.is_some(),
+        "protocol core should consume the welcome frame"
+    );
+    assert!(
+        peer.read_server_frame().await.is_some(),
+        "protocol core should consume and answer the native offer"
+    );
+
+    assert_eq!(peer.core.state(), BundleConnectionState::Connected);
+    assert!(
+        peer.state_changes.iter().any(|change| {
+            change.state == BundleConnectionState::Connected && change.cause.is_none()
+        }),
+        "native offer handling should drive the protocol core into the connected state"
+    );
 }

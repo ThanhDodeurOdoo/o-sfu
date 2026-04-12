@@ -76,6 +76,7 @@ pub(super) fn test_config(
         channel_size,
         session_timeout_ms,
         ping_interval_ms,
+        enable_native_protocol: false,
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,
@@ -87,12 +88,13 @@ pub(super) async fn spawn_test_server(
     authentication_timeout_ms: u64,
     channel_size: usize,
 ) -> Option<TestServer> {
-    spawn_test_server_with_timeouts(
+    spawn_test_server_with_timeouts_and_protocol(
         authentication_timeout_ms,
         10_000,
         60_000,
         channel_size,
         RuntimeTransportAdapter::stub(),
+        false,
     )
     .await
 }
@@ -104,14 +106,35 @@ pub(super) async fn spawn_test_server_with_timeouts(
     channel_size: usize,
     transport_adapter: RuntimeTransportAdapter,
 ) -> Option<TestServer> {
+    spawn_test_server_with_timeouts_and_protocol(
+        authentication_timeout_ms,
+        session_timeout_ms,
+        ping_interval_ms,
+        channel_size,
+        transport_adapter,
+        false,
+    )
+    .await
+}
+
+pub(super) async fn spawn_test_server_with_timeouts_and_protocol(
+    authentication_timeout_ms: u64,
+    session_timeout_ms: u64,
+    ping_interval_ms: u64,
+    channel_size: usize,
+    transport_adapter: RuntimeTransportAdapter,
+    enable_native_protocol: bool,
+) -> Option<TestServer> {
     let channels = Arc::new(ChannelManager::new());
+    let mut config = test_config(
+        authentication_timeout_ms,
+        session_timeout_ms,
+        ping_interval_ms,
+        channel_size,
+    );
+    config.enable_native_protocol = enable_native_protocol;
     let state = RuntimeState {
-        config: test_config(
-            authentication_timeout_ms,
-            session_timeout_ms,
-            ping_interval_ms,
-            channel_size,
-        ),
+        config,
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter,
@@ -145,6 +168,21 @@ pub(super) async fn spawn_test_server_with_adapter(
         60_000,
         channel_size,
         transport_adapter,
+    )
+    .await
+}
+
+pub(super) async fn spawn_native_protocol_test_server(
+    authentication_timeout_ms: u64,
+    channel_size: usize,
+) -> Option<TestServer> {
+    spawn_test_server_with_timeouts_and_protocol(
+        authentication_timeout_ms,
+        10_000,
+        60_000,
+        channel_size,
+        RuntimeTransportAdapter::stub(),
+        true,
     )
     .await
 }

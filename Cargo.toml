@@ -12,8 +12,6 @@ version = "0.1.0"
 anyhow = "1.0"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
-crossbeam-channel = "0.5"
-flatbuffers = "25.12"
 futures-util = "0.3"
 hmac = "0.13"
 o-sfu-protocol = { path = "protocol" }
@@ -31,8 +29,8 @@ tokio = { version = "1.51", features = [
     "sync",
     "time",
 ] }
-tokio-util = "0.7"
 tokio-tungstenite = "0.29"
+tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.18", features = ["v4"] }
@@ -125,8 +123,8 @@ sha2.workspace = true
 str0m.workspace = true
 time.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
 tokio-tungstenite.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
@@ -140,6 +138,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tower = { version = "0.5", features = ["util"] }
 
 [[bench]]
-name = "rtc_udp_demux"
 harness = false
+name = "rtc_udp_demux"
 required-features = ["internal-benchmarks"]
