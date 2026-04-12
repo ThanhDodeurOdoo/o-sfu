@@ -6,21 +6,25 @@ use o_sfu_protocol::{
         BundleUpdate, bundle_session_info_key,
     },
     core::{Command, ProtocolCore},
-    host_bridge::HostCommand,
+    host_bridge::{HostCommand, HostPendingRequestKind},
     shared::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
         SessionId as ProtocolSessionId, SessionInfo as ProtocolSessionInfo,
         StreamType as ProtocolStreamType,
     },
-    signaling::TrackBinding,
+    signaling::{RecordingOptions, TrackBinding},
 };
 use serde_json::json;
 
 use super::fixtures::*;
 
+const BATCH_FLUSH_DELAY_MS: u32 = 100;
+const RECOVERY_DELAY_MS: u32 = 1_000;
+
 #[derive(Default)]
 struct ProtocolHarnessPeer {
     core: ProtocolCore,
+    pending_request_commands: Vec<HostCommand>,
     state_changes: Vec<BundleStateChange>,
     timers: BTreeMap<u32, u32>,
     updates: Vec<BundleUpdate>,
@@ -64,19 +68,19 @@ impl ProtocolHarnessPeer {
     async fn broadcast(&mut self, message: serde_json::Value) -> Option<()> {
         let commands = self.core.broadcast(message);
         self.run_commands(commands).await?;
-        self.flush_scheduled_timers().await
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
     async fn update_info(&mut self, info: ProtocolSessionInfo) -> Option<()> {
         let commands = self.core.update_info(info);
         self.run_commands(commands).await?;
-        self.flush_scheduled_timers().await
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
     async fn update_upload(&mut self, stream_type: ProtocolStreamType, active: bool) -> Option<()> {
         let commands = self.core.update_upload(stream_type, active);
         self.run_commands(commands).await?;
-        self.flush_scheduled_timers().await
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
     async fn update_download(
@@ -86,11 +90,36 @@ impl ProtocolHarnessPeer {
     ) -> Option<()> {
         let commands = self.core.update_download(session_id, states);
         self.run_commands(commands).await?;
-        self.flush_scheduled_timers().await
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
-    async fn flush_scheduled_timers(&mut self) -> Option<()> {
-        let timer_ids = self.timers.keys().copied().collect::<Vec<_>>();
+    async fn start_recording(
+        &mut self,
+        audio: Option<bool>,
+        video: Option<bool>,
+        transcription: Option<bool>,
+    ) -> Option<()> {
+        let commands = self.core.start_recording(RecordingOptions {
+            audio,
+            video,
+            transcription,
+        });
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    async fn stop_recording(&mut self) -> Option<()> {
+        let commands = self.core.stop_recording();
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    async fn flush_timers_with_delay(&mut self, delay_ms: u32) -> Option<()> {
+        let timer_ids = self
+            .timers
+            .iter()
+            .filter_map(|(id, ms)| (*ms == delay_ms).then_some(*id))
+            .collect::<Vec<_>>();
         for timer_id in timer_ids {
             let commands = self.core.on_timer(timer_id);
             self.run_commands(commands).await?;
@@ -152,10 +181,13 @@ impl ProtocolHarnessPeer {
                     self.websocket.as_mut()?.close(None).await.ok()?;
                     Vec::new()
                 }
-                Command::RegisterPendingRequest { .. }
-                | Command::ResolvePendingRequest { .. }
-                | Command::AttachTrack { .. }
-                | Command::DetachTrack { .. } => return None,
+                command @ (Command::RegisterPendingRequest { .. }
+                | Command::ResolvePendingRequest { .. }) => {
+                    self.pending_request_commands
+                        .push(HostCommand::from(command));
+                    Vec::new()
+                }
+                Command::AttachTrack { .. } | Command::DetachTrack { .. } => Vec::new(),
             };
             pending.extend(follow_up);
         }
@@ -616,6 +648,214 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
     .ok()
     .unwrap_or(false);
     assert!(observed, "stub adapter should record subscribe activity");
+}
+
+#[tokio::test]
+async fn protocol_core_native_recording_requests_resolve_against_real_server_responses() {
+    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-recording",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(63));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+
+    let mut peer = ProtocolHarnessPeer::default();
+    assert!(
+        peer.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &token, None)
+            .await
+            .is_some()
+    );
+
+    assert!(
+        peer.start_recording(Some(true), Some(false), None)
+            .await
+            .is_some()
+    );
+    assert!(
+        peer.read_server_frame().await.is_some(),
+        "real server should answer start recording"
+    );
+    let Some(start_request_id) =
+        peer.pending_request_commands
+            .iter()
+            .find_map(|command| match command {
+                HostCommand::RegisterPendingRequest {
+                    request_id,
+                    request_kind: HostPendingRequestKind::StartRecording,
+                } => Some(request_id.clone()),
+                _ => None,
+            })
+    else {
+        panic!("start recording should register a pending request");
+    };
+    assert!(
+        peer.pending_request_commands
+            .contains(&HostCommand::ResolvePendingRequest {
+                request_id: start_request_id,
+                ok: false,
+            }),
+        "real server should resolve start recording with its current stubbed response"
+    );
+
+    peer.pending_request_commands.clear();
+
+    assert!(peer.stop_recording().await.is_some());
+    assert!(
+        peer.read_server_frame().await.is_some(),
+        "real server should answer stop recording"
+    );
+    let Some(stop_request_id) =
+        peer.pending_request_commands
+            .iter()
+            .find_map(|command| match command {
+                HostCommand::RegisterPendingRequest {
+                    request_id,
+                    request_kind: HostPendingRequestKind::StopRecording,
+                } => Some(request_id.clone()),
+                _ => None,
+            })
+    else {
+        panic!("stop recording should register a pending request");
+    };
+    assert!(
+        peer.pending_request_commands
+            .contains(&HostCommand::ResolvePendingRequest {
+                request_id: stop_request_id,
+                ok: false,
+            }),
+        "real server should resolve stop recording with its current stubbed response"
+    );
+}
+
+#[tokio::test]
+async fn protocol_core_replays_latest_info_after_real_server_recovery() {
+    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-recovery",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(71));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(72));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let mut alice = ProtocolHarnessPeer::default();
+    let mut bob = ProtocolHarnessPeer::default();
+    assert!(
+        alice
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+
+    assert!(
+        bob.update_info(ProtocolSessionInfo {
+            is_self_muted: Some(true),
+            ..ProtocolSessionInfo::default()
+        })
+        .await
+        .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "alice should consume bob's initial session info update"
+    );
+    alice.updates.clear();
+
+    let close_result = match bob.websocket.as_mut() {
+        Some(websocket) => websocket.close(None).await,
+        None => return,
+    };
+    assert!(close_result.is_ok());
+    bob.websocket = None;
+    assert!(
+        bob.observe_close(1011).await.is_some(),
+        "protocol core should enter recovery after a transient close"
+    );
+
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "alice should observe bob's disconnect before recovery"
+    );
+    alice.updates.clear();
+
+    assert!(
+        bob.update_info(ProtocolSessionInfo {
+            is_self_muted: Some(false),
+            is_raising_hand: Some(true),
+            ..ProtocolSessionInfo::default()
+        })
+        .await
+        .is_some()
+    );
+    assert!(
+        bob.flush_timers_with_delay(RECOVERY_DELAY_MS)
+            .await
+            .is_some(),
+        "recovery timer should reconnect the websocket"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "recovered peer should consume the welcome frame"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "recovered peer should consume the renegotiation offer"
+    );
+
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "alice should receive bob's replayed latest session info after recovery"
+    );
+    assert_eq!(
+        alice.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&ProtocolSessionId::Integer(72)),
+            ProtocolSessionInfo {
+                is_self_muted: Some(false),
+                is_raising_hand: Some(true),
+                ..ProtocolSessionInfo::default()
+            },
+        )])))
+    );
+    assert!(
+        bob.state_changes.iter().any(|change| {
+            change.state == BundleConnectionState::Recovering && change.cause.is_none()
+        }),
+        "transient close should enter recovering"
+    );
+    assert!(
+        bob.state_changes.iter().any(|change| {
+            change.state == BundleConnectionState::Connected && change.cause.is_none()
+        }),
+        "recovery handshake should return the protocol core to connected"
+    );
 }
 
 fn sample_video_rtp_parameters(mid: &str) -> RtpParameters {
