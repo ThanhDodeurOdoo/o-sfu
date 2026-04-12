@@ -7,7 +7,7 @@ import type {
     SessionId,
     SessionInfo,
     StreamType
-} from "./public_api";
+} from "./public_api.js";
 
 export type RequestId = string;
 

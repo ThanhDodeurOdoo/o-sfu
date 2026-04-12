@@ -1,2 +1,4 @@
-export * from "./protocol";
-export * from "./public_api";
+export * from "./protocol.js";
+export * from "./public_api.js";
+export * from "./runtime_contract.js";
+export * from "./sfu_client.js";

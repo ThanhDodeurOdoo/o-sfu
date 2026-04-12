@@ -1,4 +1,5 @@
 [![Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/tests.yml)
+[![Client](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client.yml)
 [![Formal Verification](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml)
 [![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql)
 
@@ -24,10 +25,10 @@ Run the regular workspace checks from the repository root:
 cargo fmt
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features
+npm --prefix client run verify
 ```
-NOTE: will do proper typescript check later
+
 TODO: copy the liting and formatting rules from odoo/sfu
-TODO: add yml github action to run tests and lint checks
 
 Kani proofs are not run by `cargo test`. Install Kani separately:
 

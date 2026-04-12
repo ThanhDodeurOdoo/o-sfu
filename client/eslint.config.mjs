@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import globals from "globals";
+import n from "eslint-plugin-n";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-plugin-prettier/recommended";
 import { defineConfig } from "eslint/config";
@@ -9,10 +10,14 @@ export default defineConfig([
     ...tseslint.configs.recommended,
     prettier,
     {
+        files: ["src/**/*.ts"],
         languageOptions: {
             globals: {
-                ...globals.browser,
-            },
+                ...globals.browser
+            }
+        },
+        plugins: {
+            n
         },
         // Rules based on what is found in other odoo JS/TS codebases
         rules: {
@@ -24,14 +29,14 @@ export default defineConfig([
                     singleQuote: false,
                     printWidth: 100,
                     endOfLine: "auto",
-                    trailingComma: "none",
-                },
+                    trailingComma: "none"
+                }
             ],
-            "node/no-unsupported-features/es-syntax": "off",
-            "node/no-missing-import": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-missing-import": "off",
             "comma-dangle": "off",
             "no-console": "error",
-            "no-undef": "error",
+            "no-undef": "off",
             "no-restricted-globals": ["error", "event", "self"],
             "no-const-assign": ["error"],
             "no-debugger": ["error"],
@@ -44,7 +49,12 @@ export default defineConfig([
             "valid-typeof": ["error"],
             "@typescript-eslint/no-unused-vars": [
                 "error",
-                { vars: "all", args: "none", ignoreRestSiblings: false, caughtErrors: "all" },
+                {
+                    vars: "all",
+                    args: "none",
+                    ignoreRestSiblings: false,
+                    caughtErrors: "all"
+                }
             ],
             curly: ["error", "all"],
             "no-restricted-syntax": ["error", "PrivateIdentifier"],
@@ -52,9 +62,18 @@ export default defineConfig([
                 "error",
                 {
                     destructuring: "all",
-                    ignoreReadBeforeAssign: true,
-                },
-            ],
-        },
+                    ignoreReadBeforeAssign: true
+                }
+            ]
+        }
     },
+    {
+        files: ["test/**/*.mjs", "eslint.config.mjs"],
+        languageOptions: {
+            globals: {
+                ...globals.browser,
+                ...globals.node
+            }
+        }
+    }
 ]);

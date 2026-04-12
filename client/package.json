@@ -5,11 +5,16 @@
   "type": "module",
   "description": "Browser shell groundwork for o-sfu",
   "scripts": {
-    "verify": "tsc --noEmit -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src test eslint.config.mjs",
+    "test": "npm run build && node --test ./test/**/*.mjs",
+    "typscript": "tsc --noEmit -p tsconfig.json",
+    "verify": "npm run lint && npm run typscript && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.2.0",
+    "eslint-plugin-n": "^17.23.1",
     "globals": "^17.5.0",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.58.1",
