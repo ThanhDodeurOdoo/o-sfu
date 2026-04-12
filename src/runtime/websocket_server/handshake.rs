@@ -10,11 +10,12 @@ use tracing::{Span, field, info};
 use super::{
     close_writer,
     controller::{ConnectedSession, WsReader},
+    session_protocol::SessionProtocol,
 };
 use crate::runtime::{
     RuntimeState,
     channel::{Channel, ChannelManagerJoinError, SessionOutbound},
-    stub_bus::{StubBusSession, WsWriter},
+    stub_bus::WsWriter,
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
@@ -41,7 +42,7 @@ pub(super) async fn establish_session(
         join_authenticated_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut stub_bus = StubBusSession::new(
+    let mut session_protocol = SessionProtocol::legacy_stub_bus(
         session_id.clone(),
         connection_id,
         Arc::clone(&channel),
@@ -54,7 +55,7 @@ pub(super) async fn establish_session(
         &channel,
         &session_id,
         connection_id,
-        &mut stub_bus,
+        &mut session_protocol,
     )
     .await?;
     Some(ConnectedSession {
@@ -62,7 +63,7 @@ pub(super) async fn establish_session(
         session_id,
         connection_id,
         outbound_rx,
-        stub_bus,
+        session_protocol,
     })
 }
 
@@ -236,7 +237,7 @@ async fn initialize_session(
     channel: &Arc<Channel>,
     session_id: &SessionId,
     connection_id: u64,
-    stub_bus: &mut StubBusSession,
+    session_protocol: &mut SessionProtocol,
 ) -> Option<()> {
     if send_welcome(channel, session_id, writer).await.is_err() {
         info!("failed to send welcome payload");
@@ -244,7 +245,7 @@ async fn initialize_session(
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
     }
-    if stub_bus.send_transport_bootstrap(writer).await.is_err() {
+    if session_protocol.initialize(writer).await.is_err() {
         info!("failed to send transport bootstrap");
         state.metrics.record_ws_transport_bootstrap_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;

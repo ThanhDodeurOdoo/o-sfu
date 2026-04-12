@@ -15,9 +15,11 @@ use tracing::{Instrument, field, info, info_span};
 use crate::runtime::{
     RuntimeState,
     channel::{Channel, SessionOutbound},
-    stub_bus::{StubBusSession, WsWriter},
+    stub_bus::WsWriter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
+
+use super::session_protocol::SessionProtocol;
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 
@@ -26,7 +28,7 @@ pub(super) struct ConnectedSession {
     pub(super) session_id: SessionId,
     pub(super) connection_id: u64,
     pub(super) outbound_rx: mpsc::UnboundedReceiver<SessionOutbound>,
-    pub(super) stub_bus: StubBusSession,
+    pub(super) session_protocol: SessionProtocol,
 }
 
 pub(crate) async fn upgrade(
@@ -52,7 +54,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
             &mut ws_writer,
             &mut ws_reader,
             &mut session.outbound_rx,
-            &mut session.stub_bus,
+            &mut session.session_protocol,
             state.config.session_timeout_ms,
             state.config.ping_interval_ms,
             &state.metrics,

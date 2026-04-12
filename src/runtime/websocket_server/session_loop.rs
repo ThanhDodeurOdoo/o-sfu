@@ -9,21 +9,20 @@ use super::{close_writer, controller::WsReader};
 use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
-    stub_bus::{
-        StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch,
-        send_server_request_batch,
-    },
+    stub_bus::{WsWriter, send_server_message_batch, send_server_request_batch},
 };
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest},
     protocol::WebSocketCloseCode,
 };
 
+use super::session_protocol::{SessionProtocol, SessionProtocolOutcome};
+
 pub(super) async fn run(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     outbound_rx: &mut mpsc::UnboundedReceiver<SessionOutbound>,
-    stub_bus: &mut StubBusSession,
+    session_protocol: &mut SessionProtocol,
     session_timeout_ms: u64,
     ping_interval_ms: u64,
     metrics: &RuntimeMetrics,
@@ -39,7 +38,7 @@ pub(super) async fn run(
             () = &mut ping_tick, if ping_response_deadline.is_none() => {
                 if let Some(reason) = handle_ping_tick(
                     writer,
-                    stub_bus,
+                    session_protocol,
                     ping_interval,
                     ping_timeout,
                     &mut next_ping_at,
@@ -58,10 +57,10 @@ pub(super) async fn run(
                 return WsSessionLoopExitReason::PingTimeout;
             }
             message = reader.next() => {
-                if let Some(reason) = handle_incoming_socket_event(writer, stub_bus, message).await {
+                if let Some(reason) = handle_incoming_socket_event(writer, session_protocol, message).await {
                     return reason;
                 }
-                if !stub_bus.awaiting_ping_response() {
+                if !session_protocol.awaiting_ping_response() {
                     ping_response_deadline = None;
                 }
             }
@@ -76,13 +75,13 @@ pub(super) async fn run(
 
 async fn handle_ping_tick(
     writer: &mut WsWriter,
-    stub_bus: &mut StubBusSession,
+    session_protocol: &mut SessionProtocol,
     ping_interval: Duration,
     ping_timeout: Duration,
     next_ping_at: &mut Instant,
     ping_response_deadline: &mut Option<Instant>,
 ) -> Option<WsSessionLoopExitReason> {
-    if stub_bus.send_ping(writer).await.is_err() {
+    if session_protocol.send_ping(writer).await.is_err() {
         info!("failed to send websocket bus ping request");
         return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
     }
@@ -94,11 +93,11 @@ async fn handle_ping_tick(
 
 async fn handle_incoming_socket_event(
     writer: &mut WsWriter,
-    stub_bus: &mut StubBusSession,
+    session_protocol: &mut SessionProtocol,
     message: Option<Result<Message, AxumError>>,
 ) -> Option<WsSessionLoopExitReason> {
     match message {
-        Some(Ok(message)) => handle_incoming_frame(writer, stub_bus, message).await,
+        Some(Ok(message)) => handle_incoming_frame(writer, session_protocol, message).await,
         Some(Err(_error)) => {
             info!("websocket reader returned an error");
             Some(WsSessionLoopExitReason::ReaderError)
@@ -112,14 +111,14 @@ async fn handle_incoming_socket_event(
 
 async fn handle_incoming_frame(
     writer: &mut WsWriter,
-    stub_bus: &mut StubBusSession,
+    session_protocol: &mut SessionProtocol,
     message: Message,
 ) -> Option<WsSessionLoopExitReason> {
     debug!("received websocket frame");
-    match stub_bus.handle_frame(writer, message).await {
-        StubBusOutcome::Continue => None,
-        StubBusOutcome::Break => Some(WsSessionLoopExitReason::BusBreak),
-        StubBusOutcome::Close(code) => {
+    match session_protocol.handle_frame(writer, message).await {
+        SessionProtocolOutcome::Continue => None,
+        SessionProtocolOutcome::Break => Some(WsSessionLoopExitReason::BusBreak),
+        SessionProtocolOutcome::Close(code) => {
             info!(
                 close_code = u16::from(code),
                 "closing websocket from session loop"

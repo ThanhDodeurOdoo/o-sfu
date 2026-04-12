@@ -1,6 +1,7 @@
 mod controller;
 mod handshake;
 mod session_loop;
+mod session_protocol;
 #[cfg(test)]
 mod tests;
 
