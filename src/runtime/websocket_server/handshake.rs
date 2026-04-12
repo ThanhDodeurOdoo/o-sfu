@@ -14,7 +14,7 @@ use super::{
 };
 use crate::runtime::{
     RuntimeState,
-    channel::{Channel, ChannelManagerJoinError, SessionOutbound},
+    channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
     stub_bus::WsWriter,
 };
 use crate::signaling::{
@@ -208,11 +208,14 @@ async fn join_authenticated_session(
         .channels
         .join_session(
             channel.uuid(),
-            session_id.clone(),
-            claims.label,
-            claims.permissions.unwrap_or_default(),
-            outbound_tx,
-            state.config.channel_size,
+            JoinSessionRequest {
+                session_id: session_id.clone(),
+                label: claims.label,
+                permissions: claims.permissions.unwrap_or_default(),
+                sender: outbound_tx,
+                max_sessions: state.config.channel_size,
+            },
+            &state.transport_adapter,
         )
         .await;
     match join_result {
@@ -273,7 +276,12 @@ async fn cleanup_failed_session(
 ) {
     let _ = state
         .channels
-        .leave_session(channel.uuid(), session_id, connection_id)
+        .leave_session(
+            channel.uuid(),
+            session_id,
+            connection_id,
+            &state.transport_adapter,
+        )
         .await;
     let _result = state
         .transport_adapter

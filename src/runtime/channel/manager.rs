@@ -24,6 +24,14 @@ pub(crate) struct RuntimeChannelStatsSnapshot {
     pub(crate) web_rtc_enabled: bool,
 }
 
+pub(crate) struct JoinSessionRequest {
+    pub(crate) session_id: SessionId,
+    pub(crate) label: Option<String>,
+    pub(crate) permissions: SessionPermissions,
+    pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
+    pub(crate) max_sessions: usize,
+}
+
 #[derive(Debug)]
 pub struct ChannelManager {
     state: RwLock<ChannelManagerState>,
@@ -165,11 +173,8 @@ impl ChannelManager {
     pub async fn join_session(
         &self,
         channel_uuid: &str,
-        session_id: SessionId,
-        label: Option<String>,
-        permissions: SessionPermissions,
-        sender: mpsc::UnboundedSender<SessionOutbound>,
-        max_sessions: usize,
+        request: JoinSessionRequest,
+        transport_adapter: &RuntimeTransportAdapter,
     ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
         let Some(entry) = self.entry(channel_uuid).await else {
             return Err(ChannelManagerJoinError::MissingChannel);
@@ -180,7 +185,14 @@ impl ChannelManager {
         }
         let connection_id = entry
             .channel
-            .join_session(session_id, label, permissions, sender, max_sessions)
+            .join_session_runtime(
+                request.session_id,
+                request.label,
+                request.permissions,
+                request.sender,
+                request.max_sessions,
+                transport_adapter,
+            )
             .await
             .map_err(|error| match error {
                 ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
@@ -194,6 +206,7 @@ impl ChannelManager {
         channel_uuid: &str,
         session_id: &SessionId,
         connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let Some(entry) = self.entry(channel_uuid).await else {
             return false;
@@ -202,8 +215,10 @@ impl ChannelManager {
         if !self.is_current_entry(channel_uuid, &entry.channel).await {
             return false;
         }
-        let did_remove_active_session =
-            entry.channel.leave_session(session_id, connection_id).await;
+        let did_remove_active_session = entry
+            .channel
+            .leave_session_runtime(session_id, connection_id, transport_adapter)
+            .await;
         if did_remove_active_session && entry.channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, &entry.channel)
                 .await;
@@ -211,7 +226,12 @@ impl ChannelManager {
         did_remove_active_session
     }
 
-    pub async fn disconnect_sessions(&self, channel_uuid: &str, session_ids: &[SessionId]) {
+    pub async fn disconnect_sessions(
+        &self,
+        channel_uuid: &str,
+        session_ids: &[SessionId],
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
         let Some(entry) = self.entry(channel_uuid).await else {
             return;
         };
@@ -219,7 +239,10 @@ impl ChannelManager {
         if !self.is_current_entry(channel_uuid, &entry.channel).await {
             return;
         }
-        entry.channel.disconnect_sessions(session_ids).await;
+        entry
+            .channel
+            .disconnect_sessions_runtime(session_ids, transport_adapter)
+            .await;
         if entry.channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, &entry.channel)
                 .await;

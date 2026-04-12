@@ -68,6 +68,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 session.channel.uuid(),
                 &session.session_id,
                 session.connection_id,
+                &state.transport_adapter,
             )
             .await;
         if state

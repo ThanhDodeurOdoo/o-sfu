@@ -49,15 +49,19 @@ async fn channel_manager_lookup_by_uuid() {
 #[tokio::test]
 async fn channel_manager_join_session_reports_missing_channel() {
     let manager = ChannelManager::new();
+    let transport_adapter = RuntimeTransportAdapter::stub();
     let (tx, _rx) = test_sender();
     let result = manager
         .join_session(
             "missing-channel",
-            SessionId::Integer(1),
-            None,
-            SessionPermissions::default(),
-            tx,
-            1,
+            JoinSessionRequest {
+                session_id: SessionId::Integer(1),
+                label: None,
+                permissions: SessionPermissions::default(),
+                sender: tx,
+                max_sessions: 1,
+            },
+            &transport_adapter,
         )
         .await;
     assert!(matches!(
@@ -69,6 +73,7 @@ async fn channel_manager_join_session_reports_missing_channel() {
 #[tokio::test]
 async fn manager_leave_session_removes_empty_channel() {
     let manager = ChannelManager::new();
+    let transport_adapter = RuntimeTransportAdapter::stub();
     let first_channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -77,11 +82,14 @@ async fn manager_leave_session_removes_empty_channel() {
     let joined = manager
         .join_session(
             &channel_uuid,
-            SessionId::Integer(1),
-            None,
-            SessionPermissions::default(),
-            tx,
-            1,
+            JoinSessionRequest {
+                session_id: SessionId::Integer(1),
+                label: None,
+                permissions: SessionPermissions::default(),
+                sender: tx,
+                max_sessions: 1,
+            },
+            &transport_adapter,
         )
         .await;
     assert!(joined.is_ok());
@@ -90,7 +98,12 @@ async fn manager_leave_session_removes_empty_channel() {
     };
 
     manager
-        .leave_session(&channel_uuid, &SessionId::Integer(1), connection_id)
+        .leave_session(
+            &channel_uuid,
+            &SessionId::Integer(1),
+            connection_id,
+            &transport_adapter,
+        )
         .await;
 
     assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
@@ -103,6 +116,7 @@ async fn manager_leave_session_removes_empty_channel() {
 #[tokio::test]
 async fn manager_disconnect_sessions_removes_empty_channel() {
     let manager = ChannelManager::new();
+    let transport_adapter = RuntimeTransportAdapter::stub();
     let first_channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -111,17 +125,20 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
     let joined = manager
         .join_session(
             &channel_uuid,
-            SessionId::Integer(1),
-            None,
-            SessionPermissions::default(),
-            tx,
-            1,
+            JoinSessionRequest {
+                session_id: SessionId::Integer(1),
+                label: None,
+                permissions: SessionPermissions::default(),
+                sender: tx,
+                max_sessions: 1,
+            },
+            &transport_adapter,
         )
         .await;
     assert!(joined.is_ok());
 
     manager
-        .disconnect_sessions(&channel_uuid, &[SessionId::Integer(1)])
+        .disconnect_sessions(&channel_uuid, &[SessionId::Integer(1)], &transport_adapter)
         .await;
 
     assert!(manager.get_by_uuid(&channel_uuid).await.is_none());

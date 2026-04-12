@@ -232,6 +232,110 @@ async fn publish_camera(
 }
 
 #[tokio::test]
+async fn leave_session_runtime_removes_surviving_consumer_media() {
+    let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_stub().await;
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::ConsumeMediaRequested {
+                consumer_session_id,
+                source_session_id,
+                ..
+            } if *consumer_session_id == SessionId::Integer(2)
+                && *source_session_id == SessionId::Integer(1)
+        )
+    })
+    .await;
+
+    let Some(connection_id) = channel.session_connection_id(&SessionId::Integer(1)).await else {
+        panic!("publisher connection should exist");
+    };
+    assert!(
+        channel
+            .leave_session_runtime(&SessionId::Integer(1), connection_id, &transport_adapter)
+            .await
+    );
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::MediaRemoved { session_id, .. }
+                if *session_id == SessionId::Integer(2)
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
+    let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_stub().await;
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::ConsumeMediaRequested {
+                consumer_session_id,
+                source_session_id,
+                ..
+            } if *consumer_session_id == SessionId::Integer(2)
+                && *source_session_id == SessionId::Integer(1)
+        )
+    })
+    .await;
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    assert!(
+        channel
+            .join_session_runtime(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                replacement_tx,
+                10,
+                &transport_adapter,
+            )
+            .await
+            .is_ok()
+    );
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::MediaRemoved { session_id, .. }
+                if *session_id == SessionId::Integer(2)
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     let manager = ChannelManager::new();
     let channel = manager

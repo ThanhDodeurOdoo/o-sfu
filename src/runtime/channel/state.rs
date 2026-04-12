@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use o_sfu_router::{
@@ -134,6 +134,13 @@ pub(super) struct ConsumerState {
     pub(super) consumer_media: TransportMediaId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TransportMediaRemoval {
+    pub(super) session: SessionId,
+    pub(super) connection: u64,
+    pub(super) transport_media: TransportMediaId,
+}
+
 #[allow(
     clippy::struct_field_names,
     reason = "postfix _id, because they are ids..."
@@ -200,6 +207,7 @@ pub(super) struct JoinSessionOutcome {
     pub(super) connection_id: u64,
     replaced_sender: Option<OutboundSender>,
     departure_fanout: Option<MessageFanout>,
+    pub(super) transport_removals: Vec<TransportMediaRemoval>,
 }
 
 impl JoinSessionOutcome {
@@ -216,6 +224,7 @@ impl JoinSessionOutcome {
 #[derive(Debug)]
 pub(super) struct LeaveSessionOutcome {
     departure_fanout: MessageFanout,
+    pub(super) transport_removals: Vec<TransportMediaRemoval>,
 }
 
 impl LeaveSessionOutcome {
@@ -239,6 +248,7 @@ impl SessionInfoUpdateOutcome {
 pub(super) struct DisconnectSessionsOutcome {
     kicked_senders: Vec<OutboundSender>,
     departure_fanouts: Vec<MessageFanout>,
+    pub(super) transport_removals: Vec<TransportMediaRemoval>,
 }
 
 impl DisconnectSessionsOutcome {
@@ -259,6 +269,27 @@ pub(super) enum ConsumerBootstrapOrigin {
 }
 
 impl ChannelState {
+    fn collect_consumer_transport_removals(
+        &self,
+        departing_session_ids: &BTreeSet<SessionId>,
+    ) -> Vec<TransportMediaRemoval> {
+        self.consumer_index
+            .iter()
+            .filter_map(|(key, consumer_state)| {
+                if !departing_session_ids.contains(&key.producer_session_id)
+                    || departing_session_ids.contains(&key.consumer_session_id)
+                {
+                    return None;
+                }
+                Some(TransportMediaRemoval {
+                    session: key.consumer_session_id.clone(),
+                    connection: consumer_state.consumer_connection_id,
+                    transport_media: consumer_state.consumer_media,
+                })
+            })
+            .collect()
+    }
+
     pub(super) fn new(router_id: RouterId, recording_service: Arc<RecordingService>) -> Self {
         Self {
             sessions: BTreeMap::new(),
@@ -349,6 +380,11 @@ impl ChannelState {
         if is_new && self.sessions.len() >= max_sessions {
             return Err(super::ChannelJoinError::ChannelFull);
         }
+        let transport_removals = if is_new {
+            Vec::new()
+        } else {
+            self.collect_consumer_transport_removals(&BTreeSet::from([session_id.clone()]))
+        };
         let connection_id = self.next_connection_id;
         self.next_connection_id = self.next_connection_id.saturating_add(1);
         if !is_new {
@@ -412,6 +448,7 @@ impl ChannelState {
             connection_id,
             replaced_sender: previous_sender,
             departure_fanout,
+            transport_removals,
         })
     }
 
@@ -424,6 +461,8 @@ impl ChannelState {
         if session.connection_id != connection_id {
             return None;
         }
+        let transport_removals =
+            self.collect_consumer_transport_removals(&BTreeSet::from([session_id.clone()]));
         if self.topology.apply_client_leave(session_id).is_err() {
             error!(
                 ?session_id,
@@ -440,6 +479,7 @@ impl ChannelState {
                     session_id: session_id.clone(),
                 }),
             ),
+            transport_removals,
         })
     }
 
@@ -490,6 +530,8 @@ impl ChannelState {
         &mut self,
         session_ids: &[SessionId],
     ) -> DisconnectSessionsOutcome {
+        let departing_session_ids = session_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let transport_removals = self.collect_consumer_transport_removals(&departing_session_ids);
         let mut kicked_senders = Vec::new();
         let mut departed = Vec::new();
         for session_id in session_ids {
@@ -523,6 +565,7 @@ impl ChannelState {
         DisconnectSessionsOutcome {
             kicked_senders,
             departure_fanouts,
+            transport_removals,
         }
     }
 

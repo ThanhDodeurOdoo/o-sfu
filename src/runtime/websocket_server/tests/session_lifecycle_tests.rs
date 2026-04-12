@@ -280,7 +280,11 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
 
     server
         .channels
-        .disconnect_sessions(channel.uuid(), &[SessionId::Integer(1)])
+        .disconnect_sessions(
+            channel.uuid(),
+            &[SessionId::Integer(1)],
+            &server.state.transport_adapter,
+        )
         .await;
 
     assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4003)));

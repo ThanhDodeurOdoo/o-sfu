@@ -8,8 +8,8 @@ pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::{task::yield_now, time::timeout};
 
 pub(super) use super::super::{
-    ChannelConfig, ChannelJoinError, ChannelManager, ChannelManagerJoinError, SessionOutbound,
-    topology::ChannelTopology,
+    ChannelConfig, ChannelJoinError, ChannelManager, ChannelManagerJoinError, JoinSessionRequest,
+    SessionOutbound, topology::ChannelTopology,
 };
 pub(super) use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
 pub(super) use crate::runtime::transport_adapter::{
