@@ -152,10 +152,28 @@ impl SessionProtocol {
 const STUB_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingNegotiationAction {
+    EstablishSession {
+        client_rtp_capabilities: SignalingRtpCapabilities,
+    },
+    RefreshSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingNegotiationRequest {
     request_id: RequestId,
     request: ServerRequest,
-    client_rtp_capabilities: SignalingRtpCapabilities,
+    action: PendingNegotiationAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NegotiationPhase {
+    BeforeInitialOffer,
+    AwaitingAnswer {
+        pending: PendingNegotiationRequest,
+        queued_renegotiation: bool,
+    },
+    Stable,
 }
 
 #[derive(Debug)]
@@ -167,7 +185,7 @@ pub(super) struct NativeSessionProtocol {
     remote_track_bindings: BTreeMap<String, TrackBinding>,
     next_request_counter: u64,
     pending_ping_request_id: Option<RequestId>,
-    pending_negotiation_request: Option<PendingNegotiationRequest>,
+    negotiation_phase: NegotiationPhase,
 }
 
 impl NativeSessionProtocol {
@@ -185,7 +203,7 @@ impl NativeSessionProtocol {
             remote_track_bindings: BTreeMap::new(),
             next_request_counter: 0,
             pending_ping_request_id: None,
-            pending_negotiation_request: None,
+            negotiation_phase: NegotiationPhase::BeforeInitialOffer,
         }
     }
 
@@ -206,18 +224,59 @@ impl NativeSessionProtocol {
             .transport_bootstrap_payload(&session_key, &router_capabilities)
             .await
             .map_err(|_error| WebSocketCloseCode::Error)?;
-        let offer_request = ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: STUB_NEGOTIATION_OFFER_SDP.to_owned(),
-        });
-        let request_id = self
-            .send_server_request(writer, offer_request.clone())
-            .await?;
-        self.pending_negotiation_request = Some(PendingNegotiationRequest {
-            request_id,
-            request: offer_request,
-            client_rtp_capabilities: bootstrap_payload.router_capabilities,
-        });
+        let offer_request = ServerRequest::Offer(stub_session_description());
+        self.issue_negotiation_request(
+            writer,
+            offer_request,
+            PendingNegotiationAction::EstablishSession {
+                client_rtp_capabilities: bootstrap_payload.router_capabilities,
+            },
+        )
+        .await?;
         Ok(())
+    }
+
+    async fn issue_negotiation_request(
+        &mut self,
+        writer: &mut WsWriter,
+        request: ServerRequest,
+        action: PendingNegotiationAction,
+    ) -> Result<(), WebSocketCloseCode> {
+        let request_id = self.send_server_request(writer, request.clone()).await?;
+        self.negotiation_phase = NegotiationPhase::AwaitingAnswer {
+            pending: PendingNegotiationRequest {
+                request_id,
+                request,
+                action,
+            },
+            queued_renegotiation: false,
+        };
+        Ok(())
+    }
+
+    async fn request_renegotiation(
+        &mut self,
+        writer: &mut WsWriter,
+    ) -> Result<bool, WebSocketCloseCode> {
+        match &mut self.negotiation_phase {
+            NegotiationPhase::BeforeInitialOffer => Ok(false),
+            NegotiationPhase::Stable => {
+                self.issue_negotiation_request(
+                    writer,
+                    ServerRequest::Renegotiate(stub_session_description()),
+                    PendingNegotiationAction::RefreshSession,
+                )
+                .await?;
+                Ok(true)
+            }
+            NegotiationPhase::AwaitingAnswer {
+                queued_renegotiation,
+                ..
+            } => {
+                *queued_renegotiation = true;
+                Ok(false)
+            }
+        }
     }
 
     fn build_ping_frame(&mut self) -> Result<(RequestId, String), WebSocketCloseCode> {
@@ -382,7 +441,10 @@ impl NativeSessionProtocol {
             ClientEnvelope::Response {
                 response_to,
                 response: ClientResponse::Offer(answer) | ClientResponse::Renegotiate(answer),
-            } => self.handle_negotiation_response(response_to, answer).await,
+            } => {
+                self.handle_negotiation_response(writer, response_to, answer)
+                    .await
+            }
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StartRecording(_payload),
@@ -418,58 +480,74 @@ impl NativeSessionProtocol {
 
     async fn handle_negotiation_response(
         &mut self,
+        writer: &mut WsWriter,
         response_to: RequestId,
         answer: SessionDescriptionPayload,
     ) -> SessionProtocolOutcome {
         if answer.sdp.is_empty() {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
-        let Some(pending_negotiation) = self.pending_negotiation_request.clone() else {
+        let NegotiationPhase::AwaitingAnswer {
+            pending: pending_negotiation,
+            queued_renegotiation,
+        } = self.negotiation_phase.clone()
+        else {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         };
         if pending_negotiation.request_id != response_to {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
-        self.pending_negotiation_request = None;
-        if !self
-            .channel
-            .apply_client_rtp_capabilities(
-                &self.session_id,
-                pending_negotiation.client_rtp_capabilities,
-                &self.transport_adapter,
-            )
-            .await
-        {
-            return SessionProtocolOutcome::Continue;
-        }
-        if !self
-            .channel
-            .apply_transport_connected(
-                &self.session_id,
-                TransportConnectDirection::Upload,
-                &self.transport_adapter,
-            )
-            .await
-        {
-            return SessionProtocolOutcome::Continue;
-        }
-        if !self
-            .channel
-            .apply_transport_connected(
-                &self.session_id,
-                TransportConnectDirection::Download,
-                &self.transport_adapter,
-            )
-            .await
-        {
-            return SessionProtocolOutcome::Continue;
-        }
-        match pending_negotiation.request {
-            ServerRequest::Offer(_) | ServerRequest::Renegotiate(_) => {
-                SessionProtocolOutcome::Continue
+        self.negotiation_phase = NegotiationPhase::Stable;
+        match pending_negotiation.action {
+            PendingNegotiationAction::EstablishSession {
+                client_rtp_capabilities,
+            } => {
+                if !self
+                    .channel
+                    .apply_client_rtp_capabilities(
+                        &self.session_id,
+                        client_rtp_capabilities,
+                        &self.transport_adapter,
+                    )
+                    .await
+                {
+                    return SessionProtocolOutcome::Continue;
+                }
+                if !self
+                    .channel
+                    .apply_transport_connected(
+                        &self.session_id,
+                        TransportConnectDirection::Upload,
+                        &self.transport_adapter,
+                    )
+                    .await
+                {
+                    return SessionProtocolOutcome::Continue;
+                }
+                if !self
+                    .channel
+                    .apply_transport_connected(
+                        &self.session_id,
+                        TransportConnectDirection::Download,
+                        &self.transport_adapter,
+                    )
+                    .await
+                {
+                    return SessionProtocolOutcome::Continue;
+                }
             }
-            ServerRequest::Ping => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
+            PendingNegotiationAction::RefreshSession => {}
         }
+        if matches!(pending_negotiation.request, ServerRequest::Ping) {
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        }
+        if queued_renegotiation {
+            match self.request_renegotiation(writer).await {
+                Ok(_sent) => {}
+                Err(code) => return SessionProtocolOutcome::Close(code),
+            }
+        }
+        SessionProtocolOutcome::Continue
     }
 
     async fn send_outbound_message(
@@ -477,8 +555,14 @@ impl NativeSessionProtocol {
         writer: &mut WsWriter,
         message: CurrentServerMessage,
     ) -> Result<usize, WebSocketCloseCode> {
-        let translated_messages = self.translate_server_message(message);
-        self.send_server_messages(writer, translated_messages).await
+        let translated = self.translate_server_message(message);
+        let mut batch_len = self
+            .send_server_messages(writer, translated.messages)
+            .await?;
+        if translated.needs_renegotiation && self.request_renegotiation(writer).await? {
+            batch_len += 1;
+        }
+        Ok(batch_len)
     }
 
     async fn send_outbound_request(
@@ -489,11 +573,16 @@ impl NativeSessionProtocol {
         match request {
             CurrentServerRequest::BootstrapRemoteTrack(payload) => {
                 self.apply_remote_track_bootstrap(payload)?;
-                self.send_server_messages(
-                    writer,
-                    vec![ServerMessage::Tracks(self.remote_track_snapshot())],
-                )
-                .await
+                let mut batch_len = self
+                    .send_server_messages(
+                        writer,
+                        vec![ServerMessage::Tracks(self.remote_track_snapshot())],
+                    )
+                    .await?;
+                if self.request_renegotiation(writer).await? {
+                    batch_len += 1;
+                }
+                Ok(batch_len)
             }
             CurrentServerRequest::BootstrapTransports(_) | CurrentServerRequest::Ping => {
                 Err(WebSocketCloseCode::Error)
@@ -525,26 +614,38 @@ impl NativeSessionProtocol {
         Ok(batch.len())
     }
 
-    fn translate_server_message(&mut self, message: CurrentServerMessage) -> Vec<ServerMessage> {
+    fn translate_server_message(
+        &mut self,
+        message: CurrentServerMessage,
+    ) -> TranslatedServerMessage {
         match message {
             CurrentServerMessage::Broadcast(payload) => {
-                vec![ServerMessage::Broadcast(ServerBroadcastPayload {
-                    sender_id: payload.sender_id,
-                    message: payload.message,
-                })]
+                TranslatedServerMessage::messages(vec![ServerMessage::Broadcast(
+                    ServerBroadcastPayload {
+                        sender_id: payload.sender_id,
+                        message: payload.message,
+                    },
+                )])
             }
             CurrentServerMessage::SessionDeparted(payload) => {
+                let removed_tracks = self
+                    .remote_track_bindings
+                    .values()
+                    .any(|binding| binding.session_id == payload.session_id);
                 self.remote_track_bindings
                     .retain(|_mid, binding| binding.session_id != payload.session_id);
-                vec![ServerMessage::PeerLeft(PeerLeftPayload {
-                    session_id: payload.session_id,
-                })]
+                TranslatedServerMessage {
+                    messages: vec![ServerMessage::PeerLeft(PeerLeftPayload {
+                        session_id: payload.session_id,
+                    })],
+                    needs_renegotiation: removed_tracks,
+                }
             }
             CurrentServerMessage::SessionInfoChanged(snapshot) => {
                 self.translate_session_info_snapshot(snapshot)
             }
             CurrentServerMessage::ChannelStateChanged(state) => {
-                vec![ServerMessage::RecordingChange(state)]
+                TranslatedServerMessage::messages(vec![ServerMessage::RecordingChange(state)])
             }
         }
     }
@@ -552,7 +653,7 @@ impl NativeSessionProtocol {
     fn translate_session_info_snapshot(
         &mut self,
         snapshot: CurrentSessionInfoSnapshotById,
-    ) -> Vec<ServerMessage> {
+    ) -> TranslatedServerMessage {
         let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
         let mut track_snapshot_changed = false;
         for (bundle_key, info) in snapshot {
@@ -566,7 +667,10 @@ impl NativeSessionProtocol {
         if track_snapshot_changed {
             messages.push(ServerMessage::Tracks(self.remote_track_snapshot()));
         }
-        messages
+        TranslatedServerMessage {
+            messages,
+            needs_renegotiation: false,
+        }
     }
 
     fn apply_remote_track_bootstrap(
@@ -617,6 +721,27 @@ impl NativeSessionProtocol {
 
     fn remote_track_snapshot(&self) -> Vec<TrackBinding> {
         self.remote_track_bindings.values().cloned().collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranslatedServerMessage {
+    messages: Vec<ServerMessage>,
+    needs_renegotiation: bool,
+}
+
+impl TranslatedServerMessage {
+    fn messages(messages: Vec<ServerMessage>) -> Self {
+        Self {
+            messages,
+            needs_renegotiation: false,
+        }
+    }
+}
+
+fn stub_session_description() -> SessionDescriptionPayload {
+    SessionDescriptionPayload {
+        sdp: STUB_NEGOTIATION_OFFER_SDP.to_owned(),
     }
 }
 

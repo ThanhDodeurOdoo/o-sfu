@@ -155,7 +155,10 @@ impl ProtocolHarnessPeer {
                     }
                     _ => return None,
                 },
-                Command::CreatePeerConnection | Command::ClosePeerConnection => Vec::new(),
+                Command::CreatePeerConnection
+                | Command::ClosePeerConnection
+                | Command::AttachTrack { .. }
+                | Command::DetachTrack { .. } => Vec::new(),
                 Command::ApplyNegotiation {
                     request_id,
                     kind,
@@ -187,7 +190,6 @@ impl ProtocolHarnessPeer {
                         .push(HostCommand::from(command));
                     Vec::new()
                 }
-                Command::AttachTrack { .. } | Command::DetachTrack { .. } => Vec::new(),
             };
             pending.extend(follow_up);
         }
@@ -535,6 +537,10 @@ async fn protocol_core_receives_translated_track_snapshot_and_unpublish_update()
             active: true,
         })
     );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "bob should consume the serialized renegotiation request after track bootstrap"
+    );
 
     assert!(
         alice
@@ -612,6 +618,7 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
         )
         .await;
     assert!(producer_id.is_some(), "native publisher should be ready");
+    assert!(bob.read_server_frame().await.is_some());
     assert!(bob.read_server_frame().await.is_some());
 
     assert!(
@@ -740,93 +747,42 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
 
 #[tokio::test]
 async fn protocol_core_replays_latest_info_after_real_server_recovery() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let channel = create_channel(
-        &server,
-        "issuer-native-recovery",
-        None,
-        CreateChannelQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(71));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(72));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+    let Some((_server, _channel, mut alice, mut bob)) =
+        setup_native_recovery_peers(SessionId::Integer(71), SessionId::Integer(72)).await
+    else {
         return;
     };
 
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
     assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-
-    assert!(
-        bob.update_info(ProtocolSessionInfo {
-            is_self_muted: Some(true),
-            ..ProtocolSessionInfo::default()
-        })
+        bob_update_info_and_deliver(
+            &mut bob,
+            &mut alice,
+            ProtocolSessionInfo {
+                is_self_muted: Some(true),
+                ..ProtocolSessionInfo::default()
+            },
+        )
         .await
         .is_some()
-    );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "alice should consume bob's initial session info update"
-    );
-    alice.updates.clear();
-
-    let close_result = match bob.websocket.as_mut() {
-        Some(websocket) => websocket.close(None).await,
-        None => return,
-    };
-    assert!(close_result.is_ok());
-    bob.websocket = None;
-    assert!(
-        bob.observe_close(1011).await.is_some(),
-        "protocol core should enter recovery after a transient close"
-    );
-
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "alice should observe bob's disconnect before recovery"
     );
     alice.updates.clear();
 
     assert!(
-        bob.update_info(ProtocolSessionInfo {
-            is_self_muted: Some(false),
-            is_raising_hand: Some(true),
-            ..ProtocolSessionInfo::default()
-        })
-        .await
-        .is_some()
-    );
-    assert!(
-        bob.flush_timers_with_delay(RECOVERY_DELAY_MS)
+        close_peer_and_observe_recovery(&mut bob, &mut alice)
             .await
-            .is_some(),
-        "recovery timer should reconnect the websocket"
+            .is_some()
     );
+    alice.updates.clear();
+
+    let latest_info = ProtocolSessionInfo {
+        is_self_muted: Some(false),
+        is_raising_hand: Some(true),
+        ..ProtocolSessionInfo::default()
+    };
     assert!(
-        bob.read_server_frame().await.is_some(),
-        "recovered peer should consume the welcome frame"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "recovered peer should consume the renegotiation offer"
+        recover_peer_with_latest_info(&mut bob, latest_info.clone())
+            .await
+            .is_some()
     );
 
     assert!(
@@ -837,25 +793,80 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
         alice.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(72)),
-            ProtocolSessionInfo {
-                is_self_muted: Some(false),
-                is_raising_hand: Some(true),
-                ..ProtocolSessionInfo::default()
-            },
+            latest_info,
         )])))
     );
-    assert!(
-        bob.state_changes.iter().any(|change| {
-            change.state == BundleConnectionState::Recovering && change.cause.is_none()
-        }),
-        "transient close should enter recovering"
-    );
-    assert!(
-        bob.state_changes.iter().any(|change| {
-            change.state == BundleConnectionState::Connected && change.cause.is_none()
-        }),
-        "recovery handshake should return the protocol core to connected"
-    );
+    assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));
+    assert!(peer_reached_state(&bob, BundleConnectionState::Connected));
+}
+
+async fn setup_native_recovery_peers(
+    alice_session_id: SessionId,
+    bob_session_id: SessionId,
+) -> Option<(
+    TestServer,
+    Arc<Channel>,
+    ProtocolHarnessPeer,
+    ProtocolHarnessPeer,
+)> {
+    let server = spawn_native_protocol_test_server(1_000, 100).await?;
+    let channel = create_channel(
+        &server,
+        "issuer-native-recovery",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id)?;
+
+    let mut alice = ProtocolHarnessPeer::default();
+    let mut bob = ProtocolHarnessPeer::default();
+    alice
+        .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+        .await?;
+    bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+        .await?;
+    Some((server, channel, alice, bob))
+}
+
+async fn bob_update_info_and_deliver(
+    bob: &mut ProtocolHarnessPeer,
+    alice: &mut ProtocolHarnessPeer,
+    info: ProtocolSessionInfo,
+) -> Option<()> {
+    bob.update_info(info).await?;
+    alice.read_server_frame().await?;
+    Some(())
+}
+
+async fn close_peer_and_observe_recovery(
+    bob: &mut ProtocolHarnessPeer,
+    alice: &mut ProtocolHarnessPeer,
+) -> Option<()> {
+    bob.websocket.as_mut()?.close(None).await.ok()?;
+    bob.websocket = None;
+    bob.observe_close(1011).await?;
+    alice.read_server_frame().await?;
+    Some(())
+}
+
+async fn recover_peer_with_latest_info(
+    bob: &mut ProtocolHarnessPeer,
+    info: ProtocolSessionInfo,
+) -> Option<()> {
+    bob.update_info(info).await?;
+    bob.flush_timers_with_delay(RECOVERY_DELAY_MS).await?;
+    bob.read_server_frame().await?;
+    bob.read_server_frame().await?;
+    assert!(bob.websocket.is_some());
+    Some(())
+}
+
+fn peer_reached_state(peer: &ProtocolHarnessPeer, state: BundleConnectionState) -> bool {
+    peer.state_changes
+        .iter()
+        .any(|change| change.state == state && change.cause.is_none())
 }
 
 fn sample_video_rtp_parameters(mid: &str) -> RtpParameters {

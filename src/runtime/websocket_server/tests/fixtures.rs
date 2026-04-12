@@ -32,7 +32,11 @@ pub(super) use crate::{
             CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
             CurrentStartupPayload, CurrentTransportConnectPayload, CurrentWebSocketCredentials,
         },
-        protocol::{AuthPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, WelcomePayload},
+        protocol::{
+            AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
+            ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
+            WelcomePayload,
+        },
         shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
         webrtc::{DtlsFingerprint, DtlsParameters, MediaKind, RtpParameters},
     },
@@ -292,6 +296,68 @@ pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<Welcom
         return None;
     }
     serde_json::from_value(envelope.payload.clone()?).ok()
+}
+
+pub(super) async fn read_native_server_batch(
+    websocket: &mut TestWebSocket,
+) -> Option<EnvelopeBatch> {
+    let payload = read_text_message(websocket).await?;
+    serde_json::from_str(&payload).ok()
+}
+
+pub(super) fn first_native_server_request(
+    batch: &EnvelopeBatch,
+) -> Option<(RequestId, ServerRequest)> {
+    let envelope = batch.first()?.clone();
+    match ServerEnvelope::decode(envelope).ok()? {
+        ServerEnvelope::Request {
+            request_id,
+            request,
+        } => Some((request_id, request)),
+        ServerEnvelope::Message(_) | ServerEnvelope::Response { .. } => None,
+    }
+}
+
+pub(super) fn native_server_messages(batch: &EnvelopeBatch) -> Option<Vec<ServerMessage>> {
+    let mut messages = Vec::new();
+    for envelope in batch.clone() {
+        match ServerEnvelope::decode(envelope).ok()? {
+            ServerEnvelope::Message(message) => messages.push(message),
+            ServerEnvelope::Request { .. } | ServerEnvelope::Response { .. } => return None,
+        }
+    }
+    Some(messages)
+}
+
+pub(super) async fn respond_to_native_negotiation_request(
+    websocket: &mut TestWebSocket,
+    response_to: RequestId,
+    request: ServerRequest,
+    sdp: &str,
+) -> Option<()> {
+    let response = match request {
+        ServerRequest::Offer(_) => ClientResponse::Offer(SessionDescriptionPayload {
+            sdp: sdp.to_owned(),
+        }),
+        ServerRequest::Renegotiate(_) => ClientResponse::Renegotiate(SessionDescriptionPayload {
+            sdp: sdp.to_owned(),
+        }),
+        ServerRequest::Ping => return None,
+    };
+    let frame = serde_json::to_string(&vec![
+        ClientEnvelope::Response {
+            response_to,
+            response,
+        }
+        .into_envelope()
+        .ok()?,
+    ])
+    .ok()?;
+    websocket
+        .send(tungstenite::Message::Text(frame.into()))
+        .await
+        .ok()?;
+    Some(())
 }
 
 pub(super) async fn read_message(

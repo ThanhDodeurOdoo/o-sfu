@@ -8,6 +8,7 @@ mod bootstrap_tests;
 mod channel_event_tests;
 mod fixtures;
 mod media_bootstrap_tests;
+mod native_negotiation_tests;
 mod protocol_core_harness_tests;
 mod protocol_resilience_tests;
 mod session_lifecycle_tests;
