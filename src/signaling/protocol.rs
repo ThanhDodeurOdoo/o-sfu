@@ -1,1 +1,1 @@
-pub use o_sfu_protocol::protocol::*;
+pub use o_sfu_protocol::signaling::*;

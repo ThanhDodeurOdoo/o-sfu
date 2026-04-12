@@ -8,7 +8,6 @@ use crate::shared::{
 };
 
 pub const FIRST_BUNDLE_PROTOCOL_VERSION: u16 = 1;
-pub const CHANNEL_FULL_CLOSE_CAUSE: &str = "full";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundleProtocolStrategy {
@@ -260,8 +259,7 @@ mod tests {
         BundleConnectionState, BundleMethodCall, BundleProtocolStrategy, BundleRecordingOptions,
         BundleStartRecordingCall, BundleStateChange, BundleUpdate, BundleUpdateDownloadCall,
         BundleUpdateInfoCall, BundleUpdateInfoOptions, BundleUpdateKind, BundleUpdateUploadCall,
-        CHANNEL_FULL_CLOSE_CAUSE, FIRST_BUNDLE_PROTOCOL_STRATEGY, FIRST_BUNDLE_PROTOCOL_VERSION,
-        bundle_session_info_key,
+        FIRST_BUNDLE_PROTOCOL_STRATEGY, FIRST_BUNDLE_PROTOCOL_VERSION, bundle_session_info_key,
     };
     use crate::shared::{
         DownloadStates, RecordingState, RecordingStateUpdate, SessionId, SessionInfo, StopCode,
@@ -284,7 +282,6 @@ mod tests {
             FIRST_BUNDLE_PROTOCOL_STRATEGY,
             BundleProtocolStrategy::ReuseCurrentWireV1
         );
-        assert_eq!(CHANNEL_FULL_CLOSE_CAUSE, "full");
     }
 
     #[test]
@@ -298,7 +295,7 @@ mod tests {
         assert_round_trip(
             &BundleStateChange {
                 state: BundleConnectionState::Closed,
-                cause: Some(CHANNEL_FULL_CLOSE_CAUSE.to_owned()),
+                cause: Some(String::from("full")),
             },
             json!({
                 "state": "closed",
