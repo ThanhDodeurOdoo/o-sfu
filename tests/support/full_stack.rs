@@ -15,11 +15,11 @@ use o_sfu::{
         current_protocol::{
             CurrentClientMessage, CurrentClientRequest, CurrentDownloadStateChangePayload,
             CurrentPublishTrackResponse, CurrentServerMessage, CurrentServerRequest,
-            CurrentStartupPayload, CurrentTransportBootstrapPayload,
-            CurrentTransportConnectPayload, CurrentUploadStateChangePayload,
-            CurrentWebSocketCredentials,
+            CurrentTransportBootstrapPayload, CurrentTransportConnectPayload,
+            CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
         },
         http::{STATS_PATH, StatsResponse},
+        protocol::WelcomePayload,
         shared::{DownloadStates, SessionId, StreamType},
         webrtc::{DtlsFingerprint, DtlsParameters, IceParameters},
     },
@@ -84,7 +84,7 @@ impl LocalNetwork {
             },
         )
         .await?;
-        let startup = client.read_startup().await?;
+        let welcome = client.read_welcome().await?;
         let (request_id, request) = client.read_server_request().await?;
         let CurrentServerRequest::BootstrapTransports(transport_bootstrap) = request else {
             return None;
@@ -97,7 +97,7 @@ impl LocalNetwork {
         Some(FakePeer {
             session_id,
             client,
-            startup,
+            welcome,
             transport_bootstrap,
             next_request_counter: 1,
         })
@@ -107,7 +107,7 @@ impl LocalNetwork {
 pub struct FakePeer {
     session_id: SessionId,
     client: FakeWebSocketClient,
-    startup: CurrentStartupPayload,
+    welcome: WelcomePayload,
     transport_bootstrap: CurrentTransportBootstrapPayload,
     next_request_counter: u64,
 }
@@ -119,8 +119,8 @@ impl FakePeer {
     }
 
     #[must_use]
-    pub fn startup(&self) -> &CurrentStartupPayload {
-        &self.startup
+    pub fn welcome(&self) -> &WelcomePayload {
+        &self.welcome
     }
 
     #[must_use]

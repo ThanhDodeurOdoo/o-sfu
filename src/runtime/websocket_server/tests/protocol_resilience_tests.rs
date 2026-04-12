@@ -13,9 +13,9 @@ async fn websocket_returns_empty_object_for_malformed_bus_requests() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;

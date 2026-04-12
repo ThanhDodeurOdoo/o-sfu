@@ -6,8 +6,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::signaling::shared::{
-    AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
-    SessionId, SessionInfo, StreamType,
+    DownloadStates, JsonPayload, RecordingStateUpdate, SessionId, SessionInfo, StreamType,
 };
 use crate::signaling::webrtc::{
     DtlsParameters, IceParameters, MediaKind, PublishOptionsByMediaKind, RtpCapabilities,
@@ -19,40 +18,6 @@ pub struct CurrentWebSocketCredentials {
     #[serde(rename = "channelUUID", skip_serializing_if = "Option::is_none")]
     pub channel_uuid: Option<String>,
     pub jwt: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum CurrentWebSocketCloseCode {
-    Clean = 1000,
-    Leaving = 1001,
-    Error = 1011,
-    AuthenticationFailed = 4106,
-    Timeout = 4107,
-    Kicked = 4108,
-    ChannelFull = 4109,
-}
-
-impl From<CurrentWebSocketCloseCode> for u16 {
-    fn from(value: CurrentWebSocketCloseCode) -> Self {
-        match value {
-            CurrentWebSocketCloseCode::Clean => 1000,
-            CurrentWebSocketCloseCode::Leaving => 1001,
-            CurrentWebSocketCloseCode::Error => 1011,
-            CurrentWebSocketCloseCode::AuthenticationFailed => 4106,
-            CurrentWebSocketCloseCode::Timeout => 4107,
-            CurrentWebSocketCloseCode::Kicked => 4108,
-            CurrentWebSocketCloseCode::ChannelFull => 4109,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CurrentStartupPayload {
-    #[serde(rename = "availableFeatures")]
-    pub available_features: AvailableFeatures,
-    #[serde(rename = "recordingState")]
-    pub recording_state: RecordingState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,13 +188,13 @@ mod tests {
         CurrentDownloadStateChangePayload, CurrentPublishTrackPayload, CurrentPublishTrackResponse,
         CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
         CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById,
-        CurrentSessionInfoUpdatePayload, CurrentStartRecordingPayload, CurrentStartupPayload,
+        CurrentSessionInfoUpdatePayload, CurrentStartRecordingPayload,
         CurrentTransportBootstrapPayload, CurrentTransportConnectPayload,
-        CurrentUploadStateChangePayload, CurrentWebSocketCloseCode, CurrentWebSocketCredentials,
+        CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
     };
     use crate::signaling::shared::{
-        AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
-        SessionInfo, SessionPermissions, StopCode, StreamType,
+        DownloadStates, RecordingState, RecordingStateUpdate, SessionId, SessionInfo,
+        SessionPermissions, StopCode, StreamType,
     };
     use crate::signaling::webrtc::{
         DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, MediaKind, PublishOptions,
@@ -291,46 +256,6 @@ mod tests {
                 "jwt": "signed-token"
             }),
         )
-    }
-
-    #[test]
-    fn startup_payload_round_trips() -> serde_json::Result<()> {
-        let startup = CurrentStartupPayload {
-            available_features: AvailableFeatures {
-                rtc: true,
-                transcription: false,
-                audio_recording: false,
-                video_recording: false,
-            },
-            recording_state: RecordingState {
-                recording: Some(false),
-                audio: Some(false),
-                transcription: Some(false),
-                video: Some(false),
-            },
-        };
-        assert_round_trip(
-            &startup,
-            json!({
-                "availableFeatures": {
-                    "rtc": true,
-                    "transcription": false,
-                    "audioRecording": false,
-                    "videoRecording": false
-                },
-                "recordingState": {
-                    "recording": false,
-                    "audio": false,
-                    "transcription": false,
-                    "video": false
-                }
-            }),
-        )?;
-        assert_eq!(
-            u16::from(CurrentWebSocketCloseCode::AuthenticationFailed),
-            4106
-        );
-        Ok(())
     }
 
     #[test]

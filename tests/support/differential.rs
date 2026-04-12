@@ -15,13 +15,14 @@ use o_sfu::signaling::{
     current_protocol::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
         CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
-        CurrentSessionInfoSnapshotById, CurrentStartupPayload, CurrentTransportConnectPayload,
+        CurrentSessionInfoSnapshotById, CurrentTransportConnectPayload,
         CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
     },
     http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, NOOP_PATH},
     shared::{SessionId, StreamType},
     webrtc::{DtlsFingerprint, DtlsParameters, MediaKind},
 };
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::time::{sleep, timeout};
@@ -160,7 +161,7 @@ impl ScenarioBackend for LocalNetwork {
 
 impl ScenarioPeer for FakePeer {
     fn rtc_feature_enabled(&self) -> bool {
-        self.startup().available_features.rtc
+        self.welcome().features.rtc
     }
 
     fn connect_transports(&mut self) -> BoxFuture<'_, Option<()>> {
@@ -215,10 +216,21 @@ struct LegacySfuServer {
     child: Child,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct LegacyStartupPayload {
+    #[serde(rename = "availableFeatures")]
+    available_features: LegacyAvailableFeatures,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct LegacyAvailableFeatures {
+    rtc: bool,
+}
+
 #[derive(Debug)]
 pub struct LegacyFakePeer {
     websocket: TestWebSocket,
-    startup: CurrentStartupPayload,
+    startup: LegacyStartupPayload,
     next_request_counter: u64,
     pending_batches: VecDeque<CurrentBusBatch>,
 }
@@ -370,7 +382,7 @@ impl LegacyFakePeer {
                     "failed to send legacy websocket credentials for session {session_label}: {error}"
                 )
             })?;
-        let startup = serde_json::from_str::<CurrentStartupPayload>(
+        let startup = serde_json::from_str::<LegacyStartupPayload>(
             &read_text_message_with_context(
                 &mut websocket,
                 &format!("legacy startup payload for session {session_label}"),

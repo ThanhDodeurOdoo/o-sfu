@@ -14,9 +14,9 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     assert!(
@@ -73,9 +73,9 @@ async fn websocket_closes_when_ping_response_times_out() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     assert!(
@@ -127,9 +127,9 @@ async fn websocket_emits_stub_webrtc_bootstrap_event() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
 
@@ -161,9 +161,9 @@ async fn websocket_closure_emits_stub_webrtc_session_closed_event() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     let batch = read_bus_batch(&mut websocket).await;
@@ -201,9 +201,9 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
         return;
     };
 
-    let first_authenticated = authenticate_and_read_startup(&server, &token).await;
+    let first_authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(first_authenticated.is_some());
-    let Some((mut first_socket, _first_startup)) = first_authenticated else {
+    let Some((mut first_socket, _first_welcome)) = first_authenticated else {
         return;
     };
     assert!(
@@ -211,9 +211,9 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
         "first session should receive transport bootstrap"
     );
 
-    let second_authenticated = authenticate_and_read_startup(&server, &token).await;
+    let second_authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(second_authenticated.is_some());
-    let Some((mut second_socket, _second_startup)) = second_authenticated else {
+    let Some((mut second_socket, _second_welcome)) = second_authenticated else {
         return;
     };
     assert!(

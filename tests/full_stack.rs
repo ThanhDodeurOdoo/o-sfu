@@ -81,8 +81,8 @@ async fn fake_peers_publish_and_receive_consumer_bootstrap_over_real_server_entr
         return;
     };
 
-    assert!(publisher.startup().available_features.rtc);
-    assert!(subscriber.startup().available_features.rtc);
+    assert!(publisher.welcome().features.rtc);
+    assert!(subscriber.welcome().features.rtc);
     assert!(
         publisher
             .transport_bootstrap()

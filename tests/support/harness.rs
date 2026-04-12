@@ -17,7 +17,7 @@ use tokio_tungstenite::{
 
 use o_sfu::{
     config::{Config, RtcPortRange, TransportBackend},
-    runtime::testing::TestServer,
+    runtime::testing::{TestServer, decode_native_welcome_batch},
     signaling::{
         auth::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
@@ -26,13 +26,10 @@ use o_sfu::{
         current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
         current_protocol::{
             CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
-            CurrentStartupPayload, CurrentWebSocketCredentials,
+            CurrentWebSocketCredentials,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
-        protocol::{
-            AuthPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, ServerMessage,
-            WelcomePayload,
-        },
+        protocol::{AuthPayload, ClientEnvelope, ClientMessage, WelcomePayload},
         shared::{SessionId, SessionPermissions},
     },
 };
@@ -173,19 +170,11 @@ impl FakeWebSocketClient {
     pub async fn authenticate_and_bootstrap(
         server: &TestServer,
         token: &str,
-    ) -> Option<(Self, CurrentStartupPayload)> {
+    ) -> Option<(Self, WelcomePayload)> {
         let mut client = Self::authenticate_with_jwt(server, token).await?;
-        let startup = client.read_startup().await?;
+        let welcome = client.read_welcome().await?;
         client.acknowledge_transport_bootstrap().await?;
-        Some((client, startup))
-    }
-
-    pub async fn read_startup(&mut self) -> Option<CurrentStartupPayload> {
-        let welcome = self.read_welcome().await?;
-        Some(CurrentStartupPayload {
-            available_features: welcome.features,
-            recording_state: welcome.recording,
-        })
+        Some((client, welcome))
     }
 
     pub async fn read_welcome(&mut self) -> Option<WelcomePayload> {
@@ -293,21 +282,7 @@ fn encode_native_auth(auth_payload: AuthPayload) -> Option<String> {
 
 pub async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
-    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-    let envelope = batch.first()?;
-    if envelope.tag != "welcome" {
-        return None;
-    }
-    let message = ServerMessage::Welcome(serde_json::from_value(envelope.payload.clone()?).ok()?);
-    match message {
-        ServerMessage::Welcome(welcome) => Some(welcome),
-        ServerMessage::Tracks(_)
-        | ServerMessage::PeerInfo(_)
-        | ServerMessage::PeerJoined(_)
-        | ServerMessage::PeerLeft(_)
-        | ServerMessage::Broadcast(_)
-        | ServerMessage::RecordingChange(_) => None,
-    }
+    decode_native_welcome_batch(&payload)
 }
 
 /// Realistc client RTP capabilities (corespond to router default)

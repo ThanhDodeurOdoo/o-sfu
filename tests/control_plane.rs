@@ -30,7 +30,7 @@ use crate::support::{
 };
 
 #[tokio::test]
-async fn websocket_startup_and_transport_bootstrap_work_from_integration_test() {
+async fn websocket_welcome_and_transport_bootstrap_work_from_integration_test() {
     let server = spawn_test_server(test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
@@ -60,12 +60,12 @@ async fn websocket_startup_and_transport_bootstrap_work_from_integration_test() 
         return;
     };
 
-    let startup = client.read_startup().await;
-    assert!(startup.is_some());
-    let Some(startup) = startup else {
+    let welcome = client.read_welcome().await;
+    assert!(welcome.is_some());
+    let Some(welcome) = welcome else {
         return;
     };
-    assert!(startup.available_features.rtc);
+    assert!(welcome.features.rtc);
 
     let batch = client.read_bus_batch().await;
     assert!(batch.is_some());
@@ -76,7 +76,7 @@ async fn websocket_startup_and_transport_bootstrap_work_from_integration_test() 
 }
 
 #[tokio::test]
-async fn websocket_startup_and_transport_bootstrap_exposes_real_rtc_bootstrap_payload() {
+async fn websocket_welcome_and_transport_bootstrap_exposes_real_rtc_bootstrap_payload() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
     let server = spawn_test_server(config).await;
@@ -108,12 +108,12 @@ async fn websocket_startup_and_transport_bootstrap_exposes_real_rtc_bootstrap_pa
         return;
     };
 
-    let startup = client.read_startup().await;
-    assert!(startup.is_some());
-    let Some(startup) = startup else {
+    let welcome = client.read_welcome().await;
+    assert!(welcome.is_some());
+    let Some(welcome) = welcome else {
         return;
     };
-    assert!(startup.available_features.rtc);
+    assert!(welcome.features.rtc);
 
     let batch = client.read_bus_batch().await;
     assert!(batch.is_some(), "bootstrap batch should be sent");
@@ -245,10 +245,10 @@ async fn broadcast_reaches_other_session_from_integration_test() {
     let bob = FakeWebSocketClient::authenticate_and_bootstrap(&server, &bob_token).await;
     assert!(alice.is_some());
     assert!(bob.is_some());
-    let Some((mut alice, _startup)) = alice else {
+    let Some((mut alice, _welcome)) = alice else {
         return;
     };
-    let Some((mut bob, _startup)) = bob else {
+    let Some((mut bob, _welcome)) = bob else {
         return;
     };
 
@@ -300,10 +300,10 @@ async fn session_info_change_reaches_other_session_from_integration_test() {
     let bob = FakeWebSocketClient::authenticate_and_bootstrap(&server, &bob_token).await;
     assert!(alice.is_some());
     assert!(bob.is_some());
-    let Some((mut alice, _startup)) = alice else {
+    let Some((mut alice, _welcome)) = alice else {
         return;
     };
-    let Some((mut bob, _startup)) = bob else {
+    let Some((mut bob, _welcome)) = bob else {
         return;
     };
 
@@ -357,10 +357,10 @@ async fn stats_reports_live_session_aggregates_from_integration_test() {
     let bob = FakeWebSocketClient::authenticate_and_bootstrap(&server, &bob_token).await;
     assert!(alice.is_some());
     assert!(bob.is_some());
-    let Some((mut alice, _startup)) = alice else {
+    let Some((mut alice, _welcome)) = alice else {
         return;
     };
-    let Some((mut bob, _startup)) = bob else {
+    let Some((mut bob, _welcome)) = bob else {
         return;
     };
 
@@ -444,7 +444,7 @@ async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integratio
 
     let first_client = FakeWebSocketClient::authenticate_and_bootstrap(&server, &first_token).await;
     assert!(first_client.is_some());
-    let Some((first_client, _startup)) = first_client else {
+    let Some((first_client, _welcome)) = first_client else {
         return;
     };
 
@@ -501,10 +501,10 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     let bob = FakeWebSocketClient::authenticate_and_bootstrap(&server, &bob_token).await;
     assert!(alice.is_some());
     assert!(bob.is_some());
-    let Some((mut alice, _startup)) = alice else {
+    let Some((mut alice, _welcome)) = alice else {
         return;
     };
-    let Some((mut bob, _startup)) = bob else {
+    let Some((mut bob, _welcome)) = bob else {
         return;
     };
 

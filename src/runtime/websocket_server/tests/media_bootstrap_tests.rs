@@ -25,14 +25,14 @@ async fn websocket_publish_sends_init_consumer_to_download_ready_peers() {
         return;
     };
 
-    let publisher_auth = authenticate_and_read_startup(&server, &publisher_token).await;
-    let subscriber_auth = authenticate_and_read_startup(&server, &subscriber_token).await;
+    let publisher_auth = authenticate_and_read_welcome(&server, &publisher_token).await;
+    let subscriber_auth = authenticate_and_read_welcome(&server, &subscriber_token).await;
     assert!(publisher_auth.is_some());
     assert!(subscriber_auth.is_some());
-    let Some((mut publisher_socket, _publisher_startup)) = publisher_auth else {
+    let Some((mut publisher_socket, _publisher_welcome)) = publisher_auth else {
         return;
     };
-    let Some((mut subscriber_socket, _subscriber_startup)) = subscriber_auth else {
+    let Some((mut subscriber_socket, _subscriber_welcome)) = subscriber_auth else {
         return;
     };
 
@@ -164,9 +164,9 @@ async fn websocket_late_join_sends_init_consumer_for_existing_producers() {
     };
 
     // Publisher: authenticate, bootstrap, connect upload, publish.
-    let publisher_auth = authenticate_and_read_startup(&server, &publisher_token).await;
+    let publisher_auth = authenticate_and_read_welcome(&server, &publisher_token).await;
     assert!(publisher_auth.is_some());
-    let Some((mut publisher_socket, _publisher_startup)) = publisher_auth else {
+    let Some((mut publisher_socket, _publisher_welcome)) = publisher_auth else {
         return;
     };
     assert!(
@@ -218,9 +218,9 @@ async fn websocket_late_join_sends_init_consumer_for_existing_producers() {
     );
 
     // Subscriber: authenticate, bootstrap, then connect download AFTER publish.
-    let subscriber_auth = authenticate_and_read_startup(&server, &subscriber_token).await;
+    let subscriber_auth = authenticate_and_read_welcome(&server, &subscriber_token).await;
     assert!(subscriber_auth.is_some());
-    let Some((mut subscriber_socket, _subscriber_startup)) = subscriber_auth else {
+    let Some((mut subscriber_socket, _subscriber_welcome)) = subscriber_auth else {
         return;
     };
 

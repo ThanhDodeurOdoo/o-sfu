@@ -134,6 +134,10 @@ pub(super) struct ConsumerState {
     pub(super) consumer_media: TransportMediaId,
 }
 
+#[allow(
+    clippy::struct_field_names,
+    reason = "postfix _id, because they are ids..."
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProducerRouteTarget {
     pub(super) producer_wire_id: String,

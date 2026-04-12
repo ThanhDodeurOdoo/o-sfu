@@ -1,7 +1,7 @@
 use super::fixtures::*;
 
 #[tokio::test]
-async fn websocket_sends_router_capabilities_in_transport_bootstrap_after_startup() {
+async fn websocket_sends_router_capabilities_in_transport_bootstrap_after_welcome() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -13,12 +13,12 @@ async fn websocket_sends_router_capabilities_in_transport_bootstrap_after_startu
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, startup)) = authenticated else {
+    let Some((mut websocket, welcome)) = authenticated else {
         return;
     };
-    assert!(startup.available_features.rtc);
+    assert!(welcome.features.rtc);
 
     let batch = read_bus_batch(&mut websocket).await;
     assert!(batch.is_some(), "transport bootstrap batch should exist");
@@ -100,14 +100,14 @@ async fn websocket_uses_stored_client_capabilities_for_consumer_negotiation() {
         return;
     };
 
-    let publisher_auth = authenticate_and_read_startup(&server, &publisher_token).await;
-    let subscriber_auth = authenticate_and_read_startup(&server, &subscriber_token).await;
+    let publisher_auth = authenticate_and_read_welcome(&server, &publisher_token).await;
+    let subscriber_auth = authenticate_and_read_welcome(&server, &subscriber_token).await;
     assert!(publisher_auth.is_some());
     assert!(subscriber_auth.is_some());
-    let Some((mut publisher_socket, _publisher_startup)) = publisher_auth else {
+    let Some((mut publisher_socket, _publisher_welcome)) = publisher_auth else {
         return;
     };
-    let Some((mut subscriber_socket, _subscriber_startup)) = subscriber_auth else {
+    let Some((mut subscriber_socket, _subscriber_welcome)) = subscriber_auth else {
         return;
     };
 
@@ -252,14 +252,14 @@ async fn websocket_bootstraps_late_join_when_capabilities_arrive_after_download_
         return;
     };
 
-    let publisher_auth = authenticate_and_read_startup(&server, &publisher_token).await;
-    let subscriber_auth = authenticate_and_read_startup(&server, &subscriber_token).await;
+    let publisher_auth = authenticate_and_read_welcome(&server, &publisher_token).await;
+    let subscriber_auth = authenticate_and_read_welcome(&server, &subscriber_token).await;
     assert!(publisher_auth.is_some());
     assert!(subscriber_auth.is_some());
-    let Some((mut publisher_socket, _publisher_startup)) = publisher_auth else {
+    let Some((mut publisher_socket, _publisher_welcome)) = publisher_auth else {
         return;
     };
-    let Some((mut subscriber_socket, _subscriber_startup)) = subscriber_auth else {
+    let Some((mut subscriber_socket, _subscriber_welcome)) = subscriber_auth else {
         return;
     };
 

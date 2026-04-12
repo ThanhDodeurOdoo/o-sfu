@@ -34,8 +34,6 @@ type PendingRequestCallbacks = {
 };
 
 type ConsumerCompat = {
-    closed: boolean;
-    paused: boolean;
     track: TrackLike | null;
 };
 
@@ -177,18 +175,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     updateDownload(sessionId: SessionId, states: DownloadStates): void {
         validateDownloadStates(states);
-        const consumers = this._consumers.get(sessionId);
-        if (consumers) {
-            if (states.audio !== undefined && consumers.audio) {
-                consumers.audio.paused = !states.audio;
-            }
-            if (states.camera !== undefined && consumers.camera) {
-                consumers.camera.paused = !states.camera;
-            }
-            if (states.screen !== undefined && consumers.screen) {
-                consumers.screen.paused = !states.screen;
-            }
-        }
         this._enqueueProtocolCommands(() => this._protocolCore.updateDownload(sessionId, states));
     }
 
@@ -554,8 +540,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         }
         const consumers = this._consumers.get(binding.sessionId) ?? EMPTY_CONSUMERS();
         consumers[binding.type] = {
-            closed: false,
-            paused: !binding.active,
             track
         };
         this._consumers.set(binding.sessionId, consumers);

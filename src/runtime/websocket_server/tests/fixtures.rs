@@ -22,6 +22,7 @@ pub(super) use crate::{
         http_server::app,
         metrics::RuntimeMetrics,
         stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
+        testing::decode_native_welcome_batch,
         transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection},
     },
     signaling::{
@@ -30,7 +31,7 @@ pub(super) use crate::{
         current_protocol::{
             CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
             CurrentServerMessage, CurrentServerRequest, CurrentSessionInfoUpdatePayload,
-            CurrentStartupPayload, CurrentTransportConnectPayload, CurrentWebSocketCredentials,
+            CurrentTransportConnectPayload, CurrentWebSocketCredentials,
         },
         protocol::{
             AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
@@ -275,27 +276,18 @@ pub(super) async fn authenticate_with_credentials(
     Some(websocket)
 }
 
-pub(super) async fn authenticate_and_read_startup(
+pub(super) async fn authenticate_and_read_welcome(
     server: &TestServer,
     token: &str,
-) -> Option<(TestWebSocket, CurrentStartupPayload)> {
+) -> Option<(TestWebSocket, WelcomePayload)> {
     let mut websocket = authenticate_with_jwt(server, token).await?;
     let welcome = read_welcome(&mut websocket).await?;
-    let startup = CurrentStartupPayload {
-        available_features: welcome.features,
-        recording_state: welcome.recording,
-    };
-    Some((websocket, startup))
+    Some((websocket, welcome))
 }
 
 pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
-    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-    let envelope = batch.first()?;
-    if envelope.tag != "welcome" {
-        return None;
-    }
-    serde_json::from_value(envelope.payload.clone()?).ok()
+    decode_native_welcome_batch(&payload)
 }
 
 pub(super) async fn read_native_server_batch(
@@ -603,7 +595,7 @@ pub(super) async fn setup_authenticated_session(
     session_id: SessionId,
 ) -> Option<TestWebSocket> {
     let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id)?;
-    let (mut websocket, _startup) = authenticate_and_read_startup(server, &token).await?;
+    let (mut websocket, _welcome) = authenticate_and_read_welcome(server, &token).await?;
     acknowledge_transport_bootstrap(&mut websocket).await?;
     Some(websocket)
 }

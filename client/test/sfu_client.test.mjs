@@ -643,7 +643,7 @@ test("track metadata updates re-emit track state for existing remote tracks", as
             }
         }
     ]);
-    assert.equal(client._consumers.get(42).camera.paused, true);
+    assert.equal(client._consumers.get(42).camera.track, track);
 });
 
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {
@@ -815,8 +815,6 @@ test("fatal runtime errors reset the public client surface", async () => {
     client._consumers.set(42, {
         audio: null,
         camera: {
-            closed: false,
-            paused: false,
             track: { id: "track-1", kind: "video" }
         },
         screen: null

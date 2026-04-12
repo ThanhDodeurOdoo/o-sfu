@@ -9,6 +9,7 @@ use super::{
     metrics::RuntimeMetrics, recording::MediaTap,
 };
 use crate::config::Config;
+use crate::signaling::protocol::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
@@ -65,4 +66,16 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         );
     });
     Ok(TestServer { addr, handle })
+}
+
+#[must_use]
+pub fn decode_native_welcome_batch(payload: &str) -> Option<WelcomePayload> {
+    let batch = serde_json::from_str::<EnvelopeBatch>(payload).ok()?;
+    let envelope = batch.first()?.clone();
+    match ServerEnvelope::decode(envelope).ok()? {
+        ServerEnvelope::Message(ServerMessage::Welcome(welcome)) => Some(welcome),
+        ServerEnvelope::Message(_)
+        | ServerEnvelope::Request { .. }
+        | ServerEnvelope::Response { .. } => None,
+    }
 }

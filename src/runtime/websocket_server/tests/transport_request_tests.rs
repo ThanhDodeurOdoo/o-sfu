@@ -17,9 +17,9 @@ async fn websocket_emits_stub_webrtc_directional_connect_events() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
@@ -94,9 +94,9 @@ async fn websocket_emits_stub_webrtc_rejected_connect_event_for_invalid_dtls() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
@@ -147,9 +147,9 @@ async fn websocket_returns_stub_responses_for_client_bus_requests() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_startup(&server, &token).await;
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _startup)) = authenticated else {
+    let Some((mut websocket, _welcome)) = authenticated else {
         return;
     };
     let acknowledged = acknowledge_transport_bootstrap(&mut websocket).await;
