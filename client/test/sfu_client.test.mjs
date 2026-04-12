@@ -164,6 +164,16 @@ class FakeProtocolCore {
                     type: "camera"
                 });
                 return [];
+            case "track-rebind":
+                this.trackBindings.set("0", {
+                    active: true,
+                    mid: "0",
+                    sessionId: 84,
+                    type: "screen"
+                });
+                return [];
+            case "close-peer-connection":
+                return [{ kind: "closePeerConnection" }];
             case "recording-ok":
                 return [{ kind: "resolvePendingRequest", ok: true, requestId: "record-1" }];
             case "explode":
@@ -634,6 +644,153 @@ test("track metadata updates re-emit track state for existing remote tracks", as
         }
     ]);
     assert.equal(client._consumers.get(42).camera.paused, true);
+});
+
+test("track rebinding waits for a fresh track event before re-emitting state", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const firstTrack = {
+        enabled: true,
+        id: "track-1",
+        kind: "video",
+        muted: false
+    };
+    peerConnections[0].emitTrack(firstTrack, "0");
+    await tick();
+
+    sockets[0].emitMessage("track-rebind");
+    await tick();
+
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 42,
+                track: firstTrack,
+                type: "camera"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.has(42), false);
+    assert.equal(client._consumers.has(84), false);
+
+    const reboundTrack = {
+        enabled: true,
+        id: "track-2",
+        kind: "video",
+        muted: false
+    };
+    peerConnections[0].emitTrack(reboundTrack, "0");
+    await tick();
+
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 42,
+                track: firstTrack,
+                type: "camera"
+            }
+        },
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 84,
+                track: reboundTrack,
+                type: "screen"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.get(84).screen.track, reboundTrack);
+});
+
+test("peer connection teardown clears stale remote consumer state", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    peerConnections[0].emitTrack(
+        {
+            enabled: true,
+            id: "track-1",
+            kind: "video",
+            muted: false
+        },
+        "0"
+    );
+    await tick();
+
+    assert.equal(client._consumers.get(42).camera.track.id, "track-1");
+
+    sockets[0].emitMessage("close-peer-connection");
+    await tick();
+
+    assert.equal(peerConnections[0].closed, true);
+    assert.equal(client._consumers.size, 0);
 });
 
 test("fatal runtime errors reset the public client surface", async () => {

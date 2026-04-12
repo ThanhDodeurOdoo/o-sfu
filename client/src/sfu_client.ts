@@ -128,6 +128,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private _pendingRequestResolvers = new Map<string, PendingRequestCallbacks>();
     private _remoteTrackBindings = new Map<string, AppliedTrackBinding>();
     private _remoteTracksByMid = new Map<string, TrackLike>();
+    private _staleRemoteTrackMids = new Set<string>();
     private _requestWaiters: Record<PendingRequestKind, PendingRequestCallbacks[]> = {
         [PENDING_REQUEST_KIND.START_RECORDING]: [],
         [PENDING_REQUEST_KIND.STOP_RECORDING]: []
@@ -397,9 +398,11 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         if (this._peerConnection) {
             this._peerConnection.close();
         }
+        this._consumers.clear();
         this._peerConnection = null;
         this._remoteTrackBindings.clear();
         this._remoteTracksByMid.clear();
+        this._staleRemoteTrackMids.clear();
         this._senderMidByType.clear();
     }
 
@@ -465,6 +468,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             return;
         }
         this._remoteTracksByMid.set(mid, event.track);
+        this._staleRemoteTrackMids.delete(mid);
         this._syncRemoteTrack(mid);
     }
 
@@ -477,6 +481,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                     if (binding.sessionId === payload.sessionId) {
                         this._remoteTrackBindings.delete(mid);
                         this._remoteTracksByMid.delete(mid);
+                        this._staleRemoteTrackMids.delete(mid);
                     }
                 }
                 break;
@@ -506,10 +511,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     private _syncRemoteTrack(mid: string): void {
-        const track = this._remoteTracksByMid.get(mid);
-        if (!track) {
-            return;
-        }
         const binding = this._protocolCore.trackBinding(mid);
         const previousBinding = this._remoteTrackBindings.get(mid);
         if (!binding) {
@@ -517,10 +518,30 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 this._clearConsumer(previousBinding.sessionId, previousBinding.type);
                 this._remoteTrackBindings.delete(mid);
             }
+            this._remoteTracksByMid.delete(mid);
+            this._staleRemoteTrackMids.delete(mid);
+            return;
+        }
+        const bindingIdentityChanged =
+            previousBinding &&
+            (previousBinding.sessionId !== binding.sessionId ||
+                previousBinding.type !== binding.type);
+        if (bindingIdentityChanged) {
+            this._clearConsumer(previousBinding.sessionId, previousBinding.type);
+            this._staleRemoteTrackMids.add(mid);
+        }
+        this._remoteTrackBindings.set(mid, {
+            active: binding.active,
+            sessionId: binding.sessionId,
+            type: binding.type
+        });
+        const track = this._remoteTracksByMid.get(mid);
+        if (!track || this._staleRemoteTrackMids.has(mid)) {
             return;
         }
         if (
             previousBinding &&
+            !bindingIdentityChanged &&
             previousBinding.active === binding.active &&
             previousBinding.sessionId === binding.sessionId &&
             previousBinding.type === binding.type &&
@@ -528,7 +549,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         ) {
             return;
         }
-        if (previousBinding) {
+        if (previousBinding && !bindingIdentityChanged) {
             this._clearConsumer(previousBinding.sessionId, previousBinding.type);
         }
         const consumers = this._consumers.get(binding.sessionId) ?? EMPTY_CONSUMERS();
@@ -538,11 +559,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             track
         };
         this._consumers.set(binding.sessionId, consumers);
-        this._remoteTrackBindings.set(mid, {
-            active: binding.active,
-            sessionId: binding.sessionId,
-            type: binding.type
-        });
         this.dispatchEvent(
             new CustomEvent("update", {
                 detail: {
