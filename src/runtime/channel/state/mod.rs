@@ -2,6 +2,7 @@
 //!
 //! `ids` owns the typed runtime-only producer/consumer identifiers.
 //! `presence` owns client-driven session presence state.
+//! `recording` owns channel recording-control state updates and fan-out.
 //! `session_info_projection` owns compatibility projection from channel-owned state.
 //! `shared` owns the in-memory state and bookkeeping types.
 //! `membership` owns session lifecycle, presence fan-out, and negotiation readiness.
@@ -11,6 +12,7 @@ mod ids;
 mod media;
 mod membership;
 mod presence;
+mod recording;
 mod session_info_projection;
 mod shared;
 

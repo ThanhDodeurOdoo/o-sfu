@@ -18,7 +18,11 @@ pub(super) use crate::{
     runtime::{
         RuntimeState,
         channel::Channel,
-        channel::{ChannelAdmissionPolicy, ChannelConfig, ChannelManager},
+        channel::rtp_capabilities,
+        channel::{
+            ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
+            ChannelRuntimePolicy,
+        },
         http_server::app,
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -41,7 +45,10 @@ pub(super) use crate::{
             ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
             WelcomePayload,
         },
-        shared::{AvailableFeatures, RecordingState, SessionId, SessionInfo, StreamType},
+        shared::{
+            AvailableFeatures, RecordingState, SessionId, SessionInfo, SessionPermissions,
+            StreamType,
+        },
         webrtc::{DtlsFingerprint, DtlsParameters, MediaKind, RtpParameters},
     },
 };
@@ -199,6 +206,50 @@ pub(super) async fn spawn_native_protocol_test_server(
     .await
 }
 
+pub(super) async fn spawn_test_server_with_feature_flags(
+    authentication_timeout_ms: u64,
+    channel_size: usize,
+    transport_adapter: RuntimeTransportAdapter,
+    enable_native_protocol: bool,
+    feature_flags: RuntimeFeatureFlags,
+) -> Option<TestServer> {
+    let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, channel_size);
+    let channels = Arc::new(ChannelManager::for_test_with_config(
+        ChannelManagerConfig::new(
+            1,
+            ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(config.channel_size),
+                feature_flags,
+                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+    ));
+    config.enable_native_protocol = enable_native_protocol;
+    config.feature_flags = feature_flags;
+    let state = RuntimeState {
+        config,
+        channels: Arc::clone(&channels),
+        metrics: Arc::new(RuntimeMetrics::default()),
+        transport_adapter,
+    };
+    let state_for_server = state.clone();
+    let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
+    let addr = listener.local_addr().ok()?;
+    let handle = tokio::spawn(async move {
+        let result = axum::serve(listener, app(state_for_server)).await;
+        assert!(
+            result.is_ok(),
+            "test server should stop cleanly: {result:?}"
+        );
+    });
+    Some(TestServer {
+        addr,
+        handle,
+        channels,
+        state,
+    })
+}
+
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::builder()
         .rtc(RtcTransportAdapterShardSetConfig::new(
@@ -253,13 +304,22 @@ pub(super) fn signed_connect_claims(
     channel_uuid: &str,
     session_id: SessionId,
 ) -> Option<String> {
+    signed_connect_claims_with_permissions(key, channel_uuid, session_id, None)
+}
+
+pub(super) fn signed_connect_claims_with_permissions(
+    key: &str,
+    channel_uuid: &str,
+    session_id: SessionId,
+    permissions: Option<SessionPermissions>,
+) -> Option<String> {
     sign(
         &WebSocketConnectClaims {
             registered: RegisteredJwtClaims::default(),
             sfu_channel_uuid: channel_uuid.to_owned(),
             session_id,
             label: Some("Alice".to_owned()),
-            permissions: None,
+            permissions,
         },
         key,
     )

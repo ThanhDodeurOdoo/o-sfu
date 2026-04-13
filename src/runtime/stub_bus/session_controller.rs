@@ -20,7 +20,7 @@ use crate::signaling::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
         CurrentPublishTrackResponse, CurrentServerRequest, CurrentTransportConnectPayload,
     },
-    protocol::WebSocketCloseCode,
+    protocol::{RecordingOptions, WebSocketCloseCode},
     shared::SessionId,
     webrtc::RtpCapabilities,
 };
@@ -333,9 +333,24 @@ impl SessionController {
             CurrentClientRequest::PublishTrack(payload) => {
                 self.handle_publish_request(payload).await
             }
-            CurrentClientRequest::StartRecording(_) | CurrentClientRequest::StopRecording => {
-                debug!("handled stub recording request");
-                Value::Bool(false)
+            CurrentClientRequest::StartRecording(payload) => {
+                debug!("handling recording start request");
+                Value::Bool(
+                    self.channel
+                        .start_recording(
+                            &self.session_id,
+                            RecordingOptions {
+                                audio: payload.audio,
+                                video: payload.video,
+                                transcription: payload.transcription,
+                            },
+                        )
+                        .await,
+                )
+            }
+            CurrentClientRequest::StopRecording => {
+                debug!("handling recording stop request");
+                Value::Bool(self.channel.stop_recording(&self.session_id).await)
             }
         }
     }

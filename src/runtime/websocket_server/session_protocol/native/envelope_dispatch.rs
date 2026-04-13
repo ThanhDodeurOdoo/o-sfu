@@ -61,30 +61,39 @@ impl NativeSessionProtocol {
             }
             ClientEnvelope::Request {
                 request_id,
-                request: ClientRequest::StartRecording(_payload),
-            } => match send_server_response(
-                writer,
-                request_id,
-                ServerResponse::StartRecording(RecordingActionResult { ok: false }),
-            )
-            .await
-            {
-                Ok(()) => SessionProtocolOutcome::Continue,
-                Err(code) => SessionProtocolOutcome::Close(code),
-            },
+                request: ClientRequest::StartRecording(payload),
+            } => {
+                let ok = self
+                    .channel
+                    .start_recording(&self.session_id, payload)
+                    .await;
+                match send_server_response(
+                    writer,
+                    request_id,
+                    ServerResponse::StartRecording(RecordingActionResult { ok }),
+                )
+                .await
+                {
+                    Ok(()) => SessionProtocolOutcome::Continue,
+                    Err(code) => SessionProtocolOutcome::Close(code),
+                }
+            }
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StopRecording,
-            } => match send_server_response(
-                writer,
-                request_id,
-                ServerResponse::StopRecording(RecordingActionResult { ok: false }),
-            )
-            .await
-            {
-                Ok(()) => SessionProtocolOutcome::Continue,
-                Err(code) => SessionProtocolOutcome::Close(code),
-            },
+            } => {
+                let ok = self.channel.stop_recording(&self.session_id).await;
+                match send_server_response(
+                    writer,
+                    request_id,
+                    ServerResponse::StopRecording(RecordingActionResult { ok }),
+                )
+                .await
+                {
+                    Ok(()) => SessionProtocolOutcome::Continue,
+                    Err(code) => SessionProtocolOutcome::Close(code),
+                }
+            }
             ClientEnvelope::Response { .. } | ClientEnvelope::Message(ClientMessage::Auth(_)) => {
                 SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
             }

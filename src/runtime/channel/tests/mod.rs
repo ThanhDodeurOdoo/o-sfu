@@ -11,4 +11,5 @@ mod fixtures;
 mod manager_tests;
 mod membership_tests;
 mod producer_tests;
+mod recording_tests;
 mod topology_tests;

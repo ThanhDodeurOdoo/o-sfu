@@ -13,8 +13,8 @@ use o_sfu_protocol::{
     host_bridge::{HostCommand, HostPendingRequestKind},
     shared::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
-        SessionId as ProtocolSessionId, SessionInfo as ProtocolSessionInfo,
-        StreamType as ProtocolStreamType,
+        RecordingStateUpdate, SessionId as ProtocolSessionId, SessionInfo as ProtocolSessionInfo,
+        StopCode as ProtocolStopCode, StreamType as ProtocolStreamType,
     },
     signaling::{RecordingOptions, TrackBinding},
 };
@@ -22,6 +22,7 @@ use serde_json::json;
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
 use super::fixtures::*;
+use crate::signaling::shared::SessionPermissions;
 
 const BATCH_FLUSH_DELAY_MS: u32 = 100;
 const RECOVERY_DELAY_MS: u32 = 1_000;
@@ -238,11 +239,12 @@ impl ProtocolHarnessPeer {
                     sdp,
                 } => {
                     if !self.auto_answer_negotiation {
-                        self.pending_negotiations.push_back(PendingHarnessNegotiation {
-                            request_id,
-                            kind,
-                            sdp,
-                        });
+                        self.pending_negotiations
+                            .push_back(PendingHarnessNegotiation {
+                                request_id,
+                                kind,
+                                sdp,
+                            });
                         continue;
                     }
                     let answer_sdp = match self.rtc_peer.as_mut() {
@@ -336,6 +338,108 @@ async fn setup_real_rtc_protocol_peers(
         .await?;
 
     Some((server, alice, bob))
+}
+
+fn recording_permissions() -> SessionPermissions {
+    SessionPermissions {
+        transcription: Some(true),
+        audio_recording: Some(true),
+        video_recording: Some(true),
+    }
+}
+
+fn has_resolved_pending_request(
+    commands: &[HostCommand],
+    request_id: &RequestId,
+    ok: bool,
+) -> bool {
+    commands.contains(&HostCommand::ResolvePendingRequest {
+        request_id: request_id.clone(),
+        ok,
+    })
+}
+
+fn has_recording_update(
+    updates: &[BundleUpdate],
+    state: &RecordingState,
+    stop_code: Option<ProtocolStopCode>,
+) -> bool {
+    updates.iter().any(|update| {
+        matches!(
+            update,
+            BundleUpdate::ChannelInfoChange(RecordingStateUpdate {
+                state: update_state,
+                stop_code: update_stop_code,
+            }) if *update_state == *state && *update_stop_code == stop_code
+        )
+    })
+}
+
+async fn drain_peer_until_recording_update(
+    peer: &mut ProtocolHarnessPeer,
+    state: &RecordingState,
+    stop_code: Option<ProtocolStopCode>,
+) -> bool {
+    matches!(
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if peer
+                    .pending_request_commands
+                    .iter()
+                    .any(|command| matches!(command, HostCommand::ResolvePendingRequest { .. }))
+                    && has_recording_update(&peer.updates, state, stop_code)
+                {
+                    return Some(());
+                }
+                peer.read_server_frame().await?;
+            }
+        })
+        .await,
+        Ok(Some(()))
+    )
+}
+
+async fn connect_native_recording_peer(
+    server: &TestServer,
+    channel: &Channel,
+) -> Option<ProtocolHarnessPeer> {
+    let token = signed_connect_claims_with_permissions(
+        TEST_AUTH_KEY,
+        channel.uuid(),
+        SessionId::Integer(63),
+        Some(recording_permissions()),
+    )?;
+    let mut peer = ProtocolHarnessPeer::default();
+    peer.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &token, None)
+        .await?;
+    Some(peer)
+}
+
+fn pending_request_id(
+    commands: &[HostCommand],
+    request_kind: HostPendingRequestKind,
+) -> Option<RequestId> {
+    commands.iter().find_map(|command| match command {
+        HostCommand::RegisterPendingRequest {
+            request_id,
+            request_kind: pending_kind,
+        } if *pending_kind == request_kind => Some(request_id.clone()),
+        _ => None,
+    })
+}
+
+async fn assert_recording_request_roundtrip(
+    peer: &mut ProtocolHarnessPeer,
+    request_kind: HostPendingRequestKind,
+    stop_code: Option<ProtocolStopCode>,
+    expected_state: RecordingState,
+) -> Option<RequestId> {
+    if !drain_peer_until_recording_update(peer, &expected_state, stop_code).await {
+        return None;
+    }
+    let request_id = pending_request_id(&peer.pending_request_commands, request_kind)?;
+    has_resolved_pending_request(&peer.pending_request_commands, &request_id, true)
+        .then_some(request_id)
 }
 
 #[tokio::test]
@@ -1079,7 +1183,18 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
 
 #[tokio::test]
 async fn protocol_core_native_recording_requests_resolve_against_real_server_responses() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    let server = spawn_test_server_with_feature_flags(
+        1_000,
+        100,
+        RuntimeTransportAdapter::builder().stub().build(),
+        true,
+        RuntimeFeatureFlags {
+            transcription: true,
+            audio_recording: true,
+            video_recording: true,
+        },
+    )
+    .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1088,83 +1203,60 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
         &server,
         "issuer-native-recording",
         None,
-        CreateChannelQuery::default(),
+        CreateChannelQuery {
+            recording_address: Some("https://record.example.com".to_owned()),
+            ..CreateChannelQuery::default()
+        },
     )
     .await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(63));
-    assert!(token.is_some());
-    let Some(token) = token else {
+    let mut peer = connect_native_recording_peer(&server, &channel).await;
+    assert!(peer.is_some());
+    let Some(ref mut peer) = peer else {
         return;
     };
-
-    let mut peer = ProtocolHarnessPeer::default();
-    assert!(
-        peer.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &token, None)
-            .await
-            .is_some()
-    );
 
     assert!(
         peer.start_recording(Some(true), Some(false), None)
             .await
             .is_some()
     );
-    assert!(
-        peer.read_server_frame().await.is_some(),
-        "real server should answer start recording"
-    );
-    let start_request_id = peer
-        .pending_request_commands
-        .iter()
-        .find_map(|command| match command {
-            HostCommand::RegisterPendingRequest {
-                request_id,
-                request_kind: HostPendingRequestKind::StartRecording,
-            } => Some(request_id.clone()),
-            _ => None,
-        });
+    let start_request_id = assert_recording_request_roundtrip(
+        peer,
+        HostPendingRequestKind::StartRecording,
+        None,
+        RecordingState {
+            recording: Some(true),
+            audio: Some(true),
+            video: Some(false),
+            transcription: Some(false),
+        },
+    )
+    .await;
     assert!(start_request_id.is_some());
-    let Some(start_request_id) = start_request_id else {
+    if start_request_id.is_none() {
         return;
-    };
-    assert!(
-        peer.pending_request_commands
-            .contains(&HostCommand::ResolvePendingRequest {
-                request_id: start_request_id,
-                ok: false,
-            }),
-        "real server should resolve start recording with its current stubbed response"
-    );
+    }
 
     peer.pending_request_commands.clear();
+    peer.updates.clear();
 
     assert!(peer.stop_recording().await.is_some());
-    assert!(
-        peer.read_server_frame().await.is_some(),
-        "real server should answer stop recording"
-    );
-    let stop_request_id = peer
-        .pending_request_commands
-        .iter()
-        .find_map(|command| match command {
-            HostCommand::RegisterPendingRequest {
-                request_id,
-                request_kind: HostPendingRequestKind::StopRecording,
-            } => Some(request_id.clone()),
-            _ => None,
-        });
+    let stop_request_id = assert_recording_request_roundtrip(
+        peer,
+        HostPendingRequestKind::StopRecording,
+        Some(ProtocolStopCode::UserRequest),
+        RecordingState {
+            recording: Some(false),
+            audio: Some(false),
+            video: Some(false),
+            transcription: Some(false),
+        },
+    )
+    .await;
     assert!(stop_request_id.is_some());
-    let Some(stop_request_id) = stop_request_id else {
+    if stop_request_id.is_none() {
         return;
-    };
-    assert!(
-        peer.pending_request_commands
-            .contains(&HostCommand::ResolvePendingRequest {
-                request_id: stop_request_id,
-                ok: false,
-            }),
-        "real server should resolve stop recording with its current stubbed response"
-    );
+    }
 }
 
 #[tokio::test]

@@ -1,4 +1,75 @@
 use super::fixtures::*;
+use crate::signaling::{
+    current_protocol::CurrentStartRecordingPayload,
+    shared::{RecordingState, RecordingStateUpdate, SessionPermissions, StopCode},
+};
+
+fn encode_bus_request(
+    request_id: u64,
+    request: CurrentClientRequest,
+) -> Option<tungstenite::Message> {
+    let message = serde_json::to_value(request).ok()?;
+    let payload = serde_json::to_string(&vec![CurrentBusEnvelope {
+        message,
+        need_response: Some(CurrentBusRequestId::new(
+            CurrentBusOrigin::Client,
+            0,
+            request_id,
+        )),
+        response_to: None,
+    }])
+    .ok()?;
+    Some(tungstenite::Message::Text(payload.into()))
+}
+
+async fn connect_recording_legacy_session(
+    server: &TestServer,
+    channel: &Channel,
+) -> Option<TestWebSocket> {
+    let token = signed_connect_claims_with_permissions(
+        TEST_AUTH_KEY,
+        channel.uuid(),
+        SessionId::Integer(3),
+        Some(SessionPermissions {
+            transcription: Some(true),
+            audio_recording: Some(true),
+            video_recording: Some(true),
+        }),
+    )?;
+    let mut websocket = authenticate_with_jwt(server, &token).await?;
+    read_welcome(&mut websocket).await?;
+    acknowledge_transport_bootstrap(&mut websocket).await?;
+    Some(websocket)
+}
+
+async fn collect_recording_roundtrip(
+    websocket: &mut TestWebSocket,
+    request_id: u64,
+    request: CurrentClientRequest,
+) -> Option<RecordingStateUpdate> {
+    let message = encode_bus_request(request_id, request)?;
+    websocket.send(message).await.ok()?;
+    let mut response_ok = false;
+    let mut update = None;
+    for _ in 0..2 {
+        let batch = read_bus_batch(websocket).await?;
+        let envelope = batch.first()?;
+        if envelope.response_to.is_some() {
+            if envelope.message != serde_json::Value::Bool(true) {
+                return None;
+            }
+            response_ok = true;
+            continue;
+        }
+        let message =
+            serde_json::from_value::<CurrentServerMessage>(envelope.message.clone()).ok()?;
+        let CurrentServerMessage::ChannelStateChanged(channel_update) = message else {
+            return None;
+        };
+        update = Some(channel_update);
+    }
+    response_ok.then_some(update?).or(None)
+}
 
 #[tokio::test]
 async fn websocket_recreates_channel_after_last_disconnect_cleanup() {
@@ -199,4 +270,71 @@ async fn info_change_broadcasts_to_all_sessions() {
     } else {
         panic!("expected SessionInfoChanged, got {bob_msg:?}");
     }
+}
+
+#[tokio::test]
+async fn recording_request_broadcasts_channel_state_and_returns_allowed_response() {
+    let server = spawn_test_server_with_feature_flags(
+        1_000,
+        10,
+        RuntimeTransportAdapter::builder().stub().build(),
+        false,
+        RuntimeFeatureFlags {
+            transcription: true,
+            audio_recording: true,
+            video_recording: true,
+        },
+    )
+    .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-recording-legacy",
+        None,
+        CreateChannelQuery {
+            recording_address: Some("https://record.example.com".to_owned()),
+            ..CreateChannelQuery::default()
+        },
+    )
+    .await;
+    let mut websocket = connect_recording_legacy_session(&server, &channel).await;
+    assert!(websocket.is_some());
+    let Some(ref mut websocket) = websocket else {
+        return;
+    };
+    let start_update = collect_recording_roundtrip(
+        websocket,
+        90,
+        CurrentClientRequest::StartRecording(CurrentStartRecordingPayload {
+            audio: Some(true),
+            video: Some(false),
+            transcription: Some(true),
+        }),
+    )
+    .await;
+    assert!(start_update.is_some(), "recording start should round-trip");
+    let Some(start_update) = start_update else {
+        return;
+    };
+    assert_eq!(start_update.stop_code, None);
+    assert_eq!(
+        start_update.state,
+        RecordingState {
+            recording: Some(true),
+            audio: Some(true),
+            video: Some(false),
+            transcription: Some(true),
+        }
+    );
+
+    let stop_update =
+        collect_recording_roundtrip(websocket, 91, CurrentClientRequest::StopRecording).await;
+    assert!(stop_update.is_some(), "recording stop should round-trip");
+    let Some(stop_update) = stop_update else {
+        return;
+    };
+    assert_eq!(stop_update.stop_code, Some(StopCode::UserRequest));
 }

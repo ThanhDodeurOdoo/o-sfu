@@ -19,6 +19,7 @@ mod manager;
 mod media;
 mod membership;
 mod outbound;
+mod recording;
 mod router_state;
 pub(crate) mod rtp_capabilities;
 mod session_negotiation;
