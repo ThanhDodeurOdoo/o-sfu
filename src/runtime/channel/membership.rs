@@ -3,14 +3,13 @@ use tracing::warn;
 
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
 use crate::signaling::{
-    current_protocol::{CurrentBroadcastPayload, CurrentServerMessage},
     shared::{SessionId, SessionInfo, SessionPermissions},
     webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
 
 use super::{
-    Channel, ChannelJoinError, SessionOutbound, session_negotiation::SessionNegotiationUpdate,
-    state::TransportMediaRemoval,
+    Channel, ChannelEventMessage, ChannelJoinError, SessionOutbound,
+    session_negotiation::SessionNegotiationUpdate, state::TransportMediaRemoval,
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -148,10 +147,10 @@ impl Channel {
         let fanout = {
             let state = self.state.read().await;
             state.fanout_all_except(
-                &CurrentServerMessage::Broadcast(CurrentBroadcastPayload {
+                &ChannelEventMessage::Broadcast {
                     sender_id: sender_id.clone(),
                     message,
-                }),
+                },
                 Some(sender_id),
             )
         };

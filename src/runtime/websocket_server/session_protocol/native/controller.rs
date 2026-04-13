@@ -3,12 +3,11 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 
 use crate::runtime::{
-    channel::{Channel, TrackBindingUpdate},
+    channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
     stub_bus::WsWriter,
     transport_adapter::RuntimeTransportAdapter,
 };
 use crate::signaling::{
-    current_protocol::{CurrentServerMessage, CurrentServerRequest},
     protocol::{ServerMessage, ServerRequest, WebSocketCloseCode},
     shared::SessionId,
 };
@@ -103,7 +102,7 @@ impl NativeSessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_outbound_message(
         &mut self,
         writer: &mut WsWriter,
-        message: CurrentServerMessage,
+        message: ChannelEventMessage,
     ) -> Result<usize, WebSocketCloseCode> {
         let translated = self.track_projection.translate_server_message(message);
         let mut batch_len = send_server_messages(writer, translated.messages).await?;
@@ -116,12 +115,12 @@ impl NativeSessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_outbound_request(
         &mut self,
         writer: &mut WsWriter,
-        request: CurrentServerRequest,
+        request: ChannelEventRequest,
     ) -> Result<usize, WebSocketCloseCode> {
         match request {
-            CurrentServerRequest::BootstrapRemoteTrack(payload) => {
+            ChannelEventRequest::BootstrapRemoteTrack(payload) => {
                 self.track_projection
-                    .apply_remote_track_bootstrap(payload)?;
+                    .apply_remote_track_bootstrap(&payload)?;
                 let mut batch_len = send_server_messages(
                     writer,
                     vec![ServerMessage::Tracks(self.track_projection.snapshot())],
@@ -131,9 +130,6 @@ impl NativeSessionProtocol {
                     batch_len += 1;
                 }
                 Ok(batch_len)
-            }
-            CurrentServerRequest::BootstrapTransports(_) | CurrentServerRequest::Ping => {
-                Err(WebSocketCloseCode::Error)
             }
         }
     }

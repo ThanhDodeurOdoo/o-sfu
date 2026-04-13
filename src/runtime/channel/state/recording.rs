@@ -1,9 +1,8 @@
-use crate::signaling::{
-    current_protocol::CurrentServerMessage,
-    shared::{RecordingState, RecordingStateUpdate, SessionId, SessionPermissions, StopCode},
+use crate::signaling::shared::{
+    RecordingState, RecordingStateUpdate, SessionId, SessionPermissions, StopCode,
 };
 
-use super::super::outbound::MessageFanout;
+use super::super::{ChannelEventMessage, outbound::MessageFanout};
 use super::shared::ChannelState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +44,7 @@ impl ChannelState {
             return None;
         }
         self.recording_state = state.clone();
-        Some(self.fanout_all(&CurrentServerMessage::ChannelStateChanged(
+        Some(self.fanout_all(&ChannelEventMessage::RecordingStateChanged(
             RecordingStateUpdate { state, stop_code },
         )))
     }

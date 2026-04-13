@@ -49,7 +49,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
     // Verify the broadcast contains isCameraOn = false.
     let info_msg = &msgs1[0];
-    if let SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot)) = info_msg {
+    if let SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot)) = info_msg {
         let info = snapshot
             .values()
             .next()
@@ -65,8 +65,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
         .await;
 
     let msgs1 = drain_outbound(&mut rx1);
-    if let SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot)) = &msgs1[0]
-    {
+    if let SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot)) = &msgs1[0] {
         let info = snapshot.values().next().unwrap();
         assert_eq!(info.is_camera_on, Some(true));
     } else {
@@ -142,7 +141,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     )));
     assert!(subscriber_messages.iter().any(|message| matches!(
         message,
-        SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot))
+        SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot))
             if snapshot.values().next().is_some_and(|info| info.is_camera_on.is_none())
     )));
 
@@ -187,11 +186,9 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
             | SessionOutbound::Close(_) => None,
         })
         .expect("subscriber should receive INIT_CONSUMER");
-    let CurrentServerRequest::BootstrapRemoteTrack(payload) = request else {
-        panic!("expected INIT_CONSUMER request");
-    };
+    let ChannelEventRequest::BootstrapRemoteTrack(payload) = request;
     let codecs = payload
-        .rtp_parameters
+        .rtp_parameters()
         .0
         .get("codecs")
         .and_then(serde_json::Value::as_array)
@@ -410,14 +407,14 @@ async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter(
     assert!(
         drain_outbound(&mut rx1).iter().any(|msg| matches!(
             msg,
-            SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+            SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(_))
         )),
         "publisher should still receive the concurrent info broadcast"
     );
     assert!(
         drain_outbound(&mut rx2).iter().any(|msg| matches!(
             msg,
-            SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+            SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(_))
         )),
         "peer should still receive the concurrent info broadcast"
     );
@@ -548,7 +545,7 @@ async fn production_change_updates_screen_sharing_info() {
         .await;
 
     let msgs = drain_outbound(&mut rx1);
-    if let SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot)) = &msgs[0] {
+    if let SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot)) = &msgs[0] {
         let info = snapshot.values().next().unwrap();
         assert_eq!(info.is_screen_sharing_on, Some(false));
     } else {
@@ -647,7 +644,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
     assert!(
         drain_outbound(&mut publisher_rx).iter().any(|msg| matches!(
             msg,
-            SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+            SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(_))
         )),
         "publisher should still receive the concurrent info broadcast"
     );
@@ -656,7 +653,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
             .iter()
             .any(|msg| matches!(
                 msg,
-                SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(_))
+                SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(_))
                     | SessionOutbound::Request(_)
             )),
         "late joiner should receive outbound traffic while bootstrap is running"
@@ -1184,8 +1181,8 @@ fn assert_bootstrap_for_stream(messages: &[SessionOutbound], stream_type: Stream
             SessionOutbound::Request(request)
                 if matches!(
                     request.as_ref(),
-                    CurrentServerRequest::BootstrapRemoteTrack(payload)
-                        if payload.stream_type == stream_type
+                    ChannelEventRequest::BootstrapRemoteTrack(payload)
+                        if payload.stream_type() == stream_type
                 )
         )),
         "expected a bootstrap request for {stream_type:?}"

@@ -16,6 +16,7 @@ mod recording;
 mod session_info_projection;
 mod shared;
 
+pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack,
 };

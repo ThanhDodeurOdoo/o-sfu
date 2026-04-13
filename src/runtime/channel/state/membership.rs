@@ -4,8 +4,6 @@ use tracing::error;
 
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
-    current_protocol::CurrentServerMessage,
-    current_protocol::CurrentSessionDeparturePayload,
     ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo, SessionPermissions},
@@ -13,7 +11,7 @@ use crate::signaling::{
 };
 
 use super::super::{
-    ChannelJoinError,
+    ChannelEventMessage, ChannelJoinError,
     outbound::{MessageFanout, OutboundSender},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
 };
@@ -153,9 +151,9 @@ impl ChannelState {
 
         let departure_fanout = previous_sender.as_ref().map(|_| {
             self.fanout_all_except(
-                &CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload {
+                &ChannelEventMessage::SessionDeparted {
                     session_id: session_id.clone(),
-                }),
+                },
                 Some(session_id),
             )
         });
@@ -188,11 +186,9 @@ impl ChannelState {
         self.sessions.remove(session_id);
         self.purge_session_media_state(session_id);
         Some(LeaveSessionOutcome {
-            departure_fanout: self.fanout_all(&CurrentServerMessage::SessionDeparted(
-                CurrentSessionDeparturePayload {
-                    session_id: session_id.clone(),
-                },
-            )),
+            departure_fanout: self.fanout_all(&ChannelEventMessage::SessionDeparted {
+                session_id: session_id.clone(),
+            }),
             transport_removals,
         })
     }
@@ -213,7 +209,7 @@ impl ChannelState {
             BTreeMap::from([self.session_info_snapshot(session_id)?])
         };
         Some(SessionInfoUpdateOutcome {
-            fanout: self.fanout_all(&CurrentServerMessage::SessionInfoChanged(snapshot)),
+            fanout: self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)),
         })
     }
 
@@ -245,11 +241,9 @@ impl ChannelState {
         let departure_fanouts = departed
             .into_iter()
             .map(|departed_id| {
-                self.fanout_all(&CurrentServerMessage::SessionDeparted(
-                    CurrentSessionDeparturePayload {
-                        session_id: departed_id,
-                    },
-                ))
+                self.fanout_all(&ChannelEventMessage::SessionDeparted {
+                    session_id: departed_id,
+                })
             })
             .collect();
         DisconnectSessionsOutcome {

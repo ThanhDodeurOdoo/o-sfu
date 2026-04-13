@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::runtime::channel::TrackBindingUpdate;
+use crate::runtime::channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate};
 use crate::signaling::{
-    current_protocol::{
-        CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentSessionInfoSnapshotById,
-    },
     protocol::{
         PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, TrackBinding,
         WebSocketCloseCode,
@@ -35,35 +32,30 @@ pub(super) struct RemoteTrackProjection {
 impl RemoteTrackProjection {
     pub(super) fn translate_server_message(
         &mut self,
-        message: CurrentServerMessage,
+        message: ChannelEventMessage,
     ) -> TranslatedServerMessage {
         match message {
-            CurrentServerMessage::Broadcast(payload) => {
+            ChannelEventMessage::Broadcast { sender_id, message } => {
                 TranslatedServerMessage::messages(vec![ServerMessage::Broadcast(
-                    ServerBroadcastPayload {
-                        sender_id: payload.sender_id,
-                        message: payload.message,
-                    },
+                    ServerBroadcastPayload { sender_id, message },
                 )])
             }
-            CurrentServerMessage::SessionDeparted(payload) => {
+            ChannelEventMessage::SessionDeparted { session_id } => {
                 let removed_tracks = self
                     .bindings_by_mid
                     .values()
-                    .any(|binding| binding.session_id == payload.session_id);
+                    .any(|binding| binding.session_id == session_id);
                 self.bindings_by_mid
-                    .retain(|_mid, binding| binding.session_id != payload.session_id);
+                    .retain(|_mid, binding| binding.session_id != session_id);
                 TranslatedServerMessage {
-                    messages: vec![ServerMessage::PeerLeft(PeerLeftPayload {
-                        session_id: payload.session_id,
-                    })],
+                    messages: vec![ServerMessage::PeerLeft(PeerLeftPayload { session_id })],
                     needs_renegotiation: removed_tracks,
                 }
             }
-            CurrentServerMessage::SessionInfoChanged(snapshot) => {
+            ChannelEventMessage::SessionInfoChanged(snapshot) => {
                 self.translate_session_info_snapshot(snapshot)
             }
-            CurrentServerMessage::ChannelStateChanged(state) => {
+            ChannelEventMessage::RecordingStateChanged(state) => {
                 TranslatedServerMessage::messages(vec![ServerMessage::RecordingChange(state)])
             }
         }
@@ -71,23 +63,24 @@ impl RemoteTrackProjection {
 
     pub(super) fn apply_remote_track_bootstrap(
         &mut self,
-        payload: CurrentRemoteTrackBootstrapPayload,
+        payload: &RemoteTrackBootstrap,
     ) -> Result<(), WebSocketCloseCode> {
         let Some(mid) = payload
-            .rtp_parameters
+            .rtp_parameters()
             .0
             .get("mid")
             .and_then(serde_json::Value::as_str)
         else {
             return Err(WebSocketCloseCode::Error);
         };
+        let mid = mid.to_owned();
         self.bindings_by_mid.insert(
-            mid.to_owned(),
+            mid.clone(),
             TrackBinding {
-                mid: mid.to_owned(),
-                session_id: payload.session_id,
-                stream_type: payload.stream_type,
-                active: payload.active,
+                mid,
+                session_id: payload.session_id().clone(),
+                stream_type: payload.stream_type(),
+                active: payload.active(),
             },
         );
         Ok(())
@@ -116,12 +109,11 @@ impl RemoteTrackProjection {
 
     fn translate_session_info_snapshot(
         &mut self,
-        snapshot: CurrentSessionInfoSnapshotById,
+        snapshot: BTreeMap<SessionId, SessionInfo>,
     ) -> TranslatedServerMessage {
         let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
         let mut track_snapshot_changed = false;
-        for (bundle_key, info) in snapshot {
-            let session_id = parse_bundle_session_info_key(&bundle_key);
+        for (session_id, info) in snapshot {
             track_snapshot_changed |= self.apply_session_info_to_tracks(&session_id, &info);
             messages.push(ServerMessage::PeerInfo(PeerInfoPayload {
                 session_id,
@@ -184,12 +176,5 @@ impl RemoteTrackProjection {
             &binding.session_id != session_id || binding.stream_type != stream_type
         });
         self.bindings_by_mid.len() != binding_count
-    }
-}
-
-fn parse_bundle_session_info_key(key: &str) -> SessionId {
-    match key.parse::<i64>() {
-        Ok(value) => SessionId::Integer(value),
-        Err(_error) => SessionId::String(key.to_owned()),
     }
 }

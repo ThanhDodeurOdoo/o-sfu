@@ -2,7 +2,6 @@ use super::fixtures::*;
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
 use crate::runtime::channel::{ChannelManagerConfig, ChannelRuntimePolicy, rtp_capabilities};
 use crate::signaling::{
-    current_protocol::CurrentServerMessage,
     protocol::RecordingOptions,
     shared::{RecordingState, RecordingStateUpdate, StopCode},
 };
@@ -69,7 +68,7 @@ async fn expect_recording_message(
         .await
         .expect("recording update should arrive before timeout")
         .expect("recording update channel should stay open");
-    let SessionOutbound::Message(CurrentServerMessage::ChannelStateChanged(update)) = outbound
+    let SessionOutbound::Message(ChannelEventMessage::RecordingStateChanged(update)) = outbound
     else {
         panic!("expected channel recording update, got {outbound:?}");
     };

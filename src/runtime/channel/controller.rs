@@ -23,12 +23,14 @@ use crate::config::RuntimeFeatureFlags;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
-    current_protocol::{CurrentServerMessage, CurrentServerRequest},
     protocol::{PeerSnapshot, WebSocketCloseCode},
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
 };
 
-use super::state::ChannelState;
+use super::{
+    events::ChannelEventMessage,
+    state::{ChannelState, RemoteTrackBootstrap},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TrackBindingUpdate {
@@ -39,10 +41,15 @@ pub(crate) struct TrackBindingUpdate {
 
 #[derive(Debug, Clone)]
 pub enum SessionOutbound {
-    Message(CurrentServerMessage),
-    Request(Box<CurrentServerRequest>),
+    Message(ChannelEventMessage),
+    Request(Box<ChannelEventRequest>),
     TrackBindingUpdate(TrackBindingUpdate),
     Close(WebSocketCloseCode),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChannelEventRequest {
+    BootstrapRemoteTrack(RemoteTrackBootstrap),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

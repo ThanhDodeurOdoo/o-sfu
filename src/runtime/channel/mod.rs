@@ -15,6 +15,7 @@
 //!   until the native Phase 9 negotiation path replaces the current websocket protocol
 
 mod controller;
+mod events;
 mod manager;
 mod media;
 mod membership;
@@ -30,12 +31,14 @@ mod topology;
 
 pub use controller::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
 pub(crate) use controller::{
-    ChannelAdmissionPolicy, ChannelConfig, ChannelRuntimeContext, ChannelRuntimePolicy,
-    ChannelSessionStatsSnapshot, TrackBindingUpdate,
+    ChannelAdmissionPolicy, ChannelConfig, ChannelEventRequest, ChannelRuntimeContext,
+    ChannelRuntimePolicy, ChannelSessionStatsSnapshot, TrackBindingUpdate,
 };
+pub(crate) use events::ChannelEventMessage;
 pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
 pub(crate) use media::NegotiatedPublish;
 pub(crate) use membership::TransportCleanupMode;
+pub(crate) use state::RemoteTrackBootstrap;

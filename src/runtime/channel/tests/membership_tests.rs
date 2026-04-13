@@ -125,8 +125,8 @@ async fn leave_session_sends_departure_to_remaining_peers() {
 
     let msg = rx1.try_recv();
     assert!(msg.is_ok());
-    if let Ok(SessionOutbound::Message(CurrentServerMessage::SessionDeparted(payload))) = msg {
-        assert_eq!(payload.session_id, SessionId::Integer(2));
+    if let Ok(SessionOutbound::Message(ChannelEventMessage::SessionDeparted { session_id })) = msg {
+        assert_eq!(session_id, SessionId::Integer(2));
     } else {
         panic!("expected SessionDeparted, got {msg:?}");
     }
@@ -173,8 +173,8 @@ async fn replacing_a_session_notifies_remaining_peers() {
     ));
     let msg = alice_rx.try_recv();
     assert!(msg.is_ok());
-    if let Ok(SessionOutbound::Message(CurrentServerMessage::SessionDeparted(payload))) = msg {
-        assert_eq!(payload.session_id, SessionId::Integer(2));
+    if let Ok(SessionOutbound::Message(ChannelEventMessage::SessionDeparted { session_id })) = msg {
+        assert_eq!(session_id, SessionId::Integer(2));
     } else {
         panic!("expected SessionDeparted, got {msg:?}");
     }
@@ -623,10 +623,12 @@ async fn update_session_info_broadcasts_to_all() {
     let msg2 = rx2.try_recv();
     assert!(msg1.is_ok());
     assert!(msg2.is_ok());
-    if let Ok(SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot))) = msg1 {
-        assert!(snapshot.contains_key("1"));
+    if let Ok(SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot))) = msg1 {
+        assert!(snapshot.contains_key(&SessionId::Integer(1)));
         assert_eq!(
-            snapshot.get("1").and_then(|info| info.is_talking),
+            snapshot
+                .get(&SessionId::Integer(1))
+                .and_then(|info| info.is_talking),
             Some(true)
         );
     } else {
@@ -669,16 +671,18 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
 
     let msg = rx1.try_recv();
     assert!(msg.is_ok());
-    if let Ok(SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot))) = msg {
+    if let Ok(SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot))) = msg {
         assert_eq!(
             snapshot.len(),
             2,
             "full refresh should include all sessions"
         );
-        assert!(snapshot.contains_key("1"));
-        assert!(snapshot.contains_key("2"));
+        assert!(snapshot.contains_key(&SessionId::Integer(1)));
+        assert!(snapshot.contains_key(&SessionId::Integer(2)));
         assert_eq!(
-            snapshot.get("1").and_then(|info| info.is_self_muted),
+            snapshot
+                .get(&SessionId::Integer(1))
+                .and_then(|info| info.is_self_muted),
             Some(true)
         );
     } else {

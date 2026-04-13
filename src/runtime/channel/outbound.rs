@@ -1,15 +1,13 @@
 use tokio::sync::mpsc;
 
-use crate::signaling::current_protocol::CurrentServerMessage;
-
-use super::SessionOutbound;
+use super::{ChannelEventMessage, SessionOutbound};
 
 pub(super) type OutboundSender = mpsc::UnboundedSender<SessionOutbound>;
 
 #[derive(Debug, Clone)]
 pub(super) struct MessageFanout {
     recipients: Vec<OutboundSender>,
-    message: CurrentServerMessage,
+    message: ChannelEventMessage,
 }
 
 impl MessageFanout {
@@ -22,7 +20,7 @@ impl MessageFanout {
 
 pub(super) fn fanout_all(
     recipients: impl IntoIterator<Item = OutboundSender>,
-    message: &CurrentServerMessage,
+    message: &ChannelEventMessage,
 ) -> MessageFanout {
     MessageFanout {
         recipients: recipients.into_iter().collect(),
@@ -32,7 +30,7 @@ pub(super) fn fanout_all(
 
 pub(super) fn fanout_all_except(
     recipients: impl IntoIterator<Item = OutboundSender>,
-    message: &CurrentServerMessage,
+    message: &ChannelEventMessage,
 ) -> MessageFanout {
     MessageFanout {
         recipients: recipients.into_iter().collect(),

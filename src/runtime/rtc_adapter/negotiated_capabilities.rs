@@ -4,10 +4,7 @@ use str0m::{
     format::{Codec, PayloadParams},
 };
 
-use crate::{
-    rfc::webrtc,
-    signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities,
-};
+use crate::{rfc::webrtc, signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities};
 
 pub(crate) fn client_rtp_capabilities_from_answer(
     answer_sdp: &str,

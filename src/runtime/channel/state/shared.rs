@@ -6,15 +6,13 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::{
-    bundle_api::bundle_session_info_key,
-    current_protocol::CurrentServerMessage,
     protocol::PeerSnapshot,
     shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
     webrtc::MediaKind as SignalingMediaKind,
 };
 
 use super::super::{
-    ChannelAdmissionPolicy,
+    ChannelAdmissionPolicy, ChannelEventMessage,
     outbound::{MessageFanout, OutboundSender, fanout_all, fanout_all_except},
     session_negotiation::SessionNegotiation,
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
@@ -321,7 +319,7 @@ impl ChannelState {
 
     pub(in crate::runtime::channel) fn fanout_all(
         &self,
-        message: &CurrentServerMessage,
+        message: &ChannelEventMessage,
     ) -> MessageFanout {
         fanout_all(
             self.sessions.values().map(|session| session.sender.clone()),
@@ -331,7 +329,7 @@ impl ChannelState {
 
     pub(in crate::runtime::channel) fn fanout_all_except(
         &self,
-        message: &CurrentServerMessage,
+        message: &ChannelEventMessage,
         excluded_session_id: Option<&SessionId>,
     ) -> MessageFanout {
         fanout_all_except(
@@ -374,24 +372,18 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn session_info_snapshot(
         &self,
         session_id: &SessionId,
-    ) -> Option<(String, SessionInfo)> {
+    ) -> Option<(SessionId, SessionInfo)> {
         let session = self.sessions.get(session_id)?;
-        Some((
-            bundle_session_info_key(session_id),
-            self.session_info(session_id, session),
-        ))
+        Some((session_id.clone(), self.session_info(session_id, session)))
     }
 
     pub(in crate::runtime::channel) fn session_info_snapshot_all(
         &self,
-    ) -> BTreeMap<String, SessionInfo> {
+    ) -> BTreeMap<SessionId, SessionInfo> {
         self.sessions
             .iter()
             .map(|(session_id, session)| {
-                (
-                    bundle_session_info_key(session_id),
-                    self.session_info(session_id, session),
-                )
+                (session_id.clone(), self.session_info(session_id, session))
             })
             .collect()
     }

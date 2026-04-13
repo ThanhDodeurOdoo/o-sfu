@@ -1,6 +1,6 @@
+use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::runtime::stub_bus::WsWriter;
 use crate::runtime::transport_bootstrap::to_wire_rtp_capabilities;
-use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::signaling::protocol::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };

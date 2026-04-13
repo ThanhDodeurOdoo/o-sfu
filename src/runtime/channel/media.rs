@@ -234,7 +234,7 @@ impl Channel {
             return;
         };
         let _ = sender.send(super::SessionOutbound::Request(Box::new(
-            bootstrap.into_current_server_request(),
+            bootstrap.into_channel_event_request(),
         )));
     }
 
