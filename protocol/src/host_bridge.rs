@@ -8,7 +8,7 @@ use crate::{
     core::{
         Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
-    shared::{AvailableFeatures, RecordingState, StreamType},
+    shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
     signaling::{RequestId, TrackBinding},
 };
 
@@ -93,6 +93,13 @@ pub enum HostCommand {
         state: String,
         cause: Option<String>,
     },
+    ReplaceTrackBindings {
+        bindings: Vec<TrackBinding>,
+    },
+    RemoveSessionTracks {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
+    },
     EmitUpdate {
         update: BundleUpdate,
     },
@@ -119,48 +126,78 @@ pub enum HostCommand {
     },
 }
 
-impl From<Command> for HostCommand {
-    fn from(command: Command) -> Self {
-        match command {
-            Command::SendWebSocket(frame) => Self::SendWebSocket { frame },
-            Command::ApplyNegotiation {
-                request_id,
-                kind,
-                sdp,
-            } => Self::ApplyNegotiation {
-                request_id,
-                negotiation_kind: kind.into(),
-                sdp,
-            },
-            Command::AttachTrack { mid, stream_type } => Self::AttachTrack { mid, stream_type },
-            Command::DetachTrack { stream_type } => Self::DetachTrack { stream_type },
-            Command::CreatePeerConnection => Self::CreatePeerConnection,
-            Command::ClosePeerConnection => Self::ClosePeerConnection,
-            Command::CloseWebSocket { code } => Self::CloseWebSocket { code },
-            Command::EmitStateChange { state, cause } => Self::EmitStateChange {
-                state: connection_state_tag(state).to_owned(),
-                cause,
-            },
-            Command::EmitEvent { event } => Self::EmitUpdate {
-                update: project_bundle_update(event),
-            },
-            Command::RegisterPendingRequest { request_id, kind } => Self::RegisterPendingRequest {
-                request_id,
-                request_kind: kind.into(),
-            },
-            Command::ResolvePendingRequest { request_id, ok } => {
-                Self::ResolvePendingRequest { request_id, ok }
-            }
-            Command::ScheduleTimer { id, ms } => Self::ScheduleTimer { id, ms },
-            Command::CancelTimer { id } => Self::CancelTimer { id },
-            Command::Connect { url } => Self::Connect { url },
+fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
+    match event {
+        ProtocolEvent::TrackSnapshot { bindings } => {
+            vec![HostCommand::ReplaceTrackBindings { bindings }]
         }
+        ProtocolEvent::PeerLeft { session_id } => vec![
+            HostCommand::RemoveSessionTracks {
+                session_id: session_id.clone(),
+            },
+            HostCommand::EmitUpdate {
+                update: BundleUpdate::Disconnect(BundleDisconnectUpdate { session_id }),
+            },
+        ],
+        other_event => project_bundle_update(other_event)
+            .into_iter()
+            .map(|update| HostCommand::EmitUpdate { update })
+            .collect(),
     }
 }
 
 #[must_use]
 pub fn host_commands(commands: Vec<Command>) -> Vec<HostCommand> {
-    commands.into_iter().map(HostCommand::from).collect()
+    let mut host_commands = Vec::new();
+    for command in commands {
+        match command {
+            Command::SendWebSocket(frame) => {
+                host_commands.push(HostCommand::SendWebSocket { frame });
+            }
+            Command::ApplyNegotiation {
+                request_id,
+                kind,
+                sdp,
+            } => host_commands.push(HostCommand::ApplyNegotiation {
+                request_id,
+                negotiation_kind: kind.into(),
+                sdp,
+            }),
+            Command::AttachTrack { mid, stream_type } => {
+                host_commands.push(HostCommand::AttachTrack { mid, stream_type });
+            }
+            Command::DetachTrack { stream_type } => {
+                host_commands.push(HostCommand::DetachTrack { stream_type });
+            }
+            Command::CreatePeerConnection => host_commands.push(HostCommand::CreatePeerConnection),
+            Command::ClosePeerConnection => host_commands.push(HostCommand::ClosePeerConnection),
+            Command::CloseWebSocket { code } => {
+                host_commands.push(HostCommand::CloseWebSocket { code });
+            }
+            Command::EmitStateChange { state, cause } => {
+                host_commands.push(HostCommand::EmitStateChange {
+                    state: connection_state_tag(state).to_owned(),
+                    cause,
+                });
+            }
+            Command::EmitEvent { event } => host_commands.extend(host_commands_for_event(event)),
+            Command::RegisterPendingRequest { request_id, kind } => {
+                host_commands.push(HostCommand::RegisterPendingRequest {
+                    request_id,
+                    request_kind: kind.into(),
+                });
+            }
+            Command::ResolvePendingRequest { request_id, ok } => {
+                host_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
+            }
+            Command::ScheduleTimer { id, ms } => {
+                host_commands.push(HostCommand::ScheduleTimer { id, ms });
+            }
+            Command::CancelTimer { id } => host_commands.push(HostCommand::CancelTimer { id }),
+            Command::Connect { url } => host_commands.push(HostCommand::Connect { url }),
+        }
+    }
+    host_commands
 }
 
 #[must_use]
@@ -180,14 +217,15 @@ pub fn cloned_track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBindi
     core.track_binding(mid).cloned()
 }
 
-fn project_bundle_update(event: ProtocolEvent) -> BundleUpdate {
-    match event {
+fn project_bundle_update(event: ProtocolEvent) -> Option<BundleUpdate> {
+    Some(match event {
         ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
             peers
                 .into_iter()
                 .map(|peer| (bundle_session_info_key(&peer.session_id), peer.info))
                 .collect::<BundleSessionInfoSnapshotById>(),
         ),
+        ProtocolEvent::TrackSnapshot { .. } => return None,
         ProtocolEvent::PeerInfo { session_id, info } => BundleUpdate::SessionInfoChange(
             [(bundle_session_info_key(&session_id), info)]
                 .into_iter()
@@ -200,7 +238,7 @@ fn project_bundle_update(event: ProtocolEvent) -> BundleUpdate {
             BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
         }
         ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -210,9 +248,9 @@ mod tests {
     use super::{CoreSnapshot, HostCommand, connection_state_tag, host_commands};
     use crate::{
         bundle_api::BundleConnectionState,
-        core::{Command, NegotiationKind, PendingRequestKind, ProtocolCore},
-        shared::StreamType,
-        signaling::RequestId,
+        core::{Command, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent},
+        shared::{SessionId, StreamType},
+        signaling::{RequestId, TrackBinding},
     };
 
     #[test]
@@ -254,6 +292,16 @@ mod tests {
                 request_id: RequestId::new("11"),
                 kind: PendingRequestKind::StartRecording,
             },
+            Command::EmitEvent {
+                event: ProtocolEvent::TrackSnapshot {
+                    bindings: vec![TrackBinding {
+                        mid: String::from("0"),
+                        session_id: SessionId::Integer(7),
+                        stream_type: StreamType::Camera,
+                        active: true,
+                    }],
+                },
+            },
             Command::DetachTrack {
                 stream_type: StreamType::Screen,
             },
@@ -281,6 +329,17 @@ mod tests {
                     "requestKind": "startRecording"
                 },
                 {
+                    "kind": "replaceTrackBindings",
+                    "bindings": [
+                        {
+                            "mid": "0",
+                            "sessionId": 7,
+                            "type": "camera",
+                            "active": true
+                        }
+                    ]
+                },
+                {
                     "kind": "detachTrack",
                     "streamType": "screen"
                 }
@@ -289,8 +348,41 @@ mod tests {
     }
 
     #[test]
+    fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
+        let commands = host_commands(vec![Command::EmitEvent {
+            event: ProtocolEvent::PeerLeft {
+                session_id: SessionId::Integer(9),
+            },
+        }]);
+
+        let encoded = serde_json::to_value(commands).unwrap_or_default();
+
+        assert_eq!(
+            encoded,
+            json!([
+                {
+                    "kind": "removeSessionTracks",
+                    "sessionId": 9
+                },
+                {
+                    "kind": "emitUpdate",
+                    "update": {
+                        "name": "disconnect",
+                        "payload": {
+                            "sessionId": 9
+                        }
+                    }
+                }
+            ])
+        );
+    }
+
+    #[test]
     fn host_command_bridge_preserves_simple_commands() {
-        let command = HostCommand::from(Command::CloseWebSocket { code: 4002 });
+        let command = host_commands(vec![Command::CloseWebSocket { code: 4002 }])
+            .into_iter()
+            .next()
+            .unwrap_or(HostCommand::ClosePeerConnection);
 
         let encoded = serde_json::to_value(command).unwrap_or_default();
 

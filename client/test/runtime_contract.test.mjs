@@ -121,6 +121,25 @@ test("wrapped protocol core rejects malformed track bindings", () => {
     });
 });
 
+test("wrapped protocol core validates replaceTrackBindings host commands", () => {
+    const core = wrapProtocolCoreBindings(
+        validCore({
+            connect() {
+                return [
+                    {
+                        bindings: [{ active: "yes", mid: "0", sessionId: 7, type: "camera" }],
+                        kind: "replaceTrackBindings"
+                    }
+                ];
+            }
+        })
+    );
+
+    assert.throws(() => core.connect("ws://example.test", "jwt", null), {
+        message: /protocol core connect\(\) command #0\.bindings\[0\]\.active must be a boolean/
+    });
+});
+
 test("createProtocolCore validates factory output at runtime", () => {
     configureProtocolCoreFactory(() =>
         validCore({

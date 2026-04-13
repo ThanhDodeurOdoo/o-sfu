@@ -134,6 +134,9 @@ pub enum ProtocolEvent {
     PeerSnapshot {
         peers: Vec<PeerSnapshot>,
     },
+    TrackSnapshot {
+        bindings: Vec<TrackBinding>,
+    },
     PeerInfo {
         session_id: SessionId,
         info: SessionInfo,
@@ -521,7 +524,14 @@ impl ProtocolCore {
     fn clear_runtime_state_with_commands(&mut self) -> Commands {
         let mut commands = self.outbound_batch.clear_with_commands();
         commands.extend(self.request_tracker.clear_with_commands());
-        self.track_bindings.clear();
+        if !self.track_bindings.is_empty() {
+            self.track_bindings.clear();
+            commands.push(Command::EmitEvent {
+                event: ProtocolEvent::TrackSnapshot {
+                    bindings: Vec::new(),
+                },
+            });
+        }
         self.pending_negotiation = None;
         commands
     }

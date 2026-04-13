@@ -5,7 +5,6 @@ import {
     type SessionId,
     type StreamType
 } from "../public_api.js";
-import type { ProtocolCoreBindings } from "../runtime_contract.js";
 import {
     createEmptyConsumers,
     type AppliedTrackBinding,
@@ -23,82 +22,85 @@ export class RemoteTracks {
     private _remoteTracksByMid = new Map<string, TrackLike>();
     private _staleRemoteTrackMids = new Set<string>();
 
+    resetAll(): void {
+        this.clearPeerConnectionState();
+        this._remoteTrackBindings.clear();
+    }
+
     clearPeerConnectionState(): void {
         this.consumers.clear();
-        this._remoteTrackBindings.clear();
         this._remoteTracksByMid.clear();
         this._staleRemoteTrackMids.clear();
     }
 
-    applyCompatUpdate(update: ClientUpdateDetail): void {
-        if (update.name !== CLIENT_UPDATE.DISCONNECT) {
-            return;
-        }
-        const { sessionId } = update.payload;
-        this.consumers.delete(sessionId);
-        for (const [mid, binding] of this._remoteTrackBindings) {
-            if (binding.sessionId !== sessionId) {
-                continue;
+    replaceTrackBindings(bindings: TrackBinding[], emitUpdate: TrackUpdateEmitter): void {
+        const nextBindings = new Map(bindings.map((binding) => [binding.mid, binding]));
+
+        for (const mid of [...this._remoteTrackBindings.keys()]) {
+            if (!nextBindings.has(mid)) {
+                this.removeBinding(mid);
             }
-            this._remoteTrackBindings.delete(mid);
-            this._remoteTracksByMid.delete(mid);
-            this._staleRemoteTrackMids.delete(mid);
+        }
+
+        for (const [mid, binding] of nextBindings) {
+            this.applyBinding(mid, binding, emitUpdate);
         }
     }
 
-    handleTrackEvent(
-        event: RtcTrackEventLike,
-        protocolCore: ProtocolCoreBindings,
-        emitUpdate: TrackUpdateEmitter
-    ): void {
+    removeSessionTracks(sessionId: SessionId): void {
+        this.consumers.delete(sessionId);
+        for (const [mid, binding] of [...this._remoteTrackBindings]) {
+            if (binding.sessionId === sessionId) {
+                this.removeBinding(mid);
+            }
+        }
+    }
+
+    handleTrackEvent(event: RtcTrackEventLike, emitUpdate: TrackUpdateEmitter): void {
         const mid = event.transceiver.mid;
         if (!mid) {
             return;
         }
         this._remoteTracksByMid.set(mid, event.track);
         this._staleRemoteTrackMids.delete(mid);
-        this.syncTrack(mid, protocolCore, emitUpdate);
-    }
-
-    syncAll(protocolCore: ProtocolCoreBindings, emitUpdate: TrackUpdateEmitter): void {
-        for (const mid of this._remoteTracksByMid.keys()) {
-            this.syncTrack(mid, protocolCore, emitUpdate);
-        }
-    }
-
-    private syncTrack(
-        mid: string,
-        protocolCore: ProtocolCoreBindings,
-        emitUpdate: TrackUpdateEmitter
-    ): void {
-        const binding = protocolCore.trackBinding(mid);
-        const previousBinding = this._remoteTrackBindings.get(mid);
+        const binding = this._remoteTrackBindings.get(mid);
         if (!binding) {
-            if (previousBinding) {
-                this.clearConsumer(previousBinding.sessionId, previousBinding.type);
-                this._remoteTrackBindings.delete(mid);
-            }
-            this._remoteTracksByMid.delete(mid);
-            this._staleRemoteTrackMids.delete(mid);
             return;
         }
+        this.publishTrack(mid, binding, binding, emitUpdate);
+    }
+
+    private applyBinding(mid: string, binding: TrackBinding, emitUpdate: TrackUpdateEmitter): void {
+        const previousBinding = this._remoteTrackBindings.get(mid);
         const bindingIdentityChanged = this.bindingIdentityChanged(previousBinding, binding);
         if (bindingIdentityChanged && previousBinding) {
             this.clearConsumer(previousBinding.sessionId, previousBinding.type);
             this._staleRemoteTrackMids.add(mid);
         }
-        this._remoteTrackBindings.set(mid, {
+        const appliedBinding = {
             active: binding.active,
             sessionId: binding.sessionId,
             type: binding.type
-        });
+        };
+        this._remoteTrackBindings.set(mid, appliedBinding);
+        if (this._staleRemoteTrackMids.has(mid)) {
+            return;
+        }
+        this.publishTrack(mid, appliedBinding, previousBinding, emitUpdate);
+    }
+
+    private publishTrack(
+        mid: string,
+        binding: AppliedTrackBinding,
+        previousBinding: AppliedTrackBinding | undefined,
+        emitUpdate: TrackUpdateEmitter
+    ): void {
         const track = this._remoteTracksByMid.get(mid);
-        if (!track || this._staleRemoteTrackMids.has(mid)) {
+        if (!track) {
             return;
         }
         if (
             previousBinding &&
-            !bindingIdentityChanged &&
             previousBinding.active === binding.active &&
             previousBinding.sessionId === binding.sessionId &&
             previousBinding.type === binding.type &&
@@ -106,7 +108,7 @@ export class RemoteTracks {
         ) {
             return;
         }
-        if (previousBinding && !bindingIdentityChanged) {
+        if (previousBinding) {
             this.clearConsumer(previousBinding.sessionId, previousBinding.type);
         }
         const consumers = this.consumers.get(binding.sessionId) ?? createEmptyConsumers();
@@ -134,6 +136,16 @@ export class RemoteTracks {
             (previousBinding.sessionId !== binding.sessionId ||
                 previousBinding.type !== binding.type)
         );
+    }
+
+    private removeBinding(mid: string): void {
+        const previousBinding = this._remoteTrackBindings.get(mid);
+        if (previousBinding) {
+            this.clearConsumer(previousBinding.sessionId, previousBinding.type);
+            this._remoteTrackBindings.delete(mid);
+        }
+        this._remoteTracksByMid.delete(mid);
+        this._staleRemoteTrackMids.delete(mid);
     }
 
     private clearConsumer(sessionId: SessionId, streamType: StreamType): void {

@@ -41,6 +41,8 @@ export type HostCommand =
     | { kind: "closePeerConnection" }
     | { kind: "closeWebSocket"; code: number }
     | { kind: "emitStateChange"; state: ConnectionState; cause?: string }
+    | { kind: "replaceTrackBindings"; bindings: TrackBinding[] }
+    | { kind: "removeSessionTracks"; sessionId: SessionId }
     | { kind: "emitUpdate"; update: ClientUpdateDetail }
     | {
           kind: "registerPendingRequest";
@@ -209,6 +211,23 @@ function validateHostCommand(value: unknown, context: string): void {
         case "emitStateChange":
             validateConnectionState(command.state, `${context}.state`);
             requireOptionalString(command.cause, `${context}.cause`);
+            return;
+        case "replaceTrackBindings":
+            if (!Array.isArray(command.bindings)) {
+                throw new Error(`${context}.bindings must be an array`);
+            }
+            command.bindings.forEach((binding, index) => {
+                const validated = validateOptionalTrackBinding(
+                    binding,
+                    `${context}.bindings[${index}]`
+                );
+                if (validated === null || validated === undefined) {
+                    throw new Error(`${context}.bindings[${index}] must be a track binding`);
+                }
+            });
+            return;
+        case "removeSessionTracks":
+            validateSessionId(command.sessionId, `${context}.sessionId`);
             return;
         case "emitUpdate":
             validateClientUpdate(command.update, `${context}.update`);

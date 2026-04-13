@@ -29,7 +29,27 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
         },
     ])));
 
-    assert!(core.on_ws_message(&first_tracks).is_empty());
+    assert_eq!(
+        core.on_ws_message(&first_tracks),
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::TrackSnapshot {
+                bindings: vec![
+                    TrackBinding {
+                        mid: String::from("0"),
+                        session_id: String::from("peer-1").into(),
+                        stream_type: StreamType::Audio,
+                        active: true,
+                    },
+                    TrackBinding {
+                        mid: String::from("1"),
+                        session_id: String::from("peer-2").into(),
+                        stream_type: StreamType::Camera,
+                        active: true,
+                    },
+                ],
+            },
+        }]
+    );
     assert_eq!(
         core.track_binding("0"),
         Some(&TrackBinding {
@@ -49,7 +69,19 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
         })
     );
 
-    assert!(core.on_ws_message(&second_tracks).is_empty());
+    assert_eq!(
+        core.on_ws_message(&second_tracks),
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::TrackSnapshot {
+                bindings: vec![TrackBinding {
+                    mid: String::from("2"),
+                    session_id: String::from("peer-2").into(),
+                    stream_type: StreamType::Camera,
+                    active: false,
+                }],
+            },
+        }]
+    );
     assert_eq!(core.track_binding("0"), None);
     assert_eq!(core.track_binding("1"), None);
     assert_eq!(

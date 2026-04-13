@@ -88,6 +88,7 @@ export class BrowserRuntime {
             this.cancelTimer(timerId);
         }
         this.closePeerConnection(hooks);
+        hooks.remoteTracks.resetAll();
         if (this._webSocket && this._webSocket.readyState < 2) {
             this._webSocket.close(webSocketCloseCode);
         }
@@ -153,6 +154,12 @@ export class BrowserRuntime {
             case "emitStateChange":
                 hooks.onStateChange(command.state, command.cause);
                 return [];
+            case "replaceTrackBindings":
+                hooks.remoteTracks.replaceTrackBindings(command.bindings, hooks.onUpdate);
+                return [];
+            case "removeSessionTracks":
+                hooks.remoteTracks.removeSessionTracks(command.sessionId);
+                return [];
             case "emitUpdate":
                 hooks.onUpdate(command.update);
                 return [];
@@ -215,7 +222,7 @@ export class BrowserRuntime {
             iceServers: hooks.iceServers
         });
         peerConnection.ontrack = (event) => {
-            hooks.remoteTracks.handleTrackEvent(event, hooks.protocolCore, hooks.onUpdate);
+            hooks.remoteTracks.handleTrackEvent(event, hooks.onUpdate);
         };
         this._peerConnection = peerConnection;
     }

@@ -10,7 +10,7 @@ use o_sfu_protocol::{
         BundleUpdate, bundle_session_info_key,
     },
     core::{Command, NegotiationKind, ProtocolCore},
-    host_bridge::{HostCommand, HostPendingRequestKind},
+    host_bridge::{HostCommand, HostPendingRequestKind, host_commands},
     shared::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
         RecordingStateUpdate, SessionId as ProtocolSessionId, SessionInfo as ProtocolSessionInfo,
@@ -222,13 +222,14 @@ impl ProtocolHarnessPeer {
                     self.state_changes.push(BundleStateChange { state, cause });
                     Vec::new()
                 }
-                command @ Command::EmitEvent { .. } => match HostCommand::from(command) {
-                    HostCommand::EmitUpdate { update } => {
-                        self.updates.push(update);
-                        Vec::new()
+                command @ Command::EmitEvent { .. } => {
+                    for host_command in host_commands(vec![command]) {
+                        if let HostCommand::EmitUpdate { update } = host_command {
+                            self.updates.push(update);
+                        }
                     }
-                    _ => return None,
-                },
+                    Vec::new()
+                }
                 Command::CreatePeerConnection
                 | Command::ClosePeerConnection
                 | Command::AttachTrack { .. }
@@ -272,7 +273,7 @@ impl ProtocolHarnessPeer {
                 command @ (Command::RegisterPendingRequest { .. }
                 | Command::ResolvePendingRequest { .. }) => {
                     self.pending_request_commands
-                        .push(HostCommand::from(command));
+                        .extend(host_commands(vec![command]));
                     Vec::new()
                 }
             };

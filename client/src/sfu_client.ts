@@ -177,9 +177,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._state = this._protocolCore.state;
         this.availableFeatures = this._protocolCore.features;
         this.recordingState = this._protocolCore.recordingState;
-        this._remoteTracks.syncAll(this._protocolCore, (update) => {
-            this._emitUpdate(update);
-        });
     }
 
     private _emitStateChange(state: ConnectionState, cause?: string): void {
@@ -204,7 +201,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     private _applyCompatUpdate(update: ClientUpdateDetail): void {
-        this._remoteTracks.applyCompatUpdate(update);
         if (
             update.name === CLIENT_UPDATE.CHANNEL_INFO_CHANGE &&
             update.payload &&

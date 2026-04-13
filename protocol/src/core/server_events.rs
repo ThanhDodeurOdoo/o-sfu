@@ -10,10 +10,7 @@ use super::{Command, Commands, ProtocolCore, ProtocolEvent};
 pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMessage) -> Commands {
     match message {
         ServerMessage::Welcome(payload) => core.on_welcome(payload),
-        ServerMessage::Tracks(bindings) => {
-            replace_track_bindings(core, bindings);
-            Vec::new()
-        }
+        ServerMessage::Tracks(bindings) => replace_track_snapshot(core, bindings),
         ServerMessage::PeerInfo(payload) | ServerMessage::PeerJoined(payload) => {
             peer_info_commands(payload)
         }
@@ -35,11 +32,15 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
     }
 }
 
-fn replace_track_bindings(core: &mut ProtocolCore, bindings: Vec<TrackBinding>) {
+fn replace_track_snapshot(core: &mut ProtocolCore, bindings: Vec<TrackBinding>) -> Commands {
     core.track_bindings = bindings
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|binding| (binding.mid.clone(), binding))
         .collect::<BTreeMap<_, _>>();
+    vec![Command::EmitEvent {
+        event: ProtocolEvent::TrackSnapshot { bindings },
+    }]
 }
 
 fn remove_track_bindings_for_session(core: &mut ProtocolCore, session_id: &SessionId) {

@@ -156,7 +156,8 @@ class FakeProtocolCore {
                         negotiationKind: "offer",
                         requestId: "7",
                         sdp: "offer-sdp"
-                    }
+                    },
+                    ...this._replaceTrackBindings()
                 ];
             case "offer-with-attach-camera":
                 return [
@@ -171,7 +172,8 @@ class FakeProtocolCore {
                         kind: "attachTrack",
                         mid: "1",
                         streamType: "camera"
-                    }
+                    },
+                    ...this._replaceTrackBindings()
                 ];
             case "track-inactive":
                 this.trackBindings.set("0", {
@@ -180,7 +182,7 @@ class FakeProtocolCore {
                     sessionId: 42,
                     type: "camera"
                 });
-                return [];
+                return this._replaceTrackBindings();
             case "track-rebind":
                 this.trackBindings.set("0", {
                     active: true,
@@ -188,7 +190,19 @@ class FakeProtocolCore {
                     sessionId: 84,
                     type: "screen"
                 });
-                return [];
+                return this._replaceTrackBindings();
+            case "peer-left":
+                this.trackBindings.delete("0");
+                return [
+                    { kind: "removeSessionTracks", sessionId: 42 },
+                    {
+                        kind: "emitUpdate",
+                        update: {
+                            name: CLIENT_UPDATE.DISCONNECT,
+                            payload: { sessionId: 42 }
+                        }
+                    }
+                ];
             case "close-peer-connection":
                 return [{ kind: "closePeerConnection" }];
             case "recording-ok":
@@ -221,6 +235,15 @@ class FakeProtocolCore {
     submitNegotiationAnswer(requestId, negotiationKind, sdp) {
         this.submittedAnswers.push({ negotiationKind, requestId, sdp });
         return [];
+    }
+
+    _replaceTrackBindings() {
+        return [
+            {
+                bindings: [...this.trackBindings.values()],
+                kind: "replaceTrackBindings"
+            }
+        ];
     }
 
     trackBinding(mid) {
@@ -758,6 +781,64 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
         }
     ]);
     assert.equal(client._consumers.get(84).screen.track, reboundTrack);
+});
+
+test("peer departure clears remote-track state through the host cleanup command", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const track = {
+        enabled: true,
+        id: "track-1",
+        kind: "video",
+        muted: false
+    };
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    sockets[0].emitMessage("peer-left");
+    await tick();
+
+    assert.equal(client._consumers.has(42), false);
+    assert.deepEqual(receivedUpdates.at(-1), {
+        name: CLIENT_UPDATE.DISCONNECT,
+        payload: {
+            sessionId: 42
+        }
+    });
 });
 
 test("peer connection teardown clears stale remote consumer state", async () => {
