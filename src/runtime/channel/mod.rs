@@ -20,7 +20,7 @@ mod media;
 mod membership;
 mod outbound;
 mod router_state;
-mod rtp_capabilities;
+pub(crate) mod rtp_capabilities;
 mod session_negotiation;
 mod state;
 #[cfg(test)]
@@ -29,7 +29,8 @@ mod topology;
 
 pub use controller::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
 pub(crate) use controller::{
-    ChannelAdmissionPolicy, ChannelConfig, ChannelRuntimeContext, ChannelSessionStatsSnapshot,
+    ChannelAdmissionPolicy, ChannelConfig, ChannelRuntimeContext, ChannelRuntimePolicy,
+    ChannelSessionStatsSnapshot,
 };
 pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;

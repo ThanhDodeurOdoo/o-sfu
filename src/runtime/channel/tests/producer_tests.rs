@@ -2,7 +2,7 @@ use super::fixtures::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Instant;
 
-use crate::config::RtcPortRange;
+use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::channel::Channel;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
@@ -994,6 +994,7 @@ fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             RtcPortRange::new(46_200, 46_299),
             1,
+            MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
         ))
         .build()

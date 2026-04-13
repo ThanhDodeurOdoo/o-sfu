@@ -19,6 +19,7 @@ use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::config::RuntimeFeatureFlags;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
@@ -63,10 +64,31 @@ impl ChannelAdmissionPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChannelRuntimeContext {
-    pub(crate) runtime_id: u64,
-    pub(crate) media_worker_id: usize,
-    pub(crate) router_id: RouterId,
+    pub(crate) runtime: u64,
+    pub(crate) media_worker: usize,
+    pub(crate) router: RouterId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChannelRuntimePolicy {
     pub(crate) admission_policy: ChannelAdmissionPolicy,
+    pub(crate) feature_flags: RuntimeFeatureFlags,
+    pub(crate) router_rtp_capabilities: o_sfu_router::MediaCapabilities,
+}
+
+impl ChannelRuntimePolicy {
+    #[must_use]
+    pub(crate) fn new(
+        admission_policy: ChannelAdmissionPolicy,
+        feature_flags: RuntimeFeatureFlags,
+        router_rtp_capabilities: o_sfu_router::MediaCapabilities,
+    ) -> Self {
+        Self {
+            admission_policy,
+            feature_flags,
+            router_rtp_capabilities,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +134,7 @@ pub struct Channel {
     pub(super) issuer: String,
     pub(super) key: Option<String>,
     pub(super) web_rtc_enabled: bool,
+    pub(super) feature_flags: RuntimeFeatureFlags,
     #[allow(dead_code, reason = "stored for future recording pipeline integration")]
     pub(super) recording_address: Option<String>,
     #[allow(
@@ -125,6 +148,7 @@ pub struct Channel {
 impl Channel {
     pub(crate) fn new(
         runtime_context: ChannelRuntimeContext,
+        runtime_policy: ChannelRuntimePolicy,
         issuer: String,
         key: Option<String>,
         config: ChannelConfig,
@@ -132,21 +156,23 @@ impl Channel {
     ) -> Self {
         let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
         let recording_service = Arc::new(RecordingService::new(
-            runtime_context.runtime_id,
+            runtime_context.runtime,
             recording_media_source,
         ));
         Self {
-            runtime_id: runtime_context.runtime_id,
-            media_worker_id: runtime_context.media_worker_id,
+            runtime_id: runtime_context.runtime,
+            media_worker_id: runtime_context.media_worker,
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
             web_rtc_enabled: config.web_rtc_enabled,
+            feature_flags: runtime_policy.feature_flags,
             recording_address: config.recording_address,
             recording_service: Arc::clone(&recording_service),
             state: RwLock::new(ChannelState::new(
-                runtime_context.router_id,
-                runtime_context.admission_policy,
+                runtime_context.router,
+                runtime_policy.admission_policy,
+                runtime_policy.router_rtp_capabilities,
                 recording_service,
             )),
         }
@@ -185,9 +211,9 @@ impl Channel {
     pub fn available_features(&self) -> AvailableFeatures {
         AvailableFeatures {
             rtc: self.web_rtc_enabled,
-            transcription: false,
-            audio_recording: false,
-            video_recording: false,
+            transcription: self.feature_flags.transcription,
+            audio_recording: self.feature_flags.audio_recording,
+            video_recording: self.feature_flags.video_recording,
         }
     }
 

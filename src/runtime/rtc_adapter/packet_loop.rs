@@ -18,7 +18,7 @@ use super::{
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState},
     worker::handle_worker_command,
 };
-use crate::config::RtcPortRange;
+use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
@@ -106,6 +106,7 @@ enum NextLoopInput {
 pub(super) async fn run_packet_loop(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     media_tap: Arc<MediaTap>,
     mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
@@ -121,6 +122,7 @@ pub(super) async fn run_packet_loop(
                 &snapshot_state,
                 public_ip,
                 rtc_port_range,
+                codec_flags,
                 command,
             );
         }
@@ -165,6 +167,7 @@ pub(super) async fn run_packet_loop(
                     &snapshot_state,
                     public_ip,
                     rtc_port_range,
+                    codec_flags,
                     command,
                 );
             }

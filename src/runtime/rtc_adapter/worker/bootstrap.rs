@@ -7,6 +7,7 @@ use o_sfu_router::RtpCapabilities;
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 use crate::runtime::{
     transport_adapter::{TransportAdapterError, TransportConnectDirection, TransportSessionKey},
@@ -20,11 +21,32 @@ use super::super::{
     validation,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct WorkerBootstrapConfig {
+    public_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
+}
+
+impl WorkerBootstrapConfig {
+    #[must_use]
+    pub(super) const fn new(
+        public_ip: IpAddr,
+        rtc_port_range: RtcPortRange,
+        codec_flags: MediaCodecFlags,
+    ) -> Self {
+        Self {
+            public_ip,
+            rtc_port_range,
+            codec_flags,
+        }
+    }
+}
+
 pub(super) fn respond_build_bootstrap(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
+    config: WorkerBootstrapConfig,
     session_key: &TransportSessionKey,
     router_capabilities: &RtpCapabilities,
     response: oneshot::Sender<Result<CurrentTransportBootstrapPayload, TransportAdapterError>>,
@@ -32,8 +54,7 @@ pub(super) fn respond_build_bootstrap(
     let _ = response.send(worker_build_bootstrap_payload(
         state,
         snapshot_state,
-        public_ip,
-        rtc_port_range,
+        config,
         session_key,
         router_capabilities,
     ));
@@ -68,20 +89,25 @@ pub(super) fn respond_connect_transport(
 fn worker_build_bootstrap_payload(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
+    config: WorkerBootstrapConfig,
     session_key: &TransportSessionKey,
     router_capabilities: &RtpCapabilities,
 ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
     let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
         shared_socket.candidate_addr
     } else {
-        let shared_socket = bootstrap::bind_shared_rtc_socket(public_ip, rtc_port_range)?;
+        let shared_socket =
+            bootstrap::bind_shared_rtc_socket(config.public_ip, config.rtc_port_range)?;
         let candidate_addr = shared_socket.candidate_addr;
         state.shared_socket = Some(shared_socket);
         candidate_addr
     };
-    bootstrap::ensure_session_rtc_state(&mut state.sessions, session_key, candidate_addr)?;
+    bootstrap::ensure_session_rtc_state(
+        &mut state.sessions,
+        session_key,
+        candidate_addr,
+        config.codec_flags,
+    )?;
     state.mark_session_dirty(session_key);
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);

@@ -6,7 +6,10 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use super::{
     RuntimeState, build_transport_adapter,
-    channel::{ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig},
+    channel::{
+        ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig, ChannelRuntimePolicy,
+        rtp_capabilities::router_rtp_capabilities,
+    },
     http_server::app,
     metrics::RuntimeMetrics,
     recording::MediaTap,
@@ -49,7 +52,11 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let channels = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
             config.rtc_media_worker_count,
-            ChannelAdmissionPolicy::new(config.channel_size),
+            ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(config.channel_size),
+                config.feature_flags,
+                router_rtp_capabilities(config.codec_flags),
+            ),
         ),
         Arc::clone(&recording_media_tap),
     ));

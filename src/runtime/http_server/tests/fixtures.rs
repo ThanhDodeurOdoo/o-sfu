@@ -15,7 +15,7 @@ pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
 pub(super) use crate::{
-    config::{Config, RtcPortRange, TransportBackend},
+    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TransportBackend},
     runtime::{
         RuntimeState,
         channel::{ChannelAdmissionPolicy, ChannelConfig, ChannelManager},
@@ -43,6 +43,8 @@ pub(super) fn test_config() -> Config {
         session_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
         enable_native_protocol: false,
+        feature_flags: RuntimeFeatureFlags::default(),
+        codec_flags: MediaCodecFlags::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,

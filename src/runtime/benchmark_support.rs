@@ -16,7 +16,10 @@ use super::{
     rtc_adapter::RtcTransportAdapter,
     transport_adapter::{RtcTransportAdapterConfig, TransportAdapterError, TransportSessionKey},
 };
-use crate::{config::RtcPortRange, signaling::shared::SessionId};
+use crate::{
+    config::{MediaCodecFlags, RtcPortRange},
+    signaling::shared::SessionId,
+};
 use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
 
 const BENCHMARK_PUBLIC_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -49,6 +52,7 @@ impl RtcUdpDemuxBenchmarkFixture {
         let adapter = RtcTransportAdapter::new(&RtcTransportAdapterConfig::new(
             BENCHMARK_PUBLIC_IP,
             BENCHMARK_PORT_RANGE,
+            MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
         ));
         let mut session_keys = Vec::with_capacity(session_count);

@@ -8,9 +8,6 @@ use anyhow::{Context, Result, anyhow, ensure};
 
 use crate::signaling::DEFAULT_AUTHENTICATION_TIMEOUT_MS;
 
-// maybe not worth being consts
-// pushning the no-literal orthodoxy a bit far here, may be better to see
-// the default values inline
 const DEFAULT_CHANNEL_SIZE: usize = 100;
 const DEFAULT_SESSION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
@@ -18,9 +15,146 @@ const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
 const DEFAULT_ENABLE_NATIVE_PROTOCOL: bool = false;
+const DEFAULT_ENABLE_TRANSCRIPTION_FEATURE: bool = false;
+const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
+const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
 const TRANSPORT_BACKEND_STUB: &str = "stub";
 const TRANSPORT_BACKEND_RTC: &str = "rtc";
 const STUB_PUBLIC_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeFeatureFlags {
+    pub transcription: bool,
+    pub audio_recording: bool,
+    pub video_recording: bool,
+}
+
+impl Default for RuntimeFeatureFlags {
+    fn default() -> Self {
+        Self {
+            transcription: DEFAULT_ENABLE_TRANSCRIPTION_FEATURE,
+            audio_recording: DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE,
+            video_recording: DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MediaCodecFlags {
+    enabled: u16,
+}
+
+impl MediaCodecFlags {
+    const OPUS: u16 = 1 << 0;
+    const PCMU: u16 = 1 << 1;
+    const PCMA: u16 = 1 << 2;
+    const VP8: u16 = 1 << 3;
+    const H264: u16 = 1 << 4;
+    const H265: u16 = 1 << 5;
+    const VP9: u16 = 1 << 6;
+    const AV1: u16 = 1 << 7;
+
+    #[must_use]
+    const fn with_flag(mut self, flag: u16, enabled: bool) -> Self {
+        if enabled {
+            self.enabled |= flag;
+        } else {
+            self.enabled &= !flag;
+        }
+        self
+    }
+
+    #[must_use]
+    const fn flag_enabled(self, flag: u16) -> bool {
+        self.enabled & flag != 0
+    }
+
+    #[must_use]
+    pub const fn opus_enabled(self) -> bool {
+        self.flag_enabled(Self::OPUS)
+    }
+
+    #[must_use]
+    pub const fn with_opus(self, enabled: bool) -> Self {
+        self.with_flag(Self::OPUS, enabled)
+    }
+
+    #[must_use]
+    pub const fn pcmu_enabled(self) -> bool {
+        self.flag_enabled(Self::PCMU)
+    }
+
+    #[must_use]
+    pub const fn with_pcmu(self, enabled: bool) -> Self {
+        self.with_flag(Self::PCMU, enabled)
+    }
+
+    #[must_use]
+    pub const fn pcma_enabled(self) -> bool {
+        self.flag_enabled(Self::PCMA)
+    }
+
+    #[must_use]
+    pub const fn with_pcma(self, enabled: bool) -> Self {
+        self.with_flag(Self::PCMA, enabled)
+    }
+
+    #[must_use]
+    pub const fn vp8_enabled(self) -> bool {
+        self.flag_enabled(Self::VP8)
+    }
+
+    #[must_use]
+    pub const fn with_vp8(self, enabled: bool) -> Self {
+        self.with_flag(Self::VP8, enabled)
+    }
+
+    #[must_use]
+    pub const fn h264_enabled(self) -> bool {
+        self.flag_enabled(Self::H264)
+    }
+
+    #[must_use]
+    pub const fn with_h264(self, enabled: bool) -> Self {
+        self.with_flag(Self::H264, enabled)
+    }
+
+    #[must_use]
+    pub const fn h265_enabled(self) -> bool {
+        self.flag_enabled(Self::H265)
+    }
+
+    #[must_use]
+    pub const fn with_h265(self, enabled: bool) -> Self {
+        self.with_flag(Self::H265, enabled)
+    }
+
+    #[must_use]
+    pub const fn vp9_enabled(self) -> bool {
+        self.flag_enabled(Self::VP9)
+    }
+
+    #[must_use]
+    pub const fn with_vp9(self, enabled: bool) -> Self {
+        self.with_flag(Self::VP9, enabled)
+    }
+
+    #[must_use]
+    pub const fn av1_enabled(self) -> bool {
+        self.flag_enabled(Self::AV1)
+    }
+
+    #[must_use]
+    pub const fn with_av1(self, enabled: bool) -> Self {
+        self.with_flag(Self::AV1, enabled)
+    }
+}
+
+impl Default for MediaCodecFlags {
+    fn default() -> Self {
+        Self { enabled: 0 }.with_opus(true).with_vp8(true)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtcPortRange {
@@ -106,6 +240,8 @@ pub struct Config {
     pub session_timeout_ms: u64,
     pub ping_interval_ms: u64,
     pub enable_native_protocol: bool,
+    pub feature_flags: RuntimeFeatureFlags,
+    pub codec_flags: MediaCodecFlags,
     pub public_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
@@ -160,6 +296,8 @@ impl Config {
             "ENABLE_NATIVE_PROTOCOL must be either `true` or `false`",
         )?
         .unwrap_or(DEFAULT_ENABLE_NATIVE_PROTOCOL);
+        let feature_flags = load_runtime_feature_flags(&mut get_var)?;
+        let codec_flags = load_media_codec_flags(&mut get_var)?;
         let (public_ip, rtc_port_range, rtc_media_worker_count, transport_backend) =
             load_transport_config(&mut get_var)?;
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
@@ -179,12 +317,102 @@ impl Config {
             session_timeout_ms,
             ping_interval_ms,
             enable_native_protocol,
+            feature_flags,
+            codec_flags,
             public_ip,
             rtc_port_range,
             rtc_media_worker_count,
             transport_backend,
         })
     }
+}
+
+fn load_runtime_feature_flags(
+    mut get_var: impl FnMut(&str) -> Option<String>,
+) -> Result<RuntimeFeatureFlags> {
+    Ok(RuntimeFeatureFlags {
+        transcription: parse_optional_env(
+            &mut get_var,
+            "ENABLE_FEATURE_TRANSCRIPTION",
+            "ENABLE_FEATURE_TRANSCRIPTION must be either `true` or `false`",
+        )?
+        .unwrap_or(DEFAULT_ENABLE_TRANSCRIPTION_FEATURE),
+        audio_recording: parse_optional_env(
+            &mut get_var,
+            "ENABLE_FEATURE_AUDIO_RECORDING",
+            "ENABLE_FEATURE_AUDIO_RECORDING must be either `true` or `false`",
+        )?
+        .unwrap_or(DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE),
+        video_recording: parse_optional_env(
+            &mut get_var,
+            "ENABLE_FEATURE_VIDEO_RECORDING",
+            "ENABLE_FEATURE_VIDEO_RECORDING must be either `true` or `false`",
+        )?
+        .unwrap_or(DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE),
+    })
+}
+
+fn load_media_codec_flags(
+    mut get_var: impl FnMut(&str) -> Option<String>,
+) -> Result<MediaCodecFlags> {
+    let default_flags = MediaCodecFlags::default();
+    let opus = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_OPUS",
+        "ENABLE_CODEC_OPUS must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.opus_enabled());
+    let g711_mu_law_enabled = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_PCMU",
+        "ENABLE_CODEC_PCMU must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.pcmu_enabled());
+    let g711_a_law_enabled = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_PCMA",
+        "ENABLE_CODEC_PCMA must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.pcma_enabled());
+    let vp8 = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_VP8",
+        "ENABLE_CODEC_VP8 must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.vp8_enabled());
+    let h264 = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_H264",
+        "ENABLE_CODEC_H264 must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.h264_enabled());
+    let h265 = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_H265",
+        "ENABLE_CODEC_H265 must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.h265_enabled());
+    let vp9 = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_VP9",
+        "ENABLE_CODEC_VP9 must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.vp9_enabled());
+    let av1 = parse_optional_env(
+        &mut get_var,
+        "ENABLE_CODEC_AV1",
+        "ENABLE_CODEC_AV1 must be either `true` or `false`",
+    )?
+    .unwrap_or(default_flags.av1_enabled());
+    Ok(MediaCodecFlags::default()
+        .with_opus(opus)
+        .with_pcmu(g711_mu_law_enabled)
+        .with_pcma(g711_a_law_enabled)
+        .with_vp8(vp8)
+        .with_h264(h264)
+        .with_h265(h265)
+        .with_vp9(vp9)
+        .with_av1(av1))
 }
 
 fn load_transport_config(
@@ -268,7 +496,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, RtcPortRange, STUB_PUBLIC_IP_DEFAULT, TransportBackend};
+    use super::{
+        Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, STUB_PUBLIC_IP_DEFAULT,
+        TransportBackend,
+    };
 
     #[test]
     fn config_requires_auth_key() {
@@ -297,6 +528,8 @@ mod tests {
         assert_eq!(config.session_timeout_ms, 10_000);
         assert_eq!(config.ping_interval_ms, 60_000);
         assert!(!config.enable_native_protocol);
+        assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
+        assert_eq!(config.codec_flags, MediaCodecFlags::default());
         assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.rtc_media_worker_count, 1);
@@ -315,6 +548,50 @@ mod tests {
             return;
         };
         assert!(config.enable_native_protocol);
+    }
+
+    #[test]
+    fn config_accepts_feature_flags() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "ENABLE_FEATURE_TRANSCRIPTION"
+            | "ENABLE_FEATURE_AUDIO_RECORDING"
+            | "ENABLE_FEATURE_VIDEO_RECORDING" => Some("true".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(
+            config.feature_flags,
+            RuntimeFeatureFlags {
+                transcription: true,
+                audio_recording: true,
+                video_recording: true,
+            }
+        );
+    }
+
+    #[test]
+    fn config_accepts_codec_flags() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "ENABLE_CODEC_OPUS" => Some("false".to_owned()),
+            "ENABLE_CODEC_H264" | "ENABLE_CODEC_AV1" => Some("true".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(
+            config.codec_flags,
+            MediaCodecFlags::default()
+                .with_opus(false)
+                .with_h264(true)
+                .with_av1(true)
+        );
     }
 
     #[test]

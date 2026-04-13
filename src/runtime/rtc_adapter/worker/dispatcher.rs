@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::config::RtcPortRange;
+use crate::config::{MediaCodecFlags, RtcPortRange};
 
 #[cfg(test)]
 use super::debug;
@@ -20,6 +20,7 @@ pub(crate) fn handle_worker_command(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -42,7 +43,14 @@ pub(crate) fn handle_worker_command(
             );
         }
         command => {
-            handle_core_worker_command(state, snapshot_state, public_ip, rtc_port_range, command);
+            handle_core_worker_command(
+                state,
+                snapshot_state,
+                public_ip,
+                rtc_port_range,
+                codec_flags,
+                command,
+            );
         }
     }
 }
@@ -52,6 +60,7 @@ fn handle_core_worker_command(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -62,8 +71,7 @@ fn handle_core_worker_command(
         } => bootstrap::respond_build_bootstrap(
             state,
             snapshot_state,
-            public_ip,
-            rtc_port_range,
+            bootstrap::WorkerBootstrapConfig::new(public_ip, rtc_port_range, codec_flags),
             &session_key,
             &router_capabilities,
             response,
@@ -85,7 +93,14 @@ fn handle_core_worker_command(
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
-            handle_negotiation_command(state, snapshot_state, public_ip, rtc_port_range, command);
+            handle_negotiation_command(
+                state,
+                snapshot_state,
+                public_ip,
+                rtc_port_range,
+                codec_flags,
+                command,
+            );
         }
         RtcWorkerCommand::CloseSession {
             session_key,
@@ -110,6 +125,7 @@ fn handle_negotiation_command(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -121,6 +137,7 @@ fn handle_negotiation_command(
             snapshot_state,
             public_ip,
             rtc_port_range,
+            codec_flags,
             &session_key,
             response,
         ),

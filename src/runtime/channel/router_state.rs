@@ -11,7 +11,6 @@ use o_sfu_router::{
     TransportId as RouterTransportId,
 };
 
-use super::rtp_capabilities::default_router_rtp_capabilities;
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
 use crate::signaling::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
@@ -36,6 +35,7 @@ struct SessionTransportIds {
 impl ChannelRouterState {
     pub(super) fn new_with_recording_service(
         router_id: RouterId,
+        rtp_capabilities: RtpCapabilities,
         recording_service: Arc<RecordingService>,
     ) -> Self {
         Self {
@@ -43,7 +43,7 @@ impl ChannelRouterState {
                 router_id,
                 RecordingRouterObserver::new(recording_service),
             ),
-            rtp_capabilities: default_router_rtp_capabilities(),
+            rtp_capabilities,
             router_session_ids_by_session_id: BTreeMap::new(),
             transport_ids_by_session_id: BTreeMap::new(),
             next_transport_id: 1,

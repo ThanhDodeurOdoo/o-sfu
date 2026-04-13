@@ -14,6 +14,7 @@ use std::{
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use std::net::SocketAddr;
 
+use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
@@ -51,6 +52,7 @@ pub(crate) struct RtcWorkerHandle {
 pub(crate) struct RtcTransportAdapter {
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     media_tap: Arc<MediaTap>,
     worker_handle: Mutex<Option<RtcWorkerHandle>>,
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
@@ -62,6 +64,7 @@ impl RtcTransportAdapter {
         Self {
             public_ip: config.public_ip(),
             rtc_port_range: config.rtc_port_range(),
+            codec_flags: config.codec_flags(),
             media_tap: config.media_tap(),
             worker_handle: Mutex::new(None),
             transport_states: Arc::new(Mutex::new(BTreeMap::new())),
@@ -311,6 +314,7 @@ impl RtcTransportAdapter {
         current_runtime.spawn(packet_loop::run_packet_loop(
             self.public_ip,
             self.rtc_port_range,
+            self.codec_flags,
             snapshot_state,
             Arc::clone(&self.media_tap),
             command_rx,
@@ -615,9 +619,12 @@ impl Default for RtcTransportAdapter {
     fn default() -> Self {
         use std::net::Ipv4Addr;
 
+        use crate::config::MediaCodecFlags;
+
         Self::new(&RtcTransportAdapterConfig::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             RtcPortRange::new(40_000, 49_999),
+            MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
         ))
     }

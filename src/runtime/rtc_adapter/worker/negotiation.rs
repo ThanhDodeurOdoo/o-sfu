@@ -10,6 +10,7 @@ use str0m::{
 use tokio::sync::oneshot;
 
 use crate::{
+    config::MediaCodecFlags,
     config::RtcPortRange,
     runtime::transport_adapter::{SessionOffer, TransportAdapterError, TransportSessionKey},
 };
@@ -27,6 +28,7 @@ pub(super) fn respond_create_initial_session_offer(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
 ) {
@@ -35,6 +37,7 @@ pub(super) fn respond_create_initial_session_offer(
         snapshot_state,
         public_ip,
         rtc_port_range,
+        codec_flags,
         session_key,
     ));
 }
@@ -64,6 +67,7 @@ fn worker_create_initial_session_offer(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
     ensure_session_ready_for_offer(
@@ -71,6 +75,7 @@ fn worker_create_initial_session_offer(
         snapshot_state,
         public_ip,
         rtc_port_range,
+        codec_flags,
         session_key,
     )?;
     if state.session_has_registered_media(session_key) {
@@ -171,6 +176,13 @@ fn apply_pending_recv_streams(session_state: &mut super::super::state::RtcSessio
         .collect::<Vec<_>>();
     let mut api = session_state.rtc.direct_api();
     for (mid, stream) in &pending_recv_streams {
+        if let Some(existing_ssrc) = api
+            .stream_rx_by_mid(*mid, stream.rid)
+            .map(|stream_rx| str0m::rtp::Ssrc::from(*stream_rx.ssrc()))
+            && existing_ssrc != stream.ssrc
+        {
+            api.remove_stream_rx(existing_ssrc);
+        }
         api.expect_stream_rx(stream.ssrc, None, *mid, stream.rid);
     }
     for (mid, _stream) in pending_recv_streams {
@@ -215,6 +227,7 @@ fn ensure_session_ready_for_offer(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     session_key: &TransportSessionKey,
 ) -> Result<(), TransportAdapterError> {
     let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
@@ -225,7 +238,12 @@ fn ensure_session_ready_for_offer(
         state.shared_socket = Some(shared_socket);
         candidate_addr
     };
-    bootstrap::ensure_session_rtc_state(&mut state.sessions, session_key, candidate_addr)?;
+    bootstrap::ensure_session_rtc_state(
+        &mut state.sessions,
+        session_key,
+        candidate_addr,
+        codec_flags,
+    )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
     }

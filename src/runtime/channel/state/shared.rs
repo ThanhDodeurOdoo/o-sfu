@@ -120,6 +120,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn new(
         router_id: RouterId,
         admission_policy: ChannelAdmissionPolicy,
+        router_rtp_capabilities: MediaCapabilities,
         recording_service: Arc<RecordingService>,
     ) -> Self {
         Self {
@@ -138,7 +139,11 @@ impl ChannelState {
             producer_ids_by_owner_stream: BTreeMap::new(),
             producer_stream_types_by_transport_media_id: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
-            topology: ChannelTopology::new_with_recording_service(router_id, recording_service),
+            topology: ChannelTopology::new_with_recording_service(
+                router_id,
+                router_rtp_capabilities,
+                recording_service,
+            ),
         }
     }
 

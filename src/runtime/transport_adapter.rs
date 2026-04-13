@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc};
 
 use super::{rtc_adapter::RtcTransportAdapter, stub_bus::StubWebRtcAdapter};
+use crate::config::MediaCodecFlags;
 use crate::runtime::recording::MediaTap;
 
 use crate::config::RtcPortRange;
@@ -192,6 +193,7 @@ impl SessionOffer {
 pub(crate) struct RtcTransportAdapterConfig {
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
     media_tap: Arc<MediaTap>,
 }
 
@@ -200,11 +202,13 @@ impl RtcTransportAdapterConfig {
     pub(crate) fn new(
         public_ip: IpAddr,
         rtc_port_range: RtcPortRange,
+        codec_flags: MediaCodecFlags,
         media_tap: Arc<MediaTap>,
     ) -> Self {
         Self {
             public_ip,
             rtc_port_range,
+            codec_flags,
             media_tap,
         }
     }
@@ -214,6 +218,7 @@ impl RtcTransportAdapterConfig {
         Self {
             public_ip: self.public_ip,
             rtc_port_range,
+            codec_flags: self.codec_flags,
             media_tap: Arc::clone(&self.media_tap),
         }
     }
@@ -226,6 +231,11 @@ impl RtcTransportAdapterConfig {
     #[must_use]
     pub(crate) const fn rtc_port_range(&self) -> RtcPortRange {
         self.rtc_port_range
+    }
+
+    #[must_use]
+    pub(crate) const fn codec_flags(&self) -> MediaCodecFlags {
+        self.codec_flags
     }
 
     #[must_use]
@@ -246,11 +256,17 @@ impl RtcTransportAdapterShardSetConfig {
         public_ip: IpAddr,
         rtc_port_range: RtcPortRange,
         worker_count: usize,
+        codec_flags: MediaCodecFlags,
         media_tap: Arc<MediaTap>,
     ) -> Self {
         Self {
             worker_count,
-            adapter: RtcTransportAdapterConfig::new(public_ip, rtc_port_range, media_tap),
+            adapter: RtcTransportAdapterConfig::new(
+                public_ip,
+                rtc_port_range,
+                codec_flags,
+                media_tap,
+            ),
         }
     }
 
@@ -699,7 +715,7 @@ mod tests {
 
     use super::RuntimeTransportAdapter;
     use crate::{
-        config::RtcPortRange,
+        config::{MediaCodecFlags, RtcPortRange},
         runtime::{
             recording::MediaTap,
             transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey},
@@ -719,6 +735,7 @@ mod tests {
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 RtcPortRange::new(46_000, 46_003),
                 2,
+                MediaCodecFlags::default(),
                 Arc::new(MediaTap::default()),
             ))
             .build();

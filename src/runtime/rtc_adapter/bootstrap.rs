@@ -13,6 +13,7 @@ use tokio::net::UdpSocket;
 use super::state::{
     RtcSessionState, SessionSdpNegotiationState, SessionTransportIds, SharedRtcSocket,
 };
+use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 use crate::rfc::webrtc;
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
@@ -64,11 +65,14 @@ pub(super) fn ensure_session_rtc_state(
     sessions: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
+    codec_flags: MediaCodecFlags,
 ) -> Result<(), TransportAdapterError> {
     if sessions.contains_key(session_key) {
         return Ok(());
     }
-    let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
+    let mut rtc = rtc_builder(codec_flags)
+        .set_ice_lite(true)
+        .build(Instant::now());
     let candidate = Candidate::host(candidate_addr, webrtc::IceTransport::Udp.as_str())
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
@@ -100,6 +104,19 @@ pub(super) fn ensure_session_rtc_state(
         },
     );
     Ok(())
+}
+
+fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
+    Rtc::builder()
+        .clear_codecs()
+        .enable_opus(codec_flags.opus_enabled())
+        .enable_pcmu(codec_flags.pcmu_enabled())
+        .enable_pcma(codec_flags.pcma_enabled())
+        .enable_vp8(codec_flags.vp8_enabled())
+        .enable_h264(codec_flags.h264_enabled())
+        .enable_h265(codec_flags.h265_enabled())
+        .enable_vp9(codec_flags.vp9_enabled())
+        .enable_av1(codec_flags.av1_enabled())
 }
 
 pub(super) fn build_transport_bootstrap(

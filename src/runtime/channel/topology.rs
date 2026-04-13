@@ -12,6 +12,8 @@ use o_sfu_router::{
 };
 
 use super::router_state::ChannelRouterState;
+#[cfg(test)]
+use crate::config::MediaCodecFlags;
 use crate::runtime::recording::RecordingService;
 #[cfg(test)]
 use crate::runtime::recording::{MediaSource, MediaTap};
@@ -84,18 +86,24 @@ impl ChannelTopology {
         let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
         Self::new_with_recording_service(
             primary_router_id,
+            super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             Arc::new(RecordingService::new(0, media_source)),
         )
     }
 
     pub(super) fn new_with_recording_service(
         primary_router_id: RouterId,
+        router_rtp_capabilities: RtpCapabilities,
         recording_service: Arc<RecordingService>,
     ) -> Self {
         let mut routers = BTreeMap::new();
         routers.insert(
             primary_router_id,
-            ChannelRouterState::new_with_recording_service(primary_router_id, recording_service),
+            ChannelRouterState::new_with_recording_service(
+                primary_router_id,
+                router_rtp_capabilities,
+                recording_service,
+            ),
         );
         Self {
             primary_router: primary_router_id,
