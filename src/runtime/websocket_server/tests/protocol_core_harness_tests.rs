@@ -1167,6 +1167,91 @@ async fn protocol_core_native_unpublish_cancels_pending_publish_before_commit() 
 }
 
 #[tokio::test]
+async fn protocol_core_native_unpublish_round_trips_through_real_rtc_after_publish_commit() {
+    let Some((_server, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+        "issuer-native-rtc-unpublish",
+        SessionId::Integer(77),
+        SessionId::Integer(78),
+        56_307,
+        56_308,
+    ))
+    .await
+    else {
+        return;
+    };
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should answer the initial rtc-backed publish renegotiation"
+    );
+
+    let Some(initial_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert_eq!(initial_track_bindings.len(), 1);
+    let Some(published_track) = initial_track_bindings.first() else {
+        return;
+    };
+    assert_eq!(published_track.session_id, ProtocolSessionId::Integer(77));
+    assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
+    assert!(published_track.active);
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should answer the follow-up renegotiation for the committed publish"
+    );
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, false)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should answer the rtc-backed unpublish renegotiation"
+    );
+
+    let Some(removed_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert!(
+        removed_track_bindings.is_empty(),
+        "committed unpublish should clear the authoritative track snapshot"
+    );
+    assert_eq!(
+        bob.core.track_binding(&published_track.mid),
+        None,
+        "committed unpublish should remove the cached track binding"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should answer the rtc-backed renegotiation that removes the remote track"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should also receive the translated peer-info update for the committed unpublish"
+    );
+    assert_eq!(
+        bob.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&ProtocolSessionId::Integer(77)),
+            ProtocolSessionInfo::default(),
+        )]))),
+        "committed unpublish should clear the publisher camera flag in the observable peer info"
+    );
+    assert!(
+        no_server_frame(&mut bob, Duration::from_millis(150)).await,
+        "committed unpublish should not leave further rtc follow-up frames queued"
+    );
+}
+
+#[tokio::test]
 async fn protocol_core_native_subscribe_updates_consumer_activity() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts_and_protocol(
