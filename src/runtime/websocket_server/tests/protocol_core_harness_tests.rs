@@ -39,10 +39,6 @@ struct ProtocolHarnessRtcPeer {
 }
 
 impl ProtocolHarnessRtcPeer {
-    fn new(port: u16) -> Option<Self> {
-        Self::new_with_rtc(port, Rtc::new(Instant::now()))
-    }
-
     fn new_with_rtc(port: u16, mut rtc: Rtc) -> Option<Self> {
         rtc.add_local_candidate(
             Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp").ok()?,
@@ -60,6 +56,26 @@ impl ProtocolHarnessRtcPeer {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ProtocolHarnessRtcPeerFactory {
+    port: u16,
+    build_rtc: fn() -> Rtc,
+}
+
+impl ProtocolHarnessRtcPeerFactory {
+    fn new(port: u16, build_rtc: fn() -> Rtc) -> Self {
+        Self { port, build_rtc }
+    }
+
+    fn build_peer(self) -> Option<ProtocolHarnessRtcPeer> {
+        ProtocolHarnessRtcPeer::new_with_rtc(self.port, (self.build_rtc)())
+    }
+}
+
+fn default_protocol_harness_rtc() -> Rtc {
+    Rtc::new(Instant::now())
+}
+
 #[derive(Debug, Clone)]
 struct PendingHarnessNegotiation {
     request_id: RequestId,
@@ -71,6 +87,7 @@ struct ProtocolHarnessPeer {
     core: ProtocolCore,
     pending_request_commands: Vec<HostCommand>,
     pending_negotiations: VecDeque<PendingHarnessNegotiation>,
+    rtc_peer_factory: Option<ProtocolHarnessRtcPeerFactory>,
     rtc_peer: Option<ProtocolHarnessRtcPeer>,
     state_changes: Vec<BundleStateChange>,
     timers: BTreeMap<u32, u32>,
@@ -85,6 +102,7 @@ impl Default for ProtocolHarnessPeer {
             core: ProtocolCore::default(),
             pending_request_commands: Vec::new(),
             pending_negotiations: VecDeque::new(),
+            rtc_peer_factory: None,
             rtc_peer: None,
             state_changes: Vec::new(),
             timers: BTreeMap::new(),
@@ -97,15 +115,20 @@ impl Default for ProtocolHarnessPeer {
 
 impl ProtocolHarnessPeer {
     fn with_real_rtc_negotiation(port: u16) -> Option<Self> {
+        let rtc_peer_factory =
+            ProtocolHarnessRtcPeerFactory::new(port, default_protocol_harness_rtc);
         Some(Self {
-            rtc_peer: Some(ProtocolHarnessRtcPeer::new(port)?),
+            rtc_peer_factory: Some(rtc_peer_factory),
+            rtc_peer: Some(rtc_peer_factory.build_peer()?),
             ..Self::default()
         })
     }
 
-    fn with_custom_rtc_negotiation(port: u16, rtc: Rtc) -> Option<Self> {
+    fn with_custom_rtc_negotiation(port: u16, build_rtc: fn() -> Rtc) -> Option<Self> {
+        let rtc_peer_factory = ProtocolHarnessRtcPeerFactory::new(port, build_rtc);
         Some(Self {
-            rtc_peer: Some(ProtocolHarnessRtcPeer::new_with_rtc(port, rtc)?),
+            rtc_peer_factory: Some(rtc_peer_factory),
+            rtc_peer: Some(rtc_peer_factory.build_peer()?),
             ..Self::default()
         })
     }
@@ -247,10 +270,18 @@ impl ProtocolHarnessPeer {
                     }
                     Vec::new()
                 }
-                Command::CreatePeerConnection
-                | Command::ClosePeerConnection
-                | Command::AttachTrack { .. }
-                | Command::DetachTrack { .. } => Vec::new(),
+                Command::CreatePeerConnection => {
+                    if let Some(factory) = self.rtc_peer_factory {
+                        self.rtc_peer = factory.build_peer();
+                        let _ = self.rtc_peer.as_ref()?;
+                    }
+                    Vec::new()
+                }
+                Command::ClosePeerConnection => {
+                    self.rtc_peer = None;
+                    Vec::new()
+                }
+                Command::AttachTrack { .. } | Command::DetachTrack { .. } => Vec::new(),
                 Command::ApplyNegotiation {
                     request_id,
                     kind,
@@ -1347,7 +1378,7 @@ async fn native_handshake_uses_answer_derived_client_capabilities_for_session_st
         return;
     };
     let Some(mut alice) =
-        ProtocolHarnessPeer::with_custom_rtc_negotiation(56_305, reduced_capability_rtc())
+        ProtocolHarnessPeer::with_custom_rtc_negotiation(56_305, reduced_capability_rtc)
     else {
         return;
     };
@@ -2198,6 +2229,105 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
     assert!(
         alice.read_server_frame().await.is_some(),
         "subscriber should receive the replayed remote-track renegotiation request"
+    );
+    assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));
+    assert!(peer_reached_state(&bob, BundleConnectionState::Connected));
+}
+
+#[tokio::test]
+async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() {
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+        "issuer-native-rtc-recovery",
+        SessionId::Integer(91),
+        SessionId::Integer(92),
+        55_091,
+        55_092,
+    ))
+    .await
+    else {
+        return;
+    };
+
+    assert!(
+        bob.publish(ProtocolStreamType::Camera, true)
+            .await
+            .is_some(),
+        "publisher should stage the initial native publish on the real rtc path"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "publisher should consume the initial real-rtc publish renegotiation and answer it"
+    );
+    let initial_track_snapshot = read_track_snapshot(&mut alice).await;
+    assert!(
+        initial_track_snapshot.is_some(),
+        "subscriber should receive the initial translated track snapshot on the real rtc path"
+    );
+    let Some(initial_track_snapshot) = initial_track_snapshot else {
+        return;
+    };
+    assert_track_snapshot_contains(
+        &initial_track_snapshot,
+        &ProtocolSessionId::Integer(92),
+        ProtocolStreamType::Camera,
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "subscriber should consume the initial real-rtc remote-track renegotiation request"
+    );
+    alice.updates.clear();
+
+    assert!(
+        close_peer_and_observe_recovery(&mut bob, &mut alice)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "subscriber should consume the departure-side real-rtc renegotiation before recovery rejoin"
+    );
+    alice.updates.clear();
+
+    assert!(
+        bob.flush_timers_with_delay(RECOVERY_DELAY_MS)
+            .await
+            .is_some(),
+        "recovery timer should reconnect the real-rtc publisher"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "publisher should consume the recovery welcome frame on the real rtc path"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "publisher should consume the recovery initial offer on the real rtc path"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "publisher should consume the replayed real-rtc publish renegotiation after recovery"
+    );
+
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(92))
+            .await
+            .is_some()
+    );
+    let replayed_track_snapshot = read_track_snapshot(&mut alice).await;
+    assert!(
+        replayed_track_snapshot.is_some(),
+        "subscriber should receive a replayed track snapshot after real-rtc publisher recovery"
+    );
+    let Some(replayed_track_snapshot) = replayed_track_snapshot else {
+        return;
+    };
+    assert_track_snapshot_contains(
+        &replayed_track_snapshot,
+        &ProtocolSessionId::Integer(92),
+        ProtocolStreamType::Camera,
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "subscriber should consume the replayed real-rtc remote-track renegotiation request"
     );
     assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));
     assert!(peer_reached_state(&bob, BundleConnectionState::Connected));
