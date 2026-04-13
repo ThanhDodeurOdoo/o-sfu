@@ -100,6 +100,7 @@ class FakeProtocolCore {
         this.state = "disconnected";
         this.disconnectCalls = 0;
         this.submittedAnswers = [];
+        this.uploadUpdates = [];
         this.trackBindings = new Map();
     }
 
@@ -154,6 +155,21 @@ class FakeProtocolCore {
                         negotiationKind: "offer",
                         requestId: "7",
                         sdp: "offer-sdp"
+                    }
+                ];
+            case "offer-with-attach-camera":
+                return [
+                    { kind: "createPeerConnection" },
+                    {
+                        kind: "applyNegotiation",
+                        negotiationKind: "offer",
+                        requestId: "8",
+                        sdp: "offer-sdp"
+                    },
+                    {
+                        kind: "attachTrack",
+                        mid: "1",
+                        streamType: "camera"
                     }
                 ];
             case "track-inactive":
@@ -219,6 +235,7 @@ class FakeProtocolCore {
     }
 
     updateUpload(type, active) {
+        this.uploadUpdates.push({ active, type });
         this.lastUploadUpdate = { active, type };
         return [];
     }
@@ -791,6 +808,110 @@ test("peer connection teardown clears stale remote consumer state", async () => 
 
     assert.equal(peerConnections[0].closed, true);
     assert.equal(client._consumers.size, 0);
+});
+
+test("updateUpload replaces an already attached local sender track without re-publishing", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const firstTrack = {
+        enabled: true,
+        id: "camera-track-1",
+        kind: "video",
+        muted: false
+    };
+    const secondTrack = {
+        enabled: true,
+        id: "camera-track-2",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    client.updateUpload("camera", firstTrack);
+    await tick();
+
+    sockets[0].emitMessage("offer-with-attach-camera");
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[1].sender.track, firstTrack);
+    assert.deepEqual(core.uploadUpdates, [{ active: true, type: "camera" }]);
+
+    client.updateUpload("camera", secondTrack);
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[1].sender.track, secondTrack);
+    assert.deepEqual(
+        core.uploadUpdates,
+        [{ active: true, type: "camera" }],
+        "replacing a live local track should stay local once the sender is bound"
+    );
+});
+
+test("updateUpload detaches the local sender before signaling unpublish", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const track = {
+        enabled: true,
+        id: "camera-track-1",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    client.updateUpload("camera", track);
+    await tick();
+    sockets[0].emitMessage("offer-with-attach-camera");
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[1].sender.track, track);
+    assert.deepEqual(core.uploadUpdates, [{ active: true, type: "camera" }]);
+
+    client.updateUpload("camera", null);
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[1].sender.track, null);
+    assert.deepEqual(core.uploadUpdates, [
+        { active: true, type: "camera" },
+        { active: false, type: "camera" }
+    ]);
 });
 
 test("fatal runtime errors reset the public client surface", async () => {

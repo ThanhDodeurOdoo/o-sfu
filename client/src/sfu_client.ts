@@ -169,8 +169,33 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     updateUpload(type: StreamType, track: MediaStreamTrack | null): void {
         validateTrackForStreamType(type, track);
+        const previousTrack = this._localTracks.get(type) ?? null;
+        const hadTrack = previousTrack !== null;
+        const hasTrack = track !== null;
+
         this._localTracks.set(type, track);
-        this._enqueueProtocolCommands(() => this._protocolCore.updateUpload(type, Boolean(track)));
+
+        if (hadTrack && hasTrack) {
+            this._enqueueLocalOperation(async () => {
+                const knownMid = this._senderMidByType.get(type);
+                if (knownMid) {
+                    await this._attachTrack(knownMid, type);
+                }
+            });
+            return;
+        }
+
+        if (hadTrack && !hasTrack) {
+            this._enqueueLocalOperation(async () => {
+                await this._detachTrack(type);
+            });
+        }
+
+        if (hadTrack == hasTrack) {
+            return;
+        }
+
+        this._enqueueProtocolCommands(() => this._protocolCore.updateUpload(type, hasTrack));
     }
 
     updateDownload(sessionId: SessionId, states: DownloadStates): void {
@@ -227,6 +252,16 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         } catch (error) {
             this._handleRuntimeError(error);
         }
+    }
+
+    private _enqueueLocalOperation(operation: () => Promise<void>): void {
+        this._commandQueue = this._commandQueue
+            .then(async () => {
+                await operation();
+            })
+            .catch((error: unknown) => {
+                this._handleRuntimeError(error);
+            });
     }
 
     private _enqueue(commands: HostCommand[]): void {
