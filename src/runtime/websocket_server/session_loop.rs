@@ -27,11 +27,20 @@ pub(super) async fn run(
     let ping_interval = Duration::from_millis(ping_interval_ms);
     let ping_timeout = Duration::from_millis(session_timeout_ms);
     let mut next_ping_at = Instant::now() + ping_interval;
+    let mut next_transport_state_check_at = next_ping_at;
     let mut ping_response_deadline: Option<Instant> = None;
     loop {
+        let transport_state_tick = sleep_until(next_transport_state_check_at);
+        tokio::pin!(transport_state_tick);
         let ping_tick = sleep_until(next_ping_at);
         tokio::pin!(ping_tick);
         tokio::select! {
+            () = &mut transport_state_tick => {
+                next_transport_state_check_at = Instant::now() + ping_interval;
+                if let Some(reason) = handle_transport_state_tick(writer, session_protocol).await {
+                    return reason;
+                }
+            }
             () = &mut ping_tick, if ping_response_deadline.is_none() => {
                 if let Some(reason) = handle_transport_state_tick(writer, session_protocol).await {
                     return reason;

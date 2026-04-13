@@ -198,6 +198,73 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
 }
 
 #[tokio::test]
+async fn websocket_closes_when_rtc_transport_disconnects_during_pending_ping() {
+    let server =
+        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_transport_adapter())
+            .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-rtc-disconnect-pending-ping",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let session_id = SessionId::Integer(413);
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some((mut websocket, _welcome)) = authenticated else {
+        return;
+    };
+    assert!(
+        acknowledge_transport_bootstrap(&mut websocket)
+            .await
+            .is_some()
+    );
+
+    let ping_request = timeout(Duration::from_secs(1), read_server_request(&mut websocket)).await;
+    assert!(
+        ping_request.is_ok(),
+        "server should send a ping request before the disconnect: {ping_request:?}"
+    );
+    let Some((_, request)) = ping_request.ok().flatten() else {
+        panic!("expected ping request before transport disconnect");
+    };
+    assert!(
+        matches!(request, CurrentServerRequest::Ping),
+        "expected ping request before transport disconnect, got {request:?}"
+    );
+
+    let connection_id = channel.session_connection_id(&session_id).await;
+    assert!(connection_id.is_some());
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    server
+        .state
+        .transport_adapter
+        .debug_set_session_transport_health(
+            &channel.transport_session_key(&session_id, connection_id),
+            TransportSessionHealth::Disconnected,
+        );
+
+    let close_code = timeout(Duration::from_millis(120), read_close_code(&mut websocket)).await;
+    assert!(
+        close_code.is_ok(),
+        "server should close promptly while a ping response is still pending: {close_code:?}"
+    );
+    assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
+}
+
+#[tokio::test]
 async fn websocket_emits_stub_webrtc_bootstrap_event() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
     let transport_adapter =
