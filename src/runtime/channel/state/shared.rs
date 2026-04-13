@@ -23,6 +23,9 @@ use super::ids::ProducerRuntimeId;
 use super::presence::SessionPresence;
 use super::session_info_projection::{SessionMediaView, project_session_info};
 
+const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
+    [StreamType::Audio, StreamType::Camera, StreamType::Screen];
+
 /// Core mutable state for a single SFU channel (room).
 ///
 /// Owns all session, producer, and consumer bookkeeping. Every mutation returns
@@ -164,22 +167,15 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
     ) {
-        let removed_producers = self
-            .producers
-            .values()
-            .filter(|producer| producer.owner_session_id == *session_id)
-            .map(|producer| {
-                (
-                    ProducerKey::new(&producer.owner_session_id, producer.stream_type),
-                    producer.transport_media_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        self.producers
-            .retain(|_producer_id, producer| producer.owner_session_id != *session_id);
-        for (producer_key, transport_media_id) in removed_producers {
-            self.producer_ids_by_owner_stream.remove(&producer_key);
-            if let Some(transport_media_id) = transport_media_id {
+        for stream_type in PUBLISHABLE_STREAM_TYPES {
+            let producer_key = ProducerKey::new(session_id, stream_type);
+            let Some(producer_id) = self.producer_ids_by_owner_stream.remove(&producer_key) else {
+                continue;
+            };
+            let Some(producer) = self.producers.remove(&producer_id) else {
+                continue;
+            };
+            if let Some(transport_media_id) = producer.transport_media_id {
                 self.producer_stream_types_by_transport_media_id
                     .remove(&transport_media_id);
             }
@@ -341,6 +337,23 @@ impl ChannelState {
         self.producers
             .values()
             .find_map(|producer| producer.transport_media_id)
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::channel) fn producer_transport_media_id(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+    ) -> Option<TransportMediaId> {
+        let producer_id = self
+            .producer_ids_by_owner_stream
+            .get(&ProducerKey::new(session_id, stream_type))?;
+        let producer = self.producers.get(producer_id)?;
+        if producer.owner_connection_id != connection_id {
+            return None;
+        }
+        producer.transport_media_id
     }
 
     pub(in crate::runtime::channel) fn session_info_snapshot(

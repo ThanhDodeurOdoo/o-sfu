@@ -324,6 +324,19 @@ impl Channel {
     }
 
     #[cfg(test)]
+    pub(super) async fn producer_transport_media_id(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+    ) -> Option<TransportMediaId> {
+        self.state
+            .read()
+            .await
+            .producer_transport_media_id(session_id, connection_id, stream_type)
+    }
+
+    #[cfg(test)]
     pub(super) async fn has_producer_route_target(
         &self,
         owner_session_id: &SessionId,

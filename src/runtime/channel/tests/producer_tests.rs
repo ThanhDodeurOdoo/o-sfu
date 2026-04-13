@@ -180,6 +180,96 @@ async fn session_replacement_purges_stale_published_media_state() {
 }
 
 #[tokio::test]
+async fn session_replacement_purges_all_published_stream_mappings() {
+    let (channel, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_sessions().await;
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Audio,
+                MediaKind::Audio,
+                test_audio_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert_eq!(
+        drain_outbound(&mut subscriber_rx)
+            .into_iter()
+            .filter(|message| matches!(message, SessionOutbound::Request(_)))
+            .count(),
+        2,
+        "subscriber should receive one bootstrap per published stream"
+    );
+
+    let camera_transport_media_id = channel
+        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .await;
+    let audio_transport_media_id = channel
+        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Audio)
+        .await;
+    assert!(camera_transport_media_id.is_some());
+    assert!(audio_transport_media_id.is_some());
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    assert!(
+        channel
+            .join_session(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                replacement_tx,
+            )
+            .await
+            .is_ok()
+    );
+
+    assert_eq!(channel.producer_count().await, 0);
+    assert_eq!(channel.consumer_count().await, 0);
+    assert!(
+        channel
+            .producer_stream_type_for_transport_media_id(
+                camera_transport_media_id.expect("camera producer should expose a transport id")
+            )
+            .await
+            .is_none()
+    );
+    assert!(
+        channel
+            .producer_stream_type_for_transport_media_id(
+                audio_transport_media_id.expect("audio producer should expose a transport id")
+            )
+            .await
+            .is_none()
+    );
+    assert!(
+        !channel
+            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .await
+    );
+    assert!(
+        !channel
+            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Audio)
+            .await
+    );
+}
+
+#[tokio::test]
 async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
     let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     let (stub_adapter, _) = stub_adapter();
