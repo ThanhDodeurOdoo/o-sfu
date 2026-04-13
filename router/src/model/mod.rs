@@ -1,4 +1,5 @@
 mod consumer;
+mod consumer_capability;
 mod diagnostic;
 mod error;
 mod ids;
@@ -15,6 +16,7 @@ mod transport;
 pub(crate) mod verification;
 
 pub use self::consumer::Consumer;
+pub use self::consumer_capability::ConsumerCapability;
 pub use self::diagnostic::{
     ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
 };

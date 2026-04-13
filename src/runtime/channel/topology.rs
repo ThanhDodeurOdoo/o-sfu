@@ -6,9 +6,9 @@ use std::{
 #[cfg(test)]
 use o_sfu_router::SessionPermissions as RouterSessionPermissions;
 use o_sfu_router::{
-    ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind, ProducerId as RouterProducerId,
-    RouterError, RouterId, RtpCapabilities, SessionId as RouterSessionId,
-    StreamType as RouterStreamType,
+    ConsumerCapability, ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind,
+    ProducerId as RouterProducerId, RouterError, RouterId, RtpCapabilities,
+    SessionId as RouterSessionId, StreamType as RouterStreamType,
 };
 
 use super::router_state::ChannelRouterState;
@@ -179,14 +179,14 @@ impl ChannelTopology {
         producer_id: RoutedProducerId,
         media_kind: RouterMediaKind,
         stream_type: RouterStreamType,
-        capable: bool,
+        capability: ConsumerCapability,
     ) -> Result<RoutedConsumerId, RouterError> {
         let consumer_id = self.router_mut(producer_id.router_id())?.add_consumer(
             consumer_session_id,
             producer_id.producer_id(),
             media_kind,
             stream_type,
-            capable,
+            capability,
         )?;
         Ok(RoutedConsumerId::new(producer_id.router_id(), consumer_id))
     }

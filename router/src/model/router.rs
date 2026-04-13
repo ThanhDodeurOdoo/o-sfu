@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Consumer, ConsumerId, NoopRouterObserver, Producer, ProducerId, RouterError, RouterEvent,
-    RouterId, RouterObserver, Session, SessionId, Transport, TransportDirection, TransportId,
+    Consumer, ConsumerCapability, ConsumerId, NoopRouterObserver, Producer, ProducerId,
+    RouterError, RouterEvent, RouterId, RouterObserver, Session, SessionId, Transport,
+    TransportDirection, TransportId,
 };
 
 #[derive(Debug)]
@@ -157,11 +158,11 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// The `capable` parameter is the result of the external capability negotiation
-    /// (e.g. [`crate::rtp_negotiation::can_consume`]). The router treats it as an opaque boolean
-    /// gate: when `false`, the consumer is rejected without inspecting RTP parameters.
-    /// This keeps the full ORTC matching logic outside the router while allowing the router
-    /// to enforce the gate structurally.
+    /// The `capability` parameter is the result of the external capability negotiation
+    /// (e.g. [`crate::rtp_negotiation::can_consume`]). The router treats it as an opaque
+    /// compatibility gate: when [`ConsumerCapability::Incompatible`], the consumer is rejected
+    /// without inspecting RTP parameters. This keeps the full ORTC matching logic outside the
+    /// router while allowing the router to enforce the gate structurally.
     ///
     /// # Errors
     ///
@@ -177,7 +178,7 @@ impl<O: RouterObserver> Router<O> {
     pub fn add_consumer(
         &mut self,
         mut consumer: Consumer,
-        capable: bool,
+        capability: ConsumerCapability,
     ) -> Result<(), RouterError> {
         let consumer_id = consumer.id();
         let transport_id = consumer.transport_id();
@@ -191,7 +192,7 @@ impl<O: RouterObserver> Router<O> {
         let Some(producer) = self.producers.get(&producer_id) else {
             return Err(RouterError::MissingProducer(producer_id));
         };
-        if !capable {
+        if !capability.is_compatible() {
             return Err(RouterError::IncompatibleCapabilities { producer_id });
         }
         if consumer.media_kind() != producer.media_kind() {

@@ -43,7 +43,9 @@ pub(super) async fn establish_session(
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
     let mut session_protocol = if state.config.enable_native_protocol
-        && state.transport_adapter.supports_native_session_protocol()
+        && state
+            .transport_adapter
+            .uses_native_protocol_migration_path()
     {
         SessionProtocol::native(
             session_id.clone(),

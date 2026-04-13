@@ -132,15 +132,17 @@ impl<
         self.insert_producer(producer)
     }
 
-    /// The `capable` parameter abstracts the external capability negotiation as a boolean gate.
-    /// When `false`, the consumer is rejected with [`RouterError::IncompatibleCapabilities`].
+    /// The `capability` parameter abstracts the external capability negotiation as a semantic
+    /// compatibility gate. [`crate::ConsumerCapability::Incompatible`] is rejected with
+    /// [`RouterError::IncompatibleCapabilities`].
     ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
-    /// consumers, [`RouterError::IncompatibleCapabilities`] when `capable` is `false`,
+    /// consumers, [`RouterError::IncompatibleCapabilities`] when `capability` is
+    /// [`crate::ConsumerCapability::Incompatible`],
     /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
@@ -149,7 +151,7 @@ impl<
     pub(crate) fn add_consumer(
         &mut self,
         mut consumer: Consumer,
-        capable: bool,
+        capability: crate::ConsumerCapability,
     ) -> Result<(), ProofRouterError> {
         let Some(transport) = self.transport_by_id(consumer.transport_id()) else {
             return Err(RouterError::MissingTransport(consumer.transport_id()).into());
@@ -160,7 +162,7 @@ impl<
         let Some(producer) = self.producer_by_id(consumer.producer_id()) else {
             return Err(RouterError::MissingProducer(consumer.producer_id()).into());
         };
-        if !capable {
+        if !capability.is_compatible() {
             return Err(RouterError::IncompatibleCapabilities {
                 producer_id: consumer.producer_id(),
             }

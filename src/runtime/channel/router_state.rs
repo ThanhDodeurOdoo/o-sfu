@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use o_sfu_router::{
-    Consumer as RouterConsumer, ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind,
-    Producer as RouterProducer, ProducerId as RouterProducerId, Router, RouterError, RouterId,
-    RtpCapabilities, Session as RouterSession, SessionId as RouterSessionId,
-    SessionInfo as RouterSessionInfo, SessionPermissionFlags as RouterSessionPermissionFlags,
+    Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
+    MediaKind as RouterMediaKind, Producer as RouterProducer, ProducerId as RouterProducerId,
+    Router, RouterError, RouterId, RtpCapabilities, Session as RouterSession,
+    SessionId as RouterSessionId, SessionInfo as RouterSessionInfo,
+    SessionPermissionFlags as RouterSessionPermissionFlags,
     SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
     Transport as RouterTransport, TransportDirection as RouterTransportDirection,
     TransportId as RouterTransportId,
@@ -172,7 +173,7 @@ impl ChannelRouterState {
         producer_id: RouterProducerId,
         media_kind: RouterMediaKind,
         stream_type: RouterStreamType,
-        capable: bool,
+        capability: ConsumerCapability,
     ) -> Result<RouterConsumerId, RouterError> {
         self.ensure_session_transports(consumer_session_id)?;
         let Some(transport_ids) = self
@@ -196,7 +197,7 @@ impl ChannelRouterState {
                 media_kind,
                 stream_type,
             ),
-            capable,
+            capability,
         )?;
         Ok(consumer_id)
     }

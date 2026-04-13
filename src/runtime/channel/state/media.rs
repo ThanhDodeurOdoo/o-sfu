@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::{
-    MediaCapabilities, MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters,
-    StreamType as RouterStreamType, can_consume, negotiate_consumer_rtp_parameters,
+    ConsumerCapability, MediaCapabilities, MediaKind as RouterMediaKind,
+    RtpParameters as RouterRtpParameters, StreamType as RouterStreamType, can_consume,
+    negotiate_consumer_rtp_parameters,
 };
 use tracing::{error, warn};
 
@@ -440,7 +441,7 @@ impl ChannelState {
             pending.producer_routed_id,
             to_router_media_kind(pending.producer_media_kind),
             to_router_stream_type(pending.producer_stream_type),
-            true,
+            ConsumerCapability::Compatible,
         ) {
             Ok(id) => id,
             Err(_error) => {

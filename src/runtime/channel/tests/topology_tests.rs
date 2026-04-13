@@ -84,7 +84,7 @@ fn topology_returns_router_scoped_entity_handles() {
             producer,
             RouterMediaKind::Audio,
             RouterStreamType::Audio,
-            true,
+            ConsumerCapability::Compatible,
         )
         .ok();
     assert!(consumer.is_some());

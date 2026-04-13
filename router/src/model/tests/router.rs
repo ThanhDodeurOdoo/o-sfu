@@ -3,8 +3,8 @@ use std::rc::Rc;
 
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
-    Consumer, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError, RouterEvent,
-    RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissionFlags,
+    Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError,
+    RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissionFlags,
     SessionPermissions, SessionState, StreamType, Transport, TransportDirection, TransportId,
 };
 
@@ -52,7 +52,7 @@ fn router_accepts_a_basic_publish_and_subscribe_flow() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );
@@ -124,7 +124,7 @@ fn removing_a_session_cleans_dependent_resources() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );
@@ -206,7 +206,7 @@ fn consumers_must_use_send_transports() {
                 MediaKind::Video,
                 StreamType::Camera,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Err(RouterError::ConsumerRequiresSendTransport(TransportId(200)))
     );
@@ -254,7 +254,7 @@ fn consumers_must_match_their_producer_media_kind() {
                 MediaKind::Video,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Err(RouterError::ConsumerMediaKindMismatch {
             producer_id: ProducerId(300),
@@ -306,7 +306,7 @@ fn consumers_must_match_their_producer_stream_type() {
                 MediaKind::Video,
                 StreamType::Screen,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Err(RouterError::ConsumerStreamTypeMismatch {
             producer_id: ProducerId(300),
@@ -358,7 +358,7 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            false,
+            ConsumerCapability::Incompatible,
         ),
         Err(RouterError::IncompatibleCapabilities {
             producer_id: ProducerId(300),
@@ -409,7 +409,7 @@ fn new_consumers_inherit_their_producer_pause_state() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );
@@ -473,7 +473,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
                 MediaKind::Video,
                 StreamType::Camera,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );
@@ -486,7 +486,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
                 MediaKind::Video,
                 StreamType::Camera,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );
@@ -554,7 +554,7 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );
@@ -617,7 +617,7 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Ok(())
     );

@@ -1,8 +1,8 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
 pub(super) use o_sfu_router::{
-    MediaKind as RouterMediaKind, RouterId, SessionPermissions as RouterSessionPermissions,
-    StreamType as RouterStreamType,
+    ConsumerCapability, MediaKind as RouterMediaKind, RouterId,
+    SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
 };
 pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::{task::yield_now, time::timeout};

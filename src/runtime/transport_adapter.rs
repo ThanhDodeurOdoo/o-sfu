@@ -413,7 +413,11 @@ impl RuntimeTransportAdapter {
     }
 
     #[must_use]
-    pub(crate) const fn supports_native_session_protocol(&self) -> bool {
+    /// Temporary migration gate for the native websocket protocol rollout.
+    ///
+    /// This is intentionally not capability discovery: it tells the runtime whether this
+    /// transport backend currently participates in the transitional native-protocol flow.
+    pub(crate) const fn uses_native_protocol_migration_path(&self) -> bool {
         matches!(self, Self::Stub(_))
     }
 

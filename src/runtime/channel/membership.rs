@@ -168,7 +168,7 @@ impl Channel {
         let Some(transport_adapter) = transport_adapter else {
             return;
         };
-        if !transport_adapter.supports_native_session_protocol() {
+        if !transport_adapter.uses_native_protocol_migration_path() {
             return;
         }
         for removal in removals {

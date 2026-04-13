@@ -1,7 +1,7 @@
 use super::{ProofRouterModel, model::ProofRouterError};
 use crate::{
-    Consumer, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session, SessionId,
-    SessionInfo, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
+    Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
+    SessionId, SessionInfo, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
     TransportDirection, TransportId,
 };
 
@@ -84,7 +84,7 @@ fn routing_flow_preserves_invariants() {
             MediaKind::Audio,
             StreamType::Audio,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
 
     assert!(router.satisfies_invariants());
@@ -120,7 +120,7 @@ fn session_teardown_preserves_invariants() {
             MediaKind::Audio,
             StreamType::Audio,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
 
     let _ = router.remove_session(SessionId(1));
@@ -199,7 +199,7 @@ fn consumers_are_rejected_on_receive_transports() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Err(ProofRouterError::Router(
             crate::RouterError::ConsumerRequiresSendTransport(consumer_transport),
@@ -250,7 +250,7 @@ fn consumers_are_rejected_when_media_kind_differs_from_producer() {
                 MediaKind::Video,
                 StreamType::Audio,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Err(ProofRouterError::Router(
             crate::RouterError::ConsumerMediaKindMismatch {
@@ -305,7 +305,7 @@ fn consumers_are_rejected_when_stream_type_differs_from_producer() {
                 MediaKind::Video,
                 StreamType::Screen,
             ),
-            true,
+            ConsumerCapability::Compatible,
         ),
         Err(ProofRouterError::Router(
             crate::RouterError::ConsumerStreamTypeMismatch {
@@ -349,7 +349,7 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
             MediaKind::Audio,
             StreamType::Audio,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
 
     assert!(
@@ -398,7 +398,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             MediaKind::Video,
             StreamType::Camera,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
     let _ = router.add_consumer(
         Consumer::new(
@@ -408,7 +408,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             MediaKind::Video,
             StreamType::Camera,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
 
     let _ = router.set_producer_paused(ProducerId(30), true);
@@ -459,7 +459,7 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             MediaKind::Video,
             StreamType::Camera,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
     let _ = router.add_consumer(
         Consumer::new(
@@ -469,7 +469,7 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             MediaKind::Video,
             StreamType::Camera,
         ),
-        true,
+        ConsumerCapability::Compatible,
     );
     let _ = router.set_producer_paused(ProducerId(30), true);
 
@@ -527,7 +527,7 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
                 MediaKind::Audio,
                 StreamType::Audio,
             ),
-            false,
+            ConsumerCapability::Incompatible,
         ),
         Err(ProofRouterError::Router(
             crate::RouterError::IncompatibleCapabilities { producer_id },
