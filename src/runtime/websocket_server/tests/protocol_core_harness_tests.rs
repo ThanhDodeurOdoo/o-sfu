@@ -9,7 +9,7 @@ use o_sfu_protocol::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate, BundleStateChange,
         BundleUpdate, bundle_session_info_key,
     },
-    core::{Command, ProtocolCore},
+    core::{Command, NegotiationKind, ProtocolCore},
     host_bridge::{HostCommand, HostPendingRequestKind},
     shared::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
@@ -49,15 +49,39 @@ impl ProtocolHarnessRtcPeer {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone)]
+struct PendingHarnessNegotiation {
+    request_id: RequestId,
+    kind: NegotiationKind,
+    sdp: String,
+}
+
 struct ProtocolHarnessPeer {
     core: ProtocolCore,
     pending_request_commands: Vec<HostCommand>,
+    pending_negotiations: VecDeque<PendingHarnessNegotiation>,
     rtc_peer: Option<ProtocolHarnessRtcPeer>,
     state_changes: Vec<BundleStateChange>,
     timers: BTreeMap<u32, u32>,
     updates: Vec<BundleUpdate>,
     websocket: Option<TestWebSocket>,
+    auto_answer_negotiation: bool,
+}
+
+impl Default for ProtocolHarnessPeer {
+    fn default() -> Self {
+        Self {
+            core: ProtocolCore::default(),
+            pending_request_commands: Vec::new(),
+            pending_negotiations: VecDeque::new(),
+            rtc_peer: None,
+            state_changes: Vec::new(),
+            timers: BTreeMap::new(),
+            updates: Vec::new(),
+            websocket: None,
+            auto_answer_negotiation: true,
+        }
+    }
 }
 
 impl ProtocolHarnessPeer {
@@ -163,6 +187,19 @@ impl ProtocolHarnessPeer {
         Some(())
     }
 
+    async fn answer_next_negotiation(&mut self) -> Option<()> {
+        let pending = self.pending_negotiations.pop_front()?;
+        let answer_sdp = match self.rtc_peer.as_mut() {
+            Some(rtc_peer) => rtc_peer.answer_offer(&pending.sdp)?,
+            None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
+        };
+        let mut commands =
+            self.core
+                .submit_negotiation_answer(&pending.request_id, pending.kind, &answer_sdp);
+        commands.extend(self.core.on_transport_ready());
+        self.run_commands(commands).await
+    }
+
     async fn run_commands(&mut self, commands: Vec<Command>) -> Option<()> {
         let mut pending: VecDeque<_> = commands.into();
         while let Some(command) = pending.pop_front() {
@@ -200,6 +237,14 @@ impl ProtocolHarnessPeer {
                     kind,
                     sdp,
                 } => {
+                    if !self.auto_answer_negotiation {
+                        self.pending_negotiations.push_back(PendingHarnessNegotiation {
+                            request_id,
+                            kind,
+                            sdp,
+                        });
+                        continue;
+                    }
                     let answer_sdp = match self.rtc_peer.as_mut() {
                         Some(rtc_peer) => rtc_peer.answer_offer(&sdp)?,
                         None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
@@ -233,6 +278,64 @@ impl ProtocolHarnessPeer {
         }
         Some(())
     }
+}
+
+async fn read_next_server_payload(websocket: &mut TestWebSocket) -> Option<String> {
+    timeout(Duration::from_secs(1), read_text_message(websocket))
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn read_track_snapshot(peer: &mut ProtocolHarnessPeer) -> Option<Vec<TrackBinding>> {
+    let websocket = peer.websocket.as_mut()?;
+    let payload = read_next_server_payload(websocket).await?;
+    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
+    let messages = native_server_messages(&batch)?;
+    let ServerMessage::Tracks(track_bindings) = messages.into_iter().next()? else {
+        return None;
+    };
+    let commands = peer.core.on_ws_message(&payload);
+    peer.run_commands(commands).await?;
+    Some(track_bindings)
+}
+
+fn assert_track_snapshot_contains(
+    track_bindings: &[TrackBinding],
+    session_id: &ProtocolSessionId,
+    stream_type: ProtocolStreamType,
+) {
+    assert!(
+        track_bindings.iter().any(|binding| {
+            binding.session_id == *session_id
+                && binding.stream_type == stream_type
+                && binding.active
+        }),
+        "expected an active track binding for session {session_id:?} and stream {stream_type:?}"
+    );
+}
+
+async fn setup_real_rtc_protocol_peers(
+    channel_name: &str,
+    alice_session_id: SessionId,
+    bob_session_id: SessionId,
+    alice_port: u16,
+    bob_port: u16,
+) -> Option<(TestServer, ProtocolHarnessPeer, ProtocolHarnessPeer)> {
+    let server = spawn_native_protocol_rtc_test_server(1_000, 100).await?;
+    let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id)?;
+
+    let mut alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
+    let mut bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
+    alice
+        .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+        .await?;
+    bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+        .await?;
+
+    Some((server, alice, bob))
 }
 
 #[tokio::test]
@@ -782,6 +885,101 @@ async fn protocol_core_native_publish_round_trips_through_real_rtc_server_sessio
     assert!(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the rtc-backed follow-up renegotiation request"
+    );
+}
+
+#[tokio::test]
+async fn protocol_core_native_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
+    let Some((_server, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+        "issuer-native-rtc-publish-queue",
+        SessionId::Integer(73),
+        SessionId::Integer(74),
+        56_303,
+        56_304,
+    ))
+    .await
+    else {
+        return;
+    };
+    alice.auto_answer_negotiation = false;
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should receive the first rtc-backed renegotiation request"
+    );
+    assert_eq!(
+        alice.pending_negotiations.len(),
+        1,
+        "the first publish should leave one pending negotiation answer in the harness"
+    );
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Screen, true)
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        alice.pending_negotiations.len(),
+        1,
+        "the second publish should queue behind the in-flight negotiation instead of producing a second simultaneous offer"
+    );
+
+    assert!(
+        alice.answer_next_negotiation().await.is_some(),
+        "publisher should answer the first queued negotiation"
+    );
+    let Some(first_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert_eq!(first_track_bindings.len(), 1);
+    assert_track_snapshot_contains(
+        &first_track_bindings,
+        &ProtocolSessionId::Integer(73),
+        ProtocolStreamType::Camera,
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the first renegotiation request after the initial publish commit"
+    );
+
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should receive the queued follow-up renegotiation only after the first answer lands"
+    );
+    assert_eq!(
+        alice.pending_negotiations.len(),
+        1,
+        "the queued publish should surface exactly one follow-up negotiation request"
+    );
+
+    assert!(
+        alice.answer_next_negotiation().await.is_some(),
+        "publisher should answer the queued follow-up negotiation"
+    );
+    let Some(updated_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert_eq!(updated_track_bindings.len(), 2);
+    assert_track_snapshot_contains(
+        &updated_track_bindings,
+        &ProtocolSessionId::Integer(73),
+        ProtocolStreamType::Camera,
+    );
+    assert_track_snapshot_contains(
+        &updated_track_bindings,
+        &ProtocolSessionId::Integer(73),
+        ProtocolStreamType::Screen,
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the follow-up renegotiation request for the queued publish"
     );
 }
 
