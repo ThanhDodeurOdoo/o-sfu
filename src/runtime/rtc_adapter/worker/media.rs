@@ -171,9 +171,6 @@ fn worker_stage_native_media_removal(
     if session_state.sdp_negotiation.pending_offer.is_some()
         && session_state.sdp_negotiation.staged_offer_sdp.is_none()
     {
-        if session_state.rtc.media(mid).is_none() {
-            return Err(TransportAdapterError::InvalidInput);
-        }
         session_state
             .sdp_negotiation
             .queued_removal_mids

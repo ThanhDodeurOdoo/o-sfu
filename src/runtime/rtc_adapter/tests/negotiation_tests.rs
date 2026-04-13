@@ -417,6 +417,79 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
 }
 
 #[tokio::test]
+async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pending_producer() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 47, SessionId::Integer(47));
+
+    let mut remote = build_remote_rtc(55_008);
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let producer_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("compat-producer-mid-cancel", 91_000),
+        )
+        .await
+        .expect("native producer media should stage an addition offer");
+    let producer_mid = adapter
+        .debug_resolve_mid(producer_media_id)
+        .await
+        .expect("producer media should expose its staged mid");
+    let addition_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("addition offer should be available");
+    let addition_sdp = addition_offer.into_sdp();
+
+    assert_eq!(
+        adapter.remove_media(&session_key, producer_media_id).await,
+        Ok(())
+    );
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&session_key)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+
+    apply_offer_answer(&adapter, &session_key, &mut remote, addition_sdp).await;
+
+    let removal_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("cancelled pending producer should stage a follow-up removal offer");
+    let removal_sdp = removal_offer.into_sdp();
+    let removal_section = media_section_for_mid(&removal_sdp, &format!("{producer_mid}"))
+        .expect("cancelled producer mid should remain in the follow-up offer");
+    assert!(removal_section.contains("a=inactive"));
+    assert_eq!(
+        adapter
+            .negotiated_producer_parameters(&session_key, producer_media_id)
+            .await,
+        Err(TransportAdapterError::TransportUnavailable)
+    );
+
+    apply_offer_answer(&adapter, &session_key, &mut remote, removal_sdp).await;
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&session_key)
+            .await,
+        Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pending() {
     let adapter = RtcTransportAdapter::default();
     let source_session_key = transport_key(1, 42, SessionId::Integer(42));

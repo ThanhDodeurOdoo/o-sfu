@@ -289,6 +289,13 @@ async fn read_next_server_payload(websocket: &mut TestWebSocket) -> Option<Strin
         .flatten()
 }
 
+async fn no_server_frame(peer: &mut ProtocolHarnessPeer, wait: Duration) -> bool {
+    let Some(websocket) = peer.websocket.as_mut() else {
+        return false;
+    };
+    timeout(wait, read_text_message(websocket)).await.is_err()
+}
+
 async fn read_track_snapshot(peer: &mut ProtocolHarnessPeer) -> Option<Vec<TrackBinding>> {
     let websocket = peer.websocket.as_mut()?;
     let payload = read_next_server_payload(websocket).await?;
@@ -1084,6 +1091,77 @@ async fn protocol_core_native_publish_queues_follow_up_renegotiation_until_first
     assert!(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the follow-up renegotiation request for the queued publish"
+    );
+}
+
+#[tokio::test]
+async fn protocol_core_native_unpublish_cancels_pending_publish_before_commit() {
+    let Some((_server, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+        "issuer-native-rtc-publish-cancel",
+        SessionId::Integer(75),
+        SessionId::Integer(76),
+        56_305,
+        56_306,
+    ))
+    .await
+    else {
+        return;
+    };
+    alice.auto_answer_negotiation = false;
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should receive the staged publish renegotiation request"
+    );
+    assert_eq!(
+        alice.pending_negotiations.len(),
+        1,
+        "the first publish should leave one pending negotiation answer in the harness"
+    );
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, false)
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        alice.pending_negotiations.len(),
+        1,
+        "canceling the staged publish should not create an overlapping negotiation"
+    );
+
+    assert!(
+        alice.answer_next_negotiation().await.is_some(),
+        "publisher should answer the staged publish negotiation"
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should receive the follow-up renegotiation that removes the canceled publish"
+    );
+    assert_eq!(
+        alice.pending_negotiations.len(),
+        1,
+        "canceling the staged publish should queue exactly one follow-up removal negotiation"
+    );
+    assert!(
+        no_server_frame(&mut bob, Duration::from_millis(150)).await,
+        "subscriber should not observe a track snapshot before the canceled publish is removed"
+    );
+
+    assert!(
+        alice.answer_next_negotiation().await.is_some(),
+        "publisher should answer the follow-up removal negotiation"
+    );
+    assert!(
+        no_server_frame(&mut bob, Duration::from_millis(150)).await,
+        "subscriber should not observe track or renegotiation updates for a publish canceled before commit"
     );
 }
 
