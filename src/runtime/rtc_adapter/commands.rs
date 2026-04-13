@@ -58,6 +58,11 @@ pub(super) enum RtcWorkerCommand {
         transport_media_id: TransportMediaId,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
+    ResolveNegotiatedProducerParameters {
+        session_key: TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        response: oneshot::Sender<Result<RouterRtpParameters, TransportAdapterError>>,
+    },
     AddRecvMedia {
         session_key: TransportSessionKey,
         media_kind: MediaKind,

@@ -198,6 +198,25 @@ impl RtcTransportAdapter {
         .await
     }
 
+    #[allow(
+        dead_code,
+        reason = "native publish commit wiring is landing incrementally and this lookup is already exercised by negotiation tests"
+    )]
+    pub(crate) async fn negotiated_producer_parameters(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Result<RouterRtpParameters, TransportAdapterError> {
+        self.request_worker(
+            |response| RtcWorkerCommand::ResolveNegotiatedProducerParameters {
+                session_key: session_key.clone(),
+                transport_media_id,
+                response,
+            },
+        )
+        .await
+    }
+
     /// Declare a receive-only media line on the proudcer's `Rtc` instance.
     ///
     /// str0m need an explicit media declaration to accept incoming RTP for

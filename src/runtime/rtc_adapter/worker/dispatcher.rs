@@ -12,7 +12,7 @@ use super::{
         commands::RtcWorkerCommand,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
-    bootstrap, media, negotiation, session,
+    bootstrap, media, negotiation, publication, session,
 };
 
 pub(crate) fn handle_worker_command(
@@ -106,6 +106,16 @@ fn handle_core_worker_command(
             session_key,
             response,
         } => session::respond_close_session(state, snapshot_state, &session_key, response),
+        RtcWorkerCommand::ResolveNegotiatedProducerParameters {
+            session_key,
+            transport_media_id,
+            response,
+        } => publication::respond_resolve_negotiated_producer_parameters(
+            state,
+            &session_key,
+            transport_media_id,
+            response,
+        ),
         RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }

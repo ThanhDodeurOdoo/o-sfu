@@ -6,6 +6,7 @@ use std::{
 use str0m::{
     change::SdpAnswer,
     media::{Direction, MediaKind},
+    rtp::Ssrc,
 };
 use tokio::sync::oneshot;
 
@@ -19,6 +20,7 @@ use super::super::{
     bootstrap,
     state::{RtcBootstrapState, RtcSnapshotState},
 };
+use super::publication::refresh_negotiated_producer_parameters;
 
 const INITIAL_NEGOTIATION_MEDIA_KIND: MediaKind = MediaKind::Audio;
 const INITIAL_NEGOTIATION_DIRECTION: Direction = Direction::Inactive;
@@ -138,6 +140,17 @@ fn worker_apply_session_answer(
     session_key: &TransportSessionKey,
     answer_sdp: &str,
 ) -> Result<(), TransportAdapterError> {
+    let producer_mids = state
+        .mid_registry
+        .values()
+        .filter_map(|handle| match handle {
+            super::super::media_registry::RegisteredMediaHandle::Producer {
+                session_key: owner_session_key,
+                mid,
+            } if owner_session_key == session_key => Some(*mid),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let Some(session_state) = state.sessions.get_mut(session_key) else {
@@ -154,6 +167,7 @@ fn worker_apply_session_answer(
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
     apply_pending_recv_streams(session_state);
+    refresh_negotiated_producer_parameters(session_state, &producer_mids, answer_sdp);
     stage_queued_removal_offer(session_state);
     session_state.dtls_started = true;
     state.mark_session_dirty(session_key);
@@ -178,7 +192,7 @@ fn apply_pending_recv_streams(session_state: &mut super::super::state::RtcSessio
     for (mid, stream) in &pending_recv_streams {
         if let Some(existing_ssrc) = api
             .stream_rx_by_mid(*mid, stream.rid)
-            .map(|stream_rx| str0m::rtp::Ssrc::from(*stream_rx.ssrc()))
+            .map(|stream_rx| Ssrc::from(*stream_rx.ssrc()))
             && existing_ssrc != stream.ssrc
         {
             api.remove_stream_rx(existing_ssrc);

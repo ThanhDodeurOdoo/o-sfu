@@ -114,6 +114,23 @@ async fn rtc_session_renegotiation_offer_stages_native_producer_additions() {
         Some(89_000),
         "renegotiated recv media should expect the published SSRC once the answer lands"
     );
+
+    let negotiated_parameters = adapter
+        .negotiated_producer_parameters(&session_key, transport_media_id)
+        .await
+        .expect("answered producer negotiation should project router RTP parameters");
+    assert_eq!(
+        negotiated_parameters.mid(),
+        Some(negotiated_mid.to_string().as_str())
+    );
+    assert!(
+        negotiated_parameters.formats().next().is_some(),
+        "projected producer parameters should include negotiated media formats"
+    );
+    assert!(
+        negotiated_parameters.bindings().next().is_some(),
+        "projected producer parameters should include at least one negotiated binding"
+    );
 }
 
 #[tokio::test]
@@ -329,6 +346,12 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
     assert!(removal_section.contains("a=inactive"));
 
     apply_offer_answer(&adapter, &session_key, &mut remote, removal_sdp).await;
+    assert_eq!(
+        adapter
+            .negotiated_producer_parameters(&session_key, producer_media_id)
+            .await,
+        Err(TransportAdapterError::TransportUnavailable)
+    );
     assert_eq!(
         adapter
             .create_session_renegotiation_offer(&session_key)

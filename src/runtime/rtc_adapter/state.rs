@@ -19,6 +19,7 @@ use tokio::net::UdpSocket;
 use crate::runtime::transport_adapter::{
     TransportBitrateSnapshot, TransportConnectDirection, TransportMediaId, TransportSessionKey,
 };
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::media_registry::RegisteredMediaHandle;
@@ -68,6 +69,7 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) staged_offer_sdp: Option<String>,
     pub(super) initial_offer_applied: bool,
     pub(super) pending_recv_streams: BTreeMap<Mid, PendingRecvStream>,
+    pub(super) negotiated_producer_parameters: BTreeMap<Mid, RouterRtpParameters>,
     pub(super) queued_removal_mids: BTreeSet<Mid>,
 }
 

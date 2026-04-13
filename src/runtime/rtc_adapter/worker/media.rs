@@ -106,6 +106,12 @@ fn worker_remove_media(
         RegisteredMediaHandle::Producer { session_key, mid } => {
             let should_remove_media = !state.session_has_mid(&session_key, mid);
             let should_remove_stream_type = !state.session_has_producer_mid(&session_key, mid);
+            if let Some(session_state) = state.sessions.get_mut(&session_key) {
+                session_state
+                    .sdp_negotiation
+                    .negotiated_producer_parameters
+                    .remove(&mid);
+            }
             if let Some(session_state) = state.sessions.get_mut(&session_key)
                 && should_remove_media
             {

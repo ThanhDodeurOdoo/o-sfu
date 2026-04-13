@@ -254,6 +254,18 @@ impl StubWebRtcAdapter {
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
+    pub(crate) async fn negotiated_producer_parameters(
+        &self,
+        _session_key: &TransportSessionKey,
+        _transport_media_id: TransportMediaId,
+    ) -> Result<RouterRtpParameters, TransportAdapterError> {
+        Err(TransportAdapterError::UnsupportedFeature)
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
     pub(crate) async fn publish_media(
         &self,
         session_key: &TransportSessionKey,

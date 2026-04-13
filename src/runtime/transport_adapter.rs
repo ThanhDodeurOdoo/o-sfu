@@ -561,6 +561,30 @@ impl RuntimeTransportAdapter {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "native publish commit wiring is staged separately from answered-SDP publication extraction"
+    )]
+    pub(crate) async fn negotiated_producer_parameters(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Result<RouterRtpParameters, TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .negotiated_producer_parameters(session_key, transport_media_id)
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .shard_for_session(session_key)
+                    .negotiated_producer_parameters(session_key, transport_media_id)
+                    .await
+            }
+        }
+    }
+
     /// Declare a media line for receiving RTP from a producer session.
     pub(crate) async fn publish_media(
         &self,
