@@ -14,7 +14,7 @@ use tracing::{Instrument, field, info, info_span};
 
 use crate::runtime::{
     RuntimeState,
-    channel::{Channel, SessionOutbound},
+    channel::{Channel, SessionOutbound, TransportCleanupMode},
     stub_bus::WsWriter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
@@ -69,6 +69,11 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 &session.session_id,
                 session.connection_id,
                 &state.transport_adapter,
+                if state.config.enable_native_protocol {
+                    TransportCleanupMode::NativeSessionProtocol
+                } else {
+                    TransportCleanupMode::LegacyCompatibility
+                },
             )
             .await;
         if state

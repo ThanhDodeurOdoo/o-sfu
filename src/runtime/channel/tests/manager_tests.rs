@@ -61,6 +61,7 @@ async fn channel_manager_join_session_reports_missing_channel() {
                 sender: tx,
             },
             &transport_adapter,
+            super::super::TransportCleanupMode::LegacyCompatibility,
         )
         .await;
     assert!(matches!(
@@ -88,6 +89,7 @@ async fn manager_leave_session_removes_empty_channel() {
                 sender: tx,
             },
             &transport_adapter,
+            super::super::TransportCleanupMode::LegacyCompatibility,
         )
         .await;
     assert!(joined.is_ok());
@@ -101,6 +103,7 @@ async fn manager_leave_session_removes_empty_channel() {
             &SessionId::Integer(1),
             connection_id,
             &transport_adapter,
+            super::super::TransportCleanupMode::LegacyCompatibility,
         )
         .await;
 
@@ -130,12 +133,18 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
                 sender: tx,
             },
             &transport_adapter,
+            super::super::TransportCleanupMode::LegacyCompatibility,
         )
         .await;
     assert!(joined.is_ok());
 
     manager
-        .disconnect_sessions(&channel_uuid, &[SessionId::Integer(1)], &transport_adapter)
+        .disconnect_sessions(
+            &channel_uuid,
+            &[SessionId::Integer(1)],
+            &transport_adapter,
+            super::super::TransportCleanupMode::LegacyCompatibility,
+        )
         .await;
 
     assert!(manager.get_by_uuid(&channel_uuid).await.is_none());

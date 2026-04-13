@@ -21,9 +21,12 @@ pub(super) use crate::{
         channel::{ChannelAdmissionPolicy, ChannelConfig, ChannelManager},
         http_server::app,
         metrics::RuntimeMetrics,
+        recording::MediaTap,
         stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
         testing::decode_native_welcome_batch,
-        transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection},
+        transport_adapter::{
+            RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportConnectDirection,
+        },
     },
     signaling::{
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -191,6 +194,33 @@ pub(super) async fn spawn_native_protocol_test_server(
         60_000,
         channel_size,
         RuntimeTransportAdapter::builder().stub().build(),
+        true,
+    )
+    .await
+}
+
+pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
+    RuntimeTransportAdapter::builder()
+        .rtc(RtcTransportAdapterShardSetConfig::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            RtcPortRange::new(47_200, 47_299),
+            1,
+            MediaCodecFlags::default(),
+            Arc::new(MediaTap::default()),
+        ))
+        .build()
+}
+
+pub(super) async fn spawn_native_protocol_rtc_test_server(
+    authentication_timeout_ms: u64,
+    channel_size: usize,
+) -> Option<TestServer> {
+    spawn_test_server_with_timeouts_and_protocol(
+        authentication_timeout_ms,
+        10_000,
+        60_000,
+        channel_size,
+        build_real_rtc_transport_adapter(),
         true,
     )
     .await

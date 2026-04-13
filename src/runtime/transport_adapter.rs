@@ -429,12 +429,13 @@ impl RuntimeTransportAdapter {
     }
 
     #[must_use]
-    /// Temporary migration gate for the native websocket protocol rollout.
+    /// Explicit rollout gate for the native websocket session lifecycle.
     ///
-    /// This is intentionally not capability discovery: it tells the runtime whether this
-    /// transport backend currently participates in the transitional native-protocol flow.
+    /// Both currently supported backends implement the server-authored offer/answer flow,
+    /// so native-protocol call sites can now stay transport-agnostic while this migration
+    /// helper remains in place.
     pub(crate) const fn uses_native_protocol_migration_path(&self) -> bool {
-        matches!(self, Self::Stub(_))
+        matches!(self, Self::Stub(_) | Self::Rtc(_))
     }
 
     /// Create the first server-authored SDP offer for the native signaling path.

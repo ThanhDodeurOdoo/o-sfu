@@ -14,7 +14,9 @@ use super::{
 };
 use crate::runtime::{
     RuntimeState,
-    channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
+    channel::{
+        Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound, TransportCleanupMode,
+    },
     stub_bus::WsWriter,
 };
 use crate::signaling::{
@@ -217,6 +219,11 @@ async fn join_authenticated_session(
                 sender: outbound_tx,
             },
             &state.transport_adapter,
+            if state.config.enable_native_protocol {
+                TransportCleanupMode::NativeSessionProtocol
+            } else {
+                TransportCleanupMode::LegacyCompatibility
+            },
         )
         .await;
     match join_result {
@@ -282,6 +289,11 @@ async fn cleanup_failed_session(
             session_id,
             connection_id,
             &state.transport_adapter,
+            if state.config.enable_native_protocol {
+                TransportCleanupMode::NativeSessionProtocol
+            } else {
+                TransportCleanupMode::LegacyCompatibility
+            },
         )
         .await;
     let _result = state

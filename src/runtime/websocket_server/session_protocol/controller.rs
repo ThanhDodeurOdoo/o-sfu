@@ -35,10 +35,6 @@ impl From<StubBusOutcome> for SessionProtocolOutcome {
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) enum SessionProtocol {
     LegacyStubBus(StubBusSession),
-    #[allow(
-        dead_code,
-        reason = "the native post-auth session path is still gated to the stub transport while the real RTC backend finishes the remaining renegotiation migration"
-    )]
     Native(NativeSessionProtocol),
 }
 

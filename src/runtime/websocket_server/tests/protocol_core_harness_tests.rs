@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    net::SocketAddr,
+    time::Instant,
+};
 
 use o_sfu_protocol::{
     bundle_api::{
@@ -15,16 +19,41 @@ use o_sfu_protocol::{
     signaling::{RecordingOptions, TrackBinding},
 };
 use serde_json::json;
+use str0m::{Candidate, Rtc, change::SdpOffer};
 
 use super::fixtures::*;
 
 const BATCH_FLUSH_DELAY_MS: u32 = 100;
 const RECOVERY_DELAY_MS: u32 = 1_000;
 
+struct ProtocolHarnessRtcPeer {
+    rtc: Rtc,
+}
+
+impl ProtocolHarnessRtcPeer {
+    fn new(port: u16) -> Option<Self> {
+        let mut rtc = Rtc::new(Instant::now());
+        rtc.add_local_candidate(
+            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp").ok()?,
+        )?;
+        Some(Self { rtc })
+    }
+
+    fn answer_offer(&mut self, offer_sdp: &str) -> Option<String> {
+        let answer = self
+            .rtc
+            .sdp_api()
+            .accept_offer(SdpOffer::from_sdp_string(offer_sdp).ok()?)
+            .ok()?;
+        Some(answer.to_sdp_string())
+    }
+}
+
 #[derive(Default)]
 struct ProtocolHarnessPeer {
     core: ProtocolCore,
     pending_request_commands: Vec<HostCommand>,
+    rtc_peer: Option<ProtocolHarnessRtcPeer>,
     state_changes: Vec<BundleStateChange>,
     timers: BTreeMap<u32, u32>,
     updates: Vec<BundleUpdate>,
@@ -32,6 +61,13 @@ struct ProtocolHarnessPeer {
 }
 
 impl ProtocolHarnessPeer {
+    fn with_real_rtc_negotiation(port: u16) -> Option<Self> {
+        Some(Self {
+            rtc_peer: Some(ProtocolHarnessRtcPeer::new(port)?),
+            ..Self::default()
+        })
+    }
+
     async fn connect(&mut self, url: &str, jwt: &str, channel: Option<String>) -> Option<()> {
         let commands = self.core.connect(url.to_owned(), jwt.to_owned(), channel);
         self.run_commands(commands).await
@@ -162,13 +198,15 @@ impl ProtocolHarnessPeer {
                 Command::ApplyNegotiation {
                     request_id,
                     kind,
-                    sdp: _sdp,
+                    sdp,
                 } => {
-                    let mut follow_up = self.core.submit_negotiation_answer(
-                        &request_id,
-                        kind,
-                        "v=0\r\ns=protocol-core-answer\r\n",
-                    );
+                    let answer_sdp = match self.rtc_peer.as_mut() {
+                        Some(rtc_peer) => rtc_peer.answer_offer(&sdp)?,
+                        None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
+                    };
+                    let mut follow_up =
+                        self.core
+                            .submit_negotiation_answer(&request_id, kind, &answer_sdp);
                     follow_up.extend(self.core.on_transport_ready());
                     follow_up
                 }
@@ -648,6 +686,106 @@ async fn protocol_core_native_publish_round_trips_through_real_server_session_pr
 }
 
 #[tokio::test]
+async fn protocol_core_native_publish_round_trips_through_real_rtc_server_session_protocol() {
+    let server = spawn_native_protocol_rtc_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-rtc-publish",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(71));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(72));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let Some(mut alice) = ProtocolHarnessPeer::with_real_rtc_negotiation(56_301) else {
+        return;
+    };
+    let Some(mut bob) = ProtocolHarnessPeer::with_real_rtc_negotiation(56_302) else {
+        return;
+    };
+    assert!(
+        alice
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+
+    assert!(
+        alice
+            .update_upload(ProtocolStreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should consume the rtc-backed renegotiation request and answer it"
+    );
+
+    let Some(bob_websocket) = bob.websocket.as_mut() else {
+        return;
+    };
+    let Some(track_snapshot_payload) =
+        timeout(Duration::from_secs(1), read_text_message(bob_websocket))
+            .await
+            .ok()
+            .flatten()
+    else {
+        return;
+    };
+    let track_batch = serde_json::from_str::<EnvelopeBatch>(&track_snapshot_payload).ok();
+    assert!(track_batch.is_some());
+    let Some(track_batch) = track_batch else {
+        return;
+    };
+    let track_messages = native_server_messages(&track_batch);
+    assert!(track_messages.is_some());
+    let Some(track_messages) = track_messages else {
+        return;
+    };
+    let Some(first_track_message) = track_messages.first() else {
+        return;
+    };
+    assert_eq!(track_messages.len(), 1);
+    assert!(matches!(first_track_message, ServerMessage::Tracks(_)));
+    let Some(ServerMessage::Tracks(track_bindings)) = track_messages.into_iter().next() else {
+        return;
+    };
+    assert_eq!(track_bindings.len(), 1);
+    let Some(published_track) = track_bindings.first() else {
+        return;
+    };
+    assert_eq!(published_track.session_id, ProtocolSessionId::Integer(71));
+    assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
+    assert!(published_track.active);
+    let track_commands = bob.core.on_ws_message(&track_snapshot_payload);
+    assert!(bob.run_commands(track_commands).await.is_some());
+    assert_eq!(
+        bob.core.track_binding(&published_track.mid),
+        Some(published_track)
+    );
+
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the rtc-backed follow-up renegotiation request"
+    );
+}
+
+#[tokio::test]
 async fn protocol_core_native_subscribe_updates_consumer_activity() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts_and_protocol(
@@ -777,18 +915,19 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
         peer.read_server_frame().await.is_some(),
         "real server should answer start recording"
     );
-    let Some(start_request_id) =
-        peer.pending_request_commands
-            .iter()
-            .find_map(|command| match command {
-                HostCommand::RegisterPendingRequest {
-                    request_id,
-                    request_kind: HostPendingRequestKind::StartRecording,
-                } => Some(request_id.clone()),
-                _ => None,
-            })
-    else {
-        panic!("start recording should register a pending request");
+    let start_request_id = peer
+        .pending_request_commands
+        .iter()
+        .find_map(|command| match command {
+            HostCommand::RegisterPendingRequest {
+                request_id,
+                request_kind: HostPendingRequestKind::StartRecording,
+            } => Some(request_id.clone()),
+            _ => None,
+        });
+    assert!(start_request_id.is_some());
+    let Some(start_request_id) = start_request_id else {
+        return;
     };
     assert!(
         peer.pending_request_commands
@@ -806,18 +945,19 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
         peer.read_server_frame().await.is_some(),
         "real server should answer stop recording"
     );
-    let Some(stop_request_id) =
-        peer.pending_request_commands
-            .iter()
-            .find_map(|command| match command {
-                HostCommand::RegisterPendingRequest {
-                    request_id,
-                    request_kind: HostPendingRequestKind::StopRecording,
-                } => Some(request_id.clone()),
-                _ => None,
-            })
-    else {
-        panic!("stop recording should register a pending request");
+    let stop_request_id = peer
+        .pending_request_commands
+        .iter()
+        .find_map(|command| match command {
+            HostCommand::RegisterPendingRequest {
+                request_id,
+                request_kind: HostPendingRequestKind::StopRecording,
+            } => Some(request_id.clone()),
+            _ => None,
+        });
+    assert!(stop_request_id.is_some());
+    let Some(stop_request_id) = stop_request_id else {
+        return;
     };
     assert!(
         peer.pending_request_commands
@@ -831,8 +971,11 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
 
 #[tokio::test]
 async fn protocol_core_replays_latest_info_after_real_server_recovery() {
-    let Some((_server, _channel, mut alice, mut bob)) =
-        setup_native_recovery_peers(SessionId::Integer(71), SessionId::Integer(72)).await
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_native_recovery_peers(
+        SessionId::Integer(71),
+        SessionId::Integer(72),
+    ))
+    .await
     else {
         return;
     };

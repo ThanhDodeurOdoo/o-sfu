@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::{
     Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelRuntimeContext,
-    ChannelRuntimePolicy, ChannelSessionStatsSnapshot, SessionOutbound,
+    ChannelRuntimePolicy, ChannelSessionStatsSnapshot, SessionOutbound, TransportCleanupMode,
 };
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
@@ -224,6 +224,7 @@ impl ChannelManager {
         channel_uuid: &str,
         request: JoinSessionRequest,
         transport_adapter: &RuntimeTransportAdapter,
+        cleanup_mode: TransportCleanupMode,
     ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
         let Some(entry) = self.entry(channel_uuid).await else {
             return Err(ChannelManagerJoinError::MissingChannel);
@@ -240,6 +241,7 @@ impl ChannelManager {
                 request.permissions,
                 request.sender,
                 transport_adapter,
+                cleanup_mode,
             )
             .await
             .map_err(|error| match error {
@@ -255,6 +257,7 @@ impl ChannelManager {
         session_id: &SessionId,
         connection_id: u64,
         transport_adapter: &RuntimeTransportAdapter,
+        cleanup_mode: TransportCleanupMode,
     ) -> bool {
         let Some(entry) = self.entry(channel_uuid).await else {
             return false;
@@ -265,7 +268,7 @@ impl ChannelManager {
         }
         let did_remove_active_session = entry
             .channel
-            .leave_session_runtime(session_id, connection_id, transport_adapter)
+            .leave_session_runtime(session_id, connection_id, transport_adapter, cleanup_mode)
             .await;
         if did_remove_active_session && entry.channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, &entry.channel)
@@ -279,6 +282,7 @@ impl ChannelManager {
         channel_uuid: &str,
         session_ids: &[SessionId],
         transport_adapter: &RuntimeTransportAdapter,
+        cleanup_mode: TransportCleanupMode,
     ) {
         let Some(entry) = self.entry(channel_uuid).await else {
             return;
@@ -289,7 +293,7 @@ impl ChannelManager {
         }
         entry
             .channel
-            .disconnect_sessions_runtime(session_ids, transport_adapter)
+            .disconnect_sessions_runtime(session_ids, transport_adapter, cleanup_mode)
             .await;
         if entry.channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, &entry.channel)

@@ -37,3 +37,4 @@ pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
 pub(crate) use media::NegotiatedPublish;
+pub(crate) use membership::TransportCleanupMode;
