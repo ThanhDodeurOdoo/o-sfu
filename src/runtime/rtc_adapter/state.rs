@@ -64,7 +64,7 @@ pub(super) struct RtcSessionState {
 
 #[derive(Default)]
 pub(super) struct SessionSdpNegotiationState {
-    pub(super) bootstrap_mid: Option<Mid>,
+    pub(super) bootstrap_mids: Vec<Mid>,
     pub(super) pending_offer: Option<SdpPendingOffer>,
     pub(super) staged_offer_sdp: Option<String>,
     pub(super) initial_offer_applied: bool,

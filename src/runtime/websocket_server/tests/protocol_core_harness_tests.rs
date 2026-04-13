@@ -19,7 +19,12 @@ use o_sfu_protocol::{
     signaling::{RecordingOptions, TrackBinding},
 };
 use serde_json::json;
-use str0m::{Candidate, Rtc, change::SdpOffer};
+use str0m::{
+    Candidate, Rtc,
+    change::SdpOffer,
+    format::{Codec, FormatParams},
+    media::Frequency,
+};
 
 use super::fixtures::*;
 use crate::signaling::shared::SessionPermissions;
@@ -33,7 +38,10 @@ struct ProtocolHarnessRtcPeer {
 
 impl ProtocolHarnessRtcPeer {
     fn new(port: u16) -> Option<Self> {
-        let mut rtc = Rtc::new(Instant::now());
+        Self::new_with_rtc(port, Rtc::new(Instant::now()))
+    }
+
+    fn new_with_rtc(port: u16, mut rtc: Rtc) -> Option<Self> {
         rtc.add_local_candidate(
             Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp").ok()?,
         )?;
@@ -89,6 +97,13 @@ impl ProtocolHarnessPeer {
     fn with_real_rtc_negotiation(port: u16) -> Option<Self> {
         Some(Self {
             rtc_peer: Some(ProtocolHarnessRtcPeer::new(port)?),
+            ..Self::default()
+        })
+    }
+
+    fn with_custom_rtc_negotiation(port: u16, rtc: Rtc) -> Option<Self> {
+        Some(Self {
+            rtc_peer: Some(ProtocolHarnessRtcPeer::new_with_rtc(port, rtc)?),
             ..Self::default()
         })
     }
@@ -346,6 +361,30 @@ async fn setup_real_rtc_protocol_peers(
         .await?;
 
     Some((server, alice, bob))
+}
+
+fn reduced_capability_rtc() -> Rtc {
+    let mut config = Rtc::builder().clear_codecs();
+    config.codec_config().add_config(
+        111.into(),
+        None,
+        Codec::Opus,
+        Frequency::FORTY_EIGHT_KHZ,
+        Some(2),
+        FormatParams {
+            use_inband_fec: Some(true),
+            ..Default::default()
+        },
+    );
+    config.codec_config().add_config(
+        96.into(),
+        None,
+        Codec::Vp8,
+        Frequency::NINETY_KHZ,
+        None,
+        FormatParams::default(),
+    );
+    config.build(Instant::now())
 }
 
 fn recording_permissions() -> SessionPermissions {
@@ -997,6 +1036,76 @@ async fn protocol_core_native_publish_round_trips_through_real_rtc_server_sessio
     assert!(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the rtc-backed follow-up renegotiation request"
+    );
+}
+
+#[tokio::test]
+async fn native_handshake_uses_answer_derived_client_capabilities_for_session_state() {
+    let server = spawn_native_protocol_rtc_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-rtc-capabilities",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(75));
+    assert!(alice_token.is_some());
+    let Some(alice_token) = alice_token else {
+        return;
+    };
+    let Some(mut alice) =
+        ProtocolHarnessPeer::with_custom_rtc_negotiation(56_305, reduced_capability_rtc())
+    else {
+        return;
+    };
+
+    assert!(
+        alice
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+            .await
+            .is_some()
+    );
+
+    let parsed_client_rtp_capabilities = timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some(capabilities) = channel
+                .parsed_client_rtp_capabilities(&SessionId::Integer(75))
+                .await
+            {
+                return capabilities;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        parsed_client_rtp_capabilities.is_ok(),
+        "native handshake should store parsed client RTP capabilities"
+    );
+    let Some(parsed_client_rtp_capabilities) = parsed_client_rtp_capabilities.ok() else {
+        return;
+    };
+    let codec_names = parsed_client_rtp_capabilities
+        .codecs()
+        .map(|codec| codec.codec_name().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(codec_names, vec![String::from("opus"), String::from("VP8")]);
+    assert!(
+        parsed_client_rtp_capabilities
+            .codecs()
+            .all(|codec| codec.codec_name() != "rtx"),
+        "the stored client RTP capabilities must not fall back to router RTX support"
+    );
+    assert!(
+        parsed_client_rtp_capabilities
+            .codecs()
+            .all(|codec| codec.codec_name() != "H264"),
+        "the stored client RTP capabilities must reflect the real RTC answer"
     );
 }
 

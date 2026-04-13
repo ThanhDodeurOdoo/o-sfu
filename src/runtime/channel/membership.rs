@@ -377,6 +377,17 @@ impl Channel {
     }
 
     #[cfg(test)]
+    pub(crate) async fn parsed_client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<o_sfu_router::MediaCapabilities> {
+        self.state
+            .read()
+            .await
+            .parsed_client_rtp_capabilities(session_id)
+    }
+
+    #[cfg(test)]
     pub(super) async fn session_connection_id(&self, session_id: &SessionId) -> Option<u64> {
         self.state.read().await.session_connection_id(session_id)
     }

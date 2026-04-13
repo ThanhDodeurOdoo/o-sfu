@@ -1,9 +1,17 @@
 use std::time::Instant;
 
-use str0m::{Candidate, Rtc, change::SdpOffer};
+use o_sfu_router::MediaKind as RouterMediaKind;
+use str0m::{
+    Candidate, Rtc,
+    change::SdpOffer,
+    format::{Codec, FormatParams},
+    media::Frequency,
+};
 
 use super::fixtures::*;
+use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::runtime::transport_adapter::TransportMediaId;
+use crate::signaling::ortc_mapper;
 
 #[tokio::test]
 async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
@@ -17,7 +25,8 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     };
     let offer_sdp = offer.into_sdp();
     assert!(offer_sdp.contains("m=audio"));
-    assert!(offer_sdp.contains("a=inactive"));
+    assert!(offer_sdp.contains("m=video"));
+    assert!(offer_sdp.contains("a=recvonly"));
 
     let mut remote = Rtc::new(Instant::now());
     assert!(
@@ -45,6 +54,57 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     assert_eq!(
         adapter.create_initial_session_offer(&session_key).await,
         Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
+async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 38, SessionId::Integer(38));
+
+    let offer_sdp = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed")
+        .into_sdp();
+    let mut remote = reduced_capability_probe_rtc();
+    remote
+        .add_local_candidate(
+            Candidate::host(SocketAddr::from(([127, 0, 0, 1], 55_038)), "udp")
+                .expect("test host candidate should build"),
+        )
+        .expect("remote candidate should register");
+    let answer = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&offer_sdp)
+                .expect("adapter should return parseable SDP offer"),
+        )
+        .expect("remote answer should build")
+        .to_sdp_string();
+
+    let projected = client_rtp_capabilities_from_answer(&answer)
+        .expect("real RTC answer should expose client RTP capabilities");
+    let parsed = ortc_mapper::parse_rtp_capabilities(&projected.0)
+        .expect("projected RTP capabilities should remain parseable");
+    let codec_names = parsed
+        .codecs()
+        .map(|codec| (codec.media_kind(), codec.codec_name().to_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        codec_names,
+        vec![
+            (RouterMediaKind::Audio, String::from("opus")),
+            (RouterMediaKind::Video, String::from("VP8")),
+        ]
+    );
+    assert!(
+        parsed.codecs().all(|codec| codec.codec_name() != "rtx"),
+        "the projected client capability set must not invent RTX support"
+    );
+    assert!(
+        parsed.codecs().all(|codec| codec.codec_name() != "H264"),
+        "the projected client capability set must reflect the answer instead of the router default"
     );
 }
 
@@ -635,6 +695,30 @@ fn build_remote_rtc(port: u16) -> Rtc {
         )
         .expect("remote candidate should register");
     remote
+}
+
+fn reduced_capability_probe_rtc() -> Rtc {
+    let mut config = Rtc::builder().clear_codecs();
+    config.codec_config().add_config(
+        111.into(),
+        None,
+        Codec::Opus,
+        Frequency::FORTY_EIGHT_KHZ,
+        Some(2),
+        FormatParams {
+            use_inband_fec: Some(true),
+            ..Default::default()
+        },
+    );
+    config.codec_config().add_config(
+        96.into(),
+        None,
+        Codec::Vp8,
+        Frequency::NINETY_KHZ,
+        None,
+        FormatParams::default(),
+    );
+    config.build(Instant::now())
 }
 
 async fn apply_offer_answer(

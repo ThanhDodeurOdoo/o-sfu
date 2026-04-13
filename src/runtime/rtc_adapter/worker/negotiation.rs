@@ -4,8 +4,8 @@ use std::{
 };
 
 use str0m::{
-    change::SdpAnswer,
-    media::{Direction, MediaKind},
+    change::{SdpAnswer, SdpApi},
+    media::{Direction, MediaKind, Mid},
     rtp::Ssrc,
 };
 use tokio::sync::oneshot;
@@ -22,8 +22,8 @@ use super::super::{
 };
 use super::publication::refresh_negotiated_producer_parameters;
 
-const INITIAL_NEGOTIATION_MEDIA_KIND: MediaKind = MediaKind::Audio;
-const INITIAL_NEGOTIATION_DIRECTION: Direction = Direction::Inactive;
+const INITIAL_NEGOTIATION_DIRECTION: Direction = Direction::RecvOnly;
+const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, MediaKind::Video];
 
 pub(super) fn respond_create_initial_session_offer(
     state: &mut RtcBootstrapState,
@@ -93,24 +93,15 @@ fn worker_create_initial_session_offer(
         return Err(TransportAdapterError::UnsupportedFeature);
     }
 
-    let mut bootstrap_mid = session_state.sdp_negotiation.bootstrap_mid;
+    let bootstrap_mids = &mut session_state.sdp_negotiation.bootstrap_mids;
     let (offer, pending_offer) = {
         let mut sdp_api = session_state.rtc.sdp_api();
-        if bootstrap_mid.is_none() {
-            bootstrap_mid = Some(sdp_api.add_media(
-                INITIAL_NEGOTIATION_MEDIA_KIND,
-                INITIAL_NEGOTIATION_DIRECTION,
-                None,
-                None,
-                None,
-            ));
-        }
+        ensure_initial_negotiation_media(bootstrap_mids, &mut sdp_api);
         sdp_api
             .apply()
             .ok_or(TransportAdapterError::TransportUnavailable)?
     };
 
-    session_state.sdp_negotiation.bootstrap_mid = bootstrap_mid;
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = None;
     Ok(SessionOffer::new(offer.to_sdp_string()))
@@ -234,6 +225,18 @@ fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessio
             .queued_removal_mids
             .remove(&mid);
     }
+}
+
+fn ensure_initial_negotiation_media(bootstrap_mids: &mut Vec<Mid>, sdp_api: &mut SdpApi<'_>) {
+    if !bootstrap_mids.is_empty() {
+        return;
+    }
+    *bootstrap_mids = INITIAL_NEGOTIATION_MEDIA_KINDS
+        .into_iter()
+        .map(|media_kind| {
+            sdp_api.add_media(media_kind, INITIAL_NEGOTIATION_DIRECTION, None, None, None)
+        })
+        .collect();
 }
 
 fn ensure_session_ready_for_offer(

@@ -6,7 +6,7 @@ use crate::signaling::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PendingNegotiationAction {
     EstablishSession {
-        client_rtp_capabilities: SignalingRtpCapabilities,
+        fallback_client_rtp_capabilities: SignalingRtpCapabilities,
     },
     RefreshSession,
 }

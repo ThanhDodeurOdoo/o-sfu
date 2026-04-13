@@ -221,6 +221,16 @@ impl ChannelState {
             .is_some()
     }
 
+    #[cfg(test)]
+    pub(in crate::runtime::channel) fn parsed_client_rtp_capabilities(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<RouterRtpCapabilities> {
+        self.sessions
+            .get(session_id)
+            .and_then(|session| session.parsed_client_rtp_capabilities.clone())
+    }
+
     pub(in crate::runtime::channel) fn recording_state(&self) -> RecordingState {
         self.recording_state.clone()
     }

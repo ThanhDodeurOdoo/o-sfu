@@ -13,6 +13,7 @@
 //! - `dtls`: DTLS parameter parsing (RFC 8122, RFC 4572)
 //! - `ice`: ICE candidate parsing (RFC 8839, RFC 8445)
 //! - `sdp`: SDP offer parsing (RFC 8866)
+//! - `negotiated_capabilities`: answer-side RTP capability projection for native signaling
 //! - `parse_diagnostic`: shared parse diagnostic infrastructure
 
 mod api;
@@ -22,6 +23,7 @@ mod demux;
 mod dtls;
 mod ice;
 mod media_registry;
+mod negotiated_capabilities;
 mod packet_loop;
 mod parse_diagnostic;
 mod sdp;
@@ -32,3 +34,4 @@ mod validation;
 mod worker;
 
 pub(crate) use api::RtcTransportAdapter;
+pub(crate) use negotiated_capabilities::client_rtp_capabilities_from_answer;

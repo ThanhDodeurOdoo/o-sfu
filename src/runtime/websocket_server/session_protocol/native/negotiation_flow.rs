@@ -1,7 +1,10 @@
 use crate::runtime::stub_bus::WsWriter;
+use crate::runtime::transport_bootstrap::to_wire_rtp_capabilities;
+use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::signaling::protocol::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };
+use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
 
 use super::super::{
     controller::SessionProtocolOutcome,
@@ -19,11 +22,6 @@ impl NativeSessionProtocol {
         let session_key = self
             .channel
             .transport_session_key(&self.session_id, self.connection_id);
-        let bootstrap_payload = self
-            .transport_adapter
-            .transport_bootstrap_payload(&session_key, &router_capabilities)
-            .await
-            .map_err(|_error| WebSocketCloseCode::Error)?;
         let offer = self
             .transport_adapter
             .create_initial_session_offer(&session_key)
@@ -36,7 +34,7 @@ impl NativeSessionProtocol {
             writer,
             offer_request,
             PendingNegotiationAction::EstablishSession {
-                client_rtp_capabilities: bootstrap_payload.router_capabilities,
+                fallback_client_rtp_capabilities: to_wire_rtp_capabilities(&router_capabilities),
             },
         )
         .await
@@ -106,8 +104,9 @@ impl NativeSessionProtocol {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::Error);
         }
         self.commit_pending_publishes().await;
+        let negotiated_client_rtp_capabilities = client_rtp_capabilities_from_answer(&answer.sdp);
         if self
-            .apply_negotiation_action(&resolved.pending)
+            .apply_negotiation_action(&resolved.pending, negotiated_client_rtp_capabilities)
             .await
             .is_err()
         {
@@ -133,17 +132,20 @@ impl NativeSessionProtocol {
     async fn apply_negotiation_action(
         &self,
         pending: &PendingNegotiationRequest,
+        negotiated_client_rtp_capabilities: Option<SignalingRtpCapabilities>,
     ) -> Result<(), ()> {
         match &pending.action {
             PendingNegotiationAction::EstablishSession {
-                client_rtp_capabilities,
+                fallback_client_rtp_capabilities,
             } => {
+                let client_rtp_capabilities = negotiated_client_rtp_capabilities
+                    .unwrap_or_else(|| fallback_client_rtp_capabilities.clone());
                 if !self
                     .channel
                     .apply_session_negotiated(
                         &self.session_id,
                         self.connection_id,
-                        client_rtp_capabilities.clone(),
+                        client_rtp_capabilities,
                         &self.transport_adapter,
                     )
                     .await
