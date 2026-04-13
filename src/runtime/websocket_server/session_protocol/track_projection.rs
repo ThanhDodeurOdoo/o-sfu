@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::runtime::channel::TrackBindingUpdate;
 use crate::signaling::{
     current_protocol::{
         CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentSessionInfoSnapshotById,
@@ -96,6 +97,23 @@ impl RemoteTrackProjection {
         self.bindings_by_mid.values().cloned().collect()
     }
 
+    pub(super) fn translate_track_binding_update(
+        &mut self,
+        update: &TrackBindingUpdate,
+    ) -> TranslatedServerMessage {
+        let changed = match update.active {
+            Some(active) => self.set_track_active(&update.session_id, update.stream_type, active),
+            None => self.remove_track_binding(&update.session_id, update.stream_type),
+        };
+        if !changed {
+            return TranslatedServerMessage::messages(Vec::new());
+        }
+        TranslatedServerMessage {
+            messages: vec![ServerMessage::Tracks(self.snapshot())],
+            needs_renegotiation: update.active.is_none(),
+        }
+    }
+
     fn translate_session_info_snapshot(
         &mut self,
         snapshot: CurrentSessionInfoSnapshotById,
@@ -139,6 +157,33 @@ impl RemoteTrackProjection {
             }
         }
         changed
+    }
+
+    fn set_track_active(
+        &mut self,
+        session_id: &SessionId,
+        stream_type: StreamType,
+        active: bool,
+    ) -> bool {
+        let mut changed = false;
+        for binding in self.bindings_by_mid.values_mut() {
+            if &binding.session_id != session_id || binding.stream_type != stream_type {
+                continue;
+            }
+            if binding.active != active {
+                binding.active = active;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn remove_track_binding(&mut self, session_id: &SessionId, stream_type: StreamType) -> bool {
+        let binding_count = self.bindings_by_mid.len();
+        self.bindings_by_mid.retain(|_mid, binding| {
+            &binding.session_id != session_id || binding.stream_type != stream_type
+        });
+        self.bindings_by_mid.len() != binding_count
     }
 }
 

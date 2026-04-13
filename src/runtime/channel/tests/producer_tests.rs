@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::channel::{Channel, NegotiatedPublish};
 use crate::runtime::recording::MediaTap;
+use crate::runtime::stub_bus::StubWebRtcEvent;
 use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
@@ -74,6 +75,86 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 }
 
 #[tokio::test]
+async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
+    let (channel, adapter, stub, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_stub().await;
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(
+        drain_outbound(&mut subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, SessionOutbound::Request(_)))
+    );
+    let Some(transport_media_id) = channel
+        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .await
+    else {
+        panic!("published camera should expose a transport media id");
+    };
+
+    assert!(
+        channel
+            .unpublish_track(&SessionId::Integer(1), 0, StreamType::Camera, &adapter)
+            .await
+    );
+
+    assert_eq!(channel.producer_count().await, 0);
+    assert_eq!(channel.consumer_count().await, 0);
+    assert!(
+        !channel
+            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .await
+    );
+    assert!(
+        channel
+            .producer_stream_type_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+
+    let publisher_messages = drain_outbound(&mut publisher_rx);
+    let subscriber_messages = drain_outbound(&mut subscriber_rx);
+    assert!(publisher_messages.iter().any(|message| matches!(
+        message,
+        SessionOutbound::TrackBindingUpdate(update)
+            if update.session_id == SessionId::Integer(1)
+                && update.stream_type == StreamType::Camera
+                && update.active.is_none()
+    )));
+    assert!(subscriber_messages.iter().any(|message| matches!(
+        message,
+        SessionOutbound::TrackBindingUpdate(update)
+            if update.session_id == SessionId::Integer(1)
+                && update.stream_type == StreamType::Camera
+                && update.active.is_none()
+    )));
+    assert!(subscriber_messages.iter().any(|message| matches!(
+        message,
+        SessionOutbound::Message(CurrentServerMessage::SessionInfoChanged(snapshot))
+            if snapshot.values().next().is_some_and(|info| info.is_camera_on.is_none())
+    )));
+
+    let removed_media_events = stub
+        .snapshot_events()
+        .into_iter()
+        .filter(|event| matches!(event, StubWebRtcEvent::MediaRemoved { .. }))
+        .count();
+    assert_eq!(removed_media_events, 2);
+}
+
+#[tokio::test]
 async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     assert!(
@@ -101,7 +182,9 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
         .into_iter()
         .find_map(|message| match message {
             SessionOutbound::Request(request) => Some(*request),
-            SessionOutbound::Message(_) | SessionOutbound::Close(_) => None,
+            SessionOutbound::Message(_)
+            | SessionOutbound::TrackBindingUpdate(_)
+            | SessionOutbound::Close(_) => None,
         })
         .expect("subscriber should receive INIT_CONSUMER");
     let CurrentServerRequest::BootstrapRemoteTrack(payload) = request else {

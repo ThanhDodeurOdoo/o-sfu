@@ -250,6 +250,20 @@ impl ChannelRouterState {
         self.router.set_consumer_paused(consumer_id, paused)
     }
 
+    /// Remove a producer from the pure router.
+    ///
+    /// The router tears down dependent consumers as part of the same transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`RouterError`] if the producer does not exist.
+    pub(super) fn remove_producer(
+        &mut self,
+        producer_id: RouterProducerId,
+    ) -> Result<(), RouterError> {
+        self.router.remove_producer(producer_id)
+    }
+
     /// Remove the pure-router session for the signaling-layer session if one exists.
     ///
     /// # Errors

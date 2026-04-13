@@ -9,7 +9,7 @@ use crate::signaling::{
 };
 
 use super::{
-    Channel,
+    Channel, TransportCleanupMode,
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack},
 };
 
@@ -305,6 +305,29 @@ impl Channel {
             .await
             .producer_route_target_for_session(session_id, stream_type)
             .is_some()
+    }
+
+    pub(crate) async fn unpublish_track(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let Some(outcome) = ({
+            let mut state = self.state.write().await;
+            state.unpublish_track(session_id, connection_id, stream_type)
+        }) else {
+            return false;
+        };
+        self.cleanup_transport_removals(
+            Some(transport_adapter),
+            &outcome.transport_removals,
+            TransportCleanupMode::NativeSessionProtocol,
+        )
+        .await;
+        outcome.emit(session_id, stream_type);
+        true
     }
 
     async fn commit_published_track(

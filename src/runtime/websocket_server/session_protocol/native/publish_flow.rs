@@ -39,7 +39,11 @@ impl NativeSessionProtocol {
         }
     }
 
-    pub(super) async fn handle_unpublish_intent(&mut self, stream_type: StreamType) {
+    pub(super) async fn handle_unpublish_intent_with_writer(
+        &mut self,
+        stream_type: StreamType,
+        writer: Option<&mut WsWriter>,
+    ) {
         if self.state.remove_queued_publish_stream(stream_type) {
             return;
         }
@@ -54,14 +58,22 @@ impl NativeSessionProtocol {
             let _disposition = self.negotiation.request_renegotiation();
             return;
         }
-        self.channel
-            .update_upload_state(
+        if !self
+            .channel
+            .unpublish_track(
                 &self.session_id,
+                self.connection_id,
                 stream_type,
-                false,
                 &self.transport_adapter,
             )
-            .await;
+            .await
+        {
+            return;
+        }
+        let Some(writer) = writer else {
+            return;
+        };
+        let _result = self.request_renegotiation(writer).await;
     }
 
     async fn stage_publish_stream(&mut self, stream_type: StreamType) -> bool {

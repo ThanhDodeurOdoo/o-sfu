@@ -30,7 +30,7 @@ mod topology;
 pub use controller::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
 pub(crate) use controller::{
     ChannelAdmissionPolicy, ChannelConfig, ChannelRuntimeContext, ChannelRuntimePolicy,
-    ChannelSessionStatsSnapshot,
+    ChannelSessionStatsSnapshot, TrackBindingUpdate,
 };
 pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;

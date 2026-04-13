@@ -124,12 +124,16 @@ impl SessionProtocol {
                 send_server_request_batch(writer, &request).await?;
                 Ok(1)
             }
+            (Self::LegacyStubBus(_), SessionOutbound::TrackBindingUpdate(_)) => Ok(0),
             (Self::LegacyStubBus(_) | Self::Native(_), SessionOutbound::Close(code)) => Err(code),
             (Self::Native(session), SessionOutbound::Message(message)) => {
                 session.send_outbound_message(writer, message).await
             }
             (Self::Native(session), SessionOutbound::Request(request)) => {
                 session.send_outbound_request(writer, *request).await
+            }
+            (Self::Native(session), SessionOutbound::TrackBindingUpdate(update)) => {
+                session.send_track_binding_update(writer, update).await
             }
         }
     }

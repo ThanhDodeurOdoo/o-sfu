@@ -12,17 +12,21 @@ use crate::signaling::{
     current_protocol::CurrentServerMessage,
     current_protocol::{CurrentRemoteTrackBootstrapPayload, CurrentServerRequest},
     ortc_mapper,
-    shared::{DownloadStates, SessionId, StreamType},
+    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     webrtc::{MediaKind as SignalingMediaKind, RtpParameters},
 };
 
 use super::super::{
+    SessionOutbound, TrackBindingUpdate,
     outbound::{MessageFanout, OutboundSender},
     topology::RoutedProducerId,
 };
 use super::{
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
-    shared::{ChannelState, ConsumerKey, ConsumerState, ProducerKey, PublishedProducer},
+    shared::{
+        ChannelState, ConsumerKey, ConsumerState, ProducerKey, PublishedProducer,
+        TransportMediaRemoval,
+    },
 };
 
 #[allow(
@@ -114,6 +118,13 @@ pub(in crate::runtime::channel) struct ConsumerRouteUpdate {
     consumer_state: ConsumerState,
     stream_type: StreamType,
     active: bool,
+}
+
+#[derive(Debug)]
+pub(in crate::runtime::channel) struct UnpublishTrackOutcome {
+    recipients: Vec<OutboundSender>,
+    pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
+    session_info_snapshot: Option<BTreeMap<String, SessionInfo>>,
 }
 
 impl ChannelState {
@@ -317,6 +328,73 @@ impl ChannelState {
     ) -> Option<ProducerRouteTarget> {
         let connection_id = self.session_connection_id(session_id)?;
         self.producer_route_target(session_id, connection_id, stream_type)
+    }
+
+    pub(in crate::runtime::channel) fn unpublish_track(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+    ) -> Option<UnpublishTrackOutcome> {
+        let producer_target = self.producer_route_target(session_id, connection_id, stream_type)?;
+        let producer_transport_removal = TransportMediaRemoval {
+            session: session_id.clone(),
+            connection: connection_id,
+            transport_media: producer_target.transport_media_id,
+        };
+        let consumer_transport_removals = self
+            .consumer_index
+            .iter()
+            .filter_map(|(key, consumer_state)| {
+                if key.producer_session_id != *session_id || key.stream_type != stream_type {
+                    return None;
+                }
+                Some(TransportMediaRemoval {
+                    session: key.consumer_session_id.clone(),
+                    connection: consumer_state.consumer_connection_id,
+                    transport_media: consumer_state.consumer_media,
+                })
+            })
+            .collect::<Vec<_>>();
+        if self
+            .topology
+            .remove_producer(producer_target.routed_producer_id)
+            .is_err()
+        {
+            error!(
+                ?session_id,
+                ?stream_type,
+                "failed to remove published track from channel router"
+            );
+            return None;
+        }
+        self.consumer_index.retain(|key, _consumer_state| {
+            key.producer_session_id != *session_id || key.stream_type != stream_type
+        });
+        let removed_producer = self.producers.remove(&producer_target.producer_id)?;
+        self.producer_ids_by_owner_stream
+            .remove(&ProducerKey::new(session_id, stream_type));
+        if let Some(transport_media_id) = removed_producer.transport_media_id {
+            self.producer_stream_types_by_transport_media_id
+                .remove(&transport_media_id);
+        }
+        let session_info_snapshot = match stream_type {
+            StreamType::Camera | StreamType::Screen => {
+                Some(BTreeMap::from([self.session_info_snapshot(session_id)?]))
+            }
+            StreamType::Audio => None,
+        };
+        let mut transport_removals = consumer_transport_removals;
+        transport_removals.push(producer_transport_removal);
+        Some(UnpublishTrackOutcome {
+            recipients: self
+                .sessions
+                .values()
+                .map(|session| session.sender.clone())
+                .collect(),
+            transport_removals,
+            session_info_snapshot,
+        })
     }
 
     pub(in crate::runtime::channel) fn prepare_consumer_bootstrap_transaction(
@@ -666,6 +744,24 @@ impl ConsumerRouteUpdate {
 
     pub(in crate::runtime::channel) const fn active(&self) -> bool {
         self.active
+    }
+}
+
+impl UnpublishTrackOutcome {
+    pub(in crate::runtime::channel) fn emit(self, session_id: &SessionId, stream_type: StreamType) {
+        let track_update = SessionOutbound::TrackBindingUpdate(TrackBindingUpdate {
+            session_id: session_id.clone(),
+            stream_type,
+            active: None,
+        });
+        for recipient in self.recipients {
+            let _ = recipient.send(track_update.clone());
+            if let Some(snapshot) = self.session_info_snapshot.as_ref() {
+                let _ = recipient.send(SessionOutbound::Message(
+                    CurrentServerMessage::SessionInfoChanged(snapshot.clone()),
+                ));
+            }
+        }
     }
 }
 

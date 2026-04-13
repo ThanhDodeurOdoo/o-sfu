@@ -42,7 +42,8 @@ impl NativeSessionProtocol {
                     .await
             }
             ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
-                self.handle_unpublish_intent(payload.stream_type).await;
+                self.handle_unpublish_intent_with_writer(payload.stream_type, Some(writer))
+                    .await;
                 SessionProtocolOutcome::Continue
             }
             ClientEnvelope::Response {

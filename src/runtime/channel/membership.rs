@@ -212,7 +212,7 @@ impl Channel {
         outcome.emit();
     }
 
-    async fn cleanup_transport_removals(
+    pub(super) async fn cleanup_transport_removals(
         &self,
         transport_adapter: Option<&RuntimeTransportAdapter>,
         removals: &[TransportMediaRemoval],
@@ -237,7 +237,7 @@ impl Channel {
                     session_id = ?removal.session(),
                     connection_id = removal.connection(),
                     transport_media_id = ?removal.transport_media(),
-                    "transport adapter failed to remove consumer media during session cleanup"
+                    "transport adapter failed to remove transport media during channel cleanup"
                 );
             }
         }

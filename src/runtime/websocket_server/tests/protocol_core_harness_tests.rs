@@ -516,7 +516,7 @@ async fn protocol_core_receives_native_broadcast_and_peer_updates() {
 }
 
 #[tokio::test]
-async fn protocol_core_receives_translated_track_snapshot_and_unpublish_update() {
+async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal() {
     let server = spawn_native_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -587,17 +587,17 @@ async fn protocol_core_receives_translated_track_snapshot_and_unpublish_update()
             .is_some()
     );
     assert!(
-        bob.read_server_frame().await.is_some(),
-        "bob should consume translated unpublish state"
+        alice.read_server_frame().await.is_some(),
+        "publisher should receive the removal renegotiation request"
     );
-    assert_eq!(
-        bob.core.track_binding("cam-0"),
-        Some(&TrackBinding {
-            mid: String::from("cam-0"),
-            session_id: ProtocolSessionId::Integer(51),
-            stream_type: ProtocolStreamType::Camera,
-            active: false,
-        })
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "bob should consume the translated track-removal snapshot"
+    );
+    assert_eq!(bob.core.track_binding("cam-0"), None);
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the removal renegotiation request"
     );
 }
 

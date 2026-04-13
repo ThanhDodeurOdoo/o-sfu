@@ -31,9 +31,17 @@ use crate::signaling::{
 use super::state::ChannelState;
 
 #[derive(Debug, Clone)]
+pub(crate) struct TrackBindingUpdate {
+    pub(crate) session_id: SessionId,
+    pub(crate) stream_type: StreamType,
+    pub(crate) active: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
 pub enum SessionOutbound {
     Message(CurrentServerMessage),
     Request(Box<CurrentServerRequest>),
+    TrackBindingUpdate(TrackBindingUpdate),
     Close(WebSocketCloseCode),
 }
 

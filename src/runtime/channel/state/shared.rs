@@ -111,9 +111,9 @@ pub(in crate::runtime::channel) struct ConsumerState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct TransportMediaRemoval {
-    session: SessionId,
-    connection: u64,
-    transport_media: TransportMediaId,
+    pub(in crate::runtime::channel) session: SessionId,
+    pub(in crate::runtime::channel) connection: u64,
+    pub(in crate::runtime::channel) transport_media: TransportMediaId,
 }
 
 impl ChannelState {

@@ -3,7 +3,9 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 
 use crate::runtime::{
-    channel::Channel, stub_bus::WsWriter, transport_adapter::RuntimeTransportAdapter,
+    channel::{Channel, TrackBindingUpdate},
+    stub_bus::WsWriter,
+    transport_adapter::RuntimeTransportAdapter,
 };
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest},
@@ -134,5 +136,20 @@ impl NativeSessionProtocol {
                 Err(WebSocketCloseCode::Error)
             }
         }
+    }
+
+    pub(in crate::runtime::websocket_server) async fn send_track_binding_update(
+        &mut self,
+        writer: &mut WsWriter,
+        update: TrackBindingUpdate,
+    ) -> Result<usize, WebSocketCloseCode> {
+        let translated = self
+            .track_projection
+            .translate_track_binding_update(&update);
+        let mut batch_len = send_server_messages(writer, translated.messages).await?;
+        if translated.needs_renegotiation && self.request_renegotiation(writer).await? {
+            batch_len += 1;
+        }
+        Ok(batch_len)
     }
 }
