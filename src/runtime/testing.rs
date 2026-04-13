@@ -5,8 +5,11 @@ use anyhow::{Result, anyhow};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use super::{
-    RuntimeState, build_transport_adapter, channel::ChannelManager, http_server::app,
-    metrics::RuntimeMetrics, recording::MediaTap,
+    RuntimeState, build_transport_adapter,
+    channel::{ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig},
+    http_server::app,
+    metrics::RuntimeMetrics,
+    recording::MediaTap,
 };
 use crate::config::Config;
 use crate::signaling::protocol::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
@@ -43,8 +46,11 @@ impl Drop for TestServer {
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let recording_media_tap = Arc::new(MediaTap::default());
-    let channels = Arc::new(ChannelManager::with_media_workers_and_recording_tap(
-        config.rtc_media_worker_count,
+    let channels = Arc::new(ChannelManager::new(
+        ChannelManagerConfig::new(
+            config.rtc_media_worker_count,
+            ChannelAdmissionPolicy::new(config.channel_size),
+        ),
         Arc::clone(&recording_media_tap),
     ));
     let transport_adapter = build_transport_adapter(&config, recording_media_tap);

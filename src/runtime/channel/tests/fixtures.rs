@@ -8,8 +8,8 @@ pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::{task::yield_now, time::timeout};
 
 pub(super) use super::super::{
-    ChannelConfig, ChannelJoinError, ChannelManager, ChannelManagerJoinError, JoinSessionRequest,
-    SessionOutbound, topology::ChannelTopology,
+    ChannelAdmissionPolicy, ChannelConfig, ChannelJoinError, ChannelManager,
+    ChannelManagerJoinError, JoinSessionRequest, SessionOutbound, topology::ChannelTopology,
 };
 pub(super) use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
 pub(super) use crate::runtime::transport_adapter::{
@@ -204,7 +204,7 @@ pub(super) async fn setup_two_ready_sessions() -> (
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -216,7 +216,6 @@ pub(super) async fn setup_two_ready_sessions() -> (
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await
         .unwrap();
@@ -226,7 +225,6 @@ pub(super) async fn setup_two_ready_sessions() -> (
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await
         .unwrap();
@@ -252,7 +250,7 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -264,7 +262,6 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await
         .unwrap();
@@ -274,7 +271,6 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await
         .unwrap();
@@ -300,7 +296,7 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -312,7 +308,6 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
             None,
             SessionPermissions::default(),
             publisher_tx,
-            10,
         )
         .await
         .unwrap();
@@ -322,7 +317,6 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
             None,
             SessionPermissions::default(),
             subscriber_tx,
-            10,
         )
         .await
         .unwrap();

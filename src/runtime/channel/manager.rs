@@ -5,15 +5,36 @@ use o_sfu_router::RouterId;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::{
-    Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelSessionStatsSnapshot,
-    SessionOutbound,
+    Channel, ChannelAdmissionPolicy, ChannelConfig, ChannelJoinError, ChannelManagerJoinError,
+    ChannelRuntimeContext, ChannelSessionStatsSnapshot, SessionOutbound,
 };
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::shared::{SessionId, SessionPermissions};
 use crate::utils::rfc3339_now;
 
+#[cfg(test)]
+const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
 const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChannelManagerConfig {
+    pub(crate) media_worker_count: usize,
+    pub(crate) admission_policy: ChannelAdmissionPolicy,
+}
+
+impl ChannelManagerConfig {
+    #[must_use]
+    pub(crate) const fn new(
+        media_worker_count: usize,
+        admission_policy: ChannelAdmissionPolicy,
+    ) -> Self {
+        Self {
+            media_worker_count,
+            admission_policy,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeChannelStatsSnapshot {
@@ -29,13 +50,13 @@ pub(crate) struct JoinSessionRequest {
     pub(crate) label: Option<String>,
     pub(crate) permissions: SessionPermissions,
     pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
-    pub(crate) max_sessions: usize,
 }
 
 #[derive(Debug)]
 pub struct ChannelManager {
     state: RwLock<ChannelManagerState>,
     media_worker_count: usize,
+    admission_policy: ChannelAdmissionPolicy,
     recording_media_tap: Arc<MediaTap>,
 }
 
@@ -58,26 +79,37 @@ struct ChannelEntry {
 impl ChannelManager {
     #[cfg(test)]
     #[must_use]
-    pub fn new() -> Self {
-        Self::with_media_workers(1)
+    pub fn for_test() -> Self {
+        Self::for_test_with_media_workers(1)
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn with_media_workers(media_worker_count: usize) -> Self {
-        Self::with_media_workers_and_recording_tap(
+    pub fn for_test_with_media_workers(media_worker_count: usize) -> Self {
+        Self::for_test_with_config(ChannelManagerConfig::new(
             media_worker_count,
-            Arc::new(MediaTap::default()),
-        )
+            ChannelAdmissionPolicy::new(DEFAULT_TEST_MAX_SESSIONS),
+        ))
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test_with_admission_policy(admission_policy: ChannelAdmissionPolicy) -> Self {
+        Self::for_test_with_config(ChannelManagerConfig::new(1, admission_policy))
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test_with_config(config: ChannelManagerConfig) -> Self {
+        Self::new(config, Arc::new(MediaTap::default()))
     }
 
     #[must_use]
-    pub fn with_media_workers_and_recording_tap(
-        media_worker_count: usize,
-        recording_media_tap: Arc<MediaTap>,
-    ) -> Self {
+    pub fn new(config: ChannelManagerConfig, recording_media_tap: Arc<MediaTap>) -> Self {
         Self {
             state: RwLock::new(ChannelManagerState::default()),
-            media_worker_count: media_worker_count.max(1),
+            media_worker_count: config.media_worker_count.max(1),
+            admission_policy: config.admission_policy,
             recording_media_tap,
         }
     }
@@ -115,9 +147,12 @@ impl ChannelManager {
         let router_id = RouterId(state.next_router_id);
         state.next_router_id = state.next_router_id.saturating_add(1);
         let channel = Arc::new(Channel::new(
-            channel_runtime_id,
-            media_worker_id,
-            router_id,
+            ChannelRuntimeContext {
+                runtime_id: channel_runtime_id,
+                media_worker_id,
+                router_id,
+                admission_policy: self.admission_policy,
+            },
             issuer.to_owned(),
             key.map(str::to_owned),
             config.clone(),
@@ -190,7 +225,6 @@ impl ChannelManager {
                 request.label,
                 request.permissions,
                 request.sender,
-                request.max_sessions,
                 transport_adapter,
             )
             .await
@@ -298,8 +332,9 @@ impl ChannelManager {
     }
 }
 
+#[cfg(test)]
 impl Default for ChannelManager {
     fn default() -> Self {
-        Self::with_media_workers(1)
+        Self::for_test()
     }
 }

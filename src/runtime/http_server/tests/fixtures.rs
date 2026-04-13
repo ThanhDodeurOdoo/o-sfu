@@ -18,7 +18,7 @@ pub(super) use crate::{
     config::{Config, RtcPortRange, TransportBackend},
     runtime::{
         RuntimeState,
-        channel::{ChannelConfig, ChannelManager},
+        channel::{ChannelAdmissionPolicy, ChannelConfig, ChannelManager},
         metrics::RuntimeMetrics,
         transport_adapter::RuntimeTransportAdapter,
     },
@@ -51,9 +51,12 @@ pub(super) fn test_config() -> Config {
 }
 
 pub(super) fn test_state() -> RuntimeState {
+    let config = test_config();
     RuntimeState {
-        config: test_config(),
-        channels: Arc::new(ChannelManager::new()),
+        channels: Arc::new(ChannelManager::for_test_with_admission_policy(
+            ChannelAdmissionPolicy::new(config.channel_size),
+        )),
+        config,
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter: RuntimeTransportAdapter::stub(),
     }

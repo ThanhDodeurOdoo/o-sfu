@@ -25,7 +25,7 @@ use crate::signaling::{
 };
 
 use super::{
-    SessionOutbound,
+    ChannelAdmissionPolicy, SessionOutbound,
     outbound::{MessageFanout, OutboundSender, fanout_all, fanout_all_except},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
@@ -57,6 +57,7 @@ use crate::signaling::bundle_api::bundle_session_info_key;
 /// ```
 #[derive(Debug)]
 pub(super) struct ChannelState {
+    admission_policy: ChannelAdmissionPolicy,
     pub(super) sessions: BTreeMap<SessionId, ActiveSession>,
     /// Monotonically increasing, each join (including re-joins) gets a fresh id
     /// so stale async callbacks from a previous connection are rejected.
@@ -290,8 +291,13 @@ impl ChannelState {
             .collect()
     }
 
-    pub(super) fn new(router_id: RouterId, recording_service: Arc<RecordingService>) -> Self {
+    pub(super) fn new(
+        router_id: RouterId,
+        admission_policy: ChannelAdmissionPolicy,
+        recording_service: Arc<RecordingService>,
+    ) -> Self {
         Self {
+            admission_policy,
             sessions: BTreeMap::new(),
             next_connection_id: 0,
             next_producer_id: 1,
@@ -374,10 +380,9 @@ impl ChannelState {
         label: Option<String>,
         permissions: SessionPermissions,
         sender: OutboundSender,
-        max_sessions: usize,
     ) -> Result<JoinSessionOutcome, super::ChannelJoinError> {
         let is_new = !self.sessions.contains_key(session_id);
-        if is_new && self.sessions.len() >= max_sessions {
+        if is_new && self.sessions.len() >= self.admission_policy.max_sessions {
             return Err(super::ChannelJoinError::ChannelFull);
         }
         let transport_removals = if is_new {

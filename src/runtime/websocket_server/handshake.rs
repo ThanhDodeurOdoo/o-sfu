@@ -213,7 +213,6 @@ async fn join_authenticated_session(
                 label: claims.label,
                 permissions: claims.permissions.unwrap_or_default(),
                 sender: outbound_tx,
-                max_sessions: state.config.channel_size,
             },
             &state.transport_adapter,
         )

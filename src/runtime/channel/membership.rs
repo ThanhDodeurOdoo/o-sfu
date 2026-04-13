@@ -21,9 +21,8 @@ impl Channel {
         label: Option<String>,
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
-        max_sessions: usize,
     ) -> Result<u64, ChannelJoinError> {
-        self.join_session_with_cleanup(session_id, label, permissions, sender, max_sessions, None)
+        self.join_session_with_cleanup(session_id, label, permissions, sender, None)
             .await
     }
 
@@ -33,7 +32,6 @@ impl Channel {
         label: Option<String>,
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
-        max_sessions: usize,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Result<u64, ChannelJoinError> {
         self.join_session_with_cleanup(
@@ -41,7 +39,6 @@ impl Channel {
             label,
             permissions,
             sender,
-            max_sessions,
             Some(transport_adapter),
         )
         .await
@@ -53,12 +50,11 @@ impl Channel {
         label: Option<String>,
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
-        max_sessions: usize,
         transport_adapter: Option<&RuntimeTransportAdapter>,
     ) -> Result<u64, ChannelJoinError> {
         let outcome = {
             let mut state = self.state.write().await;
-            state.apply_join(&session_id, label, permissions, sender, max_sessions)?
+            state.apply_join(&session_id, label, permissions, sender)?
         };
         self.cleanup_transport_removals(transport_adapter, &outcome.transport_removals)
             .await;

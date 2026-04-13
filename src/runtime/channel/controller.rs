@@ -49,6 +49,26 @@ pub enum ChannelManagerJoinError {
     RouterState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChannelAdmissionPolicy {
+    pub(crate) max_sessions: usize,
+}
+
+impl ChannelAdmissionPolicy {
+    #[must_use]
+    pub(crate) const fn new(max_sessions: usize) -> Self {
+        Self { max_sessions }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChannelRuntimeContext {
+    pub(crate) runtime_id: u64,
+    pub(crate) media_worker_id: usize,
+    pub(crate) router_id: RouterId,
+    pub(crate) admission_policy: ChannelAdmissionPolicy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelConfig {
     pub(crate) web_rtc_enabled: bool,
@@ -104,26 +124,31 @@ pub struct Channel {
 
 impl Channel {
     pub(crate) fn new(
-        runtime_id: u64,
-        media_worker_id: usize,
-        router_id: RouterId,
+        runtime_context: ChannelRuntimeContext,
         issuer: String,
         key: Option<String>,
         config: ChannelConfig,
         recording_media_tap: Arc<MediaTap>,
     ) -> Self {
         let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
-        let recording_service = Arc::new(RecordingService::new(runtime_id, recording_media_source));
+        let recording_service = Arc::new(RecordingService::new(
+            runtime_context.runtime_id,
+            recording_media_source,
+        ));
         Self {
-            runtime_id,
-            media_worker_id,
+            runtime_id: runtime_context.runtime_id,
+            media_worker_id: runtime_context.media_worker_id,
             uuid: Uuid::new_v4().to_string(),
             issuer,
             key,
             web_rtc_enabled: config.web_rtc_enabled,
             recording_address: config.recording_address,
             recording_service: Arc::clone(&recording_service),
-            state: RwLock::new(ChannelState::new(router_id, recording_service)),
+            state: RwLock::new(ChannelState::new(
+                runtime_context.router_id,
+                runtime_context.admission_policy,
+                recording_service,
+            )),
         }
     }
 

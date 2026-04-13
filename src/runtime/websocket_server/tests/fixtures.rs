@@ -18,7 +18,7 @@ pub(super) use crate::{
     runtime::{
         RuntimeState,
         channel::Channel,
-        channel::{ChannelConfig, ChannelManager},
+        channel::{ChannelAdmissionPolicy, ChannelConfig, ChannelManager},
         http_server::app,
         metrics::RuntimeMetrics,
         stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
@@ -130,13 +130,15 @@ pub(super) async fn spawn_test_server_with_timeouts_and_protocol(
     transport_adapter: RuntimeTransportAdapter,
     enable_native_protocol: bool,
 ) -> Option<TestServer> {
-    let channels = Arc::new(ChannelManager::new());
     let mut config = test_config(
         authentication_timeout_ms,
         session_timeout_ms,
         ping_interval_ms,
         channel_size,
     );
+    let channels = Arc::new(ChannelManager::for_test_with_admission_policy(
+        ChannelAdmissionPolicy::new(config.channel_size),
+    ));
     config.enable_native_protocol = enable_native_protocol;
     let state = RuntimeState {
         config,

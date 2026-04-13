@@ -28,7 +28,10 @@ mod tests;
 mod topology;
 
 pub use controller::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
-pub(crate) use controller::{ChannelConfig, ChannelSessionStatsSnapshot};
+pub(crate) use controller::{
+    ChannelAdmissionPolicy, ChannelConfig, ChannelRuntimeContext, ChannelSessionStatsSnapshot,
+};
 pub use manager::ChannelManager;
+pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;

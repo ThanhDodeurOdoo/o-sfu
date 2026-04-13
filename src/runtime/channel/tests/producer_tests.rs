@@ -159,7 +159,6 @@ async fn session_replacement_purges_stale_published_media_state() {
                 None,
                 SessionPermissions::default(),
                 replacement_tx,
-                10,
             )
             .await
             .is_ok()

@@ -2,7 +2,7 @@ use super::fixtures::*;
 
 #[tokio::test]
 async fn join_session_enforces_capacity() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -13,7 +13,6 @@ async fn join_session_enforces_capacity() {
             None,
             SessionPermissions::default(),
             tx1,
-            1,
         )
         .await;
     assert!(result.is_ok());
@@ -25,7 +24,6 @@ async fn join_session_enforces_capacity() {
             None,
             SessionPermissions::default(),
             tx2,
-            1,
         )
         .await;
     assert_eq!(result, Err(ChannelJoinError::ChannelFull));
@@ -33,7 +31,7 @@ async fn join_session_enforces_capacity() {
 
 #[tokio::test]
 async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -44,7 +42,6 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
             None,
             SessionPermissions::default(),
             tx1,
-            1,
         )
         .await;
     assert!(first_connection.is_ok());
@@ -57,7 +54,6 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
             None,
             SessionPermissions::default(),
             tx2,
-            1,
         )
         .await;
     assert!(second_connection.is_ok());
@@ -95,7 +91,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
 
 #[tokio::test]
 async fn leave_session_sends_departure_to_remaining_peers() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -107,7 +103,6 @@ async fn leave_session_sends_departure_to_remaining_peers() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let bob_connection = channel
@@ -116,7 +111,6 @@ async fn leave_session_sends_departure_to_remaining_peers() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
     assert!(alice_connection.is_ok());
@@ -141,7 +135,7 @@ async fn leave_session_sends_departure_to_remaining_peers() {
 
 #[tokio::test]
 async fn replacing_a_session_notifies_remaining_peers() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -154,7 +148,6 @@ async fn replacing_a_session_notifies_remaining_peers() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let _bob_old_connection = channel
@@ -163,7 +156,6 @@ async fn replacing_a_session_notifies_remaining_peers() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
 
@@ -173,7 +165,6 @@ async fn replacing_a_session_notifies_remaining_peers() {
             None,
             SessionPermissions::default(),
             tx3,
-            10,
         )
         .await;
     assert!(matches!(
@@ -199,7 +190,6 @@ async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, 
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await
         .unwrap_or(u64::MAX);
@@ -209,7 +199,6 @@ async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, 
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await
         .unwrap_or(u64::MAX);
@@ -318,7 +307,6 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
                 None,
                 SessionPermissions::default(),
                 replacement_tx,
-                10,
                 &transport_adapter,
             )
             .await
@@ -337,7 +325,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
 
 #[tokio::test]
 async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -413,7 +401,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
 
 #[tokio::test]
 async fn broadcast_reaches_all_except_sender() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -426,7 +414,6 @@ async fn broadcast_reaches_all_except_sender() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let _ = channel
@@ -435,7 +422,6 @@ async fn broadcast_reaches_all_except_sender() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
     let _ = channel
@@ -444,7 +430,6 @@ async fn broadcast_reaches_all_except_sender() {
             None,
             SessionPermissions::default(),
             tx3,
-            10,
         )
         .await;
 
@@ -462,7 +447,7 @@ async fn broadcast_reaches_all_except_sender() {
 
 #[tokio::test]
 async fn update_session_info_broadcasts_to_all() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -474,7 +459,6 @@ async fn update_session_info_broadcasts_to_all() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let _ = channel
@@ -483,7 +467,6 @@ async fn update_session_info_broadcasts_to_all() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
 
@@ -512,7 +495,7 @@ async fn update_session_info_broadcasts_to_all() {
 
 #[tokio::test]
 async fn update_session_info_with_refresh_sends_full_snapshot() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -524,7 +507,6 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let _ = channel
@@ -533,7 +515,6 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
 
@@ -562,7 +543,7 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
 
 #[tokio::test]
 async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -575,7 +556,6 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let _ = channel
@@ -584,7 +564,6 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
     let _ = channel
@@ -593,7 +572,6 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
             None,
             SessionPermissions::default(),
             tx3,
-            10,
         )
         .await;
 
@@ -624,7 +602,7 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
 
 #[tokio::test]
 async fn disconnect_sessions_target_only_the_active_replaced_session() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -636,7 +614,6 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
             None,
             SessionPermissions::default(),
             tx1,
-            10,
         )
         .await;
     let second_connection = channel
@@ -645,7 +622,6 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
             None,
             SessionPermissions::default(),
             tx2,
-            10,
         )
         .await;
     assert!(first_connection.is_ok());
@@ -668,7 +644,7 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
 
 #[tokio::test]
 async fn channel_maps_string_session_ids_into_router_sessions() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -679,7 +655,6 @@ async fn channel_maps_string_session_ids_into_router_sessions() {
             None,
             SessionPermissions::default(),
             tx,
-            10,
         )
         .await;
     assert!(joined.is_ok());
@@ -699,7 +674,7 @@ async fn channel_maps_string_session_ids_into_router_sessions() {
 
 #[tokio::test]
 async fn channel_keeps_router_session_permissions_in_sync() {
-    let manager = ChannelManager::new();
+    let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -710,13 +685,7 @@ async fn channel_keeps_router_session_permissions_in_sync() {
     };
     let (first_tx, _first_rx) = test_sender();
     let joined = channel
-        .join_session(
-            SessionId::Integer(1),
-            None,
-            permissions.clone(),
-            first_tx,
-            10,
-        )
+        .join_session(SessionId::Integer(1), None, permissions.clone(), first_tx)
         .await;
     assert!(joined.is_ok());
     assert_eq!(
@@ -738,7 +707,6 @@ async fn channel_keeps_router_session_permissions_in_sync() {
             None,
             replacement_permissions,
             second_tx,
-            10,
         )
         .await;
     assert!(replaced.is_ok());

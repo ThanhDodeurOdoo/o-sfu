@@ -48,7 +48,6 @@ async fn stats_returns_live_channel_data() {
             None,
             SessionPermissions::default(),
             alice_tx,
-            10,
         )
         .await;
     let bob_join = channel
@@ -57,7 +56,6 @@ async fn stats_returns_live_channel_data() {
             None,
             SessionPermissions::default(),
             bob_tx,
-            10,
         )
         .await;
     assert!(alice_join.is_ok());

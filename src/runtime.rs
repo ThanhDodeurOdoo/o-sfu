@@ -25,7 +25,9 @@ mod transport_adapter;
 mod transport_bootstrap;
 mod websocket_server;
 
+use channel::ChannelAdmissionPolicy;
 use channel::ChannelManager;
+use channel::ChannelManagerConfig;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
@@ -54,11 +56,12 @@ impl Runtime {
         let recording_media_tap = Arc::new(MediaTap::default());
         let transport_adapter = build_transport_adapter(&config, Arc::clone(&recording_media_tap));
         let rtc_media_worker_count = config.rtc_media_worker_count;
+        let channel_admission_policy = ChannelAdmissionPolicy::new(config.channel_size);
         Self {
             config,
             current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
-            channels: Arc::new(ChannelManager::with_media_workers_and_recording_tap(
-                rtc_media_worker_count,
+            channels: Arc::new(ChannelManager::new(
+                ChannelManagerConfig::new(rtc_media_worker_count, channel_admission_policy),
                 recording_media_tap,
             )),
             metrics: Arc::new(RuntimeMetrics::default()),
