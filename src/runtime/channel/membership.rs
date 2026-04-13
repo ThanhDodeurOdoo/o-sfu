@@ -124,7 +124,7 @@ impl Channel {
     ) {
         let outcome = {
             let mut state = self.state.write().await;
-            state.apply_update_session_info(session_id, info, need_refresh)
+            state.apply_presence_update(session_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
             outcome.emit();
@@ -280,7 +280,7 @@ impl Channel {
 
     #[cfg(test)]
     pub(super) async fn router_session_count(&self) -> usize {
-        let (count, _camera_count, _screen_count) = self.state.read().await.topology_counts();
+        let (count, _camera_count, _screen_count) = self.state.read().await.session_stats_counts();
         usize::try_from(count).unwrap_or(usize::MAX)
     }
 

@@ -9,7 +9,6 @@ use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::{
-    bundle_api::bundle_session_info_key,
     current_protocol::CurrentServerMessage,
     current_protocol::{CurrentRemoteTrackBootstrapPayload, CurrentServerRequest},
     ortc_mapper,
@@ -500,25 +499,7 @@ impl ChannelState {
             );
             return None;
         }
-        let session = self.sessions.get_mut(session_id)?;
-        match stream_type {
-            StreamType::Camera => session.info.is_camera_on = Some(active),
-            StreamType::Screen => session.info.is_screen_sharing_on = Some(active),
-            StreamType::Audio => {}
-        }
-        let updated_info = session.info.clone();
-        if self
-            .topology
-            .update_session_info(session_id, &updated_info)
-            .is_err()
-        {
-            error!(
-                ?session_id,
-                "failed to mirror session info update into channel router after production change"
-            );
-            return None;
-        }
-        let snapshot = BTreeMap::from([(bundle_session_info_key(session_id), updated_info)]);
+        let snapshot = BTreeMap::from([self.session_info_snapshot(session_id)?]);
         Some(self.fanout_all(&CurrentServerMessage::SessionInfoChanged(snapshot)))
     }
 

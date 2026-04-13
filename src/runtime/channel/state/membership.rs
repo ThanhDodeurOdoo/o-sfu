@@ -4,10 +4,8 @@ use tracing::error;
 
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
-    bundle_api::bundle_session_info_key,
-    current_protocol::{
-        CurrentServerMessage, CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById,
-    },
+    current_protocol::CurrentServerMessage,
+    current_protocol::CurrentSessionDeparturePayload,
     ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo, SessionPermissions},
@@ -19,6 +17,7 @@ use super::super::{
     outbound::{MessageFanout, OutboundSender},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
 };
+use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
 
 #[derive(Debug)]
@@ -130,7 +129,7 @@ impl ChannelState {
             let old_sender = session.sender.clone();
             session.label.clone_from(&label);
             session.permissions.clone_from(&permissions);
-            session.info = SessionInfo::default();
+            session.presence = SessionPresence::default();
             session.negotiation = SessionNegotiation::default();
             session.parsed_client_rtp_capabilities = None;
             session.connection_id = connection_id;
@@ -142,7 +141,7 @@ impl ChannelState {
                 ActiveSession {
                     label,
                     permissions,
-                    info: SessionInfo::default(),
+                    presence: SessionPresence::default(),
                     negotiation: SessionNegotiation::default(),
                     parsed_client_rtp_capabilities: None,
                     connection_id,
@@ -198,40 +197,20 @@ impl ChannelState {
         })
     }
 
-    pub(in crate::runtime::channel) fn apply_update_session_info(
+    pub(in crate::runtime::channel) fn apply_presence_update(
         &mut self,
         session_id: &SessionId,
-        info: SessionInfo,
+        info: &SessionInfo,
         need_refresh: bool,
     ) -> Option<SessionInfoUpdateOutcome> {
-        let updated_info = {
-            let session = self.sessions.get_mut(session_id)?;
-            session.info = info;
-            session.info.clone()
-        };
-        if self
-            .topology
-            .update_session_info(session_id, &updated_info)
-            .is_err()
         {
-            error!(
-                ?session_id,
-                "failed to mirror session info update into channel router"
-            );
-            return None;
+            let session = self.sessions.get_mut(session_id)?;
+            session.presence.apply_update(info);
         }
-        let snapshot: CurrentSessionInfoSnapshotById = if need_refresh {
-            self.sessions
-                .iter()
-                .map(|(id, session)| (bundle_session_info_key(id), session.info.clone()))
-                .collect()
+        let snapshot = if need_refresh {
+            self.session_info_snapshot_all()
         } else {
-            BTreeMap::from([(
-                bundle_session_info_key(session_id),
-                self.sessions
-                    .get(session_id)
-                    .map_or_else(SessionInfo::default, |session| session.info.clone()),
-            )])
+            BTreeMap::from([self.session_info_snapshot(session_id)?])
         };
         Some(SessionInfoUpdateOutcome {
             fanout: self.fanout_all(&CurrentServerMessage::SessionInfoChanged(snapshot)),

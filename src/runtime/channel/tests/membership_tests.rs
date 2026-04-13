@@ -519,7 +519,7 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
         .await;
 
     let info = SessionInfo {
-        is_camera_on: Some(true),
+        is_self_muted: Some(true),
         ..SessionInfo::default()
     };
     channel
@@ -536,6 +536,10 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
         );
         assert!(snapshot.contains_key("1"));
         assert!(snapshot.contains_key("2"));
+        assert_eq!(
+            snapshot.get("1").and_then(|info| info.is_self_muted),
+            Some(true)
+        );
     } else {
         panic!("expected SessionInfoChanged with full snapshot");
     }

@@ -5,8 +5,7 @@ use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
     MediaKind as RouterMediaKind, Producer as RouterProducer, ProducerId as RouterProducerId,
     Router, RouterError, RouterId, RtpCapabilities, Session as RouterSession,
-    SessionId as RouterSessionId, SessionInfo as RouterSessionInfo,
-    SessionPermissionFlags as RouterSessionPermissionFlags,
+    SessionId as RouterSessionId, SessionPermissionFlags as RouterSessionPermissionFlags,
     SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
     Transport as RouterTransport, TransportDirection as RouterTransportDirection,
     TransportId as RouterTransportId,
@@ -14,10 +13,7 @@ use o_sfu_router::{
 
 use super::rtp_capabilities::default_router_rtp_capabilities;
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
-use crate::signaling::shared::{
-    SessionId, SessionInfo as SignalingSessionInfo,
-    SessionPermissions as SignalingSessionPermissions,
-};
+use crate::signaling::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
 #[derive(Debug)]
@@ -222,26 +218,6 @@ impl ChannelRouterState {
             .update_session_permissions(router_session_id, router_permissions(permissions))
     }
 
-    /// # Errors
-    ///
-    /// Returns the underlying [`RouterError`] if the signaling/session map and router
-    /// state ever diverge.
-    pub(super) fn update_session_info(
-        &mut self,
-        session_id: &SessionId,
-        info: &SignalingSessionInfo,
-    ) -> Result<(), RouterError> {
-        let Some(router_session_id) = self
-            .router_session_ids_by_session_id
-            .get(session_id)
-            .copied()
-        else {
-            return Ok(());
-        };
-        self.router
-            .update_session_info(router_session_id, router_info(info))
-    }
-
     /// Update the pause state of a producer in the pure router.
     ///
     /// When a producer is paused, the router propagates the pause state to all
@@ -294,26 +270,9 @@ impl ChannelRouterState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn session_count(&self) -> u64 {
         u64::try_from(self.router.session_count()).unwrap_or(u64::MAX)
-    }
-
-    pub(super) fn camera_count(&self) -> u64 {
-        let count = self
-            .router
-            .sessions()
-            .filter(|session| session.info().is_camera_on() == Some(true))
-            .count();
-        u64::try_from(count).unwrap_or(u64::MAX)
-    }
-
-    pub(super) fn screen_count(&self) -> u64 {
-        let count = self
-            .router
-            .sessions()
-            .filter(|session| session.info().is_screen_sharing_on() == Some(true))
-            .count();
-        u64::try_from(count).unwrap_or(u64::MAX)
     }
 
     #[cfg(test)]
@@ -353,15 +312,4 @@ fn router_permissions(permissions: &SignalingSessionPermissions) -> RouterSessio
         audio_recording: permissions.audio_recording.unwrap_or(false),
         video_recording: permissions.video_recording.unwrap_or(false),
     })
-}
-
-fn router_info(info: &SignalingSessionInfo) -> RouterSessionInfo {
-    RouterSessionInfo::builder()
-        .talking(info.is_talking)
-        .camera_on(info.is_camera_on)
-        .screen_sharing_on(info.is_screen_sharing_on)
-        .self_muted(info.is_self_muted)
-        .deaf(info.is_deaf)
-        .raising_hand(info.is_raising_hand)
-        .build()
 }

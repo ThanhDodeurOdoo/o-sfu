@@ -89,21 +89,6 @@ impl<O: RouterObserver> Router<O> {
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the session does not exist.
-    pub fn update_session_info(
-        &mut self,
-        session_id: SessionId,
-        info: super::SessionInfo,
-    ) -> Result<(), RouterError> {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            return Err(RouterError::MissingSession(session_id));
-        };
-        session.set_info(info);
-        Ok(())
-    }
-
-    /// # Errors
-    ///
     /// Returns [`RouterError::MissingSession`] when the owning session does not exist
     /// or [`RouterError::DuplicateTransport`] when the transport already exists.
     pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {

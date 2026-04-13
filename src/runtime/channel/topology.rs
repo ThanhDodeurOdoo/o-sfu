@@ -15,10 +15,7 @@ use super::router_state::ChannelRouterState;
 use crate::runtime::recording::RecordingService;
 #[cfg(test)]
 use crate::runtime::recording::{MediaSource, MediaTap};
-use crate::signaling::shared::{
-    SessionId, SessionInfo as SignalingSessionInfo,
-    SessionPermissions as SignalingSessionPermissions,
-};
+use crate::signaling::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
 
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
@@ -147,12 +144,8 @@ impl ChannelTopology {
         router_session_seed: u64,
         permissions: &SignalingSessionPermissions,
     ) -> Result<(), RouterError> {
-        let is_existing_session = self.session_home_router.contains_key(session_id);
         self.ensure_session(session_id, router_session_seed, permissions)?;
         self.ensure_session_transports(session_id)?;
-        if is_existing_session {
-            self.update_session_info(session_id, &SignalingSessionInfo::default())?;
-        }
         Ok(())
     }
 
@@ -191,16 +184,6 @@ impl ChannelTopology {
         Ok(RoutedConsumerId::new(producer_id.router_id(), consumer_id))
     }
 
-    pub(super) fn update_session_info(
-        &mut self,
-        session_id: &SessionId,
-        info: &SignalingSessionInfo,
-    ) -> Result<(), RouterError> {
-        let router_id = self.router_id_for_session(session_id);
-        self.router_mut(router_id)?
-            .update_session_info(session_id, info)
-    }
-
     pub(super) fn set_producer_paused(
         &mut self,
         producer_id: RoutedProducerId,
@@ -226,24 +209,11 @@ impl ChannelTopology {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn session_count(&self) -> u64 {
         self.routers
             .values()
             .map(ChannelRouterState::session_count)
-            .sum()
-    }
-
-    pub(super) fn camera_count(&self) -> u64 {
-        self.routers
-            .values()
-            .map(ChannelRouterState::camera_count)
-            .sum()
-    }
-
-    pub(super) fn screen_count(&self) -> u64 {
-        self.routers
-            .values()
-            .map(ChannelRouterState::screen_count)
             .sum()
     }
 

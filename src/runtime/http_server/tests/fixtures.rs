@@ -28,7 +28,7 @@ pub(super) use crate::{
             CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, NOOP_PATH,
             NoopResponse, STATS_PATH, StatsResponse,
         },
-        shared::{SessionId, SessionInfo, SessionPermissions},
+        shared::{SessionId, SessionPermissions},
     },
 };
 

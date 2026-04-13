@@ -6,6 +6,7 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::{
+    bundle_api::bundle_session_info_key,
     current_protocol::CurrentServerMessage,
     protocol::PeerSnapshot,
     shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
@@ -19,6 +20,8 @@ use super::super::{
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use super::ids::ProducerRuntimeId;
+use super::presence::SessionPresence;
+use super::session_info_projection::{SessionMediaView, project_session_info};
 
 /// Core mutable state for a single SFU channel (room).
 ///
@@ -75,7 +78,7 @@ pub(in crate::runtime::channel) struct ActiveSession {
     pub(super) label: Option<String>,
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
     pub(super) permissions: SessionPermissions,
-    pub(super) info: SessionInfo,
+    pub(super) presence: SessionPresence,
     pub(super) negotiation: SessionNegotiation,
     pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub(super) connection_id: u64,
@@ -230,7 +233,7 @@ impl ChannelState {
             .filter(|(session_id, _session)| *session_id != excluded_session_id)
             .map(|(session_id, session)| PeerSnapshot {
                 session_id: session_id.clone(),
-                info: session.info.clone(),
+                info: self.session_info(session_id, session),
             })
             .collect()
     }
@@ -256,11 +259,29 @@ impl ChannelState {
         self.consumer_index.len()
     }
 
-    pub(in crate::runtime::channel) fn topology_counts(&self) -> (u64, u64, u64) {
+    pub(in crate::runtime::channel) fn session_stats_counts(&self) -> (u64, u64, u64) {
+        let camera_count = self
+            .sessions
+            .iter()
+            .filter(|(session_id, session)| {
+                self.session_media_view(session_id, session.connection_id)
+                    .camera_active
+                    == Some(true)
+            })
+            .count();
+        let screen_count = self
+            .sessions
+            .iter()
+            .filter(|(session_id, session)| {
+                self.session_media_view(session_id, session.connection_id)
+                    .screen_active
+                    == Some(true)
+            })
+            .count();
         (
-            self.topology.session_count(),
-            self.topology.camera_count(),
-            self.topology.screen_count(),
+            u64::try_from(self.sessions.len()).unwrap_or(u64::MAX),
+            u64::try_from(camera_count).unwrap_or(u64::MAX),
+            u64::try_from(screen_count).unwrap_or(u64::MAX),
         )
     }
 
@@ -320,6 +341,61 @@ impl ChannelState {
         self.producers
             .values()
             .find_map(|producer| producer.transport_media_id)
+    }
+
+    pub(in crate::runtime::channel) fn session_info_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<(String, SessionInfo)> {
+        let session = self.sessions.get(session_id)?;
+        Some((
+            bundle_session_info_key(session_id),
+            self.session_info(session_id, session),
+        ))
+    }
+
+    pub(in crate::runtime::channel) fn session_info_snapshot_all(
+        &self,
+    ) -> BTreeMap<String, SessionInfo> {
+        self.sessions
+            .iter()
+            .map(|(session_id, session)| {
+                (
+                    bundle_session_info_key(session_id),
+                    self.session_info(session_id, session),
+                )
+            })
+            .collect()
+    }
+
+    fn session_info(&self, session_id: &SessionId, session: &ActiveSession) -> SessionInfo {
+        project_session_info(
+            &session.presence,
+            self.session_media_view(session_id, session.connection_id),
+        )
+    }
+
+    fn session_media_view(&self, session_id: &SessionId, connection_id: u64) -> SessionMediaView {
+        SessionMediaView {
+            camera_active: self.stream_activity(session_id, connection_id, StreamType::Camera),
+            screen_active: self.stream_activity(session_id, connection_id, StreamType::Screen),
+        }
+    }
+
+    fn stream_activity(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+    ) -> Option<bool> {
+        let producer_id = self
+            .producer_ids_by_owner_stream
+            .get(&ProducerKey::new(session_id, stream_type))?;
+        let producer = self.producers.get(producer_id)?;
+        if producer.owner_connection_id != connection_id {
+            return None;
+        }
+        Some(producer.active)
     }
 }
 

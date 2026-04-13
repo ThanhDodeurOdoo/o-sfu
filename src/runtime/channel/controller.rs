@@ -244,7 +244,7 @@ impl Channel {
                 }
             }
         }
-        let (count, camera_count, screen_count) = state.topology_counts();
+        let (count, camera_count, screen_count) = state.session_stats_counts();
         drop(state);
         ChannelSessionStatsSnapshot {
             incoming_bitrate: aggregated_bitrate,

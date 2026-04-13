@@ -364,34 +364,20 @@ async fn stats_reports_live_session_aggregates_from_integration_test() {
         return;
     };
 
-    let alice_sent = alice
-        .send_bus_message(CurrentClientMessage::UpdateSessionInfo(
-            CurrentSessionInfoUpdatePayload {
-                info: SessionInfo {
-                    is_camera_on: Some(true),
-                    ..SessionInfo::default()
-                },
-                need_refresh: None,
-            },
-        ))
-        .await;
     let bob_sent = bob
         .send_bus_message(CurrentClientMessage::UpdateSessionInfo(
             CurrentSessionInfoUpdatePayload {
                 info: SessionInfo {
-                    is_screen_sharing_on: Some(true),
+                    is_talking: Some(true),
                     ..SessionInfo::default()
                 },
                 need_refresh: None,
             },
         ))
         .await;
-    assert!(alice_sent.is_some());
     assert!(bob_sent.is_some());
 
     let _ = alice.read_server_message().await;
-    let _ = alice.read_server_message().await;
-    let _ = bob.read_server_message().await;
     let _ = bob.read_server_message().await;
 
     let response = reqwest::get(format!("{}{STATS_PATH}", server.http_base_url()))
@@ -415,8 +401,8 @@ async fn stats_reports_live_session_aggregates_from_integration_test() {
     };
     assert_eq!(first.uuid, channel);
     assert_eq!(first.sessions_stats.count, 2);
-    assert_eq!(first.sessions_stats.camera_count, 1);
-    assert_eq!(first.sessions_stats.screen_count, 1);
+    assert_eq!(first.sessions_stats.camera_count, 0);
+    assert_eq!(first.sessions_stats.screen_count, 0);
     assert_eq!(first.sessions_stats.incoming_bit_rate.total, 0);
     assert!(first.web_rtc_enabled);
     assert_eq!(first.remote_address, "127.0.0.1");

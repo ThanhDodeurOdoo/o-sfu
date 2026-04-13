@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError,
-    RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissionFlags,
+    RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionPermissionFlags,
     SessionPermissions, SessionState, StreamType, Transport, TransportDirection, TransportId,
 };
 
@@ -635,7 +635,7 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
 }
 
 #[test]
-fn joined_sessions_store_permissions_and_default_info() {
+fn joined_sessions_store_permissions_and_active_state() {
     let mut router = Router::new(RouterId(1));
     let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
         transcription: true,
@@ -655,11 +655,10 @@ fn joined_sessions_store_permissions_and_default_info() {
     };
     assert_eq!(session.state(), SessionState::Active);
     assert_eq!(session.permissions(), permissions);
-    assert_eq!(session.info(), SessionInfo::default());
 }
 
 #[test]
-fn router_updates_session_permissions_and_info() {
+fn router_updates_session_permissions() {
     let mut router = Router::new(RouterId(1));
 
     assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
@@ -668,20 +667,10 @@ fn router_updates_session_permissions_and_info() {
         audio_recording: true,
         video_recording: false,
     });
-    let info = SessionInfo::builder()
-        .talking(Some(true))
-        .camera_on(Some(false))
-        .screen_sharing_on(Some(true))
-        .self_muted(Some(false))
-        .deaf(Some(true))
-        .raising_hand(Some(false))
-        .build();
-
     assert_eq!(
         router.update_session_permissions(SessionId(10), permissions),
         Ok(())
     );
-    assert_eq!(router.update_session_info(SessionId(10), info), Ok(()));
 
     let session = router.sessions().next();
     assert!(session.is_some());
@@ -689,7 +678,6 @@ fn router_updates_session_permissions_and_info() {
         return;
     };
     assert_eq!(session.permissions(), permissions);
-    assert_eq!(session.info(), info);
     assert_router_is_consistent(&router);
 }
 

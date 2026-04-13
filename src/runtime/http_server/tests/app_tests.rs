@@ -1,4 +1,71 @@
 use super::fixtures::*;
+use crate::runtime::channel::Channel;
+use crate::runtime::transport_adapter::TransportConnectDirection;
+use crate::signaling::shared::StreamType;
+use crate::signaling::webrtc::{MediaKind, RtpParameters};
+
+fn test_video_rtp_parameters(ssrc: u64) -> RtpParameters {
+    RtpParameters(serde_json::json!({
+        "codecs": [
+            {
+                "mimeType": "video/VP8",
+                "payloadType": 96,
+                "clockRate": 90000,
+                "parameters": {},
+                "rtcpFeedback": [
+                    { "type": "nack" },
+                    { "type": "nack", "parameter": "pli" },
+                    { "type": "ccm", "parameter": "fir" },
+                    { "type": "goog-remb" },
+                    { "type": "transport-cc" }
+                ]
+            },
+            {
+                "mimeType": "video/rtx",
+                "payloadType": 97,
+                "clockRate": 90000,
+                "parameters": { "apt": "96" },
+                "rtcpFeedback": []
+            }
+        ],
+        "headerExtensions": [
+            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
+            { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
+            { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
+        ],
+        "encodings": [{ "ssrc": ssrc }]
+    }))
+}
+
+async fn publish_video_stream(
+    channel: &Channel,
+    session_id: &SessionId,
+    connection_id: u64,
+    stream_type: StreamType,
+    ssrc: u64,
+    transport_adapter: &RuntimeTransportAdapter,
+) {
+    channel
+        .apply_transport_connected(
+            session_id,
+            connection_id,
+            TransportConnectDirection::Upload,
+            transport_adapter,
+        )
+        .await;
+    assert!(
+        channel
+            .publish_track(
+                session_id,
+                stream_type,
+                MediaKind::Video,
+                test_video_rtp_parameters(ssrc),
+                transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+}
 
 #[tokio::test]
 async fn noop_returns_ok_response() {
@@ -60,26 +127,30 @@ async fn stats_returns_live_channel_data() {
         .await;
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
-    channel
-        .update_session_info(
-            &SessionId::Integer(1),
-            SessionInfo {
-                is_camera_on: Some(true),
-                ..SessionInfo::default()
-            },
-            false,
-        )
-        .await;
-    channel
-        .update_session_info(
-            &SessionId::Integer(2),
-            SessionInfo {
-                is_screen_sharing_on: Some(true),
-                ..SessionInfo::default()
-            },
-            false,
-        )
-        .await;
+    let Some(alice_connection_id) = alice_join.ok() else {
+        return;
+    };
+    let Some(bob_connection_id) = bob_join.ok() else {
+        return;
+    };
+    publish_video_stream(
+        &channel,
+        &SessionId::Integer(1),
+        alice_connection_id,
+        StreamType::Camera,
+        22_222,
+        &state.transport_adapter,
+    )
+    .await;
+    publish_video_stream(
+        &channel,
+        &SessionId::Integer(2),
+        bob_connection_id,
+        StreamType::Screen,
+        33_333,
+        &state.transport_adapter,
+    )
+    .await;
 
     let request = build_request(Request::get(STATS_PATH), Body::empty());
     assert!(request.is_some());

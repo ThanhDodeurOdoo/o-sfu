@@ -83,21 +83,6 @@ impl<
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the session does not exist.
-    pub(crate) fn update_session_info(
-        &mut self,
-        session_id: SessionId,
-        info: crate::SessionInfo,
-    ) -> Result<(), ProofRouterError> {
-        let Some(session) = self.session_by_id_mut(session_id) else {
-            return Err(RouterError::MissingSession(session_id).into());
-        };
-        session.set_info(info);
-        Ok(())
-    }
-
-    /// # Errors
-    ///
     /// Returns [`RouterError::MissingSession`] when the owning session does not exist,
     /// [`RouterError::DuplicateTransport`] when the transport already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.

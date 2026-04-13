@@ -1,7 +1,7 @@
 use super::{ProofRouterModel, model::ProofRouterError};
 use crate::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
-    SessionId, SessionInfo, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
+    SessionId, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
     TransportDirection, TransportId,
 };
 
@@ -28,18 +28,9 @@ fn session_updates_preserve_invariants() {
         audio_recording: kani::any(),
         video_recording: kani::any(),
     });
-    let info = SessionInfo::builder()
-        .talking(kani::any())
-        .camera_on(kani::any())
-        .screen_sharing_on(kani::any())
-        .self_muted(kani::any())
-        .deaf(kani::any())
-        .raising_hand(kani::any())
-        .build();
 
     let _ = router.join_session(session(session_id));
     let _ = router.update_session_permissions(session_id, permissions);
-    let _ = router.update_session_info(session_id, info);
 
     assert!(router.satisfies_invariants());
 }
