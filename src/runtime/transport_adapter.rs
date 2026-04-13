@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc};
 
+#[cfg(test)]
+use super::rtc_adapter::DebugRouteEntry;
 use super::{rtc_adapter::RtcTransportAdapter, stub_bus::StubWebRtcAdapter};
 use crate::config::MediaCodecFlags;
 use crate::runtime::recording::MediaTap;
@@ -12,6 +14,8 @@ use crate::signaling::{
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind as Str0mMediaKind;
+#[cfg(test)]
+use str0m::media::Mid;
 
 /// Channel-scooped transport-adapter session identity.
 ///
@@ -380,6 +384,17 @@ impl RtcTransportAdapterShardSet {
         self.shard_for_index(self.shard_index_for_media_worker_id(media_worker_id))
     }
 
+    #[cfg(test)]
+    async fn debug_route_entry(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_mid: Mid,
+    ) -> Option<DebugRouteEntry> {
+        self.shard_for_session(source_session_key)
+            .debug_route_entry(source_session_key, source_mid)
+            .await
+    }
+
     fn shard_for_index(&self, shard_index: usize) -> Arc<RtcTransportAdapter> {
         if shard_index == 0 {
             return Arc::clone(&self.primary_shard);
@@ -720,6 +735,22 @@ impl RuntimeTransportAdapter {
                         source_transport_media_id,
                         active,
                     )
+                    .await
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn debug_route_entry(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_mid: Mid,
+    ) -> Option<DebugRouteEntry> {
+        match self {
+            Self::Stub(_) => None,
+            Self::Rtc(adapter) => {
+                adapter
+                    .debug_route_entry(source_session_key, source_mid)
                     .await
             }
         }

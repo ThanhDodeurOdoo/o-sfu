@@ -34,4 +34,6 @@ mod validation;
 mod worker;
 
 pub(crate) use api::RtcTransportAdapter;
+#[cfg(test)]
+pub(crate) use commands::DebugRouteEntry;
 pub(crate) use negotiated_capabilities::client_rtp_capabilities_from_answer;
