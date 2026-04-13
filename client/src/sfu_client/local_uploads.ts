@@ -1,5 +1,5 @@
 import type { StreamType } from "../public_api.js";
-import { STREAM_KIND, type PeerConnectionLike, type TrackLike } from "./browser_types.js";
+import { STREAM_KIND, type ClientPeerConnection, type MediaTrack } from "./browser_types.js";
 
 type UploadTransition = {
     hadTrack: boolean;
@@ -8,7 +8,7 @@ type UploadTransition = {
 };
 
 export class LocalUploads {
-    private _localTracks = new Map<StreamType, TrackLike | null>();
+    private _localTracks = new Map<StreamType, MediaTrack | null>();
     private _senderMidByType = new Map<StreamType, string>();
 
     setTrack(type: StreamType, track: MediaStreamTrack | null): UploadTransition {
@@ -26,7 +26,7 @@ export class LocalUploads {
     }
 
     async attachTrack(
-        peerConnection: PeerConnectionLike | null,
+        peerConnection: ClientPeerConnection | null,
         mid: string,
         streamType: StreamType
     ): Promise<void> {
@@ -45,7 +45,7 @@ export class LocalUploads {
     }
 
     async detachTrack(
-        peerConnection: PeerConnectionLike | null,
+        peerConnection: ClientPeerConnection | null,
         streamType: StreamType
     ): Promise<void> {
         if (!peerConnection) {

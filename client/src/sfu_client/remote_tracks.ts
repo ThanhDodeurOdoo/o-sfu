@@ -9,8 +9,8 @@ import {
     createEmptyConsumers,
     type AppliedTrackBinding,
     type ConsumersCompat,
-    type RtcTrackEventLike,
-    type TrackLike
+    type MediaTrack,
+    type PeerConnectionTrackEvent
 } from "./browser_types.js";
 
 type TrackUpdateEmitter = (update: ClientUpdateDetail) => void;
@@ -19,7 +19,7 @@ export class RemoteTracks {
     public readonly consumers = new Map<SessionId, ConsumersCompat>();
 
     private _remoteTrackBindings = new Map<string, AppliedTrackBinding>();
-    private _remoteTracksByMid = new Map<string, TrackLike>();
+    private _remoteTracksByMid = new Map<string, MediaTrack>();
     private _staleRemoteTrackMids = new Set<string>();
 
     resetAll(): void {
@@ -56,7 +56,7 @@ export class RemoteTracks {
         }
     }
 
-    handleTrackEvent(event: RtcTrackEventLike, emitUpdate: TrackUpdateEmitter): void {
+    handleTrackEvent(event: PeerConnectionTrackEvent, emitUpdate: TrackUpdateEmitter): void {
         const mid = event.transceiver.mid;
         if (!mid) {
             return;

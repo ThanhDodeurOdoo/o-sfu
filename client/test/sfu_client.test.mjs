@@ -54,9 +54,12 @@ class FakeSender {
 }
 
 class FakePeerConnection {
-    constructor(config) {
+    constructor(config, { autoConnect = true } = {}) {
+        this.autoConnect = autoConnect;
+        this.connectionState = "new";
         this.config = config;
         this.localDescriptions = [];
+        this.onconnectionstatechange = null;
         this.ontrack = null;
         this.remoteDescriptions = [];
         this.transceivers = [
@@ -71,6 +74,9 @@ class FakePeerConnection {
 
     async setLocalDescription(description) {
         this.localDescriptions.push(description);
+        if (this.autoConnect) {
+            this.emitConnectionState("connected");
+        }
     }
 
     async setRemoteDescription(description) {
@@ -82,6 +88,7 @@ class FakePeerConnection {
     }
 
     close() {
+        this.connectionState = "closed";
         this.closed = true;
     }
 
@@ -90,6 +97,11 @@ class FakePeerConnection {
             track,
             transceiver: { mid }
         });
+    }
+
+    emitConnectionState(state) {
+        this.connectionState = state;
+        this.onconnectionstatechange?.();
     }
 }
 
@@ -103,6 +115,7 @@ class FakeProtocolCore {
         this.submittedAnswers = [];
         this.publicationUpdates = [];
         this.trackBindings = new Map();
+        this.transportReadyCalls = 0;
     }
 
     broadcast() {
@@ -129,6 +142,7 @@ class FakeProtocolCore {
     }
 
     onTransportReady() {
+        this.transportReadyCalls += 1;
         this.state = "connected";
         return [{ kind: "emitStateChange", state: "connected" }];
     }
@@ -686,6 +700,50 @@ test("track metadata updates re-emit track state for existing remote tracks", as
         }
     ]);
     assert.equal(client._consumers.get(42).camera.track, track);
+});
+
+test("offer waits for peer connection transport readiness before emitting connected", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config, { autoConnect: false });
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    assert.equal(client.state, "authenticated");
+
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    assert.equal(core.transportReadyCalls, 0);
+    assert.equal(client.state, "authenticated");
+    assert.deepEqual(core.submittedAnswers, [
+        {
+            negotiationKind: "offer",
+            requestId: "7",
+            sdp: "answer-sdp"
+        }
+    ]);
+
+    peerConnections[0].emitConnectionState("connected");
+    await tick();
+
+    assert.equal(core.transportReadyCalls, 1);
+    assert.equal(client.state, "connected");
 });
 
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {

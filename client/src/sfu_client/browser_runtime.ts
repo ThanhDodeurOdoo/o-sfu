@@ -1,10 +1,10 @@
 import type { ClientUpdateDetail, ConnectionState, StreamType } from "../public_api.js";
 import type { HostCommand, ProtocolCoreBindings } from "../runtime_contract.js";
 import type {
-    PeerConnectionLike,
+    ClientPeerConnection,
+    ClientWebSocket,
     SfuClientDependencies,
-    TimerHandle,
-    WebSocketLike
+    TimerHandle
 } from "./browser_types.js";
 import type { LocalUploads } from "./local_uploads.js";
 import type { PendingRequests } from "./pending_requests.js";
@@ -24,21 +24,21 @@ export type BrowserRuntimeHooks = {
 
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
-    private readonly _createPeerConnection: (config: RTCConfiguration) => PeerConnectionLike;
-    private readonly _createWebSocket: (url: string) => WebSocketLike;
+    private readonly _createPeerConnection: (config: RTCConfiguration) => ClientPeerConnection;
+    private readonly _createWebSocket: (url: string) => ClientWebSocket;
     private readonly _setTimer: (callback: () => void, ms: number) => TimerHandle;
 
     private _commandQueue: Promise<void> = Promise.resolve();
-    private _peerConnection: PeerConnectionLike | null = null;
+    private _peerConnection: ClientPeerConnection | null = null;
     private _timerHandles = new Map<number, TimerHandle>();
-    private _webSocket: WebSocketLike | null = null;
+    private _webSocket: ClientWebSocket | null = null;
 
     constructor(dependencies: SfuClientDependencies = {}) {
         this._createWebSocket =
-            dependencies.createWebSocket ?? ((url) => new WebSocket(url) as WebSocketLike);
+            dependencies.createWebSocket ?? ((url) => new WebSocket(url) as ClientWebSocket);
         this._createPeerConnection =
             dependencies.createPeerConnection ??
-            ((config) => new RTCPeerConnection(config) as PeerConnectionLike);
+            ((config) => new RTCPeerConnection(config) as ClientPeerConnection);
         this._setTimer = dependencies.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
         this._clearTimer = dependencies.clearTimer ?? ((handle) => clearTimeout(handle));
     }
@@ -221,6 +221,15 @@ export class BrowserRuntime {
         const peerConnection = this._createPeerConnection({
             iceServers: hooks.iceServers
         });
+        peerConnection.onconnectionstatechange = () => {
+            if (
+                this._peerConnection !== peerConnection ||
+                peerConnection.connectionState !== "connected"
+            ) {
+                return;
+            }
+            this.enqueueProtocolCommands(() => hooks.protocolCore.onTransportReady(), hooks);
+        };
         peerConnection.ontrack = (event) => {
             hooks.remoteTracks.handleTrackEvent(event, hooks.onUpdate);
         };
@@ -256,8 +265,14 @@ export class BrowserRuntime {
             negotiationKind,
             answer.sdp
         );
-        commands.push(...protocolCore.onTransportReady());
+        if (negotiationKind === "offer" && this.shouldFallbackToImmediateTransportReady()) {
+            commands.push(...protocolCore.onTransportReady());
+        }
         return commands;
+    }
+
+    private shouldFallbackToImmediateTransportReady(): boolean {
+        return typeof this._peerConnection?.connectionState !== "string";
     }
 
     private cancelTimer(id: number): void {

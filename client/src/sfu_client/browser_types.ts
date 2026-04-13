@@ -2,7 +2,7 @@ import type { TrackBinding } from "../protocol.js";
 import type { StreamType } from "../public_api.js";
 import type { ProtocolCoreFactory } from "../runtime_contract.js";
 
-export type TrackLike = MediaStreamTrack & { muted?: boolean };
+export type MediaTrack = MediaStreamTrack;
 
 export type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
@@ -12,7 +12,7 @@ export type PendingRequestCallbacks = {
 };
 
 export type ConsumerCompat = {
-    track: TrackLike | null;
+    track: MediaTrack | null;
 };
 
 export type ConsumersCompat = {
@@ -23,7 +23,7 @@ export type ConsumersCompat = {
 
 export type AppliedTrackBinding = Pick<TrackBinding, "active" | "sessionId" | "type">;
 
-export type WebSocketLike = {
+export interface ClientWebSocket {
     close(code?: number): void;
     onclose: ((event: { code: number }) => void) | null;
     onerror: ((event: Event) => void) | null;
@@ -31,39 +31,49 @@ export type WebSocketLike = {
     onopen: ((event: Event) => void) | null;
     readonly readyState: number;
     send(data: string): void;
-};
+}
 
-export type RtcSenderLike = {
-    replaceTrack(track: TrackLike | null): Promise<void>;
-    track?: TrackLike | null;
-};
+export interface PeerConnectionSender {
+    replaceTrack(track: MediaTrack | null): Promise<void>;
+    track?: MediaTrack | null;
+}
 
-export type RtcTransceiverLike = {
+export interface PeerConnectionTransceiver {
     mid: string | null;
-    sender: RtcSenderLike;
-};
+    sender: PeerConnectionSender;
+}
 
-export type RtcTrackEventLike = {
-    track: TrackLike;
+export interface PeerConnectionTrackEvent {
+    track: MediaTrack;
     transceiver: {
         mid: string | null;
     };
-};
+}
 
-export type PeerConnectionLike = {
+export type ClientPeerConnectionState =
+    | "new"
+    | "connecting"
+    | "connected"
+    | "disconnected"
+    | "failed"
+    | "closed";
+
+export interface ClientPeerConnection {
     close(): void;
+    connectionState?: ClientPeerConnectionState;
     createAnswer(): Promise<{ sdp: string; type: "answer" }>;
-    getTransceivers(): RtcTransceiverLike[];
-    ontrack: ((event: RtcTrackEventLike) => void) | null;
+    getTransceivers(): PeerConnectionTransceiver[];
+    onconnectionstatechange: (() => void) | null;
+    ontrack: ((event: PeerConnectionTrackEvent) => void) | null;
     setLocalDescription(description: { sdp: string; type: "answer" }): Promise<void>;
     setRemoteDescription(description: { sdp: string; type: "offer" }): Promise<void>;
-};
+}
 
 export interface SfuClientDependencies {
     clearTimer?: (handle: TimerHandle) => void;
-    createPeerConnection?: (config: RTCConfiguration) => PeerConnectionLike;
+    createPeerConnection?: (config: RTCConfiguration) => ClientPeerConnection;
     createProtocolCore?: ProtocolCoreFactory;
-    createWebSocket?: (url: string) => WebSocketLike;
+    createWebSocket?: (url: string) => ClientWebSocket;
     setTimer?: (callback: () => void, ms: number) => TimerHandle;
 }
 
