@@ -18,6 +18,7 @@ use super::super::{
     session_negotiation::SessionNegotiation,
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
+use super::ids::ProducerRuntimeId;
 
 /// Core mutable state for a single SFU channel (room).
 ///
@@ -39,10 +40,10 @@ pub(in crate::runtime::channel) struct ChannelState {
     pub(super) next_producer_id: u64,
     pub(super) next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
-    /// Keyed by wire-format producer id (for example `"producer-3"`).
-    pub(super) producers: BTreeMap<String, PublishedProducer>,
+    /// Keyed by typed runtime producer id. Compatibility wire ids are rendered at the edge.
+    pub(super) producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
     /// Producer lookup keyed by the publisher session and stream type.
-    pub(super) producer_wire_ids_by_owner_stream: BTreeMap<ProducerKey, String>,
+    pub(super) producer_ids_by_owner_stream: BTreeMap<ProducerKey, ProducerRuntimeId>,
     /// Control-plane lookup for bitrate snapshots keyed by transport-owned media ids.
     pub(super) producer_stream_types_by_transport_media_id: BTreeMap<TransportMediaId, StreamType>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
@@ -128,7 +129,7 @@ impl ChannelState {
                 video: Some(false),
             },
             producers: BTreeMap::new(),
-            producer_wire_ids_by_owner_stream: BTreeMap::new(),
+            producer_ids_by_owner_stream: BTreeMap::new(),
             producer_stream_types_by_transport_media_id: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             topology: ChannelTopology::new_with_recording_service(router_id, recording_service),
@@ -172,9 +173,9 @@ impl ChannelState {
             })
             .collect::<Vec<_>>();
         self.producers
-            .retain(|_wire_id, producer| producer.owner_session_id != *session_id);
+            .retain(|_producer_id, producer| producer.owner_session_id != *session_id);
         for (producer_key, transport_media_id) in removed_producers {
-            self.producer_wire_ids_by_owner_stream.remove(&producer_key);
+            self.producer_ids_by_owner_stream.remove(&producer_key);
             if let Some(transport_media_id) = transport_media_id {
                 self.producer_stream_types_by_transport_media_id
                     .remove(&transport_media_id);

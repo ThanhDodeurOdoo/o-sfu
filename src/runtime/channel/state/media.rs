@@ -20,7 +20,10 @@ use super::super::{
     outbound::{MessageFanout, OutboundSender},
     topology::RoutedProducerId,
 };
-use super::shared::{ChannelState, ConsumerKey, ConsumerState, ProducerKey, PublishedProducer};
+use super::{
+    ids::{ConsumerRuntimeId, ProducerRuntimeId},
+    shared::{ChannelState, ConsumerKey, ConsumerState, ProducerKey, PublishedProducer},
+};
 
 #[allow(
     clippy::struct_field_names,
@@ -28,7 +31,7 @@ use super::shared::{ChannelState, ConsumerKey, ConsumerState, ProducerKey, Publi
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct ProducerRouteTarget {
-    producer_wire_id: String,
+    producer_id: ProducerRuntimeId,
     owner_connection_id: u64,
     routed_producer_id: RoutedProducerId,
     transport_media_id: TransportMediaId,
@@ -40,7 +43,7 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrapTarget {
     consumer_connection_id: u64,
     producer_session_id: SessionId,
     producer_connection_id: u64,
-    producer_wire_id: String,
+    producer_id: ProducerRuntimeId,
     stream_type: StreamType,
     media_kind: SignalingMediaKind,
     transport_media_id: TransportMediaId,
@@ -56,13 +59,13 @@ pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
     producer_stream_type: StreamType,
     producer_media_kind: SignalingMediaKind,
     producer_routed_id: RoutedProducerId,
-    producer_wire_id: String,
+    producer_id: ProducerRuntimeId,
     producer_active: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PendingPublishedTrack {
-    producer_wire_id: String,
+    producer_id: ProducerRuntimeId,
     owner_session_id: SessionId,
     owner_connection_id: u64,
     stream_type: StreamType,
@@ -73,14 +76,25 @@ pub(in crate::runtime::channel) struct PendingPublishedTrack {
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
     sender: OutboundSender,
-    request: CurrentServerRequest,
+    bootstrap: RemoteTrackBootstrap,
     producer_owner_session_id: SessionId,
     producer_connection_id: u64,
     producer_stream_type: StreamType,
     producer_media_kind: SignalingMediaKind,
     producer_routed_id: RoutedProducerId,
-    producer_wire_id: String,
+    producer_id: ProducerRuntimeId,
     producer_active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::runtime::channel) struct RemoteTrackBootstrap {
+    consumer_id: ConsumerRuntimeId,
+    media_kind: SignalingMediaKind,
+    producer_id: ProducerRuntimeId,
+    rtp_parameters: RtpParameters,
+    session_id: SessionId,
+    active: bool,
+    stream_type: StreamType,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,7 +144,7 @@ impl ChannelState {
 
         self.producers
             .iter()
-            .filter_map(|(producer_wire_id, producer)| {
+            .filter_map(|(producer_id, producer)| {
                 let transport_media_id = producer.transport_media_id?;
                 if producer.owner_session_id == *session_id {
                     return None;
@@ -140,7 +154,7 @@ impl ChannelState {
                     consumer_connection_id: session.connection_id,
                     producer_session_id: producer.owner_session_id.clone(),
                     producer_connection_id: producer.owner_connection_id,
-                    producer_wire_id: producer_wire_id.clone(),
+                    producer_id: *producer_id,
                     stream_type: producer.stream_type,
                     media_kind: producer.media_kind,
                     transport_media_id,
@@ -153,7 +167,7 @@ impl ChannelState {
         &self,
         producer_session_id: &SessionId,
         producer_connection_id: u64,
-        producer_wire_id: &str,
+        producer_id: ProducerRuntimeId,
         stream_type: StreamType,
         media_kind: SignalingMediaKind,
         transport_media_id: TransportMediaId,
@@ -170,7 +184,7 @@ impl ChannelState {
                     consumer_connection_id: peer_session.connection_id,
                     producer_session_id: producer_session_id.clone(),
                     producer_connection_id,
-                    producer_wire_id: producer_wire_id.to_owned(),
+                    producer_id,
                     stream_type,
                     media_kind,
                     transport_media_id,
@@ -192,7 +206,7 @@ impl ChannelState {
             return None;
         }
         Some(PendingPublishedTrack {
-            producer_wire_id: allocate_wire_producer_id(&mut self.next_producer_id),
+            producer_id: ProducerRuntimeId::allocate(&mut self.next_producer_id),
             owner_session_id: session_id.clone(),
             owner_connection_id: publisher_connection_id,
             stream_type,
@@ -205,7 +219,7 @@ impl ChannelState {
         &mut self,
         pending: PendingPublishedTrack,
         transport_media_id: TransportMediaId,
-    ) -> Option<(String, Vec<PendingConsumerBootstrapTarget>)> {
+    ) -> Option<(ProducerRuntimeId, Vec<PendingConsumerBootstrapTarget>)> {
         let session = self.sessions.get(&pending.owner_session_id)?;
         if session.connection_id != pending.owner_connection_id
             || !session.negotiation.can_publish()
@@ -227,7 +241,7 @@ impl ChannelState {
             }
         };
         self.producers.insert(
-            pending.producer_wire_id.clone(),
+            pending.producer_id,
             PublishedProducer {
                 owner_session_id: pending.owner_session_id.clone(),
                 owner_connection_id: pending.owner_connection_id,
@@ -239,21 +253,21 @@ impl ChannelState {
                 active: true,
             },
         );
-        self.producer_wire_ids_by_owner_stream.insert(
+        self.producer_ids_by_owner_stream.insert(
             ProducerKey::new(&pending.owner_session_id, pending.stream_type),
-            pending.producer_wire_id.clone(),
+            pending.producer_id,
         );
         self.producer_stream_types_by_transport_media_id
             .insert(transport_media_id, pending.stream_type);
         let consumer_targets = self.publish_consumer_targets(
             &pending.owner_session_id,
             pending.owner_connection_id,
-            &pending.producer_wire_id,
+            pending.producer_id,
             pending.stream_type,
             pending.media_kind,
             transport_media_id,
         );
-        Some((pending.producer_wire_id, consumer_targets))
+        Some((pending.producer_id, consumer_targets))
     }
 
     #[must_use]
@@ -273,16 +287,16 @@ impl ChannelState {
         owner_connection_id: u64,
         stream_type: StreamType,
     ) -> Option<ProducerRouteTarget> {
-        let producer_wire_id = self
-            .producer_wire_ids_by_owner_stream
+        let producer_id = *self
+            .producer_ids_by_owner_stream
             .get(&ProducerKey::new(owner_session_id, stream_type))?;
-        let producer = self.producers.get(producer_wire_id)?;
+        let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != owner_connection_id {
             return None;
         }
         let transport_media_id = producer.transport_media_id?;
         Some(ProducerRouteTarget {
-            producer_wire_id: producer_wire_id.clone(),
+            producer_id,
             owner_connection_id: producer.owner_connection_id,
             routed_producer_id: producer.routed_producer_id,
             transport_media_id,
@@ -309,7 +323,7 @@ impl ChannelState {
         {
             return None;
         }
-        let producer = self.producers.get(&prepared.producer_wire_id)?;
+        let producer = self.producers.get(&prepared.producer_id)?;
         if producer.owner_session_id != prepared.producer_owner_session_id
             || producer.owner_connection_id != prepared.producer_connection_id
             || producer.stream_type != prepared.producer_stream_type
@@ -320,26 +334,23 @@ impl ChannelState {
         {
             return None;
         }
-        let consumer_id = allocate_wire_consumer_id(&mut self.next_consumer_id);
         Some(PendingConsumerBootstrap {
             sender: prepared.sender.clone(),
-            request: CurrentServerRequest::BootstrapRemoteTrack(
-                CurrentRemoteTrackBootstrapPayload {
-                    id: consumer_id,
-                    media_kind: prepared.producer_media_kind,
-                    source_id: prepared.producer_wire_id.clone(),
-                    rtp_parameters: prepared.consumer_wire_rtp_parameters.clone(),
-                    session_id: prepared.producer_owner_session_id.clone(),
-                    active: prepared.producer_active,
-                    stream_type: prepared.producer_stream_type,
-                },
-            ),
+            bootstrap: RemoteTrackBootstrap {
+                consumer_id: ConsumerRuntimeId::allocate(&mut self.next_consumer_id),
+                media_kind: prepared.producer_media_kind,
+                producer_id: prepared.producer_id,
+                rtp_parameters: prepared.consumer_wire_rtp_parameters.clone(),
+                session_id: prepared.producer_owner_session_id.clone(),
+                active: prepared.producer_active,
+                stream_type: prepared.producer_stream_type,
+            },
             producer_owner_session_id: prepared.producer_owner_session_id.clone(),
             producer_connection_id: prepared.producer_connection_id,
             producer_stream_type: prepared.producer_stream_type,
             producer_media_kind: prepared.producer_media_kind,
             producer_routed_id: prepared.producer_routed_id,
-            producer_wire_id: prepared.producer_wire_id.clone(),
+            producer_id: prepared.producer_id,
             producer_active: prepared.producer_active,
         })
     }
@@ -360,7 +371,7 @@ impl ChannelState {
                 session.parsed_client_rtp_capabilities.as_ref()?,
             )
         };
-        let producer = self.producers.get(&target.producer_wire_id)?;
+        let producer = self.producers.get(&target.producer_id)?;
         if producer.owner_session_id != target.producer_session_id
             || producer.owner_connection_id != target.producer_connection_id
             || producer.stream_type != target.stream_type
@@ -396,7 +407,7 @@ impl ChannelState {
             producer_stream_type,
             producer_media_kind,
             producer_routed_id,
-            producer_wire_id: target.producer_wire_id.clone(),
+            producer_id: target.producer_id,
             producer_active,
         })
     }
@@ -406,14 +417,14 @@ impl ChannelState {
         target: &PendingConsumerBootstrapTarget,
         pending: PendingConsumerBootstrap,
         consumer_transport_media_id: TransportMediaId,
-    ) -> Option<(OutboundSender, CurrentServerRequest)> {
+    ) -> Option<(OutboundSender, RemoteTrackBootstrap)> {
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
             || !session.negotiation.can_consume()
         {
             return None;
         }
-        let producer = self.producers.get(&pending.producer_wire_id)?;
+        let producer = self.producers.get(&pending.producer_id)?;
         if producer.owner_session_id != pending.producer_owner_session_id
             || producer.owner_connection_id != pending.producer_connection_id
             || producer.stream_type != pending.producer_stream_type
@@ -435,7 +446,7 @@ impl ChannelState {
             Err(_error) => {
                 warn!(
                     consumer_session_id = ?target.consumer_session_id,
-                    producer_id = %pending.producer_wire_id,
+                    producer_id = %pending.producer_id,
                     "router rejected consumer creation"
                 );
                 return None;
@@ -455,7 +466,7 @@ impl ChannelState {
                 consumer_media: consumer_transport_media_id,
             },
         );
-        Some((pending.sender, pending.request))
+        Some((pending.sender, pending.bootstrap))
     }
 
     pub(in crate::runtime::channel) fn apply_producer_activity(
@@ -466,7 +477,7 @@ impl ChannelState {
         active: bool,
     ) -> Option<MessageFanout> {
         let current_connection_id = self.session_connection_id(session_id);
-        let producer = self.producers.get_mut(&producer_target.producer_wire_id)?;
+        let producer = self.producers.get_mut(&producer_target.producer_id)?;
         if producer.owner_connection_id != producer_target.owner_connection_id
             || Some(producer.owner_connection_id) != current_connection_id
             || producer.routed_producer_id != producer_target.routed_producer_id
@@ -629,6 +640,20 @@ impl ProducerRouteTarget {
     }
 }
 
+impl RemoteTrackBootstrap {
+    pub(in crate::runtime::channel) fn into_current_server_request(self) -> CurrentServerRequest {
+        CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
+            id: self.consumer_id.into_wire_id(),
+            media_kind: self.media_kind,
+            source_id: self.producer_id.into_wire_id(),
+            rtp_parameters: self.rtp_parameters,
+            session_id: self.session_id,
+            active: self.active,
+            stream_type: self.stream_type,
+        })
+    }
+}
+
 impl ConsumerRouteUpdate {
     pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> u64 {
         self.consumer_state.consumer_connection_id
@@ -653,18 +678,6 @@ impl ConsumerRouteUpdate {
     pub(in crate::runtime::channel) const fn active(&self) -> bool {
         self.active
     }
-}
-
-fn allocate_wire_producer_id(next_producer_id: &mut u64) -> String {
-    let current = *next_producer_id;
-    *next_producer_id = next_producer_id.saturating_add(1);
-    format!("producer-{current}")
-}
-
-fn allocate_wire_consumer_id(next_consumer_id: &mut u64) -> String {
-    let current = *next_consumer_id;
-    *next_consumer_id = next_consumer_id.saturating_add(1);
-    format!("consumer-{current}")
 }
 
 fn to_router_media_kind(media_kind: SignalingMediaKind) -> RouterMediaKind {

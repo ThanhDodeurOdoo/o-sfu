@@ -119,7 +119,7 @@ impl Channel {
             )
             .await;
         }
-        Some(producer_id)
+        Some(producer_id.into_wire_id())
     }
 
     async fn bootstrap_consumer_target(
@@ -171,7 +171,7 @@ impl Channel {
             let mut state = self.state.write().await;
             state.commit_consumer_bootstrap(target, pending_bootstrap, consumer_transport_media_id)
         };
-        let Some((sender, request)) = outbound else {
+        let Some((sender, bootstrap)) = outbound else {
             let _result = transport_adapter
                 .remove_media(
                     &self.transport_session_key(
@@ -183,7 +183,9 @@ impl Channel {
                 .await;
             return;
         };
-        let _ = sender.send(super::SessionOutbound::Request(Box::new(request)));
+        let _ = sender.send(super::SessionOutbound::Request(Box::new(
+            bootstrap.into_current_server_request(),
+        )));
     }
 
     #[allow(
