@@ -692,7 +692,13 @@ async fn channel_keeps_router_session_permissions_in_sync() {
         channel
             .router_session_permissions(&SessionId::Integer(1))
             .await,
-        Some(RouterSessionPermissions::new(true, false, true))
+        Some(RouterSessionPermissions::from_flags(
+            o_sfu_router::SessionPermissionFlags {
+                transcription: true,
+                audio_recording: false,
+                video_recording: true,
+            },
+        ))
     );
 
     let replacement_permissions = SessionPermissions {
@@ -714,6 +720,12 @@ async fn channel_keeps_router_session_permissions_in_sync() {
         channel
             .router_session_permissions(&SessionId::Integer(1))
             .await,
-        Some(RouterSessionPermissions::new(false, true, false))
+        Some(RouterSessionPermissions::from_flags(
+            o_sfu_router::SessionPermissionFlags {
+                transcription: false,
+                audio_recording: true,
+                video_recording: false,
+            },
+        ))
     );
 }

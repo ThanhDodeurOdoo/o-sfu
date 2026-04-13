@@ -6,9 +6,9 @@ pub use self::model::{
     NoopRouterObserver, ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, PayloadType,
     Producer, ProducerId, RfcReference, Rid, Router, RouterError, RouterEvent, RouterId,
     RouterObserver, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError, Session, SessionId,
-    SessionInfo, SessionPermissions, SessionState, Ssrc, StreamBinding, StreamType, Transport,
-    TransportDirection, TransportId, can_consume, derive_consumable_rtp_parameters,
-    negotiate_consumer_rtp_parameters,
+    SessionInfo, SessionInfoBuilder, SessionPermissionFlags, SessionPermissions, SessionState,
+    Ssrc, StreamBinding, StreamType, Transport, TransportDirection, TransportId, can_consume,
+    derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
 pub use self::model::{
     HeaderExtension as RtpHeaderExtension, MediaCapabilities as RtpCapabilities,

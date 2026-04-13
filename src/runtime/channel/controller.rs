@@ -192,7 +192,7 @@ impl Channel {
     }
 
     pub async fn recording_state(&self) -> RecordingState {
-        self.state.read().await.recording_state.clone()
+        self.state.read().await.recording_state()
     }
 
     pub(crate) async fn peer_snapshots_except(
@@ -202,18 +202,11 @@ impl Channel {
         self.state
             .read()
             .await
-            .sessions
-            .iter()
-            .filter(|(session_id, _session)| *session_id != excluded_session_id)
-            .map(|(session_id, session)| PeerSnapshot {
-                session_id: session_id.clone(),
-                info: session.info.clone(),
-            })
-            .collect()
+            .peer_snapshots_except(excluded_session_id)
     }
 
     pub async fn router_rtp_capabilities(&self) -> o_sfu_router::MediaCapabilities {
-        self.state.read().await.topology.rtp_capabilities().clone()
+        self.state.read().await.router_rtp_capabilities()
     }
 
     pub(crate) async fn session_stats_snapshot(
@@ -222,10 +215,10 @@ impl Channel {
     ) -> ChannelSessionStatsSnapshot {
         let state = self.state.read().await;
         let session_keys = state
-            .sessions
-            .iter()
-            .map(|(session_id, session)| {
-                self.transport_session_key(session_id, session.connection_id)
+            .transport_session_entries()
+            .into_iter()
+            .map(|(session_id, connection_id)| {
+                self.transport_session_key(&session_id, connection_id)
             })
             .collect::<Vec<_>>();
         let transport_snapshot = transport_adapter.transport_bitrate_snapshot(&session_keys);
@@ -251,11 +244,13 @@ impl Channel {
                 }
             }
         }
+        let (count, camera_count, screen_count) = state.topology_counts();
+        drop(state);
         ChannelSessionStatsSnapshot {
             incoming_bitrate: aggregated_bitrate,
-            count: state.topology.session_count(),
-            camera_count: state.topology.camera_count(),
-            screen_count: state.topology.screen_count(),
+            count,
+            camera_count,
+            screen_count,
         }
     }
 

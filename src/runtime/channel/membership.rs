@@ -9,9 +9,13 @@ use crate::signaling::{
 };
 
 use super::{
-    Channel, ChannelJoinError, SessionOutbound, outbound::fanout_all_except,
-    session_negotiation::SessionNegotiationUpdate, state::TransportMediaRemoval,
+    Channel, ChannelJoinError, SessionOutbound, session_negotiation::SessionNegotiationUpdate,
+    state::TransportMediaRemoval,
 };
+#[cfg(test)]
+use crate::runtime::transport_adapter::TransportMediaId;
+#[cfg(test)]
+use crate::signaling::shared::StreamType;
 
 impl Channel {
     #[cfg(test)]
@@ -101,8 +105,7 @@ impl Channel {
     pub async fn broadcast(&self, sender_id: &SessionId, message: serde_json::Value) {
         let fanout = {
             let state = self.state.read().await;
-            fanout_all_except(
-                &state.sessions,
+            state.fanout_all_except(
                 &CurrentServerMessage::Broadcast(CurrentBroadcastPayload {
                     sender_id: sender_id.clone(),
                     message,
@@ -171,16 +174,16 @@ impl Channel {
         for removal in removals {
             if transport_adapter
                 .remove_media(
-                    &self.transport_session_key(&removal.session, removal.connection),
-                    removal.transport_media,
+                    &self.transport_session_key(removal.session(), removal.connection()),
+                    removal.transport_media(),
                 )
                 .await
                 .is_err()
             {
                 warn!(
-                    session_id = ?removal.session,
-                    connection_id = removal.connection,
-                    transport_media_id = ?removal.transport_media,
+                    session_id = ?removal.session(),
+                    connection_id = removal.connection(),
+                    transport_media_id = ?removal.transport_media(),
                     "transport adapter failed to remove consumer media during session cleanup"
                 );
             }
@@ -255,10 +258,7 @@ impl Channel {
         capabilities: SignalingRtpCapabilities,
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
-        let connection_id = state
-            .sessions
-            .get(session_id)
-            .map_or(u64::MAX, |session| session.connection_id);
+        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
         state.set_client_rtp_capabilities(session_id, connection_id, capabilities)
     }
 
@@ -269,21 +269,19 @@ impl Channel {
         direction: TransportConnectDirection,
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
-        let connection_id = state
-            .sessions
-            .get(session_id)
-            .map_or(u64::MAX, |session| session.connection_id);
+        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
         state.set_transport_connected(session_id, connection_id, direction)
     }
 
     #[cfg(test)]
     pub(super) async fn session_count(&self) -> usize {
-        self.state.read().await.sessions.len()
+        self.state.read().await.session_count()
     }
 
     #[cfg(test)]
     pub(super) async fn router_session_count(&self) -> usize {
-        usize::try_from(self.state.read().await.topology.session_count()).unwrap_or(usize::MAX)
+        let (count, _camera_count, _screen_count) = self.state.read().await.topology_counts();
+        usize::try_from(count).unwrap_or(usize::MAX)
     }
 
     #[cfg(test)]
@@ -307,20 +305,55 @@ impl Channel {
 
     #[cfg(test)]
     pub(super) async fn session_connection_id(&self, session_id: &SessionId) -> Option<u64> {
+        self.state.read().await.session_connection_id(session_id)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn producer_count(&self) -> usize {
+        self.state.read().await.producer_count()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn consumer_count(&self) -> usize {
+        self.state.read().await.consumer_count()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
+        self.state.read().await.first_published_transport_media_id()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn has_producer_route_target(
+        &self,
+        owner_session_id: &SessionId,
+        owner_connection_id: u64,
+        stream_type: StreamType,
+    ) -> bool {
         self.state
             .read()
             .await
-            .sessions
-            .get(session_id)
-            .map(|session| session.connection_id)
+            .producer_route_target(owner_session_id, owner_connection_id, stream_type)
+            .is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn producer_stream_type_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<StreamType> {
+        self.state
+            .read()
+            .await
+            .producer_stream_type_for_transport_media_id(transport_media_id)
     }
 
     #[cfg(test)]
     pub(super) async fn has_session(&self, session_id: &SessionId) -> bool {
-        self.state.read().await.sessions.contains_key(session_id)
+        self.state.read().await.has_session(session_id)
     }
 
     pub(super) async fn is_empty(&self) -> bool {
-        self.state.read().await.sessions.is_empty()
+        self.state.read().await.is_empty()
     }
 }

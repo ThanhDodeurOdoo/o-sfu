@@ -4,8 +4,8 @@ use std::rc::Rc;
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError, RouterEvent,
-    RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissions, SessionState,
-    StreamType, Transport, TransportDirection, TransportId,
+    RouterId, RouterObserver, Session, SessionId, SessionInfo, SessionPermissionFlags,
+    SessionPermissions, SessionState, StreamType, Transport, TransportDirection, TransportId,
 };
 
 fn session(id: SessionId) -> Session {
@@ -637,7 +637,11 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
 #[test]
 fn joined_sessions_store_permissions_and_default_info() {
     let mut router = Router::new(RouterId(1));
-    let permissions = SessionPermissions::new(true, false, true);
+    let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
+        transcription: true,
+        audio_recording: false,
+        video_recording: true,
+    });
 
     assert_eq!(
         router.join_session(Session::new(SessionId(10), permissions)),
@@ -659,15 +663,19 @@ fn router_updates_session_permissions_and_info() {
     let mut router = Router::new(RouterId(1));
 
     assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
-    let permissions = SessionPermissions::new(true, true, false);
-    let info = SessionInfo::new(
-        Some(true),
-        Some(false),
-        Some(true),
-        Some(false),
-        Some(true),
-        Some(false),
-    );
+    let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
+        transcription: true,
+        audio_recording: true,
+        video_recording: false,
+    });
+    let info = SessionInfo::builder()
+        .talking(Some(true))
+        .camera_on(Some(false))
+        .screen_sharing_on(Some(true))
+        .self_muted(Some(false))
+        .deaf(Some(true))
+        .raising_hand(Some(false))
+        .build();
 
     assert_eq!(
         router.update_session_permissions(SessionId(10), permissions),

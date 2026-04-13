@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
-
 use tokio::sync::mpsc;
 
-use crate::signaling::{current_protocol::CurrentServerMessage, shared::SessionId};
+use crate::signaling::current_protocol::CurrentServerMessage;
 
-use super::{SessionOutbound, state::ActiveSession};
+use super::SessionOutbound;
 
 pub(super) type OutboundSender = mpsc::UnboundedSender<SessionOutbound>;
 
@@ -23,31 +21,21 @@ impl MessageFanout {
 }
 
 pub(super) fn fanout_all(
-    sessions: &BTreeMap<SessionId, ActiveSession>,
+    recipients: impl IntoIterator<Item = OutboundSender>,
     message: &CurrentServerMessage,
 ) -> MessageFanout {
     MessageFanout {
-        recipients: sessions
-            .values()
-            .map(|session| session.sender.clone())
-            .collect(),
+        recipients: recipients.into_iter().collect(),
         message: message.clone(),
     }
 }
 
 pub(super) fn fanout_all_except(
-    sessions: &BTreeMap<SessionId, ActiveSession>,
+    recipients: impl IntoIterator<Item = OutboundSender>,
     message: &CurrentServerMessage,
-    excluded_session_id: Option<&SessionId>,
 ) -> MessageFanout {
     MessageFanout {
-        recipients: sessions
-            .iter()
-            .filter(|(session_id, _session)| {
-                excluded_session_id.is_none_or(|excluded| excluded != *session_id)
-            })
-            .map(|(_session_id, session)| session.sender.clone())
-            .collect(),
+        recipients: recipients.into_iter().collect(),
         message: message.clone(),
     }
 }

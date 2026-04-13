@@ -42,7 +42,13 @@ fn topology_rejoin_updates_permissions_without_duplicating_router_sessions() {
     assert_eq!(topology.session_count(), 1);
     assert_eq!(
         topology.session_permissions(&session_id),
-        Some(o_sfu_router::SessionPermissions::new(false, false, true))
+        Some(o_sfu_router::SessionPermissions::from_flags(
+            o_sfu_router::SessionPermissionFlags {
+                transcription: false,
+                audio_recording: false,
+                video_recording: true,
+            },
+        ))
     );
 }
 

@@ -130,26 +130,16 @@ async fn session_replacement_purges_stale_published_media_state() {
             .iter()
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
-    let published_transport_media_id = {
-        let state = channel.state.read().await;
-        state
-            .producers
-            .values()
-            .find_map(|producer| producer.transport_media_id)
-    };
+    let published_transport_media_id = channel.first_published_transport_media_id().await;
     assert!(published_transport_media_id.is_some());
 
-    {
-        let state = channel.state.read().await;
-        assert_eq!(state.producers.len(), 1);
-        assert_eq!(state.consumer_index.len(), 1);
-        assert!(
-            state
-                .producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
-                .is_some()
-        );
-        drop(state);
-    }
+    assert_eq!(channel.producer_count().await, 1);
+    assert_eq!(channel.consumer_count().await, 1);
+    assert!(
+        channel
+            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .await
+    );
 
     let (replacement_tx, _replacement_rx) = test_sender();
     assert!(
@@ -164,25 +154,21 @@ async fn session_replacement_purges_stale_published_media_state() {
             .is_ok()
     );
 
-    {
-        let state = channel.state.read().await;
-        assert!(state.producers.is_empty());
-        assert!(state.consumer_index.is_empty());
-        assert!(
-            state
-                .producer_stream_type_for_transport_media_id(
-                    published_transport_media_id
-                        .expect("published track should have a transport id")
-                )
-                .is_none()
-        );
-        assert!(
-            state
-                .producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
-                .is_none()
-        );
-        drop(state);
-    }
+    assert_eq!(channel.producer_count().await, 0);
+    assert_eq!(channel.consumer_count().await, 0);
+    assert!(
+        channel
+            .producer_stream_type_for_transport_media_id(
+                published_transport_media_id.expect("published track should have a transport id")
+            )
+            .await
+            .is_none()
+    );
+    assert!(
+        !channel
+            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .await
+    );
 }
 
 #[tokio::test]
@@ -288,34 +274,26 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
     })
     .await;
 
-    {
-        let state = channel.state.read().await;
-        assert!(state.producers.is_empty());
-        drop(state);
-    }
+    assert_eq!(channel.producer_count().await, 0);
 
     assert!(publish_task.await.unwrap().is_some());
 
-    {
-        let state = channel.state.read().await;
-        assert_eq!(state.producers.len(), 1);
-        let transport_media_id = state
-            .producers
-            .values()
-            .find_map(|producer| producer.transport_media_id);
-        assert!(transport_media_id.is_some());
-        assert_eq!(
-            transport_media_id.and_then(|transport_media_id| state
-                .producer_stream_type_for_transport_media_id(transport_media_id)),
-            Some(StreamType::Camera)
-        );
-        assert!(
-            state
-                .producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
-                .is_some()
-        );
-        drop(state);
-    }
+    assert_eq!(channel.producer_count().await, 1);
+    let transport_media_id = channel.first_published_transport_media_id().await;
+    assert!(transport_media_id.is_some());
+    assert_eq!(
+        channel
+            .producer_stream_type_for_transport_media_id(
+                transport_media_id.expect("published track should have a transport id")
+            )
+            .await,
+        Some(StreamType::Camera)
+    );
+    assert!(
+        channel
+            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .await
+    );
 }
 
 #[tokio::test]
@@ -541,19 +519,11 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     })
     .await;
 
-    {
-        let state = channel.state.read().await;
-        assert!(state.consumer_index.is_empty());
-        drop(state);
-    }
+    assert_eq!(channel.consumer_count().await, 0);
 
     bootstrap_task.await.unwrap();
 
-    {
-        let state = channel.state.read().await;
-        assert_eq!(state.consumer_index.len(), 1);
-        drop(state);
-    }
+    assert_eq!(channel.consumer_count().await, 1);
 }
 
 #[tokio::test]

@@ -13,13 +13,20 @@ pub struct SessionPermissions {
     video_recording: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionPermissionFlags {
+    pub transcription: bool,
+    pub audio_recording: bool,
+    pub video_recording: bool,
+}
+
 impl SessionPermissions {
     #[must_use]
-    pub fn new(transcription: bool, audio_recording: bool, video_recording: bool) -> Self {
+    pub const fn from_flags(flags: SessionPermissionFlags) -> Self {
         Self {
-            transcription,
-            audio_recording,
-            video_recording,
+            transcription: flags.transcription,
+            audio_recording: flags.audio_recording,
+            video_recording: flags.video_recording,
         }
     }
 
@@ -53,24 +60,15 @@ pub struct SessionInfo {
     is_raising_hand: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionInfoBuilder {
+    info: SessionInfo,
+}
+
 impl SessionInfo {
     #[must_use]
-    pub fn new(
-        is_talking: Option<bool>,
-        is_camera_on: Option<bool>,
-        is_screen_sharing_on: Option<bool>,
-        is_self_muted: Option<bool>,
-        is_deaf: Option<bool>,
-        is_raising_hand: Option<bool>,
-    ) -> Self {
-        Self {
-            is_talking,
-            is_camera_on,
-            is_screen_sharing_on,
-            is_self_muted,
-            is_deaf,
-            is_raising_hand,
-        }
+    pub fn builder() -> SessionInfoBuilder {
+        SessionInfoBuilder::default()
     }
 
     #[must_use]
@@ -101,6 +99,49 @@ impl SessionInfo {
     #[must_use]
     pub fn is_raising_hand(&self) -> Option<bool> {
         self.is_raising_hand
+    }
+}
+
+impl SessionInfoBuilder {
+    #[must_use]
+    pub fn talking(mut self, is_talking: Option<bool>) -> Self {
+        self.info.is_talking = is_talking;
+        self
+    }
+
+    #[must_use]
+    pub fn camera_on(mut self, is_camera_on: Option<bool>) -> Self {
+        self.info.is_camera_on = is_camera_on;
+        self
+    }
+
+    #[must_use]
+    pub fn screen_sharing_on(mut self, is_screen_sharing_on: Option<bool>) -> Self {
+        self.info.is_screen_sharing_on = is_screen_sharing_on;
+        self
+    }
+
+    #[must_use]
+    pub fn self_muted(mut self, is_self_muted: Option<bool>) -> Self {
+        self.info.is_self_muted = is_self_muted;
+        self
+    }
+
+    #[must_use]
+    pub fn deaf(mut self, is_deaf: Option<bool>) -> Self {
+        self.info.is_deaf = is_deaf;
+        self
+    }
+
+    #[must_use]
+    pub fn raising_hand(mut self, is_raising_hand: Option<bool>) -> Self {
+        self.info.is_raising_hand = is_raising_hand;
+        self
+    }
+
+    #[must_use]
+    pub const fn build(self) -> SessionInfo {
+        self.info
     }
 }
 

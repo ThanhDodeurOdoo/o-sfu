@@ -1,7 +1,8 @@
 use super::{ProofRouterModel, model::ProofRouterError};
 use crate::{
     Consumer, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session, SessionId,
-    SessionInfo, SessionPermissions, StreamType, Transport, TransportDirection, TransportId,
+    SessionInfo, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
+    TransportDirection, TransportId,
 };
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
@@ -22,15 +23,19 @@ fn join_session_preserves_invariants() {
 fn session_updates_preserve_invariants() {
     let mut router = ProofRouter::new(RouterId(0));
     let session_id = SessionId(kani::any());
-    let permissions = SessionPermissions::new(kani::any(), kani::any(), kani::any());
-    let info = SessionInfo::new(
-        kani::any(),
-        kani::any(),
-        kani::any(),
-        kani::any(),
-        kani::any(),
-        kani::any(),
-    );
+    let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
+        transcription: kani::any(),
+        audio_recording: kani::any(),
+        video_recording: kani::any(),
+    });
+    let info = SessionInfo::builder()
+        .talking(kani::any())
+        .camera_on(kani::any())
+        .screen_sharing_on(kani::any())
+        .self_muted(kani::any())
+        .deaf(kani::any())
+        .raising_hand(kani::any())
+        .build();
 
     let _ = router.join_session(session(session_id));
     let _ = router.update_session_permissions(session_id, permissions);

@@ -5,9 +5,10 @@ use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind,
     Producer as RouterProducer, ProducerId as RouterProducerId, Router, RouterError, RouterId,
     RtpCapabilities, Session as RouterSession, SessionId as RouterSessionId,
-    SessionInfo as RouterSessionInfo, SessionPermissions as RouterSessionPermissions,
-    StreamType as RouterStreamType, Transport as RouterTransport,
-    TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
+    SessionInfo as RouterSessionInfo, SessionPermissionFlags as RouterSessionPermissionFlags,
+    SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
+    Transport as RouterTransport, TransportDirection as RouterTransportDirection,
+    TransportId as RouterTransportId,
 };
 
 use super::rtp_capabilities::default_router_rtp_capabilities;
@@ -346,20 +347,20 @@ impl ChannelRouterState {
 }
 
 fn router_permissions(permissions: &SignalingSessionPermissions) -> RouterSessionPermissions {
-    RouterSessionPermissions::new(
-        permissions.transcription.unwrap_or(false),
-        permissions.audio_recording.unwrap_or(false),
-        permissions.video_recording.unwrap_or(false),
-    )
+    RouterSessionPermissions::from_flags(RouterSessionPermissionFlags {
+        transcription: permissions.transcription.unwrap_or(false),
+        audio_recording: permissions.audio_recording.unwrap_or(false),
+        video_recording: permissions.video_recording.unwrap_or(false),
+    })
 }
 
 fn router_info(info: &SignalingSessionInfo) -> RouterSessionInfo {
-    RouterSessionInfo::new(
-        info.is_talking,
-        info.is_camera_on,
-        info.is_screen_sharing_on,
-        info.is_self_muted,
-        info.is_deaf,
-        info.is_raising_hand,
-    )
+    RouterSessionInfo::builder()
+        .talking(info.is_talking)
+        .camera_on(info.is_camera_on)
+        .screen_sharing_on(info.is_screen_sharing_on)
+        .self_muted(info.is_self_muted)
+        .deaf(info.is_deaf)
+        .raising_hand(info.is_raising_hand)
+        .build()
 }

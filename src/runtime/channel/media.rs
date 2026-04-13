@@ -1,12 +1,8 @@
-use std::collections::BTreeMap;
-
 use o_sfu_router::derive_consumable_rtp_parameters;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::{
-    bundle_api::bundle_session_info_key,
-    current_protocol::{CurrentServerMessage, CurrentSessionInfoSnapshotById},
     ortc_mapper,
     shared::{DownloadStates, SessionId, StreamType},
     webrtc::{MediaKind as SignalingMediaKind, RtpParameters},
@@ -14,7 +10,6 @@ use crate::signaling::{
 
 use super::{
     Channel,
-    outbound::fanout_all,
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget},
 };
 
@@ -47,17 +42,12 @@ impl Channel {
         rtp_parameters: RtpParameters,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
-        let (publisher_connection_id, router_capabilities) = {
+        let publish_prerequisites = {
             let state = self.state.read().await;
-            let session = state.sessions.get(session_id)?;
-            if !session.negotiation.can_publish() {
-                return None;
-            }
-            (
-                session.connection_id,
-                state.topology.rtp_capabilities().clone(),
-            )
+            state.publish_prerequisites(session_id)?
         };
+        let publisher_connection_id = publish_prerequisites.connection_id();
+        let router_capabilities = publish_prerequisites.router_capabilities();
 
         let parsed_rtp_parameters =
             ortc_mapper::parse_rtp_parameters(&rtp_parameters.0).or_else(|| {
@@ -153,24 +143,24 @@ impl Channel {
         let consumer_transport_media_id = match transport_adapter
             .consume_media(
                 &self.transport_session_key(
-                    &target.consumer_session_id,
-                    target.consumer_connection_id,
+                    target.consumer_session_id(),
+                    target.consumer_connection_id(),
                 ),
-                target.media_kind,
+                target.media_kind(),
                 &self.transport_session_key(
-                    &target.producer_session_id,
-                    target.producer_connection_id,
+                    target.producer_session_id(),
+                    target.producer_connection_id(),
                 ),
-                target.transport_media_id,
-                &prepared.consumer_rtp_parameters,
+                target.transport_media_id(),
+                prepared.consumer_rtp_parameters(),
             )
             .await
         {
             Ok(transport_media_id) => transport_media_id,
             Err(_error) => {
                 warn!(
-                    consumer_session_id = ?target.consumer_session_id,
-                    producer_session_id = ?target.producer_session_id,
+                    consumer_session_id = ?target.consumer_session_id(),
+                    producer_session_id = ?target.producer_session_id(),
                     ?origin,
                     "transport adapter rejected consume media declaration"
                 );
@@ -185,8 +175,8 @@ impl Channel {
             let _result = transport_adapter
                 .remove_media(
                     &self.transport_session_key(
-                        &target.consumer_session_id,
-                        target.consumer_connection_id,
+                        target.consumer_session_id(),
+                        target.consumer_connection_id(),
                     ),
                     consumer_transport_media_id,
                 )
@@ -209,18 +199,16 @@ impl Channel {
     ) {
         let Some(producer_target) = ({
             let state = self.state.read().await;
-            state.sessions.get(session_id).and_then(|session| {
-                state.producer_route_target(session_id, session.connection_id, stream_type)
-            })
+            state.producer_route_target_for_session(session_id, stream_type)
         }) else {
             return;
         };
         let transport_session_key =
-            self.transport_session_key(session_id, producer_target.owner_connection_id);
+            self.transport_session_key(session_id, producer_target.owner_connection_id());
         if transport_adapter
             .set_producer_active(
                 &transport_session_key,
-                producer_target.transport_media_id,
+                producer_target.transport_media_id(),
                 active,
             )
             .await
@@ -236,62 +224,11 @@ impl Channel {
         }
         let fanout = {
             let mut state = self.state.write().await;
-            let current_connection_id = state
-                .sessions
-                .get(session_id)
-                .map(|session| session.connection_id);
-            let Some(producer) = state.producers.get_mut(&producer_target.producer_wire_id) else {
-                return;
-            };
-            if producer.owner_connection_id != producer_target.owner_connection_id
-                || Some(producer.owner_connection_id) != current_connection_id
-                || producer.routed_producer_id != producer_target.routed_producer_id
-                || producer.transport_media_id != Some(producer_target.transport_media_id)
-            {
-                return;
-            }
-            producer.active = active;
-            let paused = !active;
-            if state
-                .topology
-                .set_producer_paused(producer_target.routed_producer_id, paused)
-                .is_err()
-            {
-                error!(
-                    ?session_id,
-                    ?stream_type,
-                    "failed to set producer pause state in channel router"
-                );
-                return;
-            }
-            let Some(session) = state.sessions.get_mut(session_id) else {
-                return;
-            };
-            match stream_type {
-                StreamType::Camera => session.info.is_camera_on = Some(active),
-                StreamType::Screen => session.info.is_screen_sharing_on = Some(active),
-                StreamType::Audio => {}
-            }
-            let updated_info = session.info.clone();
-            if state
-                .topology
-                .update_session_info(session_id, &updated_info)
-                .is_err()
-            {
-                error!(
-                    ?session_id,
-                    "failed to mirror session info update into channel router after production change"
-                );
-                return;
-            }
-            let snapshot: CurrentSessionInfoSnapshotById =
-                BTreeMap::from([(bundle_session_info_key(session_id), updated_info)]);
-            fanout_all(
-                &state.sessions,
-                &CurrentServerMessage::SessionInfoChanged(snapshot),
-            )
+            state.apply_producer_activity(session_id, &producer_target, stream_type, active)
         };
-        fanout.emit();
+        if let Some(fanout) = fanout {
+            fanout.emit();
+        }
     }
 
     pub async fn update_download_state(
@@ -303,40 +240,20 @@ impl Channel {
     ) {
         let route_updates = {
             let state = self.state.read().await;
-            let consumer_connection_id = state
-                .sessions
-                .get(session_id)
-                .map(|session| session.connection_id);
-            let mut route_updates = Vec::new();
-            for (stream_type, active) in states.iter() {
-                let key = super::state::ConsumerKey {
-                    consumer_session_id: session_id.clone(),
-                    producer_session_id: target_session_id.clone(),
-                    stream_type,
-                };
-                let Some(consumer_state) = state.consumer_index.get(&key).copied() else {
-                    continue;
-                };
-                if Some(consumer_state.consumer_connection_id) != consumer_connection_id {
-                    continue;
-                }
-                route_updates.push((consumer_state, stream_type, active));
-            }
-            drop(state);
-            route_updates
+            state.download_route_updates(session_id, target_session_id, states)
         };
         let mut committed_updates = Vec::new();
-        for (consumer_state, stream_type, active) in route_updates {
+        for route_update in route_updates {
             if transport_adapter
                 .set_consumer_active(
-                    &self.transport_session_key(session_id, consumer_state.consumer_connection_id),
-                    consumer_state.consumer_media,
+                    &self.transport_session_key(session_id, route_update.consumer_connection_id()),
+                    route_update.consumer_media(),
                     &self.transport_session_key(
                         target_session_id,
-                        consumer_state.source_connection_id,
+                        route_update.source_connection_id(),
                     ),
-                    consumer_state.source_media,
-                    active,
+                    route_update.source_media(),
+                    route_update.active(),
                 )
                 .await
                 .is_err()
@@ -344,46 +261,15 @@ impl Channel {
                 warn!(
                     ?session_id,
                     ?target_session_id,
-                    ?stream_type,
-                    active,
+                    stream_type = ?route_update.stream_type(),
+                    active = route_update.active(),
                     "transport adapter failed to update consumer route activity"
                 );
                 continue;
             }
-            committed_updates.push((consumer_state, stream_type, active));
+            committed_updates.push(route_update);
         }
         let mut state = self.state.write().await;
-        let consumer_connection_id = state
-            .sessions
-            .get(session_id)
-            .map(|session| session.connection_id);
-        for (consumer_state, stream_type, active) in committed_updates {
-            let key = super::state::ConsumerKey {
-                consumer_session_id: session_id.clone(),
-                producer_session_id: target_session_id.clone(),
-                stream_type,
-            };
-            let Some(current_consumer_state) = state.consumer_index.get(&key).copied() else {
-                continue;
-            };
-            if current_consumer_state != consumer_state
-                || Some(current_consumer_state.consumer_connection_id) != consumer_connection_id
-            {
-                continue;
-            }
-            let paused = !active;
-            if state
-                .topology
-                .set_consumer_paused(current_consumer_state.routed_consumer_id, paused)
-                .is_err()
-            {
-                error!(
-                    ?session_id,
-                    ?target_session_id,
-                    ?stream_type,
-                    "failed to set consumer pause state in channel router"
-                );
-            }
-        }
+        state.commit_download_route_updates(session_id, target_session_id, committed_updates);
     }
 }
