@@ -325,6 +325,19 @@ async fn read_track_snapshot(peer: &mut ProtocolHarnessPeer) -> Option<Vec<Track
     Some(track_bindings)
 }
 
+async fn read_single_native_server_message(peer: &mut ProtocolHarnessPeer) -> Option<ServerMessage> {
+    let payload = read_next_server_payload(peer.websocket.as_mut()?).await?;
+    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
+    let mut messages = native_server_messages(&batch)?;
+    if messages.len() != 1 {
+        return None;
+    }
+    let message = messages.pop()?;
+    let commands = peer.core.on_ws_message(&payload);
+    peer.run_commands(commands).await?;
+    Some(message)
+}
+
 fn protocol_session_id(session_id: &SessionId) -> ProtocolSessionId {
     match session_id {
         SessionId::Integer(value) => ProtocolSessionId::Integer(*value),
@@ -866,6 +879,93 @@ async fn native_session_emits_peerjoined_message_for_existing_peers() {
 
     let peer_joined_commands = alice.core.on_ws_message(&peer_joined_payload);
     assert!(alice.run_commands(peer_joined_commands).await.is_some());
+}
+
+#[tokio::test]
+async fn native_session_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
+    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-peer-replacement",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(45));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(46));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let mut alice = ProtocolHarnessPeer::default();
+    let mut bob = ProtocolHarnessPeer::default();
+    assert!(
+        alice
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(46))
+            .await
+            .is_some()
+    );
+    alice.updates.clear();
+
+    let mut replacement = ProtocolHarnessPeer::default();
+    assert!(
+        replacement
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+
+    let close_code = read_close_code(match bob.websocket.as_mut() {
+        Some(websocket) => websocket,
+        None => return,
+    })
+    .await;
+    assert_eq!(close_code, Some(CloseCode::Library(4003)));
+
+    assert!(
+        matches!(
+            read_single_native_server_message(&mut alice).await,
+            Some(ServerMessage::PeerLeft(_))
+        ),
+        "replacement should emit peerleft before rejoin"
+    );
+    assert_eq!(
+        alice.updates.last(),
+        Some(&BundleUpdate::Disconnect(BundleDisconnectUpdate {
+            session_id: ProtocolSessionId::Integer(46),
+        }))
+    );
+
+    assert!(
+        matches!(
+            read_single_native_server_message(&mut alice).await,
+            Some(ServerMessage::PeerJoined(_))
+        ),
+        "replacement should emit peerjoined after peerleft"
+    );
+    assert_eq!(
+        alice.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&ProtocolSessionId::Integer(46)),
+            ProtocolSessionInfo::default(),
+        )]))),
+    );
 }
 
 #[tokio::test]

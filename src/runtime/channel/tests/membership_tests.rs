@@ -225,6 +225,78 @@ async fn replacing_a_session_notifies_remaining_peers() {
     assert_eq!(channel.session_count().await, 2);
 }
 
+#[tokio::test]
+async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peers() {
+    let manager = ChannelManager::for_test();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let (tx1, mut alice_rx) = test_sender();
+    let (tx2, mut bob_old_rx) = test_sender();
+    let (tx3, _bob_new_rx) = test_sender();
+    assert!(
+        channel
+            .join_session_runtime(
+                SessionId::Integer(1),
+                None,
+                SessionPermissions::default(),
+                tx1,
+                &transport_adapter,
+                super::super::TransportCleanupMode::NativeSessionProtocol,
+            )
+            .await
+            .is_ok()
+    );
+    assert!(
+        channel
+            .join_session_runtime(
+                SessionId::Integer(2),
+                None,
+                SessionPermissions::default(),
+                tx2,
+                &transport_adapter,
+                super::super::TransportCleanupMode::NativeSessionProtocol,
+            )
+            .await
+            .is_ok()
+    );
+    assert!(matches!(
+        alice_rx.try_recv().ok(),
+        Some(SessionOutbound::Message(ChannelEventMessage::SessionJoined { session_id, info }))
+            if session_id == SessionId::Integer(2) && info == SessionInfo::default()
+    ));
+
+    assert!(
+        channel
+            .join_session_runtime(
+                SessionId::Integer(2),
+                None,
+                SessionPermissions::default(),
+                tx3,
+                &transport_adapter,
+                super::super::TransportCleanupMode::NativeSessionProtocol,
+            )
+            .await
+            .is_ok()
+    );
+    assert!(matches!(
+        bob_old_rx.try_recv().ok(),
+        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+    ));
+    assert!(matches!(
+        alice_rx.try_recv().ok(),
+        Some(SessionOutbound::Message(ChannelEventMessage::SessionDeparted { session_id }))
+            if session_id == SessionId::Integer(2)
+    ));
+    assert!(matches!(
+        alice_rx.try_recv().ok(),
+        Some(SessionOutbound::Message(ChannelEventMessage::SessionJoined { session_id, info }))
+            if session_id == SessionId::Integer(2) && info == SessionInfo::default()
+    ));
+    assert_eq!(channel.session_count().await, 2);
+}
+
 async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, u64) {
     let (tx1, _rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
