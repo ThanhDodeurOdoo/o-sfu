@@ -3,11 +3,11 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 
 use crate::runtime::{
-    channel::{Channel, ChannelEventRequest, SessionOutbound},
+    channel::{Channel, SessionOutbound},
     metrics::RuntimeMetrics,
     stub_bus::{
-        StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch,
-        send_server_request_batch,
+        StubBusOutcome, StubBusSession, WsWriter, legacy_server_message, legacy_server_request,
+        send_server_message_batch, send_server_request_batch,
     },
     transport_adapter::RuntimeTransportAdapter,
 };
@@ -117,18 +117,14 @@ impl SessionProtocol {
     ) -> Result<usize, WebSocketCloseCode> {
         match (self, outbound) {
             (Self::LegacyStubBus(_), SessionOutbound::Message(message)) => {
-                let Some(legacy_message) = message.into_current_server_message() else {
+                let Some(legacy_message) = legacy_server_message(message) else {
                     return Ok(0);
                 };
                 send_server_message_batch(writer, &legacy_message).await?;
                 Ok(1)
             }
             (Self::LegacyStubBus(_), SessionOutbound::Request(request)) => {
-                let legacy_request = match *request {
-                    ChannelEventRequest::BootstrapRemoteTrack(payload) => {
-                        payload.into_current_server_request()
-                    }
-                };
+                let legacy_request = legacy_server_request(*request);
                 send_server_request_batch(writer, &legacy_request).await?;
                 Ok(1)
             }

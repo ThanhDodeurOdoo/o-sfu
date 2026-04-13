@@ -1,11 +1,19 @@
+use std::collections::BTreeMap;
+
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, stream::SplitSink};
 use tracing::trace;
 
+use crate::runtime::channel::{ChannelEventMessage, ChannelEventRequest};
 use crate::signaling::{
+    bundle_api::bundle_session_info_key,
     current_bus::{CurrentBusBatch, CurrentBusEnvelope},
-    current_protocol::{CurrentServerMessage, CurrentServerRequest},
+    current_protocol::{
+        CurrentBroadcastPayload, CurrentRemoteTrackBootstrapPayload, CurrentServerMessage,
+        CurrentServerRequest, CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById,
+    },
     protocol::WebSocketCloseCode,
+    shared::{SessionId, SessionInfo},
 };
 
 pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
@@ -42,6 +50,52 @@ pub(crate) async fn send_server_request_batch(
         }],
     )
     .await
+}
+
+pub(crate) fn legacy_server_message(message: ChannelEventMessage) -> Option<CurrentServerMessage> {
+    match message {
+        ChannelEventMessage::Broadcast { sender_id, message } => {
+            Some(CurrentServerMessage::Broadcast(CurrentBroadcastPayload {
+                sender_id,
+                message,
+            }))
+        }
+        ChannelEventMessage::SessionJoined { .. } => None,
+        ChannelEventMessage::SessionDeparted { session_id } => Some(
+            CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload { session_id }),
+        ),
+        ChannelEventMessage::SessionInfoChanged(snapshot) => Some(
+            CurrentServerMessage::SessionInfoChanged(legacy_session_info_snapshot(snapshot)),
+        ),
+        ChannelEventMessage::RecordingStateChanged(state) => {
+            Some(CurrentServerMessage::ChannelStateChanged(state))
+        }
+    }
+}
+
+pub(crate) fn legacy_server_request(request: ChannelEventRequest) -> CurrentServerRequest {
+    match request {
+        ChannelEventRequest::BootstrapRemoteTrack(payload) => {
+            CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
+                id: payload.consumer_id(),
+                media_kind: payload.media_kind(),
+                source_id: payload.producer_id(),
+                rtp_parameters: payload.rtp_parameters().clone(),
+                session_id: payload.session_id().clone(),
+                active: payload.active(),
+                stream_type: payload.stream_type(),
+            })
+        }
+    }
+}
+
+fn legacy_session_info_snapshot(
+    snapshot: BTreeMap<SessionId, SessionInfo>,
+) -> CurrentSessionInfoSnapshotById {
+    snapshot
+        .into_iter()
+        .map(|(session_id, info)| (bundle_session_info_key(&session_id), info))
+        .collect()
 }
 
 pub(super) fn parse_batch(message: Message) -> Result<Option<CurrentBusBatch>, WebSocketCloseCode> {

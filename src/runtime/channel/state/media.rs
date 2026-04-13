@@ -9,7 +9,6 @@ use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::{
-    current_protocol::{CurrentRemoteTrackBootstrapPayload, CurrentServerRequest},
     ortc_mapper,
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     webrtc::{MediaKind as SignalingMediaKind, RtpParameters},
@@ -730,6 +729,18 @@ impl ProducerRouteTarget {
 }
 
 impl RemoteTrackBootstrap {
+    pub(crate) fn consumer_id(&self) -> String {
+        self.consumer_id.into_wire_id()
+    }
+
+    pub(crate) const fn media_kind(&self) -> SignalingMediaKind {
+        self.media_kind
+    }
+
+    pub(crate) fn producer_id(&self) -> String {
+        self.producer_id.into_wire_id()
+    }
+
     pub(crate) fn rtp_parameters(&self) -> &RtpParameters {
         &self.rtp_parameters
     }
@@ -744,27 +755,6 @@ impl RemoteTrackBootstrap {
 
     pub(crate) const fn stream_type(&self) -> StreamType {
         self.stream_type
-    }
-
-    pub(crate) fn into_current_server_request(self) -> CurrentServerRequest {
-        let Self {
-            consumer_id,
-            media_kind,
-            producer_id,
-            rtp_parameters,
-            session_id,
-            active,
-            stream_type,
-        } = self;
-        CurrentServerRequest::BootstrapRemoteTrack(CurrentRemoteTrackBootstrapPayload {
-            id: consumer_id.into_wire_id(),
-            media_kind,
-            source_id: producer_id.into_wire_id(),
-            rtp_parameters,
-            session_id,
-            active,
-            stream_type,
-        })
     }
 
     pub(crate) fn into_channel_event_request(self) -> ChannelEventRequest {

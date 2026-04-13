@@ -28,6 +28,7 @@ use str0m::{
 };
 
 use super::fixtures::*;
+use crate::runtime::{rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey};
 use crate::signaling::shared::SessionPermissions;
 
 const BATCH_FLUSH_DELAY_MS: u32 = 100;
@@ -324,6 +325,71 @@ async fn read_track_snapshot(peer: &mut ProtocolHarnessPeer) -> Option<Vec<Track
     let commands = peer.core.on_ws_message(&payload);
     peer.run_commands(commands).await?;
     Some(track_bindings)
+}
+
+fn route_has_consumer_activity(
+    route_entry: &DebugRouteEntry,
+    consumer_session_key: &TransportSessionKey,
+    active: bool,
+) -> bool {
+    route_entry.destinations.iter().any(|destination| {
+        destination.dest_session == *consumer_session_key && destination.active == active
+    })
+}
+
+async fn real_rtc_route_entry(
+    server: &TestServer,
+    channel: &Arc<Channel>,
+    source_session_id: SessionId,
+    consumer_session_id: SessionId,
+    mid: &str,
+) -> Option<(DebugRouteEntry, TransportSessionKey)> {
+    let source_connection_id = channel.session_connection_id(&source_session_id).await?;
+    let consumer_connection_id = channel.session_connection_id(&consumer_session_id).await?;
+    let source_session_key =
+        channel.transport_session_key(&source_session_id, source_connection_id);
+    let consumer_session_key =
+        channel.transport_session_key(&consumer_session_id, consumer_connection_id);
+    let route_entry = server
+        .state
+        .transport_adapter
+        .debug_route_entry(&source_session_key, Mid::from(mid))
+        .await?;
+    Some((route_entry, consumer_session_key))
+}
+
+async fn assert_real_rtc_subscribe_activity(
+    bob: &mut ProtocolHarnessPeer,
+    server: &TestServer,
+    channel: &Arc<Channel>,
+    published_track: &TrackBinding,
+    active: bool,
+) -> Option<()> {
+    bob.subscribe(
+        ProtocolSessionId::Integer(91),
+        ProtocolDownloadStates {
+            camera: Some(active),
+            ..ProtocolDownloadStates::default()
+        },
+    )
+    .await?;
+    if !no_server_frame(bob, Duration::from_millis(150)).await {
+        return None;
+    }
+    let (route_entry, consumer_session_key) = real_rtc_route_entry(
+        server,
+        channel,
+        SessionId::Integer(91),
+        SessionId::Integer(92),
+        &published_track.mid,
+    )
+    .await?;
+    if !route_entry.source_active
+        || !route_has_consumer_activity(&route_entry, &consumer_session_key, active)
+    {
+        return None;
+    }
+    Some(())
 }
 
 async fn read_single_native_server_message(
@@ -1886,42 +1952,16 @@ async fn protocol_core_native_subscribe_updates_real_rtc_consumer_activity() {
     );
 
     assert!(
-        bob.subscribe(
-            ProtocolSessionId::Integer(91),
-            ProtocolDownloadStates {
-                camera: Some(false),
-                ..ProtocolDownloadStates::default()
-            },
-        )
-        .await
-        .is_some(),
-        "subscriber should send the native subscribe update"
+        assert_real_rtc_subscribe_activity(&mut bob, &server, &channel, published_track, false)
+            .await
+            .is_some(),
+        "subscriber should disable the existing rtc route without extra websocket signaling"
     );
     assert!(
-        no_server_frame(&mut bob, Duration::from_millis(150)).await,
-        "subscribe activity changes should not emit extra websocket signaling once rtc routes exist"
-    );
-
-    let source_session_key = channel.transport_session_key(&SessionId::Integer(91), 0);
-    let consumer_session_key = channel.transport_session_key(&SessionId::Integer(92), 1);
-    let route_entry = server
-        .state
-        .transport_adapter
-        .debug_route_entry(&source_session_key, Mid::from(published_track.mid.as_str()))
-        .await;
-    assert!(
-        route_entry.is_some(),
-        "published rtc route should remain inspectable"
-    );
-    let Some(route_entry) = route_entry else {
-        return;
-    };
-    assert!(route_entry.source_active);
-    assert!(
-        route_entry.destinations.iter().any(|destination| {
-            destination.dest_session == consumer_session_key && !destination.active
-        }),
-        "real rtc route should mark the subscriber destination inactive after subscribe(camera=false)"
+        assert_real_rtc_subscribe_activity(&mut bob, &server, &channel, published_track, true)
+            .await
+            .is_some(),
+        "real rtc route should mark the subscriber destination active again after subscribe(camera=true)"
     );
 }
 

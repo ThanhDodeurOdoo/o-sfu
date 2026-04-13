@@ -393,7 +393,7 @@ impl Channel {
     }
 
     #[cfg(test)]
-    pub(super) async fn session_connection_id(&self, session_id: &SessionId) -> Option<u64> {
+    pub(crate) async fn session_connection_id(&self, session_id: &SessionId) -> Option<u64> {
         self.state.read().await.session_connection_id(session_id)
     }
 
