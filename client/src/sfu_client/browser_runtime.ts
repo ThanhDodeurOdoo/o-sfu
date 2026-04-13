@@ -22,6 +22,8 @@ export type BrowserRuntimeHooks = {
     syncPublicState: () => void;
 };
 
+const TRANSPORT_FAILURE_CLOSE_CODE = 1011;
+
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
     private readonly _createPeerConnection: (config: RTCConfiguration) => ClientPeerConnection;
@@ -222,13 +224,17 @@ export class BrowserRuntime {
             iceServers: hooks.iceServers
         });
         peerConnection.onconnectionstatechange = () => {
-            if (
-                this._peerConnection !== peerConnection ||
-                peerConnection.connectionState !== "connected"
-            ) {
+            if (this._peerConnection !== peerConnection) {
                 return;
             }
-            this.enqueueProtocolCommands(() => hooks.protocolCore.onTransportReady(), hooks);
+            const state = peerConnection.connectionState;
+            if (state === "connected") {
+                this.enqueueProtocolCommands(() => hooks.protocolCore.onTransportReady(), hooks);
+                return;
+            }
+            if (state === "disconnected" || state === "failed") {
+                this.closeWebSocketForTransportFailure();
+            }
         };
         peerConnection.ontrack = (event) => {
             hooks.remoteTracks.handleTrackEvent(event, hooks.onUpdate);
@@ -273,6 +279,13 @@ export class BrowserRuntime {
 
     private shouldFallbackToImmediateTransportReady(): boolean {
         return typeof this._peerConnection?.connectionState !== "string";
+    }
+
+    private closeWebSocketForTransportFailure(): void {
+        if (!this._webSocket || this._webSocket.readyState >= 2) {
+            return;
+        }
+        this._webSocket.close(TRANSPORT_FAILURE_CLOSE_CODE);
     }
 
     private cancelTimer(id: number): void {

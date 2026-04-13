@@ -116,6 +116,8 @@ class FakeProtocolCore {
         this.publicationUpdates = [];
         this.trackBindings = new Map();
         this.transportReadyCalls = 0;
+        this.transportFailureState = null;
+        this.wsCloseCodes = [];
     }
 
     broadcast() {
@@ -147,7 +149,12 @@ class FakeProtocolCore {
         return [{ kind: "emitStateChange", state: "connected" }];
     }
 
-    onWsClose() {
+    onWsClose(code) {
+        this.wsCloseCodes.push(code);
+        if (this.transportFailureState) {
+            this.state = this.transportFailureState;
+            return [{ kind: "emitStateChange", state: this.transportFailureState }];
+        }
         return [];
     }
 
@@ -744,6 +751,42 @@ test("offer waits for peer connection transport readiness before emitting connec
 
     assert.equal(core.transportReadyCalls, 1);
     assert.equal(client.state, "connected");
+});
+
+test("peer connection transport failure closes the websocket and enters recovery", async () => {
+    const core = new FakeProtocolCore();
+    core.transportFailureState = "recovering";
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].open();
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    peerConnections[0].emitConnectionState("disconnected");
+    await tick();
+
+    assert.equal(sockets[0].readyState, 3);
+    assert.deepEqual(core.wsCloseCodes, [1011]);
+    assert.equal(client.state, "recovering");
 });
 
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {
