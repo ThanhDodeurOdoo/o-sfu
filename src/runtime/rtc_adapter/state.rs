@@ -11,7 +11,8 @@ use std::{
 
 use str0m::change::SdpPendingOffer;
 use str0m::config::Fingerprint;
-use str0m::media::Mid;
+use str0m::media::{Mid, Rid};
+use str0m::rtp::Ssrc;
 use str0m::{IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
@@ -66,7 +67,14 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) pending_offer: Option<SdpPendingOffer>,
     pub(super) staged_offer_sdp: Option<String>,
     pub(super) initial_offer_applied: bool,
+    pub(super) pending_recv_streams: BTreeMap<Mid, PendingRecvStream>,
     pub(super) queued_removal_mids: BTreeSet<Mid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingRecvStream {
+    pub(super) ssrc: Ssrc,
+    pub(super) rid: Option<Rid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

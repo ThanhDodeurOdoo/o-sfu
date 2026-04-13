@@ -148,10 +148,37 @@ fn worker_apply_session_answer(
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
+    apply_pending_recv_streams(session_state);
     stage_queued_removal_offer(session_state);
     session_state.dtls_started = true;
     state.mark_session_dirty(session_key);
     Ok(())
+}
+
+fn apply_pending_recv_streams(session_state: &mut super::super::state::RtcSessionState) {
+    if session_state
+        .sdp_negotiation
+        .pending_recv_streams
+        .is_empty()
+    {
+        return;
+    }
+    let pending_recv_streams = session_state
+        .sdp_negotiation
+        .pending_recv_streams
+        .iter()
+        .map(|(mid, stream)| (*mid, stream.clone()))
+        .collect::<Vec<_>>();
+    let mut api = session_state.rtc.direct_api();
+    for (mid, stream) in &pending_recv_streams {
+        api.expect_stream_rx(stream.ssrc, None, *mid, stream.rid);
+    }
+    for (mid, _stream) in pending_recv_streams {
+        session_state
+            .sdp_negotiation
+            .pending_recv_streams
+            .remove(&mid);
+    }
 }
 
 fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessionState) {

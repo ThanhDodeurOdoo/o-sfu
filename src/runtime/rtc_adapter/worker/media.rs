@@ -109,7 +109,11 @@ fn worker_remove_media(
             if let Some(session_state) = state.sessions.get_mut(&session_key)
                 && should_remove_media
             {
-                session_state.rtc.direct_api().remove_media(mid);
+                if session_state.sdp_negotiation.initial_offer_applied {
+                    worker_stage_native_media_removal(session_state, mid)?;
+                } else {
+                    session_state.rtc.direct_api().remove_media(mid);
+                }
             }
             if should_remove_stream_type {
                 state.recv_media_ids.remove(&(session_key.clone(), mid));
@@ -201,18 +205,23 @@ fn worker_add_recv_media(
     let Some(session_state) = state.sessions.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    let mid = transport_mid(rtp_parameters).unwrap_or_default();
-    let has_media = session_state.rtc.media(mid).is_some();
-    {
-        let mut api = session_state.rtc.direct_api();
-        if !has_media {
-            api.declare_media(mid, media_kind);
+    let mid = if session_state.sdp_negotiation.initial_offer_applied {
+        worker_stage_native_recv_media(session_state, media_kind, rtp_parameters)?
+    } else {
+        let mid = transport_mid(rtp_parameters).unwrap_or_default();
+        let has_media = session_state.rtc.media(mid).is_some();
+        {
+            let mut api = session_state.rtc.direct_api();
+            if !has_media {
+                api.declare_media(mid, media_kind);
+            }
+            if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
+                api.expect_stream_rx(ssrc, None, mid, rid);
+            }
         }
-        if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
-            api.expect_stream_rx(ssrc, None, mid, rid);
-        }
-    }
-    state.mark_session_dirty(session_key);
+        state.mark_session_dirty(session_key);
+        mid
+    };
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
         mid,
@@ -228,6 +237,42 @@ fn worker_add_recv_media(
         "declared recv-only media on rtc session for incoming producer RTP"
     );
     Ok(transport_media_id)
+}
+
+fn worker_stage_native_recv_media(
+    session_state: &mut super::super::state::RtcSessionState,
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+) -> Result<Mid, TransportAdapterError> {
+    if session_state.sdp_negotiation.pending_offer.is_some()
+        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
+    {
+        return Err(TransportAdapterError::InvalidInput);
+    }
+
+    let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
+    let mut sdp_api = session_state.rtc.sdp_api();
+    if let Some(pending_offer) = existing_pending_offer {
+        sdp_api.merge(pending_offer);
+    }
+    let mid = sdp_api.add_media(media_kind, Direction::RecvOnly, None, None, None);
+    let Some((offer, pending_offer)) = sdp_api.apply() else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
+    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
+        session_state
+            .sdp_negotiation
+            .pending_recv_streams
+            .insert(mid, super::super::state::PendingRecvStream { ssrc, rid });
+    } else {
+        session_state
+            .sdp_negotiation
+            .pending_recv_streams
+            .remove(&mid);
+    }
+    Ok(mid)
 }
 
 fn worker_add_send_media(

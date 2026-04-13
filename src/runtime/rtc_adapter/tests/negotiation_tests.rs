@@ -66,6 +66,57 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
 }
 
 #[tokio::test]
+async fn rtc_session_renegotiation_offer_stages_native_producer_additions() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 45, SessionId::Integer(45));
+
+    let mut remote = build_remote_rtc(55_006);
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("compat-producer-mid", 89_000),
+        )
+        .await
+        .expect("native producer media should stage a renegotiation offer");
+
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged renegotiation offer should be available");
+    let renegotiation_sdp = renegotiation_offer.into_sdp();
+    assert!(renegotiation_sdp.contains("m=video"));
+
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
+        .await
+        .expect("transport media should resolve to the server-assigned mid");
+    assert!(renegotiation_sdp.contains(&format!("a=mid:{negotiated_mid}")));
+
+    apply_offer_answer(&adapter, &session_key, &mut remote, renegotiation_sdp).await;
+
+    assert_eq!(
+        adapter
+            .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
+            .await,
+        Some(89_000),
+        "renegotiated recv media should expect the published SSRC once the answer lands"
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_native_consumer_additions() {
     let adapter = RtcTransportAdapter::default();
     let source_session_key = transport_key(1, 36, SessionId::Integer(36));
@@ -231,6 +282,56 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     assert_eq!(
         adapter
             .create_session_renegotiation_offer(&consumer_session_key)
+            .await,
+        Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
+async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 46, SessionId::Integer(46));
+
+    let mut remote = build_remote_rtc(55_007);
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let (producer_media_id, producer_mid) = add_negotiated_producer_media(
+        &adapter,
+        &session_key,
+        "compat-producer-mid-remove",
+        90_000,
+        &mut remote,
+    )
+    .await;
+
+    assert_eq!(
+        adapter.remove_media(&session_key, producer_media_id).await,
+        Ok(())
+    );
+
+    let removal_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("removal should stage a renegotiation offer");
+    let removal_sdp = removal_offer.into_sdp();
+    let removal_section = media_section_for_mid(&removal_sdp, &format!("{producer_mid}"))
+        .expect("removed producer mid should remain in the renegotiation offer");
+    assert!(removal_section.contains("a=inactive"));
+
+    apply_offer_answer(&adapter, &session_key, &mut remote, removal_sdp).await;
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
     );
@@ -477,4 +578,31 @@ async fn add_negotiated_consumer_media(
     )
     .await;
     (consumer_media_id, consumer_mid)
+}
+
+async fn add_negotiated_producer_media(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+    mid: &str,
+    ssrc: u32,
+    remote: &mut Rtc,
+) -> (TransportMediaId, Mid) {
+    let producer_media_id = adapter
+        .add_recv_media(
+            session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters(mid, ssrc),
+        )
+        .await
+        .expect("native producer media should stage an addition offer");
+    let producer_mid = adapter
+        .debug_resolve_mid(producer_media_id)
+        .await
+        .expect("producer media should expose its staged mid");
+    let addition_offer = adapter
+        .create_session_renegotiation_offer(session_key)
+        .await
+        .expect("addition offer should be available");
+    apply_offer_answer(adapter, session_key, remote, addition_offer.into_sdp()).await;
+    (producer_media_id, producer_mid)
 }
