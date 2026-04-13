@@ -1,5 +1,8 @@
 use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::runtime::stub_bus::WsWriter;
+use crate::runtime::transport_adapter::{
+    RuntimeTransportAdapter, TransportAdapterError, TransportSessionKey,
+};
 use crate::runtime::transport_bootstrap::to_wire_rtp_capabilities;
 use crate::signaling::protocol::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
@@ -62,16 +65,14 @@ impl NativeSessionProtocol {
                 let session_key = self
                     .channel
                     .transport_session_key(&self.session_id, self.connection_id);
-                let offer = self
-                    .transport_adapter
-                    .create_session_renegotiation_offer(&session_key)
-                    .await
-                    .map_err(|_error| WebSocketCloseCode::Error)?;
+                let Some(request) =
+                    staged_renegotiation_request(&self.transport_adapter, &session_key).await?
+                else {
+                    return Ok(false);
+                };
                 self.issue_negotiation_request(
                     writer,
-                    ServerRequest::Renegotiate(SessionDescriptionPayload {
-                        sdp: offer.into_sdp(),
-                    }),
+                    request,
                     PendingNegotiationAction::RefreshSession,
                 )
                 .await?;
@@ -168,5 +169,119 @@ impl NativeSessionProtocol {
             }
         }
         Ok(())
+    }
+}
+
+async fn staged_renegotiation_request(
+    transport_adapter: &RuntimeTransportAdapter,
+    session_key: &TransportSessionKey,
+) -> Result<Option<ServerRequest>, WebSocketCloseCode> {
+    match transport_adapter
+        .create_session_renegotiation_offer(session_key)
+        .await
+    {
+        Ok(offer) => Ok(Some(ServerRequest::Renegotiate(
+            SessionDescriptionPayload {
+                sdp: offer.into_sdp(),
+            },
+        ))),
+        Err(TransportAdapterError::UnsupportedFeature) => Ok(None),
+        Err(TransportAdapterError::TransportUnavailable | TransportAdapterError::InvalidInput) => {
+            Err(WebSocketCloseCode::Error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::Arc,
+        time::Instant,
+    };
+
+    use str0m::{Candidate, Rtc, change::SdpOffer};
+
+    use super::staged_renegotiation_request;
+    use crate::{
+        config::{MediaCodecFlags, RtcPortRange},
+        runtime::{
+            recording::MediaTap,
+            transport_adapter::{
+                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportSessionKey,
+            },
+        },
+        signaling::{protocol::WebSocketCloseCode, shared::SessionId},
+    };
+
+    fn build_real_rtc_transport_adapter(port_min: u16) -> RuntimeTransportAdapter {
+        RuntimeTransportAdapter::builder()
+            .rtc(RtcTransportAdapterShardSetConfig::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                RtcPortRange::new(port_min, port_min.saturating_add(99)),
+                1,
+                MediaCodecFlags::default(),
+                Arc::new(MediaTap::default()),
+            ))
+            .build()
+    }
+
+    fn answer_offer(offer_sdp: &str, port: u16) -> Option<String> {
+        let mut rtc = Rtc::new(Instant::now());
+        rtc.add_local_candidate(
+            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp").ok()?,
+        )?;
+        let answer = rtc
+            .sdp_api()
+            .accept_offer(SdpOffer::from_sdp_string(offer_sdp).ok()?)
+            .ok()?;
+        Some(answer.to_sdp_string())
+    }
+
+    #[tokio::test]
+    async fn staged_renegotiation_request_returns_none_without_pending_offer() {
+        let transport_adapter = build_real_rtc_transport_adapter(58_100);
+        let session_key = TransportSessionKey::new(7, 0, 11, SessionId::Integer(19));
+        let initial_offer_result = transport_adapter
+            .create_initial_session_offer(&session_key)
+            .await;
+        assert!(
+            initial_offer_result.is_ok(),
+            "expected initial rtc offer, got {initial_offer_result:?}"
+        );
+        let Ok(initial_offer) = initial_offer_result else {
+            return;
+        };
+        let initial_offer_sdp = initial_offer.into_sdp();
+        let answer_sdp = answer_offer(&initial_offer_sdp, 58_300);
+        assert!(
+            answer_sdp.is_some(),
+            "expected answerer to accept the initial rtc offer"
+        );
+        let Some(answer_sdp) = answer_sdp else {
+            return;
+        };
+        assert_eq!(
+            transport_adapter
+                .apply_session_answer(&session_key, &answer_sdp)
+                .await,
+            Ok(())
+        );
+
+        let renegotiation_request =
+            staged_renegotiation_request(&transport_adapter, &session_key).await;
+
+        assert_eq!(renegotiation_request, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn staged_renegotiation_request_keeps_transport_errors_fatal() {
+        let transport_adapter = build_real_rtc_transport_adapter(58_400);
+        let missing_session_key = TransportSessionKey::new(8, 0, 12, SessionId::Integer(20));
+
+        let renegotiation_request =
+            staged_renegotiation_request(&transport_adapter, &missing_session_key).await;
+
+        assert_eq!(renegotiation_request, Err(WebSocketCloseCode::Error));
     }
 }
