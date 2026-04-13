@@ -583,7 +583,7 @@ impl ChannelState {
         active: bool,
     ) -> Option<MessageFanout> {
         let current_connection_id = self.session_connection_id(session_id);
-        let producer = self.producers.get_mut(&producer_target.producer_id)?;
+        let producer = self.producers.get(&producer_target.producer_id)?;
         if producer.owner_connection_id != producer_target.owner_connection_id
             || Some(producer.owner_connection_id) != current_connection_id
             || producer.routed_producer_id != producer_target.routed_producer_id
@@ -591,7 +591,6 @@ impl ChannelState {
         {
             return None;
         }
-        producer.active = active;
         let paused = !active;
         if self
             .topology
@@ -604,6 +603,10 @@ impl ChannelState {
                 "failed to set producer pause state in channel router"
             );
             return None;
+        }
+        {
+            let producer = self.producers.get_mut(&producer_target.producer_id)?;
+            producer.active = active;
         }
         let snapshot = BTreeMap::from([self.session_info_snapshot(session_id)?]);
         Some(self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)))
@@ -818,5 +821,91 @@ fn to_router_stream_type(stream_type: StreamType) -> RouterStreamType {
         StreamType::Audio => RouterStreamType::Audio,
         StreamType::Camera => RouterStreamType::Camera,
         StreamType::Screen => RouterStreamType::Screen,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use o_sfu_router::{ProducerId, RouterId, RtpParameters};
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::config::MediaCodecFlags;
+    use crate::runtime::channel::{
+        ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
+        state::ids::ProducerRuntimeId, topology::RoutedProducerId,
+    };
+    use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
+    use crate::runtime::transport_adapter::TransportMediaId;
+    use crate::signaling::shared::SessionPermissions;
+
+    fn test_state() -> ChannelState {
+        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+        ChannelState::new(
+            RouterId(1),
+            ChannelAdmissionPolicy::new(4),
+            router_rtp_capabilities(MediaCodecFlags::default()),
+            Arc::new(RecordingService::new(0, media_source)),
+        )
+    }
+
+    #[test]
+    fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
+        let mut state = test_state();
+        let session_id = SessionId::Integer(1);
+        let (sender, _rx) = mpsc::unbounded_channel();
+
+        let join = state.apply_join(
+            &session_id,
+            None,
+            SessionPermissions::default(),
+            sender,
+            false,
+        );
+        assert!(join.is_ok());
+        let connection_id = state.session_connection_id(&session_id).unwrap_or(u64::MAX);
+
+        let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+        let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(777));
+        let transport_media_id = TransportMediaId::default();
+        state.producer_ids_by_owner_stream.insert(
+            ProducerKey::new(&session_id, StreamType::Camera),
+            producer_id,
+        );
+        state.producers.insert(
+            producer_id,
+            PublishedProducer {
+                owner_session_id: session_id.clone(),
+                owner_connection_id: connection_id,
+                stream_type: StreamType::Camera,
+                media_kind: SignalingMediaKind::Video,
+                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
+                routed_producer_id,
+                transport_media_id: Some(transport_media_id),
+                active: true,
+            },
+        );
+
+        let outcome = state.apply_producer_activity(
+            &session_id,
+            &ProducerRouteTarget {
+                producer_id,
+                owner_connection_id: connection_id,
+                routed_producer_id,
+                transport_media_id,
+            },
+            StreamType::Camera,
+            false,
+        );
+        assert!(outcome.is_none());
+        assert!(
+            state
+                .producers
+                .get(&producer_id)
+                .is_some_and(|producer| producer.active),
+            "channel state must keep the previous activity flag when router pause propagation fails"
+        );
     }
 }

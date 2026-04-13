@@ -31,10 +31,11 @@ pub(super) fn respond_remember_remote_addr(
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
     let result = if state.sessions.contains_key(session_key) {
-        state
+        if state
             .remote_addr_demux
-            .remember_remote_addr(source_addr, session_key);
-        if let Ok(mut snapshot) = snapshot_state.lock() {
+            .remember_remote_addr(source_addr, session_key)
+            && let Ok(mut snapshot) = snapshot_state.lock()
+        {
             snapshot
                 .remote_addr_demux
                 .remember_remote_addr(source_addr, session_key);

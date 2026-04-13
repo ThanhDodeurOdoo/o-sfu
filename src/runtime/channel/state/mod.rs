@@ -1,13 +1,15 @@
 //! Pure channel-state model split by responsibility.
 //!
 //! `ids` owns the typed runtime-only producer/consumer identifiers.
+//! `fanout` owns outbound fan-out preparation from state snapshots.
 //! `presence` owns client-driven session presence state.
 //! `recording` owns channel recording-control state updates and fan-out.
-//! `session_info_projection` owns compatibility projection from channel-owned state.
+//! `session_info_projection` owns outward-facing session and peer projection.
 //! `shared` owns the in-memory state and bookkeeping types.
 //! `membership` owns session lifecycle, presence fan-out, and negotiation readiness.
 //! `media` owns producer/consumer bootstrap and routing-side media bookkeeping.
 
+mod fanout;
 mod ids;
 mod media;
 mod membership;

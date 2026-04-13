@@ -6,20 +6,18 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::{
-    protocol::PeerSnapshot,
-    shared::{RecordingState, SessionId, SessionInfo, SessionPermissions, StreamType},
+    shared::{RecordingState, SessionId, SessionPermissions, StreamType},
     webrtc::MediaKind as SignalingMediaKind,
 };
 
 use super::super::{
-    ChannelAdmissionPolicy, ChannelEventMessage,
-    outbound::{MessageFanout, OutboundSender, fanout_all, fanout_all_except},
+    ChannelAdmissionPolicy,
+    outbound::OutboundSender,
     session_negotiation::SessionNegotiation,
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use super::ids::ProducerRuntimeId;
 use super::presence::SessionPresence;
-use super::session_info_projection::{SessionMediaView, project_session_info};
 
 const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
     [StreamType::Audio, StreamType::Camera, StreamType::Screen];
@@ -233,20 +231,6 @@ impl ChannelState {
         self.recording_state.clone()
     }
 
-    pub(in crate::runtime::channel) fn peer_snapshots_except(
-        &self,
-        excluded_session_id: &SessionId,
-    ) -> Vec<PeerSnapshot> {
-        self.sessions
-            .iter()
-            .filter(|(session_id, _session)| *session_id != excluded_session_id)
-            .map(|(session_id, session)| PeerSnapshot {
-                session_id: session_id.clone(),
-                info: self.session_info(session_id, session),
-            })
-            .collect()
-    }
-
     pub(in crate::runtime::channel) fn router_rtp_capabilities(&self) -> MediaCapabilities {
         self.topology.rtp_capabilities().clone()
     }
@@ -266,32 +250,6 @@ impl ChannelState {
     #[cfg(test)]
     pub(in crate::runtime::channel) fn consumer_count(&self) -> usize {
         self.consumer_index.len()
-    }
-
-    pub(in crate::runtime::channel) fn session_stats_counts(&self) -> (u64, u64, u64) {
-        let camera_count = self
-            .sessions
-            .iter()
-            .filter(|(session_id, session)| {
-                self.session_media_view(session_id, session.connection_id)
-                    .camera_active
-                    == Some(true)
-            })
-            .count();
-        let screen_count = self
-            .sessions
-            .iter()
-            .filter(|(session_id, session)| {
-                self.session_media_view(session_id, session.connection_id)
-                    .screen_active
-                    == Some(true)
-            })
-            .count();
-        (
-            u64::try_from(self.sessions.len()).unwrap_or(u64::MAX),
-            u64::try_from(camera_count).unwrap_or(u64::MAX),
-            u64::try_from(screen_count).unwrap_or(u64::MAX),
-        )
     }
 
     pub(in crate::runtime::channel) fn session_connection_id(
@@ -315,32 +273,6 @@ impl ChannelState {
 
     pub(in crate::runtime::channel) fn is_empty(&self) -> bool {
         self.sessions.is_empty()
-    }
-
-    pub(in crate::runtime::channel) fn fanout_all(
-        &self,
-        message: &ChannelEventMessage,
-    ) -> MessageFanout {
-        fanout_all(
-            self.sessions.values().map(|session| session.sender.clone()),
-            message,
-        )
-    }
-
-    pub(in crate::runtime::channel) fn fanout_all_except(
-        &self,
-        message: &ChannelEventMessage,
-        excluded_session_id: Option<&SessionId>,
-    ) -> MessageFanout {
-        fanout_all_except(
-            self.sessions
-                .iter()
-                .filter(|(session_id, _session)| {
-                    excluded_session_id.is_none_or(|excluded| excluded != *session_id)
-                })
-                .map(|(_session_id, session)| session.sender.clone()),
-            message,
-        )
     }
 
     #[cfg(test)]
@@ -367,55 +299,6 @@ impl ChannelState {
             return None;
         }
         producer.transport_media_id
-    }
-
-    pub(in crate::runtime::channel) fn session_info_snapshot(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<(SessionId, SessionInfo)> {
-        let session = self.sessions.get(session_id)?;
-        Some((session_id.clone(), self.session_info(session_id, session)))
-    }
-
-    pub(in crate::runtime::channel) fn session_info_snapshot_all(
-        &self,
-    ) -> BTreeMap<SessionId, SessionInfo> {
-        self.sessions
-            .iter()
-            .map(|(session_id, session)| {
-                (session_id.clone(), self.session_info(session_id, session))
-            })
-            .collect()
-    }
-
-    fn session_info(&self, session_id: &SessionId, session: &ActiveSession) -> SessionInfo {
-        project_session_info(
-            &session.presence,
-            self.session_media_view(session_id, session.connection_id),
-        )
-    }
-
-    fn session_media_view(&self, session_id: &SessionId, connection_id: u64) -> SessionMediaView {
-        SessionMediaView {
-            camera_active: self.stream_activity(session_id, connection_id, StreamType::Camera),
-            screen_active: self.stream_activity(session_id, connection_id, StreamType::Screen),
-        }
-    }
-
-    fn stream_activity(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        stream_type: StreamType,
-    ) -> Option<bool> {
-        let producer_id = self
-            .producer_ids_by_owner_stream
-            .get(&ProducerKey::new(session_id, stream_type))?;
-        let producer = self.producers.get(producer_id)?;
-        if producer.owner_connection_id != connection_id {
-            return None;
-        }
-        Some(producer.active)
     }
 }
 

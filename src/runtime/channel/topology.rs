@@ -210,6 +210,14 @@ impl ChannelTopology {
             .set_consumer_paused(consumer_id.consumer_id(), paused)
     }
 
+    pub(super) fn remove_consumer(
+        &mut self,
+        consumer_id: RoutedConsumerId,
+    ) -> Result<(), RouterError> {
+        self.router_mut(consumer_id.router_id())?
+            .remove_consumer(consumer_id.consumer_id())
+    }
+
     pub(super) fn remove_producer(
         &mut self,
         producer_id: RoutedProducerId,

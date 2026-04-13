@@ -6,14 +6,6 @@
 
 # o-sfu
 
-WORK IN PROGRESS, MAY CHANGE, MAY BE OPUT OF DATE
-- `protocol/`: shraed bundle and signaling contract crate that feeds the server today and expose the first `wasm-bindgen` entry point for the future browser client layer (what odoo will interact with, like current odoo/sfu)
-- `client/`: TypeScript browser-shell groundwork for the future bundle that can replace the current odoo sfu bundle
-- `router/`: isolated router crate
-- `src/runtime.rs`: application bootstrap shell around the core crates.
-- `src/signaling.rs` + `src/signaling/`: server signaling side, auth claims, current wire reference types, and transiitonal re-exports for the extracted protocol crate.
-  The first replacement prototype keeps the current wire protocol as a bundle (that will be added to odoo codebase) contract so the Odoo-facing API stays stable while the server runtime is repalced (ideally we just hot swap the client bundle, at least thats the goal...)
-
 > [!WARNING]  
 > Early phase of developments, the readme may not be up to date, or be incorrect.
 > Everything is up for massive refactor, some files are just testing prototypes

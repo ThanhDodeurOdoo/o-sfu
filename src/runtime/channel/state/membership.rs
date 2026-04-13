@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use o_sfu_router::RouterError;
 use tracing::error;
 
 use crate::runtime::transport_adapter::TransportConnectDirection;
@@ -105,17 +106,6 @@ impl ChannelState {
             self.collect_consumer_transport_removals(&BTreeSet::from([session_id.clone()]))
         };
         let connection_id = self.next_connection_id;
-        self.next_connection_id = self.next_connection_id.saturating_add(1);
-        if !is_new {
-            if self.topology.apply_client_leave(session_id).is_err() {
-                error!(
-                    ?session_id,
-                    "failed to reset replaced session in channel router"
-                );
-                return Err(ChannelJoinError::RouterState);
-            }
-            self.purge_session_media_state(session_id);
-        }
         if self
             .topology
             .apply_client_join(session_id, connection_id, &permissions)
@@ -127,6 +117,14 @@ impl ChannelState {
             );
             return Err(ChannelJoinError::RouterState);
         }
+        if !is_new && self.reset_existing_session_routing(session_id).is_err() {
+            error!(
+                ?session_id,
+                "failed to reset replaced session routing in channel router"
+            );
+            return Err(ChannelJoinError::RouterState);
+        }
+        self.next_connection_id = self.next_connection_id.saturating_add(1);
 
         let previous_sender = if let Some(session) = self.sessions.get_mut(session_id) {
             let old_sender = session.sender.clone();
@@ -153,6 +151,9 @@ impl ChannelState {
             );
             None
         };
+        if previous_sender.is_some() {
+            self.purge_session_media_state(session_id);
+        }
 
         let departure_fanout = previous_sender.as_ref().map(|_| {
             self.fanout_all_except(
@@ -183,6 +184,35 @@ impl ChannelState {
             departure_fanout,
             transport_removals,
         })
+    }
+
+    fn reset_existing_session_routing(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), RouterError> {
+        let routed_consumers = self
+            .consumer_index
+            .iter()
+            .filter_map(|(key, consumer_state)| {
+                (key.consumer_session_id == *session_id)
+                    .then_some(consumer_state.routed_consumer_id)
+            })
+            .collect::<Vec<_>>();
+        for routed_consumer_id in routed_consumers {
+            self.topology.remove_consumer(routed_consumer_id)?;
+        }
+
+        let routed_producers = self
+            .producers
+            .values()
+            .filter_map(|producer| {
+                (producer.owner_session_id == *session_id).then_some(producer.routed_producer_id)
+            })
+            .collect::<Vec<_>>();
+        for routed_producer_id in routed_producers {
+            self.topology.remove_producer(routed_producer_id)?;
+        }
+        Ok(())
     }
 
     pub(in crate::runtime::channel) fn apply_leave(
@@ -311,5 +341,91 @@ impl ChannelState {
         session.parsed_client_rtp_capabilities =
             ortc_mapper::parse_rtp_capabilities(&capabilities.0);
         session.negotiation.set_session_negotiated()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use o_sfu_router::{ProducerId, RouterId, RtpParameters};
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::config::MediaCodecFlags;
+    use crate::runtime::channel::{
+        ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
+        state::ids::ProducerRuntimeId, topology::RoutedProducerId,
+    };
+    use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
+    use crate::signaling::{shared::StreamType, webrtc::MediaKind as SignalingMediaKind};
+
+    fn test_state() -> ChannelState {
+        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+        ChannelState::new(
+            RouterId(1),
+            ChannelAdmissionPolicy::new(4),
+            router_rtp_capabilities(MediaCodecFlags::default()),
+            Arc::new(RecordingService::new(0, media_source)),
+        )
+    }
+
+    #[test]
+    fn replacement_join_keeps_existing_channel_state_when_router_reset_fails() {
+        let mut state = test_state();
+        let session_id = SessionId::Integer(1);
+        let (first_sender, _first_rx) = mpsc::unbounded_channel();
+        let (replacement_sender, _replacement_rx) = mpsc::unbounded_channel();
+
+        let first_join = state.apply_join(
+            &session_id,
+            None,
+            SessionPermissions::default(),
+            first_sender,
+            false,
+        );
+        assert!(first_join.is_ok());
+        let original_connection_id = state.session_connection_id(&session_id);
+
+        let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+        state.producer_ids_by_owner_stream.insert(
+            super::super::shared::ProducerKey::new(&session_id, StreamType::Camera),
+            producer_id,
+        );
+        state.producers.insert(
+            producer_id,
+            super::super::shared::PublishedProducer {
+                owner_session_id: session_id.clone(),
+                owner_connection_id: original_connection_id.unwrap_or(u64::MAX),
+                stream_type: StreamType::Camera,
+                media_kind: SignalingMediaKind::Video,
+                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
+                routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(999)),
+                transport_media_id: None,
+                active: true,
+            },
+        );
+
+        let replacement = state.apply_join(
+            &session_id,
+            Some(String::from("replacement")),
+            SessionPermissions::default(),
+            replacement_sender,
+            false,
+        );
+        assert!(matches!(replacement, Err(ChannelJoinError::RouterState)));
+        assert_eq!(
+            state.session_connection_id(&session_id),
+            original_connection_id
+        );
+        assert_eq!(state.producer_count(), 1);
+        assert!(
+            state
+                .producer_route_target_for_session(&session_id, StreamType::Camera)
+                .is_none(),
+            "the invalid staged producer should stay untouched when replacement fails"
+        );
+        assert!(state.has_session(&session_id));
+        assert_eq!(state.topology.session_count(), 1);
     }
 }
