@@ -22,6 +22,7 @@ use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
 pub(in crate::runtime::channel) struct JoinSessionOutcome {
     pub(in crate::runtime::channel) connection_id: u64,
     replaced_sender: Option<OutboundSender>,
+    joined_fanout: Option<MessageFanout>,
     departure_fanout: Option<MessageFanout>,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
@@ -32,6 +33,9 @@ impl JoinSessionOutcome {
             let _ = sender.send(super::super::SessionOutbound::Close(
                 WebSocketCloseCode::Kicked,
             ));
+        }
+        if let Some(fanout) = self.joined_fanout {
+            fanout.emit();
         }
         if let Some(fanout) = self.departure_fanout {
             fanout.emit();
@@ -89,6 +93,7 @@ impl ChannelState {
         label: Option<String>,
         permissions: SessionPermissions,
         sender: OutboundSender,
+        emit_joined_fanout: bool,
     ) -> Result<JoinSessionOutcome, ChannelJoinError> {
         let is_new = !self.sessions.contains_key(session_id);
         if is_new && self.sessions.len() >= self.admission_policy.max_sessions {
@@ -157,9 +162,24 @@ impl ChannelState {
                 Some(session_id),
             )
         });
+        let joined_fanout = if is_new && emit_joined_fanout {
+            self.session_info_snapshot(session_id)
+                .map(|(joined_session_id, info)| {
+                    self.fanout_all_except(
+                        &ChannelEventMessage::SessionJoined {
+                            session_id: joined_session_id,
+                            info,
+                        },
+                        Some(session_id),
+                    )
+                })
+        } else {
+            None
+        };
         Ok(JoinSessionOutcome {
             connection_id,
             replaced_sender: previous_sender,
+            joined_fanout,
             departure_fanout,
             transport_removals,
         })

@@ -325,6 +325,29 @@ async fn read_track_snapshot(peer: &mut ProtocolHarnessPeer) -> Option<Vec<Track
     Some(track_bindings)
 }
 
+fn protocol_session_id(session_id: &SessionId) -> ProtocolSessionId {
+    match session_id {
+        SessionId::Integer(value) => ProtocolSessionId::Integer(*value),
+        SessionId::String(value) => ProtocolSessionId::String(value.clone()),
+    }
+}
+
+async fn consume_peer_joined_update(
+    peer: &mut ProtocolHarnessPeer,
+    session_id: ProtocolSessionId,
+) -> Option<()> {
+    peer.read_server_frame().await?;
+    assert_eq!(
+        peer.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&session_id),
+            ProtocolSessionInfo::default(),
+        )]))),
+        "peer join should project into the compatibility session-info update surface"
+    );
+    Some(())
+}
+
 fn assert_track_snapshot_contains(
     track_bindings: &[TrackBinding],
     session_id: &ProtocolSessionId,
@@ -350,7 +373,7 @@ async fn setup_real_rtc_protocol_peers(
     let server = spawn_native_protocol_rtc_test_server(1_000, 100).await?;
     let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
     let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id)?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
     let mut bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
@@ -359,6 +382,7 @@ async fn setup_real_rtc_protocol_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
+    consume_peer_joined_update(&mut alice, protocol_session_id(&bob_session_id)).await?;
 
     Some((server, alice, bob))
 }
@@ -706,6 +730,12 @@ async fn protocol_core_receives_native_broadcast_and_peer_updates() {
             .await
             .is_some()
     );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(42))
+            .await
+            .is_some(),
+        "existing peers should consume the native peer-joined update after a new session joins"
+    );
     bob.updates.clear();
 
     assert!(alice.broadcast(json!({ "text": "hello" })).await.is_some());
@@ -770,6 +800,75 @@ async fn protocol_core_receives_native_broadcast_and_peer_updates() {
 }
 
 #[tokio::test]
+async fn native_session_emits_peerjoined_message_for_existing_peers() {
+    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-peerjoined",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(43));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(44));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let mut alice = ProtocolHarnessPeer::default();
+    let mut bob = ProtocolHarnessPeer::default();
+    assert!(
+        alice
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+
+    let Some(alice_websocket) = alice.websocket.as_mut() else {
+        return;
+    };
+    let Some(peer_joined_payload) =
+        timeout(Duration::from_secs(1), read_text_message(alice_websocket))
+            .await
+            .ok()
+            .flatten()
+    else {
+        panic!("existing peer should receive a peerjoined message");
+    };
+    let peer_joined_batch = serde_json::from_str::<EnvelopeBatch>(&peer_joined_payload).ok();
+    assert!(peer_joined_batch.is_some());
+    let Some(peer_joined_batch) = peer_joined_batch else {
+        return;
+    };
+    let peer_joined_messages = native_server_messages(&peer_joined_batch);
+    assert!(peer_joined_messages.is_some());
+    let Some(peer_joined_messages) = peer_joined_messages else {
+        return;
+    };
+    assert!(
+        matches!(
+            peer_joined_messages.as_slice(),
+            [ServerMessage::PeerJoined(_)]
+        ),
+        "existing peers should receive peerjoined rather than a generic peerinfo frame on join"
+    );
+
+    let peer_joined_commands = alice.core.on_ws_message(&peer_joined_payload);
+    assert!(alice.run_commands(peer_joined_commands).await.is_some());
+}
+
+#[tokio::test]
 async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal() {
     let server = spawn_native_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
@@ -801,6 +900,11 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     );
     assert!(
         bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(52))
             .await
             .is_some()
     );
@@ -899,6 +1003,11 @@ async fn protocol_core_native_publish_round_trips_through_real_server_session_pr
             .await
             .is_some()
     );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(54))
+            .await
+            .is_some()
+    );
 
     assert!(
         alice
@@ -975,6 +1084,11 @@ async fn protocol_core_native_publish_round_trips_through_real_rtc_server_sessio
     );
     assert!(
         bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(72))
             .await
             .is_some()
     );
@@ -1365,7 +1479,8 @@ async fn protocol_core_native_unpublish_round_trips_through_real_rtc_after_publi
     clippy::too_many_lines,
     reason = "the regression keeps the full queued-removal rtc flow explicit in one place for reviewability"
 )]
-async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands() {
+async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands()
+{
     let Some((_server, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-native-rtc-unpublish-removal-queue",
         SessionId::Integer(79),
@@ -1473,7 +1588,9 @@ async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_fligh
             .ok()
             .flatten()
     else {
-        panic!("subscriber should receive the translated peer-info update for the unpublished track");
+        panic!(
+            "subscriber should receive the translated peer-info update for the unpublished track"
+        );
     };
     let peer_info_batch = serde_json::from_str::<EnvelopeBatch>(&peer_info_payload).ok();
     assert!(peer_info_batch.is_some());
@@ -1561,6 +1678,11 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
     );
     assert!(
         bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(62))
             .await
             .is_some()
     );
@@ -1734,6 +1856,12 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
             .await
             .is_some()
     );
+    assert!(
+        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(72))
+            .await
+            .is_some()
+    );
+    alice.updates.clear();
 
     assert!(
         alice.read_server_frame().await.is_some(),
@@ -1768,7 +1896,7 @@ async fn setup_native_recovery_peers(
     )
     .await;
     let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id)?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::default();
     let mut bob = ProtocolHarnessPeer::default();
@@ -1777,6 +1905,7 @@ async fn setup_native_recovery_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
+    consume_peer_joined_update(&mut alice, protocol_session_id(&bob_session_id)).await?;
     Some((server, channel, alice, bob))
 }
 

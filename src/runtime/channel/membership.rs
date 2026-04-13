@@ -79,7 +79,13 @@ impl Channel {
     ) -> Result<u64, ChannelJoinError> {
         let outcome = {
             let mut state = self.state.write().await;
-            state.apply_join(&session_id, label, permissions, sender)?
+            state.apply_join(
+                &session_id,
+                label,
+                permissions,
+                sender,
+                cleanup_mode == TransportCleanupMode::NativeSessionProtocol,
+            )?
         };
         self.cleanup_transport_removals(
             transport_adapter,

@@ -134,6 +134,50 @@ async fn leave_session_sends_departure_to_remaining_peers() {
 }
 
 #[tokio::test]
+async fn join_session_notifies_existing_peers_with_session_joined() {
+    let manager = ChannelManager::for_test();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let (tx1, mut rx1) = test_sender();
+    let (tx2, _rx2) = test_sender();
+    let first_join = channel
+        .join_session_runtime(
+            SessionId::Integer(1),
+            None,
+            SessionPermissions::default(),
+            tx1,
+            &transport_adapter,
+            super::super::TransportCleanupMode::NativeSessionProtocol,
+        )
+        .await;
+    let second_join = channel
+        .join_session_runtime(
+            SessionId::Integer(2),
+            None,
+            SessionPermissions::default(),
+            tx2,
+            &transport_adapter,
+            super::super::TransportCleanupMode::NativeSessionProtocol,
+        )
+        .await;
+    assert!(first_join.is_ok());
+    assert!(second_join.is_ok());
+
+    let msg = rx1.try_recv();
+    assert!(msg.is_ok());
+    if let Ok(SessionOutbound::Message(ChannelEventMessage::SessionJoined { session_id, info })) =
+        msg
+    {
+        assert_eq!(session_id, SessionId::Integer(2));
+        assert_eq!(info, SessionInfo::default());
+    } else {
+        panic!("expected SessionJoined, got {msg:?}");
+    }
+}
+
+#[tokio::test]
 async fn replacing_a_session_notifies_remaining_peers() {
     let manager = ChannelManager::for_test();
     let channel = manager

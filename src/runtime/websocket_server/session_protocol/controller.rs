@@ -117,7 +117,9 @@ impl SessionProtocol {
     ) -> Result<usize, WebSocketCloseCode> {
         match (self, outbound) {
             (Self::LegacyStubBus(_), SessionOutbound::Message(message)) => {
-                let legacy_message = message.into_current_server_message();
+                let Some(legacy_message) = message.into_current_server_message() else {
+                    return Ok(0);
+                };
                 send_server_message_batch(writer, &legacy_message).await?;
                 Ok(1)
             }

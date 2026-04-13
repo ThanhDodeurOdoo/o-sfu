@@ -15,6 +15,10 @@ pub(crate) enum ChannelEventMessage {
         sender_id: SessionId,
         message: JsonPayload,
     },
+    SessionJoined {
+        session_id: SessionId,
+        info: SessionInfo,
+    },
     SessionDeparted {
         session_id: SessionId,
     },
@@ -24,18 +28,24 @@ pub(crate) enum ChannelEventMessage {
 
 impl ChannelEventMessage {
     #[must_use]
-    pub(crate) fn into_current_server_message(self) -> CurrentServerMessage {
+    pub(crate) fn into_current_server_message(self) -> Option<CurrentServerMessage> {
         match self {
             Self::Broadcast { sender_id, message } => {
-                CurrentServerMessage::Broadcast(CurrentBroadcastPayload { sender_id, message })
+                Some(CurrentServerMessage::Broadcast(CurrentBroadcastPayload {
+                    sender_id,
+                    message,
+                }))
             }
-            Self::SessionDeparted { session_id } => {
-                CurrentServerMessage::SessionDeparted(CurrentSessionDeparturePayload { session_id })
-            }
-            Self::SessionInfoChanged(snapshot) => CurrentServerMessage::SessionInfoChanged(
+            Self::SessionJoined { .. } => None,
+            Self::SessionDeparted { session_id } => Some(CurrentServerMessage::SessionDeparted(
+                CurrentSessionDeparturePayload { session_id },
+            )),
+            Self::SessionInfoChanged(snapshot) => Some(CurrentServerMessage::SessionInfoChanged(
                 into_legacy_session_info_snapshot(snapshot),
-            ),
-            Self::RecordingStateChanged(state) => CurrentServerMessage::ChannelStateChanged(state),
+            )),
+            Self::RecordingStateChanged(state) => {
+                Some(CurrentServerMessage::ChannelStateChanged(state))
+            }
         }
     }
 }

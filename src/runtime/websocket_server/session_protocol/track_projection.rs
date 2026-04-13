@@ -40,6 +40,11 @@ impl RemoteTrackProjection {
                     ServerBroadcastPayload { sender_id, message },
                 )])
             }
+            ChannelEventMessage::SessionJoined { session_id, info } => {
+                TranslatedServerMessage::messages(vec![ServerMessage::PeerJoined(
+                    PeerInfoPayload { session_id, info },
+                )])
+            }
             ChannelEventMessage::SessionDeparted { session_id } => {
                 let removed_tracks = self
                     .bindings_by_mid
