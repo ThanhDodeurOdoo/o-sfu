@@ -251,7 +251,7 @@ impl Channel {
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_client_rtp_capabilities(session_id, connection_id, capabilities)
+            state.set_client_rtp_capabilities(session_id, connection_id, &capabilities)
         };
         self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
             .await
@@ -281,7 +281,7 @@ impl Channel {
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_session_negotiated(session_id, connection_id, capabilities)
+            state.set_session_negotiated(session_id, connection_id, &capabilities)
         };
         self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
             .await
@@ -331,7 +331,7 @@ impl Channel {
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_client_rtp_capabilities(session_id, connection_id, capabilities)
+        state.set_client_rtp_capabilities(session_id, connection_id, &capabilities)
     }
 
     #[cfg(test)]

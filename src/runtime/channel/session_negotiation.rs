@@ -1,5 +1,4 @@
 use crate::runtime::transport_adapter::TransportConnectDirection;
-use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
 
 /// Tracks the two independent axes of session readiness: **transport connections**
 /// (upload / download ICE) and **RTP capability exchange**.
@@ -35,9 +34,7 @@ pub(super) enum SessionNegotiationState {
     /// Neither transport connected nor capabilities received.
     AwaitingCapabilities,
     /// Capabilities received, but no transport connected yet.
-    CapabilitiesReady {
-        client_rtp_capabilities: SignalingRtpCapabilities,
-    },
+    CapabilitiesReady,
     /// Upload transport connected; still waiting for capabilities.
     UploadConnectedAwaitingCapabilities,
     /// Download transport connected; still waiting for capabilities.
@@ -45,17 +42,11 @@ pub(super) enum SessionNegotiationState {
     /// Both transports connected; still waiting for capabilities.
     TransportsConnectedAwaitingCapabilities,
     /// Upload transport connected and capabilities received; download pending.
-    UploadReady {
-        client_rtp_capabilities: SignalingRtpCapabilities,
-    },
+    UploadReady,
     /// Download transport connected and capabilities received; upload pending.
-    DownloadReady {
-        client_rtp_capabilities: SignalingRtpCapabilities,
-    },
+    DownloadReady,
     /// Fully negotiated: both transports conected and capabilities received.
-    Ready {
-        client_rtp_capabilities: SignalingRtpCapabilities,
-    },
+    Ready,
 }
 
 /// Returned after each state transition to tell the caller what changed.
@@ -94,8 +85,8 @@ impl SessionNegotiation {
             self.state,
             SessionNegotiationState::UploadConnectedAwaitingCapabilities
                 | SessionNegotiationState::TransportsConnectedAwaitingCapabilities
-                | SessionNegotiationState::UploadReady { .. }
-                | SessionNegotiationState::Ready { .. }
+                | SessionNegotiationState::UploadReady
+                | SessionNegotiationState::Ready
         )
     }
 
@@ -103,44 +94,27 @@ impl SessionNegotiation {
     pub(super) fn can_consume(&self) -> bool {
         matches!(
             self.state,
-            SessionNegotiationState::DownloadReady { .. } | SessionNegotiationState::Ready { .. }
+            SessionNegotiationState::DownloadReady | SessionNegotiationState::Ready
         )
     }
 
-    pub(super) fn set_client_rtp_capabilities(
-        &mut self,
-        client_rtp_capabilities: SignalingRtpCapabilities,
-    ) -> SessionNegotiationUpdate {
+    pub(super) fn set_client_rtp_capabilities(&mut self) -> SessionNegotiationUpdate {
         let was_consumer_ready = self.can_consume();
         self.state = match &self.state {
             SessionNegotiationState::AwaitingCapabilities
-            | SessionNegotiationState::CapabilitiesReady { .. } => {
-                SessionNegotiationState::CapabilitiesReady {
-                    client_rtp_capabilities,
-                }
+            | SessionNegotiationState::CapabilitiesReady => {
+                SessionNegotiationState::CapabilitiesReady
             }
             SessionNegotiationState::UploadConnectedAwaitingCapabilities => {
-                SessionNegotiationState::UploadReady {
-                    client_rtp_capabilities,
-                }
+                SessionNegotiationState::UploadReady
             }
             SessionNegotiationState::DownloadConnectedAwaitingCapabilities
-            | SessionNegotiationState::DownloadReady { .. } => {
-                SessionNegotiationState::DownloadReady {
-                    client_rtp_capabilities,
-                }
-            }
+            | SessionNegotiationState::DownloadReady => SessionNegotiationState::DownloadReady,
             SessionNegotiationState::TransportsConnectedAwaitingCapabilities => {
-                SessionNegotiationState::Ready {
-                    client_rtp_capabilities,
-                }
+                SessionNegotiationState::Ready
             }
-            SessionNegotiationState::UploadReady { .. } => SessionNegotiationState::UploadReady {
-                client_rtp_capabilities,
-            },
-            SessionNegotiationState::Ready { .. } => SessionNegotiationState::Ready {
-                client_rtp_capabilities,
-            },
+            SessionNegotiationState::UploadReady => SessionNegotiationState::UploadReady,
+            SessionNegotiationState::Ready => SessionNegotiationState::Ready,
         };
         SessionNegotiationUpdate {
             session_present: true,
@@ -161,22 +135,12 @@ impl SessionNegotiation {
                 SessionNegotiationState::AwaitingCapabilities,
                 TransportConnectDirection::Download,
             ) => SessionNegotiationState::DownloadConnectedAwaitingCapabilities,
-            (
-                SessionNegotiationState::CapabilitiesReady {
-                    client_rtp_capabilities,
-                },
-                TransportConnectDirection::Upload,
-            ) => SessionNegotiationState::UploadReady {
-                client_rtp_capabilities: client_rtp_capabilities.clone(),
-            },
-            (
-                SessionNegotiationState::CapabilitiesReady {
-                    client_rtp_capabilities,
-                },
-                TransportConnectDirection::Download,
-            ) => SessionNegotiationState::DownloadReady {
-                client_rtp_capabilities: client_rtp_capabilities.clone(),
-            },
+            (SessionNegotiationState::CapabilitiesReady, TransportConnectDirection::Upload) => {
+                SessionNegotiationState::UploadReady
+            }
+            (SessionNegotiationState::CapabilitiesReady, TransportConnectDirection::Download) => {
+                SessionNegotiationState::DownloadReady
+            }
             (
                 SessionNegotiationState::UploadConnectedAwaitingCapabilities,
                 TransportConnectDirection::Download,
@@ -185,20 +149,10 @@ impl SessionNegotiation {
                 SessionNegotiationState::DownloadConnectedAwaitingCapabilities,
                 TransportConnectDirection::Upload,
             ) => SessionNegotiationState::TransportsConnectedAwaitingCapabilities,
-            (
-                SessionNegotiationState::UploadReady {
-                    client_rtp_capabilities,
-                },
-                TransportConnectDirection::Download,
-            )
-            | (
-                SessionNegotiationState::DownloadReady {
-                    client_rtp_capabilities,
-                },
-                TransportConnectDirection::Upload,
-            ) => SessionNegotiationState::Ready {
-                client_rtp_capabilities: client_rtp_capabilities.clone(),
-            },
+            (SessionNegotiationState::UploadReady, TransportConnectDirection::Download)
+            | (SessionNegotiationState::DownloadReady, TransportConnectDirection::Upload) => {
+                SessionNegotiationState::Ready
+            }
             _ => self.state.clone(),
         };
         SessionNegotiationUpdate {
@@ -207,14 +161,9 @@ impl SessionNegotiation {
         }
     }
 
-    pub(super) fn set_session_negotiated(
-        &mut self,
-        client_rtp_capabilities: SignalingRtpCapabilities,
-    ) -> SessionNegotiationUpdate {
+    pub(super) fn set_session_negotiated(&mut self) -> SessionNegotiationUpdate {
         let was_consumer_ready = self.can_consume();
-        self.state = SessionNegotiationState::Ready {
-            client_rtp_capabilities,
-        };
+        self.state = SessionNegotiationState::Ready;
         SessionNegotiationUpdate {
             session_present: true,
             became_consumer_ready: !was_consumer_ready && self.can_consume(),
@@ -224,32 +173,8 @@ impl SessionNegotiation {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::{SessionNegotiation, SessionNegotiationState};
     use crate::runtime::transport_adapter::TransportConnectDirection;
-    use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
-
-    fn test_client_rtp_capabilities() -> SignalingRtpCapabilities {
-        SignalingRtpCapabilities(json!({
-            "codecs": [{
-                "mimeType": "audio/opus",
-                "kind": "audio",
-                "preferredPayloadType": 111,
-                "clockRate": 48000,
-                "channels": 2,
-                "parameters": { "useinbandfec": "1" },
-                "rtcpFeedback": [{ "type": "transport-cc" }]
-            }],
-            "headerExtensions": [{
-                "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
-                "preferredId": 1,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            }]
-        }))
-    }
 
     #[test]
     fn session_negotiation_transitions_to_ready_when_capabilities_follow_connections() {
@@ -258,8 +183,7 @@ mod tests {
         let upload_update = negotiation.set_transport_connected(TransportConnectDirection::Upload);
         let download_update =
             negotiation.set_transport_connected(TransportConnectDirection::Download);
-        let capabilities_update =
-            negotiation.set_client_rtp_capabilities(test_client_rtp_capabilities());
+        let capabilities_update = negotiation.set_client_rtp_capabilities();
 
         assert!(upload_update.session_present);
         assert!(!upload_update.became_consumer_ready);
@@ -269,18 +193,14 @@ mod tests {
         assert!(capabilities_update.became_consumer_ready);
         assert!(negotiation.can_publish());
         assert!(negotiation.can_consume());
-        assert!(matches!(
-            negotiation.state(),
-            SessionNegotiationState::Ready { .. }
-        ));
+        assert_eq!(negotiation.state(), &SessionNegotiationState::Ready);
     }
 
     #[test]
     fn session_negotiation_transitions_to_download_ready_when_download_follows_capabilities() {
         let mut negotiation = SessionNegotiation::default();
 
-        let capabilities_update =
-            negotiation.set_client_rtp_capabilities(test_client_rtp_capabilities());
+        let capabilities_update = negotiation.set_client_rtp_capabilities();
         let download_update =
             negotiation.set_transport_connected(TransportConnectDirection::Download);
 
@@ -290,25 +210,19 @@ mod tests {
         assert!(download_update.became_consumer_ready);
         assert!(!negotiation.can_publish());
         assert!(negotiation.can_consume());
-        assert!(matches!(
-            negotiation.state(),
-            SessionNegotiationState::DownloadReady { .. }
-        ));
+        assert_eq!(negotiation.state(), &SessionNegotiationState::DownloadReady);
     }
 
     #[test]
     fn session_negotiation_set_session_negotiated_jumps_directly_to_ready() {
         let mut negotiation = SessionNegotiation::default();
 
-        let update = negotiation.set_session_negotiated(test_client_rtp_capabilities());
+        let update = negotiation.set_session_negotiated();
 
         assert!(update.session_present);
         assert!(update.became_consumer_ready);
         assert!(negotiation.can_publish());
         assert!(negotiation.can_consume());
-        assert!(matches!(
-            negotiation.state(),
-            SessionNegotiationState::Ready { .. }
-        ));
+        assert_eq!(negotiation.state(), &SessionNegotiationState::Ready);
     }
 }

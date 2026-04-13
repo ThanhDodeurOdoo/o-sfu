@@ -257,16 +257,14 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
-        capabilities: SignalingRtpCapabilities,
+        capabilities: &SignalingRtpCapabilities,
     ) -> SessionNegotiationUpdate {
         let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
         session.parsed_client_rtp_capabilities =
             ortc_mapper::parse_rtp_capabilities(&capabilities.0);
-        session
-            .negotiation
-            .set_client_rtp_capabilities(capabilities)
+        session.negotiation.set_client_rtp_capabilities()
     }
 
     pub(in crate::runtime::channel) fn set_transport_connected(
@@ -285,13 +283,13 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
-        capabilities: SignalingRtpCapabilities,
+        capabilities: &SignalingRtpCapabilities,
     ) -> SessionNegotiationUpdate {
         let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
         session.parsed_client_rtp_capabilities =
             ortc_mapper::parse_rtp_capabilities(&capabilities.0);
-        session.negotiation.set_session_negotiated(capabilities)
+        session.negotiation.set_session_negotiated()
     }
 }
