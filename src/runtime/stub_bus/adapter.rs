@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -13,7 +14,10 @@ use crate::signaling::{
     shared::SessionId,
     webrtc::{DtlsParameters, MediaKind},
 };
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::{
+    MediaFormat as RouterMediaFormat, MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
+    RtpParameters as RouterRtpParameters, StreamBinding,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 
@@ -66,6 +70,7 @@ pub(crate) enum StubWebRtcEvent {
 pub(crate) struct StubWebRtcAdapter {
     events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
     next_media_id: Arc<AtomicU64>,
+    negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     delays: Arc<Mutex<StubWebRtcAdapterDelays>>,
 }
 
@@ -243,6 +248,14 @@ impl StubWebRtcAdapter {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
+        match self.negotiated_producer_parameters.lock() {
+            Ok(mut parameters) => {
+                parameters.remove(&transport_media_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&transport_media_id);
+            }
+        }
         self.record_event(StubWebRtcEvent::MediaRemoved {
             session_id: session_key.session_id().clone(),
             transport_media_id,
@@ -257,9 +270,19 @@ impl StubWebRtcAdapter {
     pub(crate) async fn negotiated_producer_parameters(
         &self,
         _session_key: &TransportSessionKey,
-        _transport_media_id: TransportMediaId,
+        transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        Err(TransportAdapterError::UnsupportedFeature)
+        match self.negotiated_producer_parameters.lock() {
+            Ok(parameters) => parameters
+                .get(&transport_media_id)
+                .cloned()
+                .ok_or(TransportAdapterError::UnsupportedFeature),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .get(&transport_media_id)
+                .cloned()
+                .ok_or(TransportAdapterError::UnsupportedFeature),
+        }
     }
 
     #[allow(
@@ -280,7 +303,17 @@ impl StubWebRtcAdapter {
             sleep(delay).await;
         }
         let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
-        Ok(TransportMediaId::new(id))
+        let transport_media_id = TransportMediaId::new(id);
+        let negotiated = synthetic_negotiated_producer_parameters(media_kind, transport_media_id);
+        match self.negotiated_producer_parameters.lock() {
+            Ok(mut parameters) => {
+                parameters.insert(transport_media_id, negotiated);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(transport_media_id, negotiated);
+            }
+        }
+        Ok(transport_media_id)
     }
 
     #[allow(
@@ -342,4 +375,32 @@ impl StubWebRtcAdapter {
         });
         Ok(())
     }
+}
+
+fn synthetic_negotiated_producer_parameters(
+    media_kind: MediaKind,
+    transport_media_id: TransportMediaId,
+) -> RouterRtpParameters {
+    let (router_media_kind, codec_name, payload_type, clock_rate) = match media_kind {
+        MediaKind::Audio => (RouterMediaKind::Audio, "opus", 111_u8, 48_000_u32),
+        MediaKind::Video => (RouterMediaKind::Video, "VP8", 96_u8, 90_000_u32),
+    };
+    let mut codec = RouterMediaFormat::new(router_media_kind, codec_name, payload_type, clock_rate);
+    if matches!(media_kind, MediaKind::Audio) {
+        codec = codec.with_channels(2);
+    } else {
+        codec = codec.with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None));
+    }
+    let transport_media_u64 = transport_media_id.as_u64();
+    let ssrc_suffix = u32::try_from(transport_media_u64).unwrap_or(u32::MAX.saturating_sub(90_000));
+    RouterRtpParameters::new(
+        vec![codec],
+        vec![],
+        vec![
+            StreamBinding::new()
+                .with_ssrc(90_000_u32.saturating_add(ssrc_suffix))
+                .with_payload_type(payload_type),
+        ],
+    )
+    .with_mid(format!("stub-mid-{transport_media_u64}"))
 }

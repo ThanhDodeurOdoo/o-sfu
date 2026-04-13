@@ -1,15 +1,16 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, mem, sync::Arc};
 
 use axum::extract::ws::Message;
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use crate::runtime::{
-    channel::{Channel, SessionOutbound},
+    channel::{Channel, NegotiatedPublish, SessionOutbound},
     metrics::RuntimeMetrics,
     stub_bus::{
         StubBusOutcome, StubBusSession, WsWriter, send_server_message_batch,
         send_server_request_batch,
     },
-    transport_adapter::RuntimeTransportAdapter,
+    transport_adapter::{RuntimeTransportAdapter, TransportMediaId},
 };
 use crate::signaling::{
     current_protocol::{CurrentServerMessage, CurrentServerRequest},
@@ -18,7 +19,8 @@ use crate::signaling::{
         RecordingActionResult, RequestId, ServerMessage, ServerRequest, ServerResponse,
         SessionDescriptionPayload, WebSocketCloseCode,
     },
-    shared::SessionId,
+    shared::{SessionId, StreamType},
+    webrtc::MediaKind as SignalingMediaKind,
 };
 
 use super::{
@@ -166,6 +168,15 @@ pub(in crate::runtime::websocket_server) struct NativeSessionProtocol {
     request_state: NativeRequestState,
     negotiation: NegotiationState,
     track_projection: RemoteTrackProjection,
+    pending_publish_commits: Vec<PendingPublishCommit>,
+    queued_publish_streams: BTreeSet<StreamType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingPublishCommit {
+    stream_type: StreamType,
+    media_kind: SignalingMediaKind,
+    transport_media_id: TransportMediaId,
 }
 
 impl NativeSessionProtocol {
@@ -183,6 +194,8 @@ impl NativeSessionProtocol {
             request_state: NativeRequestState::default(),
             negotiation: NegotiationState::default(),
             track_projection: RemoteTrackProjection::default(),
+            pending_publish_commits: Vec::new(),
+            queued_publish_streams: BTreeSet::new(),
         }
     }
 
@@ -330,15 +343,12 @@ impl NativeSessionProtocol {
                     .await;
                 SessionProtocolOutcome::Continue
             }
+            ClientEnvelope::Message(ClientMessage::Publish(payload)) => {
+                self.handle_publish_intent(writer, payload.stream_type)
+                    .await
+            }
             ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
-                self.channel
-                    .update_upload_state(
-                        &self.session_id,
-                        payload.stream_type,
-                        false,
-                        &self.transport_adapter,
-                    )
-                    .await;
+                self.handle_unpublish_intent(payload.stream_type).await;
                 SessionProtocolOutcome::Continue
             }
             ClientEnvelope::Response {
@@ -380,8 +390,7 @@ impl NativeSessionProtocol {
                 Ok(()) => SessionProtocolOutcome::Continue,
                 Err(code) => SessionProtocolOutcome::Close(code),
             },
-            ClientEnvelope::Response { .. }
-            | ClientEnvelope::Message(ClientMessage::Auth(_) | ClientMessage::Publish(_)) => {
+            ClientEnvelope::Response { .. } | ClientEnvelope::Message(ClientMessage::Auth(_)) => {
                 SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
             }
         }
@@ -410,6 +419,7 @@ impl NativeSessionProtocol {
         {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::Error);
         }
+        self.commit_pending_publishes().await;
         if self
             .apply_negotiation_action(&resolved.pending)
             .await
@@ -420,13 +430,163 @@ impl NativeSessionProtocol {
         if matches!(resolved.pending.request, ServerRequest::Ping) {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
-        if resolved.queued_renegotiation {
+        let needs_follow_up = if self.stage_queued_publish_streams().await {
+            true
+        } else {
+            resolved.queued_renegotiation
+        };
+        if needs_follow_up {
             match self.request_renegotiation(writer).await {
                 Ok(_sent) => {}
                 Err(code) => return SessionProtocolOutcome::Close(code),
             }
         }
         SessionProtocolOutcome::Continue
+    }
+
+    async fn handle_publish_intent(
+        &mut self,
+        writer: &mut WsWriter,
+        stream_type: StreamType,
+    ) -> SessionProtocolOutcome {
+        if self
+            .pending_publish_commits
+            .iter()
+            .any(|pending| pending.stream_type == stream_type)
+            || self.queued_publish_streams.contains(&stream_type)
+        {
+            return SessionProtocolOutcome::Continue;
+        }
+        if self
+            .channel
+            .is_stream_published(&self.session_id, stream_type)
+            .await
+        {
+            self.channel
+                .update_upload_state(&self.session_id, stream_type, true, &self.transport_adapter)
+                .await;
+            return SessionProtocolOutcome::Continue;
+        }
+        if self.negotiation.awaiting_answer() {
+            self.queued_publish_streams.insert(stream_type);
+            let _disposition = self.negotiation.request_renegotiation();
+            return SessionProtocolOutcome::Continue;
+        }
+        if !self.stage_publish_stream(stream_type).await {
+            return SessionProtocolOutcome::Continue;
+        }
+        match self.request_renegotiation(writer).await {
+            Ok(_sent) => SessionProtocolOutcome::Continue,
+            Err(code) => SessionProtocolOutcome::Close(code),
+        }
+    }
+
+    async fn handle_unpublish_intent(&mut self, stream_type: StreamType) {
+        if self.queued_publish_streams.remove(&stream_type) {
+            return;
+        }
+        if let Some(position) = self
+            .pending_publish_commits
+            .iter()
+            .position(|pending| pending.stream_type == stream_type)
+        {
+            let pending = self.pending_publish_commits.remove(position);
+            let session_key = self
+                .channel
+                .transport_session_key(&self.session_id, self.connection_id);
+            let _result = self
+                .transport_adapter
+                .remove_media(&session_key, pending.transport_media_id)
+                .await;
+            let _disposition = self.negotiation.request_renegotiation();
+            return;
+        }
+        self.channel
+            .update_upload_state(
+                &self.session_id,
+                stream_type,
+                false,
+                &self.transport_adapter,
+            )
+            .await;
+    }
+
+    async fn stage_publish_stream(&mut self, stream_type: StreamType) -> bool {
+        let media_kind = media_kind_for_stream_type(stream_type);
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        let transport_media_id = match self
+            .transport_adapter
+            .publish_media(&session_key, media_kind, &pending_publish_parameters())
+            .await
+        {
+            Ok(transport_media_id) => transport_media_id,
+            Err(_error) => return false,
+        };
+        self.pending_publish_commits.push(PendingPublishCommit {
+            stream_type,
+            media_kind,
+            transport_media_id,
+        });
+        true
+    }
+
+    async fn stage_queued_publish_streams(&mut self) -> bool {
+        let queued_publish_streams = mem::take(&mut self.queued_publish_streams)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut staged_any = false;
+        for stream_type in queued_publish_streams {
+            if self.stage_publish_stream(stream_type).await {
+                staged_any = true;
+            }
+        }
+        staged_any
+    }
+
+    async fn commit_pending_publishes(&mut self) {
+        let pending_publish_commits = mem::take(&mut self.pending_publish_commits);
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        for pending_publish in pending_publish_commits {
+            let consumable_rtp_parameters = match self
+                .transport_adapter
+                .negotiated_producer_parameters(&session_key, pending_publish.transport_media_id)
+                .await
+            {
+                Ok(rtp_parameters) => rtp_parameters,
+                Err(_error) => {
+                    let _result = self
+                        .transport_adapter
+                        .remove_media(&session_key, pending_publish.transport_media_id)
+                        .await;
+                    continue;
+                }
+            };
+            if self
+                .channel
+                .publish_negotiated_track(
+                    &self.session_id,
+                    NegotiatedPublish {
+                        connection_id: self.connection_id,
+                        stream_type: pending_publish.stream_type,
+                        media_kind: pending_publish.media_kind,
+                        transport_media_id: pending_publish.transport_media_id,
+                        consumable_rtp_parameters,
+                    },
+                    &self.transport_adapter,
+                )
+                .await
+                .is_none()
+            {
+                let _result = self
+                    .transport_adapter
+                    .remove_media(&session_key, pending_publish.transport_media_id)
+                    .await;
+            }
+        }
     }
 
     async fn apply_negotiation_action(
@@ -496,4 +656,15 @@ impl NativeSessionProtocol {
             }
         }
     }
+}
+
+fn media_kind_for_stream_type(stream_type: StreamType) -> SignalingMediaKind {
+    match stream_type {
+        StreamType::Audio => SignalingMediaKind::Audio,
+        StreamType::Camera | StreamType::Screen => SignalingMediaKind::Video,
+    }
+}
+
+fn pending_publish_parameters() -> RouterRtpParameters {
+    RouterRtpParameters::new(vec![], vec![], vec![])
 }

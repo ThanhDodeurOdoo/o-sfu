@@ -134,6 +134,62 @@ async fn rtc_session_renegotiation_offer_stages_native_producer_additions() {
 }
 
 #[tokio::test]
+async fn rtc_native_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
+{
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 46, SessionId::Integer(46));
+
+    let mut remote = build_remote_rtc(55_007);
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &RouterRtpParameters::new(vec![], vec![], vec![]),
+        )
+        .await
+        .expect("native publish intent should stage a recv-only media line");
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("native publish should stage a follow-up offer");
+    let renegotiation_sdp = renegotiation_offer.into_sdp();
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
+        .await
+        .expect("transport media should expose its negotiated mid");
+
+    apply_offer_answer(&adapter, &session_key, &mut remote, renegotiation_sdp).await;
+
+    assert!(
+        adapter
+            .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
+            .await
+            .is_some(),
+        "answered native publish should recover the recv expectation from the negotiated SDP"
+    );
+    let negotiated_parameters = adapter
+        .negotiated_producer_parameters(&session_key, transport_media_id)
+        .await
+        .expect("native publish should project negotiated RTP parameters");
+    assert!(
+        negotiated_parameters.bindings().next().is_some(),
+        "projected native publish parameters should expose at least one binding"
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_native_consumer_additions() {
     let adapter = RtcTransportAdapter::default();
     let source_session_key = transport_key(1, 36, SessionId::Integer(36));

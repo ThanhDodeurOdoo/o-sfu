@@ -55,6 +55,10 @@ impl Default for NegotiationState {
 }
 
 impl NegotiationState {
+    pub(super) const fn awaiting_answer(&self) -> bool {
+        matches!(self.phase, NegotiationPhase::AwaitingAnswer { .. })
+    }
+
     pub(super) fn issue(
         &mut self,
         request_id: RequestId,

@@ -109,6 +109,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
         if bindings.is_empty() {
             continue;
         }
+        apply_projected_recv_streams(session_state, mid, &bindings);
         session_state
             .sdp_negotiation
             .negotiated_producer_parameters
@@ -117,6 +118,24 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 RouterRtpParameters::new(formats, header_extensions, bindings)
                     .with_mid(mid.to_string()),
             );
+    }
+}
+
+fn apply_projected_recv_streams(
+    session_state: &mut RtcSessionState,
+    mid: Mid,
+    bindings: &[StreamBinding],
+) {
+    let mut api = session_state.rtc.direct_api();
+    for binding in bindings {
+        let Some(ssrc) = binding.ssrc() else {
+            continue;
+        };
+        let rid = binding.rid().map(Rid::from);
+        if api.stream_rx_by_mid(mid, rid).is_some() {
+            continue;
+        }
+        api.expect_stream_rx(ssrc.into(), None, mid, rid);
     }
 }
 

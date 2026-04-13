@@ -564,6 +564,90 @@ async fn protocol_core_receives_translated_track_snapshot_and_unpublish_update()
 }
 
 #[tokio::test]
+async fn protocol_core_native_publish_round_trips_through_real_server_session_protocol() {
+    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let server = spawn_test_server_with_timeouts_and_protocol(
+        1_000,
+        10_000,
+        60_000,
+        100,
+        RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
+        true,
+    )
+    .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-native-publish",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(53));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(54));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let mut alice = ProtocolHarnessPeer::default();
+    let mut bob = ProtocolHarnessPeer::default();
+    assert!(
+        alice
+            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+            .await
+            .is_some()
+    );
+    assert!(
+        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+            .await
+            .is_some()
+    );
+
+    assert!(
+        alice
+            .update_upload(ProtocolStreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should consume the renegotiation request and answer it"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the translated track snapshot after publish commit"
+    );
+    assert_eq!(
+        bob.core.track_binding("stub-mid-0"),
+        Some(&TrackBinding {
+            mid: String::from("stub-mid-0"),
+            session_id: ProtocolSessionId::Integer(53),
+            stream_type: ProtocolStreamType::Camera,
+            active: true,
+        })
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the follow-up renegotiation request for the new remote track"
+    );
+    assert!(
+        adapter.snapshot_events().iter().any(|event| matches!(
+            event,
+            StubWebRtcEvent::PublishMediaRequested {
+                session_id,
+                media_kind,
+            } if *session_id == SessionId::Integer(53) && *media_kind == MediaKind::Video
+        )),
+        "native publish should declare producer media through the transport adapter"
+    );
+}
+
+#[tokio::test]
 async fn protocol_core_native_subscribe_updates_consumer_activity() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts_and_protocol(

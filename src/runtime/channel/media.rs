@@ -1,7 +1,7 @@
 use o_sfu_router::derive_consumable_rtp_parameters;
 use tracing::warn;
 
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 use crate::signaling::{
     ortc_mapper,
     shared::{DownloadStates, SessionId, StreamType},
@@ -10,10 +10,45 @@ use crate::signaling::{
 
 use super::{
     Channel,
-    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget},
+    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack},
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct NegotiatedPublish {
+    pub(crate) connection_id: u64,
+    pub(crate) stream_type: StreamType,
+    pub(crate) media_kind: SignalingMediaKind,
+    pub(crate) transport_media_id: TransportMediaId,
+    pub(crate) consumable_rtp_parameters: o_sfu_router::RtpParameters,
+}
+
 impl Channel {
+    pub async fn publish_negotiated_track(
+        &self,
+        session_id: &SessionId,
+        publish: NegotiatedPublish,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Option<String> {
+        let pending_publish = {
+            let mut state = self.state.write().await;
+            state.prepare_published_track(
+                session_id,
+                publish.connection_id,
+                publish.stream_type,
+                publish.media_kind,
+                publish.consumable_rtp_parameters,
+            )?
+        };
+        self.commit_published_track(
+            session_id,
+            publish.connection_id,
+            pending_publish,
+            publish.transport_media_id,
+            transport_adapter,
+        )
+        .await
+    }
+
     pub async fn bootstrap_missing_consumers(
         &self,
         session_id: &SessionId,
@@ -97,29 +132,14 @@ impl Channel {
             }
         };
 
-        let consumer_targets = {
-            let mut state = self.state.write().await;
-            state.commit_published_track(pending_publish, transport_media_id)
-        };
-        let Some((producer_id, consumer_targets)) = consumer_targets else {
-            let _result = transport_adapter
-                .remove_media(
-                    &self.transport_session_key(session_id, publisher_connection_id),
-                    transport_media_id,
-                )
-                .await;
-            return None;
-        };
-
-        for target in consumer_targets {
-            self.bootstrap_consumer_target(
-                &target,
-                transport_adapter,
-                ConsumerBootstrapOrigin::Publish,
-            )
-            .await;
-        }
-        Some(producer_id.into_wire_id())
+        self.commit_published_track(
+            session_id,
+            publisher_connection_id,
+            pending_publish,
+            transport_media_id,
+            transport_adapter,
+        )
+        .await
     }
 
     async fn bootstrap_consumer_target(
@@ -273,5 +293,50 @@ impl Channel {
         }
         let mut state = self.state.write().await;
         state.commit_download_route_updates(session_id, target_session_id, committed_updates);
+    }
+
+    pub(crate) async fn is_stream_published(
+        &self,
+        session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.state
+            .read()
+            .await
+            .producer_route_target_for_session(session_id, stream_type)
+            .is_some()
+    }
+
+    async fn commit_published_track(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        pending_publish: PendingPublishedTrack,
+        transport_media_id: TransportMediaId,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Option<String> {
+        let consumer_targets = {
+            let mut state = self.state.write().await;
+            state.commit_published_track(pending_publish, transport_media_id)
+        };
+        let Some((producer_id, consumer_targets)) = consumer_targets else {
+            let _result = transport_adapter
+                .remove_media(
+                    &self.transport_session_key(session_id, connection_id),
+                    transport_media_id,
+                )
+                .await;
+            return None;
+        };
+
+        for target in consumer_targets {
+            self.bootstrap_consumer_target(
+                &target,
+                transport_adapter,
+                ConsumerBootstrapOrigin::Publish,
+            )
+            .await;
+        }
+        Some(producer_id.into_wire_id())
     }
 }

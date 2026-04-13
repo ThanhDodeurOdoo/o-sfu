@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Instant;
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::channel::Channel;
+use crate::runtime::channel::{Channel, NegotiatedPublish};
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
 use str0m::{Candidate, Rtc, change::SdpOffer};
@@ -894,6 +894,85 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
         drain_outbound(&mut scenario.subscriber_rx).is_empty(),
         "no new bootstrap should be emitted once every consumer already exists"
     );
+}
+
+#[tokio::test]
+async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
+    let mut scenario = setup_real_rtc_refresh_scenario().await;
+    let Some(publisher_connection_id) = scenario
+        .channel
+        .session_connection_id(&scenario.publisher_session_id)
+        .await
+    else {
+        panic!("publisher connection should exist");
+    };
+    let publisher_session_key = scenario
+        .channel
+        .transport_session_key(&scenario.publisher_session_id, publisher_connection_id);
+    let mut publisher_remote = build_remote_rtc(55_101);
+    let initial_offer = scenario
+        .transport_adapter
+        .create_initial_session_offer(&publisher_session_key)
+        .await
+        .expect("publisher should get an initial rtc offer");
+    apply_offer_answer(
+        &scenario.transport_adapter,
+        &publisher_session_key,
+        &mut publisher_remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let transport_media_id = scenario
+        .transport_adapter
+        .publish_media(
+            &publisher_session_key,
+            MediaKind::Video,
+            &o_sfu_router::RtpParameters::new(vec![], vec![], vec![]),
+        )
+        .await
+        .expect("native publish intent should stage a recv-only media line");
+    let publish_offer = scenario
+        .transport_adapter
+        .create_session_renegotiation_offer(&publisher_session_key)
+        .await
+        .expect("native publish should stage a follow-up offer");
+    apply_offer_answer(
+        &scenario.transport_adapter,
+        &publisher_session_key,
+        &mut publisher_remote,
+        publish_offer.into_sdp(),
+    )
+    .await;
+    let negotiated_parameters = scenario
+        .transport_adapter
+        .negotiated_producer_parameters(&publisher_session_key, transport_media_id)
+        .await
+        .expect("answered native publish should expose negotiated producer parameters");
+
+    assert!(
+        scenario
+            .channel
+            .publish_negotiated_track(
+                &scenario.publisher_session_id,
+                NegotiatedPublish {
+                    connection_id: publisher_connection_id,
+                    stream_type: StreamType::Camera,
+                    media_kind: MediaKind::Video,
+                    transport_media_id,
+                    consumable_rtp_parameters: negotiated_parameters,
+                },
+                &scenario.transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
+    assert_bootstrap_for_stream(
+        &drain_outbound(&mut scenario.subscriber_rx),
+        StreamType::Camera,
+    );
+    assert_eq!(scenario.channel.consumer_count().await, 1);
 }
 
 struct RealRtcRefreshScenario {

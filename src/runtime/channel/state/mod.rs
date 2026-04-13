@@ -15,6 +15,6 @@ mod session_info_projection;
 mod shared;
 
 pub(in crate::runtime::channel) use self::media::{
-    ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget,
+    ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack,
 };
 pub(in crate::runtime::channel) use self::shared::{ChannelState, TransportMediaRemoval};
