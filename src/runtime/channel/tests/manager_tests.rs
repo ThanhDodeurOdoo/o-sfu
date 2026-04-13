@@ -49,7 +49,7 @@ async fn channel_manager_lookup_by_uuid() {
 #[tokio::test]
 async fn channel_manager_join_session_reports_missing_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::stub();
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
     let (tx, _rx) = test_sender();
     let result = manager
         .join_session(
@@ -72,7 +72,7 @@ async fn channel_manager_join_session_reports_missing_channel() {
 #[tokio::test]
 async fn manager_leave_session_removes_empty_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::stub();
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
     let first_channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -114,7 +114,7 @@ async fn manager_leave_session_removes_empty_channel() {
 #[tokio::test]
 async fn manager_disconnect_sessions_removes_empty_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::stub();
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
     let first_channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;

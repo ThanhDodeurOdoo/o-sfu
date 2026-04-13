@@ -14,7 +14,7 @@ use tokio::runtime::Builder;
 use super::{
     recording::MediaTap,
     rtc_adapter::RtcTransportAdapter,
-    transport_adapter::{TransportAdapterError, TransportSessionKey},
+    transport_adapter::{RtcTransportAdapterConfig, TransportAdapterError, TransportSessionKey},
 };
 use crate::{config::RtcPortRange, signaling::shared::SessionId};
 use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
@@ -46,11 +46,11 @@ impl RtcUdpDemuxBenchmarkFixture {
         }
         let runtime = Builder::new_current_thread().enable_all().build().ok()?;
         let _runtime_guard = runtime.enter();
-        let adapter = RtcTransportAdapter::new(
+        let adapter = RtcTransportAdapter::new(&RtcTransportAdapterConfig::new(
             BENCHMARK_PUBLIC_IP,
             BENCHMARK_PORT_RANGE,
             Arc::new(MediaTap::default()),
-        );
+        ));
         let mut session_keys = Vec::with_capacity(session_count);
         let mut probe_addrs = Vec::with_capacity(session_count);
         for idx in 0..session_count {

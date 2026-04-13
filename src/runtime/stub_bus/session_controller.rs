@@ -9,7 +9,10 @@ use super::{
 use crate::runtime::{
     channel::Channel,
     metrics::RuntimeMetrics,
-    transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection, TransportSessionKey},
+    transport_adapter::{
+        RuntimeTransportAdapter, TransportConnectDirection, TransportConnectRequest,
+        TransportSessionKey,
+    },
 };
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
@@ -342,15 +345,10 @@ impl SessionController {
         payload: &CurrentTransportConnectPayload,
         direction: TransportConnectDirection,
     ) -> Value {
+        let request = Self::transport_connect_request(payload, direction);
         if self
             .transport_adapter
-            .connect_transport(
-                &self.transport_session_key(),
-                direction,
-                &payload.dtls_parameters,
-                payload.ice_parameters.as_ref(),
-                payload.sdp_offer.as_deref(),
-            )
+            .connect_transport(&self.transport_session_key(), request)
             .await
             .is_err()
         {
@@ -375,6 +373,23 @@ impl SessionController {
         }
         debug!(?direction, "handled transport connect request");
         empty_object()
+    }
+
+    fn transport_connect_request(
+        payload: &CurrentTransportConnectPayload,
+        direction: TransportConnectDirection,
+    ) -> TransportConnectRequest<'_> {
+        let request = payload.ice_parameters.as_ref().map_or(
+            TransportConnectRequest::new(direction, &payload.dtls_parameters),
+            |ice_parameters| {
+                TransportConnectRequest::new(direction, &payload.dtls_parameters)
+                    .with_ice_parameters(ice_parameters)
+            },
+        );
+        payload
+            .sdp_offer
+            .as_deref()
+            .map_or(request, |sdp_offer| request.with_sdp_offer(sdp_offer))
     }
 
     async fn handle_publish_request(&self, payload: &CurrentPublishTrackPayload) -> Value {

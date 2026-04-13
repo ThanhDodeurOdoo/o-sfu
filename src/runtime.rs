@@ -31,7 +31,7 @@ use channel::ChannelManagerConfig;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
-use transport_adapter::RuntimeTransportAdapter;
+use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter};
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -109,13 +109,16 @@ fn build_transport_adapter(
     config: &Config,
     recording_media_tap: Arc<MediaTap>,
 ) -> RuntimeTransportAdapter {
+    let builder = RuntimeTransportAdapter::builder();
     match config.transport_backend {
-        TransportBackend::Stub => RuntimeTransportAdapter::stub(),
-        TransportBackend::Rtc => RuntimeTransportAdapter::rtc(
-            config.public_ip,
-            config.rtc_port_range,
-            config.rtc_media_worker_count,
-            recording_media_tap,
-        ),
+        TransportBackend::Stub => builder.stub().build(),
+        TransportBackend::Rtc => builder
+            .rtc(RtcTransportAdapterShardSetConfig::new(
+                config.public_ip,
+                config.rtc_port_range,
+                config.rtc_media_worker_count,
+                recording_media_tap,
+            ))
+            .build(),
     }
 }

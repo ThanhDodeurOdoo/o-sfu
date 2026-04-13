@@ -58,7 +58,7 @@ pub(super) fn test_state() -> RuntimeState {
         )),
         config,
         metrics: Arc::new(RuntimeMetrics::default()),
-        transport_adapter: RuntimeTransportAdapter::stub(),
+        transport_adapter: RuntimeTransportAdapter::builder().stub().build(),
     }
 }
 

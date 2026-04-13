@@ -11,20 +11,20 @@ async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
     let first_connect = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(first_connect, Ok(()));
     let second_connect = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(second_connect, Err(TransportAdapterError::InvalidInput));
@@ -41,10 +41,11 @@ async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
     let connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            Some("v=0\r\ns=-\r\nt=0 0\r\n"),
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            )
+            .with_sdp_offer("v=0\r\ns=-\r\nt=0 0\r\n"),
         )
         .await;
     assert_eq!(connect_result, Err(TransportAdapterError::InvalidInput));
@@ -61,10 +62,11 @@ async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
     let connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            Some("m=audio 9 RTP/SAVPF 111\r\n"),
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            )
+            .with_sdp_offer("m=audio 9 RTP/SAVPF 111\r\n"),
         )
         .await;
     assert_eq!(
@@ -84,20 +86,20 @@ async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_co
     let upload_connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(upload_connect_result, Ok(()));
     let download_connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Download,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Download,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(download_connect_result, Ok(()));
@@ -114,23 +116,23 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
     let first_connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(first_connect_result, Ok(()));
     let second_connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Download,
-            &sample_sha256_dtls_parameters_with_value(
-                "client",
-                "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00",
+            TransportConnectRequest::new(
+                TransportConnectDirection::Download,
+                &sample_sha256_dtls_parameters_with_value(
+                    "client",
+                    "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00",
+                ),
             ),
-            None,
-            None,
         )
         .await;
     assert_eq!(
@@ -154,10 +156,10 @@ async fn rtc_transport_connect_allows_late_remote_ice_credentials_on_second_dire
         adapter
             .connect_transport(
                 &session_key,
-                TransportConnectDirection::Upload,
-                &sample_sha256_dtls_parameters("client"),
-                None,
-                None,
+                TransportConnectRequest::new(
+                    TransportConnectDirection::Upload,
+                    &sample_sha256_dtls_parameters("client"),
+                ),
             )
             .await,
         Ok(())
@@ -167,10 +169,11 @@ async fn rtc_transport_connect_allows_late_remote_ice_credentials_on_second_dire
         adapter
             .connect_transport(
                 &session_key,
-                TransportConnectDirection::Download,
-                &sample_sha256_dtls_parameters("client"),
-                Some(&sample_ice_parameters("client-ufrag", "client-password")),
-                None,
+                TransportConnectRequest::new(
+                    TransportConnectDirection::Download,
+                    &sample_sha256_dtls_parameters("client"),
+                )
+                .with_ice_parameters(&sample_ice_parameters("client-ufrag", "client-password",)),
             )
             .await,
         Ok(())
@@ -192,10 +195,11 @@ async fn rtc_transport_connect_rejects_mismatched_remote_ice_credentials_between
         adapter
             .connect_transport(
                 &session_key,
-                TransportConnectDirection::Upload,
-                &sample_sha256_dtls_parameters("client"),
-                Some(&sample_ice_parameters("client-ufrag", "client-password")),
-                None,
+                TransportConnectRequest::new(
+                    TransportConnectDirection::Upload,
+                    &sample_sha256_dtls_parameters("client"),
+                )
+                .with_ice_parameters(&sample_ice_parameters("client-ufrag", "client-password",)),
             )
             .await,
         Ok(())
@@ -205,10 +209,11 @@ async fn rtc_transport_connect_rejects_mismatched_remote_ice_credentials_between
         adapter
             .connect_transport(
                 &session_key,
-                TransportConnectDirection::Download,
-                &sample_sha256_dtls_parameters("client"),
-                Some(&sample_ice_parameters("other-ufrag", "other-password")),
-                None,
+                TransportConnectRequest::new(
+                    TransportConnectDirection::Download,
+                    &sample_sha256_dtls_parameters("client"),
+                )
+                .with_ice_parameters(&sample_ice_parameters("other-ufrag", "other-password",)),
             )
             .await,
         Err(TransportAdapterError::InvalidInput)

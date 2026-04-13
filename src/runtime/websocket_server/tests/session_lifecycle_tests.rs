@@ -2,8 +2,14 @@ use super::fixtures::*;
 
 #[tokio::test]
 async fn websocket_sends_ping_requests_and_accepts_responses() {
-    let server =
-        spawn_test_server_with_timeouts(1_000, 200, 20, 100, RuntimeTransportAdapter::stub()).await;
+    let server = spawn_test_server_with_timeouts(
+        1_000,
+        200,
+        20,
+        100,
+        RuntimeTransportAdapter::builder().stub().build(),
+    )
+    .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -54,8 +60,14 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
 
 #[tokio::test]
 async fn websocket_closes_when_ping_response_times_out() {
-    let server =
-        spawn_test_server_with_timeouts(1_000, 30, 15, 100, RuntimeTransportAdapter::stub()).await;
+    let server = spawn_test_server_with_timeouts(
+        1_000,
+        30,
+        15,
+        100,
+        RuntimeTransportAdapter::builder().stub().build(),
+    )
+    .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;

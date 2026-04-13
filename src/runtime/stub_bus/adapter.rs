@@ -5,13 +5,13 @@ use std::{
 
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportConnectDirection, TransportMediaId,
-    TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
+    TransportMediaId, TransportSessionKey,
 };
 use crate::signaling::{
     current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
-    webrtc::{DtlsParameters, IceParameters, MediaKind},
+    webrtc::{DtlsParameters, MediaKind},
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -197,26 +197,25 @@ impl StubWebRtcAdapter {
     pub(crate) async fn connect_transport(
         &self,
         session_key: &TransportSessionKey,
-        direction: TransportConnectDirection,
-        dtls_parameters: &DtlsParameters,
-        _ice_parameters: Option<&IceParameters>,
-        _sdp_offer: Option<&str>,
+        request: TransportConnectRequest<'_>,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::TransportConnectRequested {
             session_id: session_key.session_id().clone(),
-            direction,
-            dtls_parameters: dtls_parameters.clone(),
+            direction: request.direction(),
+            dtls_parameters: request.dtls_parameters().clone(),
         });
-        if dtls_parameters.role.is_empty() || dtls_parameters.fingerprints.is_empty() {
+        if request.dtls_parameters().role.is_empty()
+            || request.dtls_parameters().fingerprints.is_empty()
+        {
             self.record_event(StubWebRtcEvent::TransportConnectRejected {
                 session_id: session_key.session_id().clone(),
-                direction,
+                direction: request.direction(),
             });
             return Err(TransportAdapterError::TransportUnavailable);
         }
         self.record_event(StubWebRtcEvent::TransportConnected {
             session_id: session_key.session_id().clone(),
-            direction,
+            direction: request.direction(),
         });
         Ok(())
     }

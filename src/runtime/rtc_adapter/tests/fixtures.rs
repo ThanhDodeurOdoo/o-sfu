@@ -23,7 +23,8 @@ pub(super) use tokio::time::sleep;
 pub(super) use super::super::{RtcTransportAdapter, packet_loop::take_write_payload, validation};
 pub(super) use crate::{
     runtime::transport_adapter::{
-        TransportAdapterError, TransportConnectDirection, TransportSessionKey,
+        TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
+        TransportSessionKey,
     },
     signaling::{
         current_protocol::CurrentTransportBootstrapPayload,

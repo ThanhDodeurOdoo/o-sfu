@@ -17,13 +17,10 @@ use std::net::SocketAddr;
 use crate::config::RtcPortRange;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportBitrateSnapshot, TransportConnectDirection,
-    TransportMediaId, TransportSessionKey,
+    RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
+    TransportConnectDirection, TransportConnectRequest, TransportMediaId, TransportSessionKey,
 };
-use crate::signaling::{
-    current_protocol::CurrentTransportBootstrapPayload,
-    webrtc::{DtlsParameters, IceParameters},
-};
+use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind;
 #[cfg(test)]
@@ -61,15 +58,11 @@ pub(crate) struct RtcTransportAdapter {
 }
 
 impl RtcTransportAdapter {
-    pub(crate) fn new(
-        public_ip: IpAddr,
-        rtc_port_range: RtcPortRange,
-        media_tap: Arc<MediaTap>,
-    ) -> Self {
+    pub(crate) fn new(config: &RtcTransportAdapterConfig) -> Self {
         Self {
-            public_ip,
-            rtc_port_range,
-            media_tap,
+            public_ip: config.public_ip(),
+            rtc_port_range: config.rtc_port_range(),
+            media_tap: config.media_tap(),
             worker_handle: Mutex::new(None),
             transport_states: Arc::new(Mutex::new(BTreeMap::new())),
             packet_loop_started: Arc::new(AtomicBool::new(false)),
@@ -133,32 +126,30 @@ impl RtcTransportAdapter {
     pub(crate) async fn connect_transport(
         &self,
         session_key: &TransportSessionKey,
-        direction: TransportConnectDirection,
-        dtls_parameters: &DtlsParameters,
-        ice_parameters: Option<&IceParameters>,
-        sdp_offer: Option<&str>,
+        request: TransportConnectRequest<'_>,
     ) -> Result<(), TransportAdapterError> {
-        if let Some(sdp_offer) = sdp_offer {
+        if let Some(sdp_offer) = request.sdp_offer() {
             validation::validate_sdp_offer(sdp_offer)?;
         }
-        let parsed_dtls_parameters = validation::parse_dtls_parameters(dtls_parameters)?;
-        let remote_ice_credentials = validation::parse_remote_ice_credentials(ice_parameters)?;
-        self.ensure_connect_transition(session_key, direction)?;
+        let parsed_dtls_parameters = validation::parse_dtls_parameters(request.dtls_parameters())?;
+        let remote_ice_credentials =
+            validation::parse_remote_ice_credentials(request.ice_parameters())?;
+        self.ensure_connect_transition(session_key, request.direction())?;
         debug!(
-            ?direction,
+            direction = ?request.direction(),
             session_id = ?session_key.session_id(),
             channel_runtime_id = session_key.channel_runtime_id(),
             "validated DTLS parameters and transport lifecycle state before rtc transport connect"
         );
         self.request_worker(|response| RtcWorkerCommand::ConnectTransport {
             session_key: session_key.clone(),
-            direction,
+            direction: request.direction(),
             parsed_dtls_parameters,
             remote_ice_credentials,
             response,
         })
         .await?;
-        self.mark_connected(session_key, direction)?;
+        self.mark_connected(session_key, request.direction())?;
         Ok(())
     }
 
@@ -624,10 +615,10 @@ impl Default for RtcTransportAdapter {
     fn default() -> Self {
         use std::net::Ipv4Addr;
 
-        Self::new(
+        Self::new(&RtcTransportAdapterConfig::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             RtcPortRange::new(40_000, 49_999),
             Arc::new(MediaTap::default()),
-        )
+        ))
     }
 }

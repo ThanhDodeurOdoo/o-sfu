@@ -7,13 +7,13 @@ async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
     let result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &DtlsParameters {
-                role: String::from("client"),
-                fingerprints: vec![],
-            },
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &DtlsParameters {
+                    role: String::from("client"),
+                    fingerprints: vec![],
+                },
+            ),
         )
         .await;
     assert_eq!(result, Err(TransportAdapterError::InvalidInput));
@@ -26,10 +26,10 @@ async fn rtc_transport_connect_requires_bootstrap_first() {
     let result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
@@ -46,10 +46,11 @@ async fn rtc_transport_connect_succeeds_after_bootstrap() {
     let connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            Some(VALID_SDP_OFFER),
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            )
+            .with_sdp_offer(VALID_SDP_OFFER),
         )
         .await;
     assert_eq!(connect_result, Ok(()));
@@ -69,10 +70,11 @@ async fn rtc_transport_connect_accepts_remote_ice_credentials() {
     let result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            Some(&sample_ice_parameters("client-ufrag", "client-password")),
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            )
+            .with_ice_parameters(&sample_ice_parameters("client-ufrag", "client-password")),
         )
         .await;
     assert_eq!(result, Ok(()));
@@ -92,12 +94,13 @@ async fn rtc_transport_connect_rejects_invalid_remote_ice_credentials() {
     let result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            Some(&IceParameters(json!({
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            )
+            .with_ice_parameters(&IceParameters(json!({
                 "usernameFragment": "client-ufrag"
             }))),
-            None,
         )
         .await;
     assert_eq!(result, Err(TransportAdapterError::InvalidInput));
@@ -164,10 +167,10 @@ async fn rtc_transport_close_session_cleans_bootstrap_state() {
     let connect_result = adapter
         .connect_transport(
             &session_key,
-            TransportConnectDirection::Upload,
-            &sample_sha256_dtls_parameters("client"),
-            None,
-            None,
+            TransportConnectRequest::new(
+                TransportConnectDirection::Upload,
+                &sample_sha256_dtls_parameters("client"),
+            ),
         )
         .await;
     assert_eq!(
@@ -264,10 +267,10 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
         adapter
             .connect_transport(
                 &second_session_key,
-                TransportConnectDirection::Upload,
-                &sample_sha256_dtls_parameters("client"),
-                None,
-                None,
+                TransportConnectRequest::new(
+                    TransportConnectDirection::Upload,
+                    &sample_sha256_dtls_parameters("client"),
+                ),
             )
             .await,
         Ok(())

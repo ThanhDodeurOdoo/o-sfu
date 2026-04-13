@@ -85,6 +85,65 @@ pub(crate) enum TransportAdapterError {
     UnsupportedFeature,
 }
 
+/// Named request for connecting one transport direction with client auth data.
+///
+/// This keeps the transport boundary readable when optional ICE credentials or
+/// transitional SDP validation are present.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TransportConnectRequest<'a> {
+    direction: TransportConnectDirection,
+    dtls_parameters: &'a DtlsParameters,
+    ice_parameters: Option<&'a IceParameters>,
+    sdp_offer: Option<&'a str>,
+}
+
+impl<'a> TransportConnectRequest<'a> {
+    #[must_use]
+    pub(crate) fn new(
+        direction: TransportConnectDirection,
+        dtls_parameters: &'a DtlsParameters,
+    ) -> Self {
+        Self {
+            direction,
+            dtls_parameters,
+            ice_parameters: None,
+            sdp_offer: None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn with_ice_parameters(mut self, ice_parameters: &'a IceParameters) -> Self {
+        self.ice_parameters = Some(ice_parameters);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_sdp_offer(mut self, sdp_offer: &'a str) -> Self {
+        self.sdp_offer = Some(sdp_offer);
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn direction(self) -> TransportConnectDirection {
+        self.direction
+    }
+
+    #[must_use]
+    pub(crate) const fn dtls_parameters(self) -> &'a DtlsParameters {
+        self.dtls_parameters
+    }
+
+    #[must_use]
+    pub(crate) const fn ice_parameters(self) -> Option<&'a IceParameters> {
+        self.ice_parameters
+    }
+
+    #[must_use]
+    pub(crate) const fn sdp_offer(self) -> Option<&'a str> {
+        self.sdp_offer
+    }
+}
+
 /// Point-in-time bitrate measurement aggregated across one or more transport sessions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TransportBitrateSnapshot {
@@ -129,6 +188,120 @@ impl SessionOffer {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RtcTransportAdapterConfig {
+    public_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+    media_tap: Arc<MediaTap>,
+}
+
+impl RtcTransportAdapterConfig {
+    #[must_use]
+    pub(crate) fn new(
+        public_ip: IpAddr,
+        rtc_port_range: RtcPortRange,
+        media_tap: Arc<MediaTap>,
+    ) -> Self {
+        Self {
+            public_ip,
+            rtc_port_range,
+            media_tap,
+        }
+    }
+
+    #[must_use]
+    fn with_rtc_port_range(&self, rtc_port_range: RtcPortRange) -> Self {
+        Self {
+            public_ip: self.public_ip,
+            rtc_port_range,
+            media_tap: Arc::clone(&self.media_tap),
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn public_ip(&self) -> IpAddr {
+        self.public_ip
+    }
+
+    #[must_use]
+    pub(crate) const fn rtc_port_range(&self) -> RtcPortRange {
+        self.rtc_port_range
+    }
+
+    #[must_use]
+    pub(crate) fn media_tap(&self) -> Arc<MediaTap> {
+        Arc::clone(&self.media_tap)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RtcTransportAdapterShardSetConfig {
+    worker_count: usize,
+    adapter: RtcTransportAdapterConfig,
+}
+
+impl RtcTransportAdapterShardSetConfig {
+    #[must_use]
+    pub(crate) fn new(
+        public_ip: IpAddr,
+        rtc_port_range: RtcPortRange,
+        worker_count: usize,
+        media_tap: Arc<MediaTap>,
+    ) -> Self {
+        Self {
+            worker_count,
+            adapter: RtcTransportAdapterConfig::new(public_ip, rtc_port_range, media_tap),
+        }
+    }
+
+    #[must_use]
+    fn worker_count(&self) -> usize {
+        self.worker_count
+    }
+
+    #[must_use]
+    fn adapter_config(&self) -> &RtcTransportAdapterConfig {
+        &self.adapter
+    }
+
+    #[must_use]
+    fn shard_config_with_port_range(
+        &self,
+        rtc_port_range: RtcPortRange,
+    ) -> RtcTransportAdapterConfig {
+        self.adapter.with_rtc_port_range(rtc_port_range)
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeTransportAdapterBuilder {
+    rtc_config: Option<RtcTransportAdapterShardSetConfig>,
+}
+
+impl RuntimeTransportAdapterBuilder {
+    #[must_use]
+    pub(crate) fn stub(mut self) -> Self {
+        self.rtc_config = None;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn rtc(mut self, config: RtcTransportAdapterShardSetConfig) -> Self {
+        self.rtc_config = Some(config);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn build(self) -> RuntimeTransportAdapter {
+        self.rtc_config.map_or_else(
+            || RuntimeTransportAdapter::Stub(Arc::new(StubWebRtcAdapter::default())),
+            |config| {
+                RuntimeTransportAdapter::Rtc(Arc::new(RtcTransportAdapterShardSet::new(&config)))
+            },
+        )
+    }
+}
+
 /// Runtime boundary between signaling/session orchestration and transport-specific behavior.
 ///
 /// Implementations provide transport bootstrap payloads and transport connection handling
@@ -146,45 +319,32 @@ pub(crate) struct RtcTransportAdapterShardSet {
 }
 
 impl RtcTransportAdapterShardSet {
-    fn new(
-        public_ip: IpAddr,
-        rtc_port_range: RtcPortRange,
-        worker_count: usize,
-        media_tap: Arc<MediaTap>,
-    ) -> Self {
-        let Some(shard_ranges) = rtc_port_range.split_for_workers(worker_count) else {
+    fn new(config: &RtcTransportAdapterShardSetConfig) -> Self {
+        let Some(shard_ranges) = config
+            .adapter_config()
+            .rtc_port_range()
+            .split_for_workers(config.worker_count())
+        else {
             return Self {
-                primary_shard: Arc::new(RtcTransportAdapter::new(
-                    public_ip,
-                    rtc_port_range,
-                    media_tap,
-                )),
+                primary_shard: Arc::new(RtcTransportAdapter::new(config.adapter_config())),
                 extra_shards: Vec::new(),
             };
         };
         let mut shard_ranges = shard_ranges.into_iter();
         let Some(primary_range) = shard_ranges.next() else {
             return Self {
-                primary_shard: Arc::new(RtcTransportAdapter::new(
-                    public_ip,
-                    rtc_port_range,
-                    media_tap,
-                )),
+                primary_shard: Arc::new(RtcTransportAdapter::new(config.adapter_config())),
                 extra_shards: Vec::new(),
             };
         };
         Self {
             primary_shard: Arc::new(RtcTransportAdapter::new(
-                public_ip,
-                primary_range,
-                Arc::clone(&media_tap),
+                &config.shard_config_with_port_range(primary_range),
             )),
             extra_shards: shard_ranges
                 .map(|range| {
                     Arc::new(RtcTransportAdapter::new(
-                        public_ip,
-                        range,
-                        Arc::clone(&media_tap),
+                        &config.shard_config_with_port_range(range),
                     ))
                 })
                 .collect(),
@@ -242,23 +402,8 @@ impl RtcTransportAdapterShardSet {
 
 impl RuntimeTransportAdapter {
     #[must_use]
-    pub(crate) fn stub() -> Self {
-        Self::Stub(Arc::new(StubWebRtcAdapter::default()))
-    }
-
-    #[must_use]
-    pub(crate) fn rtc(
-        public_ip: IpAddr,
-        rtc_port_range: RtcPortRange,
-        worker_count: usize,
-        media_tap: Arc<MediaTap>,
-    ) -> Self {
-        Self::Rtc(Arc::new(RtcTransportAdapterShardSet::new(
-            public_ip,
-            rtc_port_range,
-            worker_count,
-            media_tap,
-        )))
+    pub(crate) fn builder() -> RuntimeTransportAdapterBuilder {
+        RuntimeTransportAdapterBuilder::default()
     }
 
     #[cfg(test)]
@@ -350,33 +495,14 @@ impl RuntimeTransportAdapter {
     pub(crate) async fn connect_transport(
         &self,
         session_key: &TransportSessionKey,
-        direction: TransportConnectDirection,
-        dtls_parameters: &DtlsParameters,
-        ice_parameters: Option<&IceParameters>,
-        sdp_offer: Option<&str>,
+        request: TransportConnectRequest<'_>,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
-                adapter
-                    .connect_transport(
-                        session_key,
-                        direction,
-                        dtls_parameters,
-                        ice_parameters,
-                        sdp_offer,
-                    )
-                    .await
-            }
+            Self::Stub(adapter) => adapter.connect_transport(session_key, request).await,
             Self::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
-                    .connect_transport(
-                        session_key,
-                        direction,
-                        dtls_parameters,
-                        ice_parameters,
-                        sdp_offer,
-                    )
+                    .connect_transport(session_key, request)
                     .await
             }
         }
@@ -570,7 +696,10 @@ mod tests {
     use super::RuntimeTransportAdapter;
     use crate::{
         config::RtcPortRange,
-        runtime::{recording::MediaTap, transport_adapter::TransportSessionKey},
+        runtime::{
+            recording::MediaTap,
+            transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey},
+        },
         signaling::shared::SessionId,
     };
     use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
@@ -581,12 +710,14 @@ mod tests {
 
     #[tokio::test]
     async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
-        let adapter = RuntimeTransportAdapter::rtc(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RtcPortRange::new(46_000, 46_003),
-            2,
-            Arc::new(MediaTap::default()),
-        );
+        let adapter = RuntimeTransportAdapter::builder()
+            .rtc(RtcTransportAdapterShardSetConfig::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                RtcPortRange::new(46_000, 46_003),
+                2,
+                Arc::new(MediaTap::default()),
+            ))
+            .build();
         let first_channel_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));
         let second_channel_session = TransportSessionKey::new(11, 1, 1, SessionId::Integer(2));
         let same_shard_session = TransportSessionKey::new(12, 0, 1, SessionId::Integer(3));

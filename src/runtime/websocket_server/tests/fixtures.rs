@@ -98,7 +98,7 @@ pub(super) async fn spawn_test_server(
         10_000,
         60_000,
         channel_size,
-        RuntimeTransportAdapter::stub(),
+        RuntimeTransportAdapter::builder().stub().build(),
         false,
     )
     .await
@@ -188,7 +188,7 @@ pub(super) async fn spawn_native_protocol_test_server(
         10_000,
         60_000,
         channel_size,
-        RuntimeTransportAdapter::stub(),
+        RuntimeTransportAdapter::builder().stub().build(),
         true,
     )
     .await
