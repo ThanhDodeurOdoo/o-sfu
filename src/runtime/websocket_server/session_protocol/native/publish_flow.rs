@@ -21,7 +21,12 @@ impl NativeSessionProtocol {
             .await
         {
             self.channel
-                .update_upload_state(&self.session_id, stream_type, true, &self.transport_adapter)
+                .set_publication_active(
+                    &self.session_id,
+                    stream_type,
+                    true,
+                    &self.transport_adapter,
+                )
                 .await;
             return SessionProtocolOutcome::Continue;
         }

@@ -9,8 +9,8 @@ use crate::{
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct StickyReplayState {
-    active_uploads: BTreeSet<StreamType>,
-    desired_downloads: BTreeMap<SessionId, DownloadStates>,
+    active_publications: BTreeSet<StreamType>,
+    desired_subscriptions: BTreeMap<SessionId, DownloadStates>,
     desired_info: Option<SessionInfo>,
 }
 
@@ -20,31 +20,31 @@ impl StickyReplayState {
     }
 
     pub(super) fn clear(&mut self) {
-        self.active_uploads.clear();
-        self.desired_downloads.clear();
+        self.active_publications.clear();
+        self.desired_subscriptions.clear();
         self.desired_info = None;
     }
 
-    pub(super) fn set_upload_active(&mut self, stream_type: StreamType, active: bool) {
+    pub(super) fn set_publish_active(&mut self, stream_type: StreamType, active: bool) {
         if active {
-            self.active_uploads.insert(stream_type);
+            self.active_publications.insert(stream_type);
         } else {
-            self.active_uploads.remove(&stream_type);
+            self.active_publications.remove(&stream_type);
         }
     }
 
-    pub(super) fn remember_download_states(
+    pub(super) fn remember_subscription_states(
         &mut self,
         session_id: &SessionId,
         states: &DownloadStates,
     ) {
         let existing_states = self
-            .desired_downloads
+            .desired_subscriptions
             .entry(session_id.clone())
             .or_default();
         merge_download_states(existing_states, states);
         if download_states_are_empty(existing_states) {
-            self.desired_downloads.remove(session_id);
+            self.desired_subscriptions.remove(session_id);
         }
     }
 
@@ -56,7 +56,7 @@ impl StickyReplayState {
     pub(super) fn replay_batch(&self) -> Option<EnvelopeBatch> {
         let mut replay_batch = Vec::new();
 
-        for &stream_type in &self.active_uploads {
+        for &stream_type in &self.active_publications {
             let Some(envelope) =
                 ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
                     stream_type,
@@ -69,7 +69,7 @@ impl StickyReplayState {
             replay_batch.push(envelope);
         }
 
-        for (session_id, states) in &self.desired_downloads {
+        for (session_id, states) in &self.desired_subscriptions {
             let Some(envelope) =
                 ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
                     session_id: session_id.clone(),

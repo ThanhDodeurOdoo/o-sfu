@@ -28,7 +28,7 @@ impl NativeSessionProtocol {
             }
             ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
                 self.channel
-                    .update_download_state(
+                    .update_subscription(
                         &self.session_id,
                         &payload.session_id,
                         &payload.states,

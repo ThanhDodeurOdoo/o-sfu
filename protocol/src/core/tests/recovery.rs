@@ -70,8 +70,8 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
-    let _ = core.update_upload(StreamType::Camera, true);
-    let _ = core.update_download(
+    let _ = core.publish(StreamType::Camera, true);
+    let _ = core.subscribe(
         String::from("peer-7").into(),
         DownloadStates {
             audio: Some(true),
@@ -127,8 +127,8 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
-    let _ = core.update_upload(StreamType::Camera, true);
-    let _ = core.update_download(
+    let _ = core.publish(StreamType::Camera, true);
+    let _ = core.subscribe(
         String::from("peer-7").into(),
         DownloadStates {
             audio: Some(true),
@@ -137,8 +137,8 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
         },
     );
     let _ = core.on_ws_close(1011);
-    let _ = core.update_upload(StreamType::Camera, false);
-    let _ = core.update_download(
+    let _ = core.publish(StreamType::Camera, false);
+    let _ = core.subscribe(
         String::from("peer-7").into(),
         DownloadStates {
             audio: Some(false),

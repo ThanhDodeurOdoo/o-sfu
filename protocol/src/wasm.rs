@@ -80,25 +80,15 @@ impl WasmProtocolCore {
         to_js(&host_commands(self.inner.on_timer(timer_id)))
     }
 
-    #[wasm_bindgen(js_name = updateUpload)]
-    pub fn update_upload(&mut self, stream_type: String, active: bool) -> Result<JsValue, JsValue> {
+    pub fn publish(&mut self, stream_type: String, active: bool) -> Result<JsValue, JsValue> {
         let stream_type = parse_stream_type(&stream_type)?;
-        to_js(&host_commands(
-            self.inner.update_upload(stream_type, active),
-        ))
+        to_js(&host_commands(self.inner.publish(stream_type, active)))
     }
 
-    #[wasm_bindgen(js_name = updateDownload)]
-    pub fn update_download(
-        &mut self,
-        session_id: JsValue,
-        states: JsValue,
-    ) -> Result<JsValue, JsValue> {
+    pub fn subscribe(&mut self, session_id: JsValue, states: JsValue) -> Result<JsValue, JsValue> {
         let session_id = from_js(session_id)?;
         let states = from_js(states)?;
-        to_js(&host_commands(
-            self.inner.update_download(session_id, states),
-        ))
+        to_js(&host_commands(self.inner.subscribe(session_id, states)))
     }
 
     #[wasm_bindgen(js_name = updateInfo)]

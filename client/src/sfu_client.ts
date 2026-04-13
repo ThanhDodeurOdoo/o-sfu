@@ -88,7 +88,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    updateUpload(type: StreamType, track: MediaStreamTrack | null): void {
+    publish(type: StreamType, track: MediaStreamTrack | null): void {
         validateTrackForStreamType(type, track);
         const transition = this._localUploads.setTrack(type, track);
 
@@ -112,17 +112,31 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         }
 
         this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.updateUpload(type, transition.hasTrack),
+            () => this._protocolCore.publish(type, transition.hasTrack),
             this._runtimeHooks()
         );
     }
 
-    updateDownload(sessionId: SessionId, states: DownloadStates): void {
+    subscribe(sessionId: SessionId, states: DownloadStates): void {
         validateDownloadStates(states);
         this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.updateDownload(sessionId, states),
+            () => this._protocolCore.subscribe(sessionId, states),
             this._runtimeHooks()
         );
+    }
+
+    /**
+     * @deprecated Use `publish()` instead.
+     */
+    updateUpload(type: StreamType, track: MediaStreamTrack | null): void {
+        this.publish(type, track);
+    }
+
+    /**
+     * @deprecated Use `subscribe()` instead.
+     */
+    updateDownload(sessionId: SessionId, states: DownloadStates): void {
+        this.subscribe(sessionId, states);
     }
 
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {

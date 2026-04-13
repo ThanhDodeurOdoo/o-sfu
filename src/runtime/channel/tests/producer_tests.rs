@@ -38,7 +38,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
     // Now session 1 sends PRODUCTION_CHANGE: camera off (pause).
     channel
-        .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
+        .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
     // Both sessions should receive a session info broadcast with isCameraOn = false.
@@ -61,7 +61,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
     // Resume: session 1 sends PRODUCTION_CHANGE: camera on.
     channel
-        .update_upload_state(&SessionId::Integer(1), StreamType::Camera, true, &adapter)
+        .set_publication_active(&SessionId::Integer(1), StreamType::Camera, true, &adapter)
         .await;
 
     let msgs1 = drain_outbound(&mut rx1);
@@ -544,7 +544,7 @@ async fn production_change_updates_screen_sharing_info() {
 
     // Pause screen sharing.
     channel
-        .update_upload_state(&SessionId::Integer(1), StreamType::Screen, false, &adapter)
+        .set_publication_active(&SessionId::Integer(1), StreamType::Screen, false, &adapter)
         .await;
 
     let msgs = drain_outbound(&mut rx1);
@@ -573,7 +573,7 @@ async fn production_change_updates_transport_route_activity() {
     drain_outbound(&mut rx2);
 
     channel
-        .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
+        .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
     wait_for_stub_event(&stub, |event| {
@@ -765,7 +765,7 @@ async fn production_change_ignores_unknown_stream_type() {
 
     // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
     channel
-        .update_upload_state(&SessionId::Integer(1), StreamType::Audio, false, &adapter)
+        .set_publication_active(&SessionId::Integer(1), StreamType::Audio, false, &adapter)
         .await;
 
     assert!(

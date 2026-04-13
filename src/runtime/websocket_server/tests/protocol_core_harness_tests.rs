@@ -113,18 +113,18 @@ impl ProtocolHarnessPeer {
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
-    async fn update_upload(&mut self, stream_type: ProtocolStreamType, active: bool) -> Option<()> {
-        let commands = self.core.update_upload(stream_type, active);
+    async fn publish(&mut self, stream_type: ProtocolStreamType, active: bool) -> Option<()> {
+        let commands = self.core.publish(stream_type, active);
         self.run_commands(commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
-    async fn update_download(
+    async fn subscribe(
         &mut self,
         session_id: ProtocolSessionId,
         states: ProtocolDownloadStates,
     ) -> Option<()> {
-        let commands = self.core.update_download(session_id, states);
+        let commands = self.core.subscribe(session_id, states);
         self.run_commands(commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
@@ -582,7 +582,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
 
     assert!(
         alice
-            .update_upload(ProtocolStreamType::Camera, false)
+            .publish(ProtocolStreamType::Camera, false)
             .await
             .is_some()
     );
@@ -648,7 +648,7 @@ async fn protocol_core_native_publish_round_trips_through_real_server_session_pr
 
     assert!(
         alice
-            .update_upload(ProtocolStreamType::Camera, true)
+            .publish(ProtocolStreamType::Camera, true)
             .await
             .is_some()
     );
@@ -727,7 +727,7 @@ async fn protocol_core_native_publish_round_trips_through_real_rtc_server_sessio
 
     assert!(
         alice
-            .update_upload(ProtocolStreamType::Camera, true)
+            .publish(ProtocolStreamType::Camera, true)
             .await
             .is_some()
     );
@@ -844,7 +844,7 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
     assert!(bob.read_server_frame().await.is_some());
 
     assert!(
-        bob.update_download(
+        bob.subscribe(
             ProtocolSessionId::Integer(61),
             ProtocolDownloadStates {
                 camera: Some(false),

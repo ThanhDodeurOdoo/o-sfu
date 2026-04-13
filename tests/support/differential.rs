@@ -104,7 +104,7 @@ pub trait ScenarioPeer: Sized {
         source: &'a FakeMediaSource,
     ) -> BoxFuture<'a, Option<String>>;
 
-    fn set_upload_active(
+    fn set_publication_active(
         &mut self,
         stream_type: StreamType,
         active: bool,
@@ -175,12 +175,12 @@ impl ScenarioPeer for FakePeer {
         Box::pin(async move { Self::publish_track(self, source).await })
     }
 
-    fn set_upload_active(
+    fn set_publication_active(
         &mut self,
         stream_type: StreamType,
         active: bool,
     ) -> BoxFuture<'_, Option<()>> {
-        Box::pin(async move { Self::set_upload_active(self, stream_type, active).await })
+        Box::pin(async move { Self::set_publication_active(self, stream_type, active).await })
     }
 
     fn read_next_bus_batch(&mut self) -> BoxFuture<'_, Option<CurrentBusBatch>> {
@@ -565,13 +565,13 @@ impl ScenarioPeer for LegacyFakePeer {
         })
     }
 
-    fn set_upload_active(
+    fn set_publication_active(
         &mut self,
         stream_type: StreamType,
         active: bool,
     ) -> BoxFuture<'_, Option<()>> {
         Box::pin(async move {
-            self.send_message(CurrentClientMessage::UpdateUploadState(
+            self.send_message(CurrentClientMessage::Publish(
                 CurrentUploadStateChangePayload {
                     stream_type,
                     active,
@@ -845,7 +845,7 @@ where
     P: ScenarioPeer,
 {
     publisher
-        .set_upload_active(StreamType::Camera, active)
+        .set_publication_active(StreamType::Camera, active)
         .await
         .ok_or_else(|| format!("publisher failed to set camera active={active}"))?;
     let snapshot = timeout(SCENARIO_EVENT_TIMEOUT, expect_session_info(subscriber))

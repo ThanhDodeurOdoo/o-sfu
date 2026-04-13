@@ -30,8 +30,10 @@ pub enum BundleMethodCall {
     Disconnect,
     Broadcast(BundleBroadcastCall),
     UpdateInfo(BundleUpdateInfoCall),
-    UpdateDownload(BundleUpdateDownloadCall),
-    UpdateUpload(BundleUpdateUploadCall),
+    #[serde(rename = "subscribe", alias = "updateDownload")]
+    Subscribe(BundleSubscribeCall),
+    #[serde(rename = "publish", alias = "updateUpload")]
+    Publish(BundlePublishCall),
     GetStats,
     StartRecording(BundleStartRecordingCall),
     StopRecording,
@@ -90,13 +92,13 @@ impl BundleUpdateInfoOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BundleUpdateDownloadCall {
+pub struct BundleSubscribeCall {
     pub session_id: SessionId,
     pub states: DownloadStates,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleUpdateUploadCall {
+pub struct BundlePublishCall {
     #[serde(rename = "type")]
     pub stream_type: StreamType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,9 +258,9 @@ mod tests {
 
     use super::{
         BundleBroadcastCall, BundleBroadcastUpdate, BundleConnectCall, BundleConnectOptions,
-        BundleConnectionState, BundleMethodCall, BundleProtocolStrategy, BundleRecordingOptions,
-        BundleStartRecordingCall, BundleStateChange, BundleUpdate, BundleUpdateDownloadCall,
-        BundleUpdateInfoCall, BundleUpdateInfoOptions, BundleUpdateKind, BundleUpdateUploadCall,
+        BundleConnectionState, BundleMethodCall, BundleProtocolStrategy, BundlePublishCall,
+        BundleRecordingOptions, BundleStartRecordingCall, BundleStateChange, BundleSubscribeCall,
+        BundleUpdate, BundleUpdateInfoCall, BundleUpdateInfoOptions, BundleUpdateKind,
         FIRST_BUNDLE_PROTOCOL_STRATEGY, FIRST_BUNDLE_PROTOCOL_VERSION, bundle_session_info_key,
     };
     use crate::shared::{
@@ -391,7 +393,7 @@ mod tests {
             }),
         )?;
 
-        let update_download = BundleMethodCall::UpdateDownload(BundleUpdateDownloadCall {
+        let subscribe_call = BundleMethodCall::Subscribe(BundleSubscribeCall {
             session_id: SessionId::Integer(7),
             states: DownloadStates {
                 audio: Some(false),
@@ -400,9 +402,9 @@ mod tests {
             },
         });
         assert_round_trip(
-            &update_download,
+            &subscribe_call,
             json!({
-                "method": "updateDownload",
+                "method": "subscribe",
                 "arguments": {
                     "sessionId": 7,
                     "states": {
@@ -413,7 +415,7 @@ mod tests {
             }),
         )?;
 
-        let update_upload = BundleMethodCall::UpdateUpload(BundleUpdateUploadCall {
+        let publish_call = BundleMethodCall::Publish(BundlePublishCall {
             stream_type: StreamType::Audio,
             track: Some(json!({
                 "id": "microphone-track",
@@ -421,9 +423,9 @@ mod tests {
             })),
         });
         assert_round_trip(
-            &update_upload,
+            &publish_call,
             json!({
-                "method": "updateUpload",
+                "method": "publish",
                 "arguments": {
                     "type": "audio",
                     "track": {
@@ -433,6 +435,46 @@ mod tests {
                 }
             }),
         )
+    }
+
+    #[test]
+    fn bundle_state_mutation_calls_accept_legacy_method_names() -> serde_json::Result<()> {
+        let subscribe = serde_json::from_value::<BundleMethodCall>(json!({
+            "method": "updateDownload",
+            "arguments": {
+                "sessionId": 7,
+                "states": {
+                    "audio": false
+                }
+            }
+        }))?;
+        assert_eq!(
+            subscribe,
+            BundleMethodCall::Subscribe(BundleSubscribeCall {
+                session_id: SessionId::Integer(7),
+                states: DownloadStates {
+                    audio: Some(false),
+                    camera: None,
+                    screen: None,
+                },
+            })
+        );
+
+        let publish = serde_json::from_value::<BundleMethodCall>(json!({
+            "method": "updateUpload",
+            "arguments": {
+                "type": "audio"
+            }
+        }))?;
+        assert_eq!(
+            publish,
+            BundleMethodCall::Publish(BundlePublishCall {
+                stream_type: StreamType::Audio,
+                track: None,
+            })
+        );
+
+        Ok(())
     }
 
     #[test]

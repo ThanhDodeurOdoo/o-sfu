@@ -212,7 +212,7 @@ impl Channel {
         clippy::cognitive_complexity,
         reason = "the production-change transition intentionally keeps router updates, session-info sync, broadcast, and transport activity in one explicit sequence"
     )]
-    pub async fn update_upload_state(
+    pub async fn set_publication_active(
         &self,
         session_id: &SessionId,
         stream_type: StreamType,
@@ -253,7 +253,7 @@ impl Channel {
         }
     }
 
-    pub async fn update_download_state(
+    pub async fn update_subscription(
         &self,
         session_id: &SessionId,
         target_session_id: &SessionId,

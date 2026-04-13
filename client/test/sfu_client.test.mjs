@@ -99,8 +99,9 @@ class FakeProtocolCore {
         this.recordingState = {};
         this.state = "disconnected";
         this.disconnectCalls = 0;
+        this.subscriptionUpdates = [];
         this.submittedAnswers = [];
-        this.uploadUpdates = [];
+        this.publicationUpdates = [];
         this.trackBindings = new Map();
     }
 
@@ -226,7 +227,8 @@ class FakeProtocolCore {
         return this.trackBindings.get(mid) ?? null;
     }
 
-    updateDownload() {
+    subscribe(sessionId, states) {
+        this.subscriptionUpdates.push({ sessionId, states });
         return [];
     }
 
@@ -234,9 +236,9 @@ class FakeProtocolCore {
         return [];
     }
 
-    updateUpload(type, active) {
-        this.uploadUpdates.push({ active, type });
-        this.lastUploadUpdate = { active, type };
+    publish(type, active) {
+        this.publicationUpdates.push({ active, type });
+        this.lastPublicationUpdate = { active, type };
         return [];
     }
 }
@@ -399,8 +401,8 @@ test("real protocol core replays sticky intents after recovery welcome", async (
     sockets[0].emitMessage(buildWelcomeFrame());
     await tick();
 
-    client.updateUpload("camera", cameraTrack);
-    client.updateDownload(7, { audio: true, camera: false });
+    client.publish("camera", cameraTrack);
+    client.subscribe(7, { audio: true, camera: false });
     client.updateInfo({ isCameraOn: true, isRaisingHand: true });
     await tick();
 
@@ -473,20 +475,20 @@ test("real protocol core replays the latest sticky intents changed while recover
     sockets[0].emitMessage(buildWelcomeFrame());
     await tick();
 
-    client.updateUpload("camera", {
+    client.publish("camera", {
         enabled: true,
         id: "camera-track-2",
         kind: "video",
         muted: false
     });
-    client.updateDownload(7, { audio: true });
+    client.subscribe(7, { audio: true });
     await tick();
 
     sockets[0].close(1011);
     await tick();
 
-    client.updateUpload("camera", null);
-    client.updateDownload(7, { audio: false, camera: true });
+    client.publish("camera", null);
+    client.subscribe(7, { audio: false, camera: true });
     client.updateInfo({ isSelfMuted: true });
     await tick();
 
@@ -810,7 +812,7 @@ test("peer connection teardown clears stale remote consumer state", async () => 
     assert.equal(client._consumers.size, 0);
 });
 
-test("updateUpload replaces an already attached local sender track without re-publishing", async () => {
+test("publish replaces an already attached local sender track without re-publishing", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
     const peerConnections = [];
@@ -846,27 +848,27 @@ test("updateUpload replaces an already attached local sender track without re-pu
     sockets[0].emitMessage("welcome");
     await tick();
 
-    client.updateUpload("camera", firstTrack);
+    client.publish("camera", firstTrack);
     await tick();
 
     sockets[0].emitMessage("offer-with-attach-camera");
     await tick();
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, firstTrack);
-    assert.deepEqual(core.uploadUpdates, [{ active: true, type: "camera" }]);
+    assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
 
-    client.updateUpload("camera", secondTrack);
+    client.publish("camera", secondTrack);
     await tick();
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, secondTrack);
     assert.deepEqual(
-        core.uploadUpdates,
+        core.publicationUpdates,
         [{ active: true, type: "camera" }],
         "replacing a live local track should stay local once the sender is bound"
     );
 });
 
-test("updateUpload detaches the local sender before signaling unpublish", async () => {
+test("publish detaches the local sender before signaling unpublish", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
     const peerConnections = [];
@@ -896,19 +898,19 @@ test("updateUpload detaches the local sender before signaling unpublish", async 
     sockets[0].emitMessage("welcome");
     await tick();
 
-    client.updateUpload("camera", track);
+    client.publish("camera", track);
     await tick();
     sockets[0].emitMessage("offer-with-attach-camera");
     await tick();
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, track);
-    assert.deepEqual(core.uploadUpdates, [{ active: true, type: "camera" }]);
+    assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
 
-    client.updateUpload("camera", null);
+    client.publish("camera", null);
     await tick();
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, null);
-    assert.deepEqual(core.uploadUpdates, [
+    assert.deepEqual(core.publicationUpdates, [
         { active: true, type: "camera" },
         { active: false, type: "camera" }
     ]);
@@ -952,15 +954,34 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(sockets[0].readyState, 3);
 });
 
-test("updateUpload rejects stream-kind mismatches", () => {
+test("publish rejects stream-kind mismatches", () => {
     const client = new SfuClient({
         createProtocolCore: () => new FakeProtocolCore()
     });
 
     assert.throws(() => {
-        client.updateUpload("camera", {
+        client.publish("camera", {
             id: "audio-track",
             kind: "audio"
         });
     }, /camera uploads require a video track/);
+});
+
+test("deprecated updateUpload and updateDownload delegate to publish and subscribe", async () => {
+    const core = new FakeProtocolCore();
+    const client = new SfuClient({
+        createProtocolCore: () => core
+    });
+
+    client.updateUpload("camera", {
+        enabled: true,
+        id: "camera-track-compat",
+        kind: "video",
+        muted: false
+    });
+    client.updateDownload(7, { audio: true });
+    await tick();
+
+    assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
+    assert.equal(core.subscriptionUpdates.length, 1);
 });

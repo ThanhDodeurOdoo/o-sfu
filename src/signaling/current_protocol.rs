@@ -125,11 +125,11 @@ pub enum CurrentClientMessage {
     #[serde(rename = "BROADCAST")]
     Broadcast(JsonPayload),
     #[serde(rename = "CONSUMPTION_CHANGE")]
-    UpdateDownloadState(CurrentDownloadStateChangePayload),
+    Subscribe(CurrentDownloadStateChangePayload),
     #[serde(rename = "C_INFO_CHANGE")]
     UpdateSessionInfo(CurrentSessionInfoUpdatePayload),
     #[serde(rename = "PRODUCTION_CHANGE")]
-    UpdateUploadState(CurrentUploadStateChangePayload),
+    Publish(CurrentUploadStateChangePayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,7 +269,7 @@ mod tests {
         )?;
 
         assert_round_trip(
-            &CurrentClientMessage::UpdateDownloadState(CurrentDownloadStateChangePayload {
+            &CurrentClientMessage::Subscribe(CurrentDownloadStateChangePayload {
                 session_id: SessionId::Integer(3),
                 states: DownloadStates {
                     audio: Some(true),
@@ -318,7 +318,7 @@ mod tests {
         )?;
 
         assert_round_trip(
-            &CurrentClientMessage::UpdateUploadState(CurrentUploadStateChangePayload {
+            &CurrentClientMessage::Publish(CurrentUploadStateChangePayload {
                 stream_type: StreamType::Camera,
                 active: false,
             }),

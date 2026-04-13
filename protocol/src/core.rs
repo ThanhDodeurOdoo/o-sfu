@@ -338,10 +338,10 @@ impl ProtocolCore {
 
     /// Stores the desired publication state and sends it when signaling is ready.
     ///
-    /// Upload intent is sticky across reconnects, which lets UI toggles be issued
+    /// Publish intent is sticky across reconnects, which lets UI toggles be issued
     /// before authentication completes without losing the latest desired state.
-    pub fn update_upload(&mut self, stream_type: StreamType, active: bool) -> Commands {
-        self.sticky_replay.set_upload_active(stream_type, active);
+    pub fn publish(&mut self, stream_type: StreamType, active: bool) -> Commands {
+        self.sticky_replay.set_publish_active(stream_type, active);
         if !self.can_send_client_messages() {
             return Vec::new();
         }
@@ -362,11 +362,9 @@ impl ProtocolCore {
     /// Repeated updates merge at the sticky layer, so callers can send partial
     /// audio/camera/screen adjustments without rebuilding the full preference set
     /// on every change or after recovery.
-    /// NOTE: yes these functions do not follow the "industry-standard" publish/subscribe
-    /// naming pattern, but we keep the same naming as the old odoo sfu.
-    pub fn update_download(&mut self, session_id: SessionId, states: DownloadStates) -> Commands {
+    pub fn subscribe(&mut self, session_id: SessionId, states: DownloadStates) -> Commands {
         self.sticky_replay
-            .remember_download_states(&session_id, &states);
+            .remember_subscription_states(&session_id, &states);
         if !self.can_send_client_messages() {
             return Vec::new();
         }

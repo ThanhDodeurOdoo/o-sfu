@@ -175,8 +175,12 @@ impl FakePeer {
         Some(response.id)
     }
 
-    pub async fn set_upload_active(&mut self, stream_type: StreamType, active: bool) -> Option<()> {
-        self.send_message(CurrentClientMessage::UpdateUploadState(
+    pub async fn set_publication_active(
+        &mut self,
+        stream_type: StreamType,
+        active: bool,
+    ) -> Option<()> {
+        self.send_message(CurrentClientMessage::Publish(
             CurrentUploadStateChangePayload {
                 stream_type,
                 active,
@@ -186,15 +190,15 @@ impl FakePeer {
     }
 
     pub async fn unpublish_upload(&mut self, stream_type: StreamType) -> Option<()> {
-        self.set_upload_active(stream_type, false).await
+        self.set_publication_active(stream_type, false).await
     }
 
-    pub async fn set_download_state(
+    pub async fn update_subscription(
         &mut self,
         target_session_id: SessionId,
         states: DownloadStates,
     ) -> Option<()> {
-        self.send_message(CurrentClientMessage::UpdateDownloadState(
+        self.send_message(CurrentClientMessage::Subscribe(
             CurrentDownloadStateChangePayload {
                 session_id: target_session_id,
                 states,

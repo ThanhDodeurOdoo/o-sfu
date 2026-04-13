@@ -63,8 +63,8 @@ export interface ProtocolCoreBindings {
     onTransportReady(): HostCommand[];
     onWsClose(code: number): HostCommand[];
     onTimer(timerId: number): HostCommand[];
-    updateUpload(type: StreamType, active: boolean): HostCommand[];
-    updateDownload(sessionId: SessionId, states: DownloadStates): HostCommand[];
+    publish(type: StreamType, active: boolean): HostCommand[];
+    subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[];
     updateInfo(info: SessionInfo): HostCommand[];
     broadcast(message: unknown): HostCommand[];
     startRecording(options?: RecordingOptions): HostCommand[];
@@ -121,16 +121,13 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
         onTimer(timerId: number): HostCommand[] {
             return validateHostCommands(bindings.onTimer(timerId), "protocol core onTimer()");
         },
-        updateUpload(type: StreamType, active: boolean): HostCommand[] {
-            return validateHostCommands(
-                bindings.updateUpload(type, active),
-                "protocol core updateUpload()"
-            );
+        publish(type: StreamType, active: boolean): HostCommand[] {
+            return validateHostCommands(bindings.publish(type, active), "protocol core publish()");
         },
-        updateDownload(sessionId: SessionId, states: DownloadStates): HostCommand[] {
+        subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[] {
             return validateHostCommands(
-                bindings.updateDownload(sessionId, states),
-                "protocol core updateDownload()"
+                bindings.subscribe(sessionId, states),
+                "protocol core subscribe()"
             );
         },
         updateInfo(info: SessionInfo): HostCommand[] {

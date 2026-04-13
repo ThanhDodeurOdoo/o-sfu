@@ -262,13 +262,13 @@ test("default browser runtime reconnects and replays sticky intents", async ({ p
         socket.emitMessage(frame);
     }, WELCOME_FRAME);
     await page.evaluate(() => {
-        globalThis.__browserHarness.client.updateUpload("camera", {
+        globalThis.__browserHarness.client.publish("camera", {
             enabled: true,
             id: "camera-track-1",
             kind: "video",
             muted: false
         });
-        globalThis.__browserHarness.client.updateDownload(7, {
+        globalThis.__browserHarness.client.subscribe(7, {
             audio: true,
             camera: false
         });

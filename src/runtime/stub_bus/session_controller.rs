@@ -433,14 +433,14 @@ impl SessionController {
                     )
                     .await;
             }
-            CurrentClientMessage::UpdateUploadState(payload) => {
+            CurrentClientMessage::Publish(payload) => {
                 debug!(
                     stream_type = ?payload.stream_type,
                     active = payload.active,
-                    "relaying production change to channel"
+                    "relaying compatibility publish state change to channel"
                 );
                 self.channel
-                    .update_upload_state(
+                    .set_publication_active(
                         &self.session_id,
                         payload.stream_type,
                         payload.active,
@@ -448,13 +448,13 @@ impl SessionController {
                     )
                     .await;
             }
-            CurrentClientMessage::UpdateDownloadState(payload) => {
+            CurrentClientMessage::Subscribe(payload) => {
                 debug!(
                     target_session = ?payload.session_id,
-                    "relaying consumption change to channel"
+                    "relaying compatibility subscription change to channel"
                 );
                 self.channel
-                    .update_download_state(
+                    .update_subscription(
                         &self.session_id,
                         &payload.session_id,
                         &payload.states,

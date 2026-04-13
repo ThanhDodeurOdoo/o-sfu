@@ -39,10 +39,10 @@ function validCore(overrides = {}) {
         onTimer() {
             return [];
         },
-        updateUpload() {
+        publish() {
             return [];
         },
-        updateDownload() {
+        subscribe() {
             return [];
         },
         updateInfo() {

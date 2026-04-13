@@ -21,7 +21,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
 
     // Session 2 sends CONSUMPTION_CHANGE: pause camera from session 1.
     channel
-        .update_download_state(
+        .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
             &DownloadStates {
@@ -39,7 +39,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
 
     // Session 2 sends CONSUMPTION_CHANGE: resume camera from session 1.
     channel
-        .update_download_state(
+        .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
             &DownloadStates {
@@ -73,7 +73,7 @@ async fn consumption_change_updates_transport_route_activity() {
     drain_outbound(&mut rx2);
 
     channel
-        .update_download_state(
+        .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
             &DownloadStates {
@@ -104,7 +104,7 @@ async fn consumption_change_ignores_nonexistent_consumer() {
 
     // No tracks published. CONSUMPTION_CHANGE should be a no-op.
     channel
-        .update_download_state(
+        .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
             &DownloadStates {
@@ -149,7 +149,7 @@ async fn consumption_change_handles_multiple_stream_types() {
 
     // Session 2 pauses both in one message.
     channel
-        .update_download_state(
+        .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
             &DownloadStates {
@@ -191,7 +191,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
     // After session 1 leaves, a consumption change targeting session 1's
     // producer should be a no-op (the consumer index entry was cleaned up).
     channel
-        .update_download_state(
+        .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
             &DownloadStates {
@@ -205,7 +205,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
 
     // Similarly, a production change for session 1 should be a no-op.
     channel
-        .update_upload_state(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
+        .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
     // No crashes, no stale state — both operations are silent no-ops.

@@ -773,7 +773,7 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
 
     assert!(
         subscriber
-            .set_download_state(
+            .update_subscription(
                 SessionId::Integer(70),
                 DownloadStates {
                     audio: Some(false),
@@ -917,7 +917,7 @@ async fn publish_camera_track(
 async fn assert_consumer_download_toggle_round_trip(subscriber: &mut FakePeer) {
     assert!(
         subscriber
-            .set_download_state(
+            .update_subscription(
                 SessionId::Integer(10),
                 DownloadStates {
                     camera: Some(false),
@@ -929,7 +929,7 @@ async fn assert_consumer_download_toggle_round_trip(subscriber: &mut FakePeer) {
     );
     assert!(
         subscriber
-            .set_download_state(
+            .update_subscription(
                 SessionId::Integer(10),
                 DownloadStates {
                     camera: Some(true),
@@ -948,7 +948,7 @@ async fn assert_camera_info_update(
 ) {
     assert!(
         publisher
-            .set_upload_active(StreamType::Camera, active)
+            .set_publication_active(StreamType::Camera, active)
             .await
             .is_some()
     );
