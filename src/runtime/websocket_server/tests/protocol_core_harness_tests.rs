@@ -1361,6 +1361,166 @@ async fn protocol_core_native_unpublish_round_trips_through_real_rtc_after_publi
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the regression keeps the full queued-removal rtc flow explicit in one place for reviewability"
+)]
+async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands() {
+    let Some((_server, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+        "issuer-native-rtc-unpublish-removal-queue",
+        SessionId::Integer(79),
+        SessionId::Integer(80),
+        56_309,
+        56_310,
+    ))
+    .await
+    else {
+        return;
+    };
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should answer the initial rtc-backed publish renegotiation"
+    );
+
+    let Some(initial_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert_eq!(initial_track_bindings.len(), 1);
+    assert_track_snapshot_contains(
+        &initial_track_bindings,
+        &ProtocolSessionId::Integer(79),
+        ProtocolStreamType::Camera,
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should answer the first rtc renegotiation so the initial consumer is committed"
+    );
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Screen, true)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should answer the second rtc-backed publish renegotiation"
+    );
+
+    let Some(updated_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert_eq!(updated_track_bindings.len(), 2);
+    assert_track_snapshot_contains(
+        &updated_track_bindings,
+        &ProtocolSessionId::Integer(79),
+        ProtocolStreamType::Camera,
+    );
+    assert_track_snapshot_contains(
+        &updated_track_bindings,
+        &ProtocolSessionId::Integer(79),
+        ProtocolStreamType::Screen,
+    );
+
+    bob.auto_answer_negotiation = false;
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the second rtc renegotiation request while the first consumer is already committed"
+    );
+    assert_eq!(
+        bob.pending_negotiations.len(),
+        1,
+        "subscriber should keep the second renegotiation pending until the harness answers it"
+    );
+
+    assert!(
+        alice
+            .publish(ProtocolStreamType::Camera, false)
+            .await
+            .is_some()
+    );
+    assert!(
+        alice.read_server_frame().await.is_some(),
+        "publisher should answer the unpublish renegotiation while the subscriber still has the later addition offer pending"
+    );
+    let Some(removed_track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    assert_eq!(removed_track_bindings.len(), 1);
+    assert_track_snapshot_contains(
+        &removed_track_bindings,
+        &ProtocolSessionId::Integer(79),
+        ProtocolStreamType::Screen,
+    );
+    assert_eq!(
+        bob.pending_negotiations.len(),
+        1,
+        "subscriber removal should not create an overlapping renegotiation while the later addition answer is pending"
+    );
+    let Some(bob_websocket) = bob.websocket.as_mut() else {
+        return;
+    };
+    let Some(peer_info_payload) =
+        timeout(Duration::from_millis(150), read_text_message(bob_websocket))
+            .await
+            .ok()
+            .flatten()
+    else {
+        panic!("subscriber should receive the translated peer-info update for the unpublished track");
+    };
+    let peer_info_batch = serde_json::from_str::<EnvelopeBatch>(&peer_info_payload).ok();
+    assert!(peer_info_batch.is_some());
+    let Some(peer_info_batch) = peer_info_batch else {
+        return;
+    };
+    let peer_info_messages = native_server_messages(&peer_info_batch);
+    assert!(peer_info_messages.is_some());
+    let Some(peer_info_messages) = peer_info_messages else {
+        return;
+    };
+    assert!(
+        matches!(peer_info_messages.as_slice(), [ServerMessage::PeerInfo(_)]),
+        "the frame before the queued removal renegotiation should be the translated peer-info update"
+    );
+    let peer_info_commands = bob.core.on_ws_message(&peer_info_payload);
+    assert!(bob.run_commands(peer_info_commands).await.is_some());
+    assert!(
+        no_server_frame(&mut bob, Duration::from_millis(150)).await,
+        "subscriber removal should stay queued until the in-flight addition answer lands"
+    );
+
+    assert!(
+        bob.answer_next_negotiation().await.is_some(),
+        "subscriber should answer the second renegotiation before the queued removal can flush"
+    );
+    assert!(
+        bob.read_server_frame().await.is_some(),
+        "subscriber should receive the queued follow-up renegotiation after answering the in-flight addition offer"
+    );
+    assert_eq!(
+        bob.pending_negotiations.len(),
+        1,
+        "queued consumer removal should surface exactly one follow-up renegotiation request"
+    );
+
+    assert!(
+        bob.answer_next_negotiation().await.is_some(),
+        "subscriber should answer the queued removal renegotiation"
+    );
+    assert!(
+        no_server_frame(&mut bob, Duration::from_millis(150)).await,
+        "consumer removal should not leave further rtc follow-up frames queued"
+    );
+}
+
+#[tokio::test]
 async fn protocol_core_native_subscribe_updates_consumer_activity() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts_and_protocol(
