@@ -406,6 +406,141 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
 }
 
 #[tokio::test]
+async fn stale_refresh_callbacks_do_not_target_a_replaced_session() {
+    let mut scenario = setup_stale_refresh_scenario().await;
+
+    assert!(
+        scenario
+            .channel
+            .apply_session_negotiated(
+                &SessionId::Integer(2),
+                scenario.second_subscriber_connection,
+                test_client_rtp_capabilities(),
+                &scenario.transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        drain_outbound(&mut scenario.second_subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, SessionOutbound::Request(_))),
+        "the current connection should receive the consumer bootstrap once it becomes ready"
+    );
+
+    assert!(
+        !scenario
+            .channel
+            .apply_session_refreshed(
+                &SessionId::Integer(2),
+                scenario.first_subscriber_connection,
+                &scenario.transport_adapter,
+            )
+            .await,
+        "stale refresh callbacks must not target the replacement connection"
+    );
+    assert!(
+        drain_outbound(&mut scenario.second_subscriber_rx).is_empty(),
+        "stale refresh callbacks must not emit duplicate bootstrap on the replacement connection"
+    );
+
+    assert!(
+        scenario
+            .channel
+            .apply_session_refreshed(
+                &SessionId::Integer(2),
+                scenario.second_subscriber_connection,
+                &scenario.transport_adapter,
+            )
+            .await,
+        "the current connection should still accept refresh follow-up callbacks"
+    );
+    assert!(
+        drain_outbound(&mut scenario.second_subscriber_rx).is_empty(),
+        "refreshing the current connection must not duplicate already-committed consumers"
+    );
+}
+
+struct StaleRefreshScenario {
+    channel: Arc<super::super::Channel>,
+    transport_adapter: RuntimeTransportAdapter,
+    first_subscriber_connection: u64,
+    second_subscriber_connection: u64,
+    second_subscriber_rx: mpsc::UnboundedReceiver<SessionOutbound>,
+}
+
+async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
+    let manager = ChannelManager::for_test();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let (transport_adapter, _stub) = stub_adapter();
+    let (publisher_tx, mut publisher_rx) = test_sender();
+    let (first_subscriber_tx, _first_subscriber_rx) = test_sender();
+    let publisher_connection = channel
+        .join_session(
+            SessionId::Integer(1),
+            None,
+            SessionPermissions::default(),
+            publisher_tx,
+        )
+        .await
+        .unwrap();
+    let first_subscriber_connection = channel
+        .join_session(
+            SessionId::Integer(2),
+            None,
+            SessionPermissions::default(),
+            first_subscriber_tx,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        channel
+            .apply_session_negotiated(
+                &SessionId::Integer(1),
+                publisher_connection,
+                test_client_rtp_capabilities(),
+                &transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+
+    let (second_subscriber_tx, second_subscriber_rx) = test_sender();
+    let second_subscriber_connection = channel
+        .join_session(
+            SessionId::Integer(2),
+            None,
+            SessionPermissions::default(),
+            second_subscriber_tx,
+        )
+        .await
+        .unwrap();
+    assert_ne!(first_subscriber_connection, second_subscriber_connection);
+
+    StaleRefreshScenario {
+        channel,
+        transport_adapter,
+        first_subscriber_connection,
+        second_subscriber_connection,
+        second_subscriber_rx,
+    }
+}
+
+#[tokio::test]
 async fn broadcast_reaches_all_except_sender() {
     let manager = ChannelManager::for_test();
     let channel = manager

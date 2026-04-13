@@ -142,6 +142,7 @@ impl ChannelState {
         })
     }
 
+    #[cfg(test)]
     pub(in crate::runtime::channel) fn missing_consumer_targets(
         &self,
         session_id: &SessionId,
@@ -152,7 +153,29 @@ impl ChannelState {
         if !session.negotiation.can_consume() {
             return Vec::new();
         }
+        self.collect_missing_consumer_targets(session_id, session.connection_id)
+    }
 
+    pub(in crate::runtime::channel) fn missing_consumer_targets_for_connection(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> Option<Vec<PendingConsumerBootstrapTarget>> {
+        let session = self.sessions.get(session_id)?;
+        if session.connection_id != connection_id {
+            return None;
+        }
+        if !session.negotiation.can_consume() {
+            return Some(Vec::new());
+        }
+        Some(self.collect_missing_consumer_targets(session_id, connection_id))
+    }
+
+    fn collect_missing_consumer_targets(
+        &self,
+        session_id: &SessionId,
+        consumer_connection_id: u64,
+    ) -> Vec<PendingConsumerBootstrapTarget> {
         self.producers
             .iter()
             .filter_map(|(producer_id, producer)| {
@@ -169,7 +192,7 @@ impl ChannelState {
                 }
                 Some(PendingConsumerBootstrapTarget {
                     consumer_session_id: session_id.clone(),
-                    consumer_connection_id: session.connection_id,
+                    consumer_connection_id,
                     producer_session_id: producer.owner_session_id.clone(),
                     producer_connection_id: producer.owner_connection_id,
                     producer_id: *producer_id,

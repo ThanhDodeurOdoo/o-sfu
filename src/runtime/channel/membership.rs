@@ -254,7 +254,7 @@ impl Channel {
             let mut state = self.state.write().await;
             state.set_client_rtp_capabilities(session_id, connection_id, capabilities)
         };
-        self.apply_negotiation_update(session_id, update, transport_adapter)
+        self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
             .await
     }
 
@@ -269,7 +269,7 @@ impl Channel {
             let mut state = self.state.write().await;
             state.set_transport_connected(session_id, connection_id, direction)
         };
-        self.apply_negotiation_update(session_id, update, transport_adapter)
+        self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
             .await
     }
 
@@ -284,13 +284,14 @@ impl Channel {
             let mut state = self.state.write().await;
             state.set_session_negotiated(session_id, connection_id, capabilities)
         };
-        self.apply_negotiation_update(session_id, update, transport_adapter)
+        self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
             .await
     }
 
     async fn apply_negotiation_update(
         &self,
         session_id: &SessionId,
+        connection_id: u64,
         update: SessionNegotiationUpdate,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -298,10 +299,29 @@ impl Channel {
             return false;
         }
         if update.became_consumer_ready {
-            self.bootstrap_missing_consumers(session_id, transport_adapter)
+            return self
+                .bootstrap_missing_consumers_for_connection(
+                    session_id,
+                    connection_id,
+                    transport_adapter,
+                )
                 .await;
         }
         true
+    }
+
+    pub(crate) async fn apply_session_refreshed(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        self.bootstrap_missing_consumers_for_connection(
+            session_id,
+            connection_id,
+            transport_adapter,
+        )
+        .await
     }
 
     #[cfg(test)]

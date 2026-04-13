@@ -152,9 +152,17 @@ impl NativeSessionProtocol {
                 }
             }
             PendingNegotiationAction::RefreshSession => {
-                self.channel
-                    .bootstrap_missing_consumers(&self.session_id, &self.transport_adapter)
-                    .await;
+                if !self
+                    .channel
+                    .apply_session_refreshed(
+                        &self.session_id,
+                        self.connection_id,
+                        &self.transport_adapter,
+                    )
+                    .await
+                {
+                    return Err(());
+                }
             }
         }
         Ok(())

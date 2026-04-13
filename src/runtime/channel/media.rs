@@ -49,6 +49,7 @@ impl Channel {
         .await
     }
 
+    #[cfg(test)]
     pub async fn bootstrap_missing_consumers(
         &self,
         session_id: &SessionId,
@@ -58,17 +59,46 @@ impl Channel {
             let state = self.state.read().await;
             state.missing_consumer_targets(session_id)
         };
-
-        for target in targets {
-            self.bootstrap_consumer_target(
-                &target,
-                transport_adapter,
-                ConsumerBootstrapOrigin::LateJoin,
-            )
-            .await;
-        }
+        self.bootstrap_consumer_targets(
+            targets,
+            transport_adapter,
+            ConsumerBootstrapOrigin::LateJoin,
+        )
+        .await;
     }
 
+    pub(crate) async fn bootstrap_missing_consumers_for_connection(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let Some(targets) = ({
+            let state = self.state.read().await;
+            state.missing_consumer_targets_for_connection(session_id, connection_id)
+        }) else {
+            return false;
+        };
+        self.bootstrap_consumer_targets(
+            targets,
+            transport_adapter,
+            ConsumerBootstrapOrigin::LateJoin,
+        )
+        .await;
+        true
+    }
+
+    async fn bootstrap_consumer_targets(
+        &self,
+        targets: Vec<PendingConsumerBootstrapTarget>,
+        transport_adapter: &RuntimeTransportAdapter,
+        origin: ConsumerBootstrapOrigin,
+    ) {
+        for target in targets {
+            self.bootstrap_consumer_target(&target, transport_adapter, origin)
+                .await;
+        }
+    }
     pub async fn publish_track(
         &self,
         session_id: &SessionId,
