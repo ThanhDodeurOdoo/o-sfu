@@ -66,6 +66,7 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) pending_offer: Option<SdpPendingOffer>,
     pub(super) staged_offer_sdp: Option<String>,
     pub(super) initial_offer_applied: bool,
+    pub(super) queued_removal_mids: BTreeSet<Mid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

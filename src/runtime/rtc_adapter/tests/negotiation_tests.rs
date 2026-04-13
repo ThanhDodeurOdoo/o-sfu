@@ -3,6 +3,7 @@ use std::time::Instant;
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
 use super::fixtures::*;
+use crate::runtime::transport_adapter::TransportMediaId;
 
 #[tokio::test]
 async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
@@ -236,6 +237,112 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
 }
 
 #[tokio::test]
+async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pending() {
+    let adapter = RtcTransportAdapter::default();
+    let source_session_key = transport_key(1, 42, SessionId::Integer(42));
+    let consumer_session_key = transport_key(1, 43, SessionId::Integer(43));
+
+    let (first_source_media_id, first_source_mid, second_source_media_id) =
+        setup_queued_removal_sources(&adapter, &source_session_key).await;
+
+    let mut remote = build_remote_rtc(55_005);
+    let initial_offer = adapter
+        .create_initial_session_offer(&consumer_session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &consumer_session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let (first_consumer_media_id, first_consumer_mid) = add_negotiated_consumer_media(
+        &adapter,
+        &consumer_session_key,
+        &source_session_key,
+        first_source_media_id,
+        "compat-mid-queued-remove-a",
+        87_000,
+        &mut remote,
+    )
+    .await;
+
+    let _second_consumer_media_id = adapter
+        .add_send_media(
+            &consumer_session_key,
+            Str0mMediaKind::Video,
+            &source_session_key,
+            second_source_media_id,
+            &sample_router_rtp_parameters("compat-mid-queued-remove-b", 88_000),
+        )
+        .await
+        .expect("second native consumer media should stage an addition offer");
+    let second_addition_offer = adapter
+        .create_session_renegotiation_offer(&consumer_session_key)
+        .await
+        .expect("second addition offer should be available");
+    let second_addition_sdp = second_addition_offer.into_sdp();
+
+    assert_eq!(
+        adapter
+            .remove_media(&consumer_session_key, first_consumer_media_id)
+            .await,
+        Ok(())
+    );
+    assert!(
+        adapter
+            .debug_route_entry(&source_session_key, first_source_mid)
+            .await
+            .is_some_and(|entry| {
+                !entry
+                    .destinations
+                    .iter()
+                    .any(|destination| destination.dest_mid == first_consumer_mid)
+            })
+    );
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&consumer_session_key)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+
+    apply_offer_answer(
+        &adapter,
+        &consumer_session_key,
+        &mut remote,
+        second_addition_sdp,
+    )
+    .await;
+
+    let queued_removal_offer = adapter
+        .create_session_renegotiation_offer(&consumer_session_key)
+        .await
+        .expect("queued removal should stage after the in-flight answer lands");
+    let queued_removal_sdp = queued_removal_offer.into_sdp();
+    let removal_section =
+        media_section_for_mid(&queued_removal_sdp, &format!("{first_consumer_mid}"))
+            .expect("queued removal mid should remain in the follow-up offer");
+    assert!(removal_section.contains("a=inactive"));
+
+    apply_offer_answer(
+        &adapter,
+        &consumer_session_key,
+        &mut remote,
+        queued_removal_sdp,
+    )
+    .await;
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&consumer_session_key)
+            .await,
+        Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 41, SessionId::Integer(41));
@@ -296,4 +403,78 @@ async fn apply_offer_answer(
             .await,
         Ok(())
     );
+}
+
+async fn setup_queued_removal_sources(
+    adapter: &RtcTransportAdapter,
+    source_session_key: &TransportSessionKey,
+) -> (TransportMediaId, Mid, TransportMediaId) {
+    assert!(
+        adapter
+            .transport_bootstrap_payload(source_session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    let first_source_media_id = adapter
+        .add_recv_media(
+            source_session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("source-up-queued-remove-a", 85_000),
+        )
+        .await
+        .expect("first source media should register");
+    let first_source_mid = adapter
+        .debug_resolve_mid(first_source_media_id)
+        .await
+        .expect("first source media should expose its mid");
+    let second_source_media_id = adapter
+        .add_recv_media(
+            source_session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("source-up-queued-remove-b", 86_000),
+        )
+        .await
+        .expect("second source media should register");
+    (
+        first_source_media_id,
+        first_source_mid,
+        second_source_media_id,
+    )
+}
+
+async fn add_negotiated_consumer_media(
+    adapter: &RtcTransportAdapter,
+    consumer_session_key: &TransportSessionKey,
+    source_session_key: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    mid: &str,
+    ssrc: u32,
+    remote: &mut Rtc,
+) -> (TransportMediaId, Mid) {
+    let consumer_media_id = adapter
+        .add_send_media(
+            consumer_session_key,
+            Str0mMediaKind::Video,
+            source_session_key,
+            source_media_id,
+            &sample_router_rtp_parameters(mid, ssrc),
+        )
+        .await
+        .expect("native consumer media should stage an addition offer");
+    let consumer_mid = adapter
+        .debug_resolve_mid(consumer_media_id)
+        .await
+        .expect("consumer media should expose its staged mid");
+    let addition_offer = adapter
+        .create_session_renegotiation_offer(consumer_session_key)
+        .await
+        .expect("addition offer should be available");
+    apply_offer_answer(
+        adapter,
+        consumer_session_key,
+        remote,
+        addition_offer.into_sdp(),
+    )
+    .await;
+    (consumer_media_id, consumer_mid)
 }

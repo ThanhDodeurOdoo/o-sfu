@@ -161,7 +161,14 @@ fn worker_stage_native_media_removal(
     if session_state.sdp_negotiation.pending_offer.is_some()
         && session_state.sdp_negotiation.staged_offer_sdp.is_none()
     {
-        return Err(TransportAdapterError::InvalidInput);
+        if session_state.rtc.media(mid).is_none() {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        session_state
+            .sdp_negotiation
+            .queued_removal_mids
+            .insert(mid);
+        return Ok(());
     }
     if session_state.rtc.media(mid).is_none() {
         return Err(TransportAdapterError::InvalidInput);
@@ -178,6 +185,10 @@ fn worker_stage_native_media_removal(
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state
+        .sdp_negotiation
+        .queued_removal_mids
+        .remove(&mid);
     Ok(())
 }
 

@@ -148,9 +148,39 @@ fn worker_apply_session_answer(
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
+    stage_queued_removal_offer(session_state);
     session_state.dtls_started = true;
     state.mark_session_dirty(session_key);
     Ok(())
+}
+
+fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessionState) {
+    if session_state.sdp_negotiation.queued_removal_mids.is_empty() {
+        return;
+    }
+
+    let queued_removal_mids = session_state
+        .sdp_negotiation
+        .queued_removal_mids
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let mut sdp_api = session_state.rtc.sdp_api();
+    for mid in &queued_removal_mids {
+        sdp_api.set_direction(*mid, Direction::Inactive);
+    }
+    let Some((offer, pending_offer)) = sdp_api.apply() else {
+        session_state.sdp_negotiation.queued_removal_mids.clear();
+        return;
+    };
+    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
+    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    for mid in queued_removal_mids {
+        session_state
+            .sdp_negotiation
+            .queued_removal_mids
+            .remove(&mid);
+    }
 }
 
 fn ensure_session_ready_for_offer(
