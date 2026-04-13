@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc};
 
 #[cfg(test)]
 use super::rtc_adapter::DebugRouteEntry;
-use super::{rtc_adapter::RtcTransportAdapter, stub_bus::StubWebRtcAdapter};
+use super::{
+    rtc_adapter::{RtcTransportAdapter, TransportSessionHealth},
+    stub_bus::StubWebRtcAdapter,
+};
 use crate::config::MediaCodecFlags;
 use crate::runtime::recording::MediaTap;
 
@@ -677,6 +680,18 @@ impl RuntimeTransportAdapter {
         }
     }
 
+    pub(crate) fn session_transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
+        match self {
+            Self::Stub(_adapter) => None,
+            Self::Rtc(adapter) => adapter
+                .shard_for_session(session_key)
+                .session_transport_health(session_key),
+        }
+    }
+
     /// Update whether a producer media line is allowed to forward packets.
     pub(crate) async fn set_producer_active(
         &self,
@@ -737,6 +752,19 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_set_session_transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+        health: TransportSessionHealth,
+    ) {
+        if let Self::Rtc(adapter) = self {
+            adapter
+                .shard_for_session(session_key)
+                .debug_set_session_transport_health(session_key, health);
         }
     }
 

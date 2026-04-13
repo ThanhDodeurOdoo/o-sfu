@@ -1,5 +1,6 @@
 use super::fixtures::*;
 use crate::runtime::channel::TransportCleanupMode;
+use crate::runtime::rtc_adapter::TransportSessionHealth;
 
 #[tokio::test]
 async fn websocket_sends_ping_requests_and_accepts_responses() {
@@ -122,6 +123,78 @@ async fn websocket_closes_when_ping_response_times_out() {
             .has_session(channel.uuid(), &session_id)
             .await
     );
+}
+
+#[tokio::test]
+async fn websocket_closes_when_rtc_transport_disconnects() {
+    let server = spawn_test_server_with_timeouts_and_protocol(
+        1_000,
+        200,
+        20,
+        100,
+        build_real_rtc_transport_adapter(),
+        true,
+    )
+    .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-rtc-disconnect",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let session_id = SessionId::Integer(412);
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_with_jwt(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+    assert!(read_welcome(&mut websocket).await.is_some());
+    let Some(offer_batch) = read_native_server_batch(&mut websocket).await else {
+        panic!("native session should receive an initial offer");
+    };
+    let Some((request_id, request)) = first_native_server_request(&offer_batch) else {
+        panic!("initial native frame should be an offer request");
+    };
+    assert!(
+        respond_to_native_negotiation_request(
+            &mut websocket,
+            request_id,
+            request,
+            "v=0\r\ns=rtc-disconnect-answer\r\n",
+        )
+        .await
+        .is_some()
+    );
+
+    let connection_id = channel.session_connection_id(&session_id).await;
+    assert!(connection_id.is_some());
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    server
+        .state
+        .transport_adapter
+        .debug_set_session_transport_health(
+            &channel.transport_session_key(&session_id, connection_id),
+            TransportSessionHealth::Disconnected,
+        );
+
+    let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
+    assert!(
+        close_code.is_ok(),
+        "server should close once RTC transport health becomes disconnected: {close_code:?}"
+    );
+    assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
 }
 
 #[tokio::test]

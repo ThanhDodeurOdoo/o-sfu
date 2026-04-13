@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use str0m::IceConnectionState;
 use str0m::media::{MediaData, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
@@ -15,7 +16,7 @@ use tracing::{debug, trace, warn};
 
 use super::{
     commands::RtcWorkerCommand,
-    state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState},
+    state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
     worker::handle_worker_command,
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
@@ -309,7 +310,7 @@ fn snapshot_and_pump(
             let Some(session_state) = state.sessions.get_mut(&session_id) else {
                 continue;
             };
-            drain_single_session(&session_id, session_state, buffers)
+            drain_single_session(&session_id, session_state, snapshot_state, buffers)
         };
         state.update_session_timeout(&session_id, session_timeout);
     }
@@ -396,6 +397,7 @@ fn snapshot_and_pump(
 fn drain_single_session(
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<Instant> {
     loop {
@@ -408,6 +410,7 @@ fn drain_single_session(
                 buffers.pending_media.push((session_key.clone(), data));
             }
             Ok(Output::Event(event)) => {
+                observe_rtc_event(snapshot_state, session_key, &event);
                 log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {
@@ -470,6 +473,38 @@ fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
                 "rtc packet loop event"
             );
         }
+    }
+}
+
+fn observe_rtc_event(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    session_key: &TransportSessionKey,
+    event: &Event,
+) {
+    let Some(health) = transport_health_from_event(event) else {
+        return;
+    };
+    let Ok(mut snapshot_state) = snapshot_state.lock() else {
+        return;
+    };
+    snapshot_state.set_transport_health(session_key, health);
+}
+
+pub(super) fn transport_health_from_event(event: &Event) -> Option<TransportSessionHealth> {
+    match event {
+        Event::Connected => Some(TransportSessionHealth::Connected),
+        Event::IceConnectionStateChange(state) => transport_health_from_ice_state(*state),
+        _ => None,
+    }
+}
+
+fn transport_health_from_ice_state(state: IceConnectionState) -> Option<TransportSessionHealth> {
+    if state.is_connected() {
+        Some(TransportSessionHealth::Connected)
+    } else if state.is_disconnected() {
+        Some(TransportSessionHealth::Disconnected)
+    } else {
+        None
     }
 }
 

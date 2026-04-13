@@ -38,7 +38,7 @@ use super::commands::{DebugRouteEntry, DebugRtcCommand};
 use super::{
     commands::{CloseSessionOutcome, RtcWorkerCommand},
     packet_loop,
-    state::{RtcSnapshotState, TransportLifecycleState, TransportStateKey},
+    state::{RtcSnapshotState, TransportLifecycleState, TransportSessionHealth, TransportStateKey},
     validation,
 };
 
@@ -442,6 +442,17 @@ impl RtcTransportAdapter {
         };
         snapshot_state.transport_bitrate_snapshot_at(session_keys, Instant::now())
     }
+
+    pub(crate) fn session_transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
+        let worker_handle = self.worker_handle().ok().flatten()?;
+        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+            return None;
+        };
+        snapshot_state.transport_health(session_key)
+    }
 }
 
 #[cfg(feature = "internal-benchmarks")]
@@ -491,6 +502,20 @@ impl RtcTransportAdapter {
 
 #[cfg(test)]
 impl RtcTransportAdapter {
+    pub(crate) fn debug_set_session_transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+        health: TransportSessionHealth,
+    ) {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+            return;
+        };
+        let Ok(mut snapshot_state) = worker_handle.snapshot_state.lock() else {
+            return;
+        };
+        snapshot_state.set_transport_health(session_key, health);
+    }
+
     async fn request_debug_worker<T, F>(&self, build_command: F) -> Option<T>
     where
         F: FnOnce(oneshot::Sender<T>) -> DebugRtcCommand,

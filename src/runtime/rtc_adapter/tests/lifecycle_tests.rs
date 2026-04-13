@@ -1,4 +1,5 @@
 use super::fixtures::*;
+use str0m::{Event, IceConnectionState};
 
 #[tokio::test]
 async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
@@ -154,6 +155,32 @@ async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
     assert!(fingerprint.value.contains(':'));
 }
 
+#[test]
+fn rtc_transport_health_maps_connected_and_disconnected_events() {
+    assert_eq!(
+        super::super::packet_loop::transport_health_from_event(&Event::Connected),
+        Some(super::super::state::TransportSessionHealth::Connected)
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_health_from_event(&Event::IceConnectionStateChange(
+            IceConnectionState::Connected
+        )),
+        Some(super::super::state::TransportSessionHealth::Connected)
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_health_from_event(&Event::IceConnectionStateChange(
+            IceConnectionState::Disconnected
+        )),
+        Some(super::super::state::TransportSessionHealth::Disconnected)
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_health_from_event(&Event::IceConnectionStateChange(
+            IceConnectionState::New
+        )),
+        None
+    );
+}
+
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_bootstrap_state() {
     let adapter = RtcTransportAdapter::default();
@@ -177,6 +204,30 @@ async fn rtc_transport_close_session_cleans_bootstrap_state() {
         connect_result,
         Err(TransportAdapterError::TransportUnavailable)
     );
+}
+
+#[tokio::test]
+async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 143, SessionId::Integer(143));
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+
+    adapter.debug_set_session_transport_health(
+        &session_key,
+        super::super::state::TransportSessionHealth::Disconnected,
+    );
+    assert_eq!(
+        adapter.session_transport_health(&session_key),
+        Some(super::super::state::TransportSessionHealth::Disconnected)
+    );
+
+    assert_eq!(adapter.close_session(&session_key).await, Ok(()));
+    assert_eq!(adapter.session_transport_health(&session_key), None);
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ use super::{
 use crate::runtime::{
     channel::Channel,
     metrics::RuntimeMetrics,
+    rtc_adapter::TransportSessionHealth,
     transport_adapter::{
         RuntimeTransportAdapter, TransportConnectDirection, TransportConnectRequest,
         TransportSessionKey,
@@ -94,6 +95,18 @@ impl SessionController {
 
     pub(super) fn awaiting_ping_response(&self) -> bool {
         self.pending_ping_request_id.is_some()
+    }
+
+    pub(super) fn transport_close_code(&self) -> Option<WebSocketCloseCode> {
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        self.transport_adapter
+            .session_transport_health(&session_key)
+            .and_then(|health| match health {
+                TransportSessionHealth::Disconnected => Some(WebSocketCloseCode::Error),
+                TransportSessionHealth::Connected => None,
+            })
     }
 
     pub(super) async fn send_ping(

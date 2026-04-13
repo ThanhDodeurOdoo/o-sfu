@@ -89,6 +89,15 @@ impl SessionProtocol {
         }
     }
 
+    pub(in crate::runtime::websocket_server) fn transport_close_code(
+        &self,
+    ) -> Option<WebSocketCloseCode> {
+        match self {
+            Self::LegacyStubBus(session) => session.transport_close_code(),
+            Self::Native(session) => session.transport_close_code(),
+        }
+    }
+
     pub(in crate::runtime::websocket_server) async fn send_ping(
         &mut self,
         writer: &mut WsWriter,

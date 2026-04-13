@@ -4,6 +4,7 @@ use axum::extract::ws::Message;
 
 use crate::runtime::{
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
+    rtc_adapter::TransportSessionHealth,
     stub_bus::WsWriter,
     transport_adapter::RuntimeTransportAdapter,
 };
@@ -54,6 +55,20 @@ impl NativeSessionProtocol {
 
     pub(in crate::runtime::websocket_server) fn awaiting_ping_response(&self) -> bool {
         self.request_state.awaiting_ping_response()
+    }
+
+    pub(in crate::runtime::websocket_server) fn transport_close_code(
+        &self,
+    ) -> Option<WebSocketCloseCode> {
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        self.transport_adapter
+            .session_transport_health(&session_key)
+            .and_then(|health| match health {
+                TransportSessionHealth::Disconnected => Some(WebSocketCloseCode::Error),
+                TransportSessionHealth::Connected => None,
+            })
     }
 
     pub(in crate::runtime::websocket_server) async fn send_ping(

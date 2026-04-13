@@ -33,6 +33,9 @@ pub(super) async fn run(
         tokio::pin!(ping_tick);
         tokio::select! {
             () = &mut ping_tick, if ping_response_deadline.is_none() => {
+                if let Some(reason) = handle_transport_state_tick(writer, session_protocol).await {
+                    return reason;
+                }
                 if let Some(reason) = handle_ping_tick(
                     writer,
                     session_protocol,
@@ -86,6 +89,19 @@ async fn handle_ping_tick(
     *next_ping_at = now + ping_interval;
     *ping_response_deadline = Some(now + ping_timeout);
     None
+}
+
+async fn handle_transport_state_tick(
+    writer: &mut WsWriter,
+    session_protocol: &SessionProtocol,
+) -> Option<WsSessionLoopExitReason> {
+    let close_code = session_protocol.transport_close_code()?;
+    info!(
+        close_code = u16::from(close_code),
+        "closing websocket because the underlying RTC transport disconnected"
+    );
+    close_writer(writer, close_code).await;
+    Some(WsSessionLoopExitReason::TransportDisconnected)
 }
 
 async fn handle_incoming_socket_event(

@@ -36,6 +36,12 @@ pub(super) enum TransportLifecycleState {
     Connected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportSessionHealth {
+    Connected,
+    Disconnected,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct TransportStateKey {
     pub(super) session_key: TransportSessionKey,
@@ -264,6 +270,7 @@ pub(crate) struct RtcSnapshotState {
     pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
+    transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
 }
 
 impl RtcSnapshotState {
@@ -276,6 +283,7 @@ impl RtcSnapshotState {
         self.remote_addr_demux
             .forget_session_remote_addrs(session_key);
         self.incoming_bitrates_by_session.remove(session_key);
+        self.transport_health_by_session.remove(session_key);
     }
 
     pub(super) fn record_incoming_media(
@@ -305,5 +313,21 @@ impl RtcSnapshotState {
             snapshot.per_media.extend(session_bitrates.snapshot(now));
         }
         snapshot
+    }
+
+    pub(super) fn set_transport_health(
+        &mut self,
+        session_key: &TransportSessionKey,
+        health: TransportSessionHealth,
+    ) {
+        self.transport_health_by_session
+            .insert(session_key.clone(), health);
+    }
+
+    pub(crate) fn transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
+        self.transport_health_by_session.get(session_key).copied()
     }
 }

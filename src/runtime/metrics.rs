@@ -8,6 +8,7 @@ pub(super) enum WsSessionLoopExitReason {
     ReaderError,
     BusBreak,
     PingTimeout,
+    TransportDisconnected,
     OutboundChannelClosed,
     OutboundCloseSignal,
     OutboundMessageSendFailure,
@@ -40,6 +41,7 @@ pub(super) struct RuntimeMetrics {
     ws_session_loop_exits_reader_error: AtomicU64,
     ws_session_loop_exits_bus_break: AtomicU64,
     ws_session_loop_exits_ping_timeout: AtomicU64,
+    ws_session_loop_exits_transport_disconnected: AtomicU64,
     ws_session_loop_exits_outbound_channel_closed: AtomicU64,
     ws_session_loop_exits_outbound_close_signal: AtomicU64,
     ws_session_loop_exits_outbound_message_send_failure: AtomicU64,
@@ -88,6 +90,7 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub ws_session_loop_exits_reader_error: u64,
     pub ws_session_loop_exits_bus_break: u64,
     pub ws_session_loop_exits_ping_timeout: u64,
+    pub ws_session_loop_exits_transport_disconnected: u64,
     pub ws_session_loop_exits_outbound_channel_closed: u64,
     pub ws_session_loop_exits_outbound_close_signal: u64,
     pub ws_session_loop_exits_outbound_message_send_failure: u64,
@@ -139,6 +142,9 @@ impl RuntimeMetrics {
             ws_session_loop_exits_reader_error: load(&self.ws_session_loop_exits_reader_error),
             ws_session_loop_exits_bus_break: load(&self.ws_session_loop_exits_bus_break),
             ws_session_loop_exits_ping_timeout: load(&self.ws_session_loop_exits_ping_timeout),
+            ws_session_loop_exits_transport_disconnected: load(
+                &self.ws_session_loop_exits_transport_disconnected,
+            ),
             ws_session_loop_exits_outbound_channel_closed: load(
                 &self.ws_session_loop_exits_outbound_channel_closed,
             ),
@@ -271,6 +277,9 @@ impl RuntimeMetrics {
             WsSessionLoopExitReason::PingTimeout => {
                 increment(&self.ws_session_loop_exits_ping_timeout);
             }
+            WsSessionLoopExitReason::TransportDisconnected => {
+                increment(&self.ws_session_loop_exits_transport_disconnected);
+            }
             WsSessionLoopExitReason::OutboundChannelClosed => {
                 increment(&self.ws_session_loop_exits_outbound_channel_closed);
             }
@@ -380,6 +389,7 @@ mod tests {
         assert_eq!(snapshot.ws_session_loops_started, 1);
         assert_eq!(snapshot.ws_session_loop_exits_peer_closed, 1);
         assert_eq!(snapshot.ws_session_loop_exits_ping_timeout, 0);
+        assert_eq!(snapshot.ws_session_loop_exits_transport_disconnected, 0);
         assert_eq!(snapshot.ws_bus_batches_received, 1);
         assert_eq!(snapshot.ws_bus_envelopes_received, 3);
         assert_eq!(snapshot.ws_bus_client_requests, 1);

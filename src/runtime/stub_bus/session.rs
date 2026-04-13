@@ -57,6 +57,10 @@ impl StubBusSession {
         self.controller.awaiting_ping_response()
     }
 
+    pub(crate) fn transport_close_code(&self) -> Option<WebSocketCloseCode> {
+        self.controller.transport_close_code()
+    }
+
     pub(crate) async fn send_ping(
         &mut self,
         writer: &mut WsWriter,
