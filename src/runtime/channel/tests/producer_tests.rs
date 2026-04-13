@@ -1,4 +1,12 @@
 use super::fixtures::*;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Instant;
+
+use crate::config::RtcPortRange;
+use crate::runtime::channel::Channel;
+use crate::runtime::recording::MediaTap;
+use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
+use str0m::{Candidate, Rtc, change::SdpOffer};
 
 #[tokio::test]
 async fn production_change_pauses_producer_and_broadcasts_info() {
@@ -427,7 +435,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
         let adapter = transport_adapter.clone();
         async move {
             channel
-                .bootstrap_late_join_consumers(&SessionId::Integer(2), &adapter)
+                .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
                 .await;
         }
     });
@@ -502,7 +510,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
         let adapter = transport_adapter.clone();
         async move {
             channel
-                .bootstrap_late_join_consumers(&SessionId::Integer(2), &adapter)
+                .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
                 .await;
         }
     });
@@ -546,7 +554,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
         let adapter = transport_adapter.clone();
         async move {
             channel
-                .bootstrap_late_join_consumers(&SessionId::Integer(2), &adapter)
+                .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
                 .await;
         }
     });
@@ -695,4 +703,304 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
             .any(|message| matches!(message, SessionOutbound::Request(_))),
         "subscriber should receive a consumer bootstrap after download connect makes it ready"
     );
+}
+
+#[tokio::test]
+async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
+    let mut scenario = setup_real_rtc_refresh_scenario().await;
+
+    assert!(
+        scenario
+            .channel
+            .publish_track(
+                &scenario.publisher_session_id,
+                StreamType::Camera,
+                MediaKind::Video,
+                video_rtp_parameters_with_mid("cam-refresh-retry", 22_222),
+                &scenario.transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
+    assert_bootstrap_for_stream(
+        &drain_outbound(&mut scenario.subscriber_rx),
+        StreamType::Camera,
+    );
+    assert_eq!(scenario.channel.consumer_count().await, 1);
+
+    let first_refresh_offer = scenario
+        .transport_adapter
+        .create_session_renegotiation_offer(&scenario.subscriber_session_key)
+        .await
+        .expect("first subscriber refresh should stage an rtc offer");
+
+    assert!(
+        scenario
+            .channel
+            .publish_track(
+                &scenario.publisher_session_id,
+                StreamType::Screen,
+                MediaKind::Video,
+                video_rtp_parameters_with_mid("screen-refresh-retry", 33_333),
+                &scenario.transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        scenario.channel.consumer_count().await,
+        1,
+        "second consumer must stay pending while the first rtc offer awaits an answer"
+    );
+    assert!(
+        drain_outbound(&mut scenario.subscriber_rx).is_empty(),
+        "no second bootstrap should be emitted before the first refresh answer lands"
+    );
+
+    apply_offer_answer(
+        &scenario.transport_adapter,
+        &scenario.subscriber_session_key,
+        &mut scenario.subscriber_remote,
+        first_refresh_offer.into_sdp(),
+    )
+    .await;
+
+    scenario
+        .channel
+        .bootstrap_missing_consumers(&scenario.subscriber_session_id, &scenario.transport_adapter)
+        .await;
+
+    assert_eq!(scenario.channel.consumer_count().await, 2);
+    assert_bootstrap_for_stream(
+        &drain_outbound(&mut scenario.subscriber_rx),
+        StreamType::Screen,
+    );
+
+    let second_refresh_offer = scenario
+        .transport_adapter
+        .create_session_renegotiation_offer(&scenario.subscriber_session_key)
+        .await
+        .expect("retry should stage the deferred rtc offer");
+    apply_offer_answer(
+        &scenario.transport_adapter,
+        &scenario.subscriber_session_key,
+        &mut scenario.subscriber_remote,
+        second_refresh_offer.into_sdp(),
+    )
+    .await;
+
+    scenario
+        .channel
+        .bootstrap_missing_consumers(&scenario.subscriber_session_id, &scenario.transport_adapter)
+        .await;
+
+    assert_eq!(
+        scenario.channel.consumer_count().await,
+        2,
+        "retry pass must not duplicate already-committed consumers"
+    );
+    assert!(
+        drain_outbound(&mut scenario.subscriber_rx).is_empty(),
+        "no new bootstrap should be emitted once every consumer already exists"
+    );
+}
+
+struct RealRtcRefreshScenario {
+    channel: Arc<Channel>,
+    transport_adapter: RuntimeTransportAdapter,
+    publisher_session_id: SessionId,
+    subscriber_session_id: SessionId,
+    subscriber_session_key: TransportSessionKey,
+    publisher_rx: mpsc::UnboundedReceiver<SessionOutbound>,
+    subscriber_rx: mpsc::UnboundedReceiver<SessionOutbound>,
+    subscriber_remote: Rtc,
+}
+
+async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
+    let manager = ChannelManager::for_test();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let (publisher_tx, publisher_rx) = test_sender();
+    let (subscriber_tx, subscriber_rx) = test_sender();
+    let publisher_session_id = SessionId::Integer(1);
+    let subscriber_session_id = SessionId::Integer(2);
+    let publisher_connection_id = channel
+        .join_session(
+            publisher_session_id.clone(),
+            None,
+            SessionPermissions::default(),
+            publisher_tx,
+        )
+        .await
+        .expect("publisher should join");
+    let subscriber_connection_id = channel
+        .join_session(
+            subscriber_session_id.clone(),
+            None,
+            SessionPermissions::default(),
+            subscriber_tx,
+        )
+        .await
+        .expect("subscriber should join");
+    let transport_adapter = build_real_rtc_transport_adapter();
+    let publisher_session_key =
+        channel.transport_session_key(&publisher_session_id, publisher_connection_id);
+    let subscriber_session_key =
+        channel.transport_session_key(&subscriber_session_id, subscriber_connection_id);
+
+    bootstrap_real_rtc_session(&transport_adapter, &publisher_session_key).await;
+    bootstrap_real_rtc_session(&transport_adapter, &subscriber_session_key).await;
+    let mut subscriber_remote = build_remote_rtc(55_100);
+    let initial_offer = transport_adapter
+        .create_initial_session_offer(&subscriber_session_key)
+        .await
+        .expect("subscriber should get an initial rtc offer");
+    apply_offer_answer(
+        &transport_adapter,
+        &subscriber_session_key,
+        &mut subscriber_remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    assert!(
+        channel
+            .apply_session_negotiated(
+                &publisher_session_id,
+                publisher_connection_id,
+                test_client_rtp_capabilities(),
+                &transport_adapter,
+            )
+            .await
+    );
+    assert!(
+        channel
+            .apply_session_negotiated(
+                &subscriber_session_id,
+                subscriber_connection_id,
+                test_client_rtp_capabilities(),
+                &transport_adapter,
+            )
+            .await
+    );
+
+    RealRtcRefreshScenario {
+        channel,
+        transport_adapter,
+        publisher_session_id,
+        subscriber_session_id,
+        subscriber_session_key,
+        publisher_rx,
+        subscriber_rx,
+        subscriber_remote,
+    }
+}
+
+fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
+    RuntimeTransportAdapter::builder()
+        .rtc(RtcTransportAdapterShardSetConfig::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            RtcPortRange::new(46_200, 46_299),
+            1,
+            Arc::new(MediaTap::default()),
+        ))
+        .build()
+}
+
+async fn bootstrap_real_rtc_session(
+    transport_adapter: &RuntimeTransportAdapter,
+    session_key: &TransportSessionKey,
+) {
+    assert!(
+        transport_adapter
+            .transport_bootstrap_payload(
+                session_key,
+                &o_sfu_router::RtpCapabilities::new(vec![], vec![])
+            )
+            .await
+            .is_ok()
+    );
+}
+
+fn assert_bootstrap_for_stream(messages: &[SessionOutbound], stream_type: StreamType) {
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            SessionOutbound::Request(request)
+                if matches!(
+                    request.as_ref(),
+                    CurrentServerRequest::BootstrapRemoteTrack(payload)
+                        if payload.stream_type == stream_type
+                )
+        )),
+        "expected a bootstrap request for {stream_type:?}"
+    );
+}
+
+fn build_remote_rtc(port: u16) -> Rtc {
+    let mut remote = Rtc::new(Instant::now());
+    remote
+        .add_local_candidate(
+            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp")
+                .expect("test host candidate should build"),
+        )
+        .expect("remote candidate should register");
+    remote
+}
+
+async fn apply_offer_answer(
+    adapter: &RuntimeTransportAdapter,
+    session_key: &TransportSessionKey,
+    remote: &mut Rtc,
+    offer_sdp: String,
+) {
+    let answer = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&offer_sdp)
+                .expect("adapter should return parseable SDP offer"),
+        )
+        .expect("remote answer should build");
+    assert_eq!(
+        adapter
+            .apply_session_answer(session_key, &answer.to_sdp_string())
+            .await,
+        Ok(())
+    );
+}
+
+fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> RtpParameters {
+    RtpParameters(json!({
+        "mid": mid,
+        "codecs": [
+            {
+                "mimeType": "video/VP8",
+                "payloadType": 96,
+                "clockRate": 90000,
+                "parameters": {},
+                "rtcpFeedback": [
+                    { "type": "nack" },
+                    { "type": "nack", "parameter": "pli" },
+                    { "type": "ccm", "parameter": "fir" },
+                    { "type": "goog-remb" },
+                    { "type": "transport-cc" }
+                ]
+            },
+            {
+                "mimeType": "video/rtx",
+                "payloadType": 97,
+                "clockRate": 90000,
+                "parameters": { "apt": "96" },
+                "rtcpFeedback": []
+            }
+        ],
+        "headerExtensions": [
+            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
+            { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
+            { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
+        ],
+        "encodings": [{ "ssrc": ssrc }]
+    }))
 }

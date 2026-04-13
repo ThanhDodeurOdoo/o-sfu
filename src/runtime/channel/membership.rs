@@ -245,7 +245,7 @@ impl Channel {
             return false;
         }
         if update.became_consumer_ready {
-            self.bootstrap_late_join_consumers(session_id, transport_adapter)
+            self.bootstrap_missing_consumers(session_id, transport_adapter)
                 .await;
         }
         true

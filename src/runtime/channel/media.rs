@@ -14,14 +14,14 @@ use super::{
 };
 
 impl Channel {
-    pub async fn bootstrap_late_join_consumers(
+    pub async fn bootstrap_missing_consumers(
         &self,
         session_id: &SessionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         let targets = {
             let state = self.state.read().await;
-            state.late_join_consumer_targets(session_id)
+            state.missing_consumer_targets(session_id)
         };
 
         for target in targets {

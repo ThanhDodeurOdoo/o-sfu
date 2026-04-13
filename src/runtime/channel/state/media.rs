@@ -131,7 +131,7 @@ impl ChannelState {
         })
     }
 
-    pub(in crate::runtime::channel) fn late_join_consumer_targets(
+    pub(in crate::runtime::channel) fn missing_consumer_targets(
         &self,
         session_id: &SessionId,
     ) -> Vec<PendingConsumerBootstrapTarget> {
@@ -147,6 +147,13 @@ impl ChannelState {
             .filter_map(|(producer_id, producer)| {
                 let transport_media_id = producer.transport_media_id?;
                 if producer.owner_session_id == *session_id {
+                    return None;
+                }
+                if self.consumer_index.contains_key(&ConsumerKey {
+                    consumer_session_id: session_id.clone(),
+                    producer_session_id: producer.owner_session_id.clone(),
+                    stream_type: producer.stream_type,
+                }) {
                     return None;
                 }
                 Some(PendingConsumerBootstrapTarget {
