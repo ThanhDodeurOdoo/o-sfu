@@ -15,11 +15,10 @@ use tracing::{Instrument, field, info, info_span};
 use crate::runtime::{
     RuntimeState,
     channel::{Channel, SessionOutbound, TransportCleanupMode},
-    stub_bus::WsWriter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
 
-use super::session_protocol::SessionProtocol;
+use super::{WsWriter, session_protocol::SessionProtocol};
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 

@@ -5,8 +5,8 @@ use axum::extract::ws::Message;
 use crate::runtime::{
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
     rtc_adapter::TransportSessionHealth,
-    stub_bus::WsWriter,
     transport_adapter::RuntimeTransportAdapter,
+    websocket_server::WsWriter,
 };
 use crate::signaling::{
     protocol::{ServerMessage, ServerRequest, WebSocketCloseCode},

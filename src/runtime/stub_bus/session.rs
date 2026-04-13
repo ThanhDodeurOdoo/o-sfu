@@ -4,11 +4,10 @@ use axum::extract::ws::Message;
 use serde_json::Value;
 use tracing::trace;
 
-use super::{
-    codec, codec::WsWriter, session_controller::SessionController, signaling_edge::decode_envelope,
-};
+use super::{codec, session_controller::SessionController, signaling_edge::decode_envelope};
 use crate::runtime::{
     channel::Channel, metrics::RuntimeMetrics, transport_adapter::RuntimeTransportAdapter,
+    websocket_server::WsWriter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
 

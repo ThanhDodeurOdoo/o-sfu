@@ -1,4 +1,4 @@
-use crate::runtime::stub_bus::WsWriter;
+use crate::runtime::websocket_server::WsWriter;
 use crate::signaling::protocol::{
     ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
     RecordingActionResult, ServerResponse, WebSocketCloseCode,

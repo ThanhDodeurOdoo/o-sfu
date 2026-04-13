@@ -3,9 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::debug;
 
-use super::{
-    STUB_SERVER_BUS_ID, codec, codec::WsWriter, empty_object, signaling_edge::DomainCommand,
-};
+use super::{STUB_SERVER_BUS_ID, codec, empty_object, signaling_edge::DomainCommand};
 use crate::runtime::{
     channel::Channel,
     metrics::RuntimeMetrics,
@@ -14,6 +12,7 @@ use crate::runtime::{
         RuntimeTransportAdapter, TransportConnectDirection, TransportConnectRequest,
         TransportSessionKey,
     },
+    websocket_server::WsWriter,
 };
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},

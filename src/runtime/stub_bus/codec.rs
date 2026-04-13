@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
-use axum::extract::ws::{Message, WebSocket};
-use futures_util::{SinkExt, stream::SplitSink};
+use axum::extract::ws::Message;
+use futures_util::SinkExt;
 use tracing::trace;
 
-use crate::runtime::channel::{ChannelEventMessage, ChannelEventRequest};
+use crate::runtime::{
+    channel::{ChannelEventMessage, ChannelEventRequest},
+    websocket_server::WsWriter,
+};
 use crate::signaling::{
     bundle_api::bundle_session_info_key,
     current_bus::{CurrentBusBatch, CurrentBusEnvelope},
@@ -15,8 +18,6 @@ use crate::signaling::{
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo},
 };
-
-pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
 
 pub(crate) async fn send_server_message_batch(
     writer: &mut WsWriter,

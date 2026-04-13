@@ -446,16 +446,6 @@ impl RuntimeTransportAdapter {
         Self::Stub(adapter)
     }
 
-    #[must_use]
-    /// Explicit rollout gate for the native websocket session lifecycle.
-    ///
-    /// Both currently supported backends implement the server-authored offer/answer flow,
-    /// so native-protocol call sites can now stay transport-agnostic while this migration
-    /// helper remains in place.
-    pub(crate) const fn uses_native_protocol_migration_path(&self) -> bool {
-        matches!(self, Self::Stub(_) | Self::Rtc(_))
-    }
-
     /// Create the first server-authored SDP offer for the native signaling path.
     pub(crate) async fn create_initial_session_offer(
         &self,

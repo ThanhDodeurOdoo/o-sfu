@@ -6,13 +6,14 @@ use crate::runtime::{
     channel::{Channel, SessionOutbound},
     metrics::RuntimeMetrics,
     stub_bus::{
-        StubBusOutcome, StubBusSession, WsWriter, legacy_server_message, legacy_server_request,
+        StubBusOutcome, StubBusSession, legacy_server_message, legacy_server_request,
         send_server_message_batch, send_server_request_batch,
     },
     transport_adapter::RuntimeTransportAdapter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
 
+use super::super::WsWriter;
 use super::native::NativeSessionProtocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

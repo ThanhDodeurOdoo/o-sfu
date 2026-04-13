@@ -1,6 +1,6 @@
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
-use crate::runtime::{channel::NegotiatedPublish, stub_bus::WsWriter};
+use crate::runtime::{channel::NegotiatedPublish, websocket_server::WsWriter};
 use crate::signaling::{shared::StreamType, webrtc::MediaKind as SignalingMediaKind};
 
 use super::super::controller::SessionProtocolOutcome;

@@ -1,7 +1,7 @@
 use axum::extract::ws::Message;
 use futures_util::SinkExt;
 
-use crate::runtime::stub_bus::WsWriter;
+use crate::runtime::websocket_server::WsWriter;
 use crate::signaling::protocol::{
     ClientEnvelope, EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
     ServerResponse, WebSocketCloseCode,

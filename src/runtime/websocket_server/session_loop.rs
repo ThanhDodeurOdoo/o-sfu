@@ -9,11 +9,13 @@ use super::{close_writer, controller::WsReader};
 use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
-    stub_bus::WsWriter,
 };
 use crate::signaling::protocol::WebSocketCloseCode;
 
-use super::session_protocol::{SessionProtocol, SessionProtocolOutcome};
+use super::{
+    WsWriter,
+    session_protocol::{SessionProtocol, SessionProtocolOutcome},
+};
 
 pub(super) async fn run(
     writer: &mut WsWriter,

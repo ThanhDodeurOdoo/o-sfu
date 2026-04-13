@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use tracing::{Span, field, info};
 
 use super::{
-    close_writer,
+    WsWriter, close_writer,
     controller::{ConnectedSession, WsReader},
     session_protocol::SessionProtocol,
 };
@@ -17,11 +17,9 @@ use crate::runtime::{
     channel::{
         Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound, TransportCleanupMode,
     },
-    stub_bus::WsWriter,
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
-    current_protocol::CurrentWebSocketCredentials,
     protocol::{
         AuthPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, ServerMessage,
         WebSocketCloseCode, WelcomePayload,
@@ -35,20 +33,18 @@ pub(super) async fn establish_session(
     reader: &mut WsReader,
 ) -> Option<ConnectedSession> {
     let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
-    let credentials = CurrentWebSocketCredentials {
-        channel_uuid: auth_payload.channel,
-        jwt: auth_payload.jwt,
-    };
-    let (channel, claims) = authenticate_session(state, writer, credentials).await?;
-    let (session_id, outbound_rx, channel, connection_id) =
-        join_authenticated_session(state, writer, channel, claims).await?;
+    let (channel, claims) = authenticate_session(state, writer, &auth_payload).await?;
+    let (session_id, outbound_rx, channel, connection_id) = join_authenticated_session(
+        state,
+        writer,
+        channel,
+        claims,
+        state.config.enable_native_protocol,
+    )
+    .await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut session_protocol = if state.config.enable_native_protocol
-        && state
-            .transport_adapter
-            .uses_native_protocol_migration_path()
-    {
+    let mut session_protocol = if state.config.enable_native_protocol {
         SessionProtocol::native(
             session_id.clone(),
             connection_id,
@@ -150,14 +146,14 @@ fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCod
 
 async fn authenticate(
     state: &RuntimeState,
-    credentials: CurrentWebSocketCredentials,
+    auth_payload: &AuthPayload,
 ) -> Result<(Arc<Channel>, WebSocketConnectClaims), WebSocketCloseCode> {
-    if let Some(channel_uuid) = credentials.channel_uuid.as_deref() {
+    if let Some(channel_uuid) = auth_payload.channel.as_deref() {
         let Some(channel) = state.channels.get_by_uuid(channel_uuid).await else {
             return Err(WebSocketCloseCode::AuthFailed);
         };
         let key = channel.key().unwrap_or(&state.config.auth_key);
-        let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, key)
+        let claims = auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, key)
             .map_err(|_error| WebSocketCloseCode::AuthFailed)?;
         if claims.sfu_channel_uuid != channel_uuid {
             return Err(WebSocketCloseCode::AuthFailed);
@@ -165,7 +161,7 @@ async fn authenticate(
         return Ok((channel, claims));
     }
 
-    let claims = auth::verify::<WebSocketConnectClaims>(&credentials.jwt, &state.config.auth_key)
+    let claims = auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth_key)
         .map_err(|_error| WebSocketCloseCode::AuthFailed)?;
     let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
         return Err(WebSocketCloseCode::AuthFailed);
@@ -179,9 +175,9 @@ async fn authenticate(
 async fn authenticate_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    credentials: CurrentWebSocketCredentials,
+    auth_payload: &AuthPayload,
 ) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
-    match authenticate(state, credentials).await {
+    match authenticate(state, auth_payload).await {
         Ok(result) => Some(result),
         Err(code) => {
             reject_handshake(
@@ -200,6 +196,7 @@ async fn join_authenticated_session(
     writer: &mut WsWriter,
     channel: Arc<Channel>,
     claims: WebSocketConnectClaims,
+    use_native_session_protocol: bool,
 ) -> Option<(
     SessionId,
     mpsc::UnboundedReceiver<SessionOutbound>,
@@ -219,7 +216,7 @@ async fn join_authenticated_session(
                 sender: outbound_tx,
             },
             &state.transport_adapter,
-            if state.config.enable_native_protocol {
+            if use_native_session_protocol {
                 TransportCleanupMode::NativeSessionProtocol
             } else {
                 TransportCleanupMode::LegacyCompatibility
