@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc};
 #[cfg(test)]
 use super::rtc_adapter::DebugRouteEntry;
 use super::{
-    rtc_adapter::{RtcTransportAdapter, TransportSessionHealth},
+    rtc_adapter::{
+        RtcTransportAdapter, TransportSessionHealth, client_rtp_capabilities_from_answer,
+    },
     stub_bus::StubWebRtcAdapter,
 };
 use crate::config::MediaCodecFlags;
@@ -15,7 +17,7 @@ use crate::runtime::transport_connect::{
 
 use crate::config::RtcPortRange;
 use crate::signaling::{shared::SessionId, webrtc::MediaKind as SignalingMediaKind};
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::{MediaCapabilities, RtpParameters as RouterRtpParameters};
 use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
@@ -502,6 +504,20 @@ impl RuntimeTransportAdapter {
         }
     }
 
+    pub(crate) fn negotiated_client_rtp_capabilities(
+        &self,
+        answer_sdp: &str,
+        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+    ) -> Result<MediaCapabilities, TransportAdapterError> {
+        match self {
+            Self::Stub(_adapter) => Ok(StubWebRtcAdapter::compatibility_client_rtp_capabilities(
+                offered_router_capabilities,
+            )),
+            Self::Rtc(_adapter) => client_rtp_capabilities_from_answer(answer_sdp)
+                .ok_or(TransportAdapterError::InvalidInput),
+        }
+    }
+
     /// Build the `INIT_TRANSPORTS` payload for a newly authenticated session.
     pub(crate) async fn transport_bootstrap_payload(
         &self,
@@ -790,12 +806,17 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
 
+    use o_sfu_router::{MediaCodecCapability, MediaKind as RouterMediaKind};
+
     use super::RuntimeTransportAdapter;
     use crate::{
         config::{MediaCodecFlags, RtcPortRange},
         runtime::{
             recording::MediaTap,
-            transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey},
+            stub_bus::StubWebRtcAdapter,
+            transport_adapter::{
+                RtcTransportAdapterShardSetConfig, TransportAdapterError, TransportSessionKey,
+            },
         },
         signaling::shared::SessionId,
     };
@@ -803,6 +824,49 @@ mod tests {
 
     fn empty_router_capabilities() -> RouterRtpCapabilities {
         RouterRtpCapabilities::new(vec![], vec![])
+    }
+
+    fn sample_router_capabilities() -> RouterRtpCapabilities {
+        RouterRtpCapabilities::new(
+            vec![
+                MediaCodecCapability::new(RouterMediaKind::Audio, "opus", 48_000)
+                    .with_channels(2)
+                    .with_preferred_payload_type(111),
+            ],
+            vec![],
+        )
+    }
+
+    #[test]
+    fn stub_adapter_uses_explicit_compatibility_capability_projection() {
+        let adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::new(StubWebRtcAdapter::default()));
+        let offered = sample_router_capabilities();
+
+        let projected =
+            adapter.negotiated_client_rtp_capabilities("v=0\r\ns=stub-answer\r\n", &offered);
+
+        assert_eq!(projected, Ok(offered));
+    }
+
+    #[test]
+    fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
+        let adapter = RuntimeTransportAdapter::builder()
+            .rtc(RtcTransportAdapterShardSetConfig::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                RtcPortRange::new(46_100, 46_199),
+                1,
+                MediaCodecFlags::default(),
+                Arc::new(MediaTap::default()),
+            ))
+            .build();
+
+        let projected = adapter.negotiated_client_rtp_capabilities(
+            "v=0\r\ns=invalid-answer\r\n",
+            &sample_router_capabilities(),
+        );
+
+        assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
     }
 
     #[tokio::test]

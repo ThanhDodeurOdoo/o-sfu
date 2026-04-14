@@ -5,7 +5,7 @@ use crate::signaling::protocol::{RequestId, ServerRequest};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PendingNegotiationAction {
     EstablishSession {
-        fallback_client_rtp_capabilities: MediaCapabilities,
+        offered_router_rtp_capabilities: MediaCapabilities,
     },
     RefreshSession,
 }

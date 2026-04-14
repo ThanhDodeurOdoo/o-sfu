@@ -142,6 +142,13 @@ impl StubWebRtcAdapter {
 }
 
 impl StubWebRtcAdapter {
+    #[must_use]
+    pub(crate) fn compatibility_client_rtp_capabilities(
+        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+    ) -> o_sfu_router::RtpCapabilities {
+        offered_router_capabilities.clone()
+    }
+
     #[allow(
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"

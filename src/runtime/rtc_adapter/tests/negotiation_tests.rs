@@ -11,7 +11,6 @@ use str0m::{
 use super::fixtures::*;
 use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::ortc_mapper;
 
 #[tokio::test]
 async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
@@ -85,9 +84,7 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
 
     let projected = client_rtp_capabilities_from_answer(&answer)
         .expect("real RTC answer should expose client RTP capabilities");
-    let parsed = ortc_mapper::parse_rtp_capabilities(&projected.0)
-        .expect("projected RTP capabilities should remain parseable");
-    let codec_names = parsed
+    let codec_names = projected
         .codecs()
         .map(|codec| (codec.media_kind(), codec.codec_name().to_owned()))
         .collect::<Vec<_>>();
@@ -99,11 +96,11 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
         ]
     );
     assert!(
-        parsed.codecs().all(|codec| codec.codec_name() != "rtx"),
+        projected.codecs().all(|codec| codec.codec_name() != "rtx"),
         "the projected client capability set must not invent RTX support"
     );
     assert!(
-        parsed.codecs().all(|codec| codec.codec_name() != "H264"),
+        projected.codecs().all(|codec| codec.codec_name() != "H264"),
         "the projected client capability set must reflect the answer instead of the router default"
     );
 }
