@@ -3,7 +3,10 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::debug;
 
-use super::{STUB_SERVER_BUS_ID, codec, empty_object, signaling_edge::DomainCommand};
+use super::{
+    STUB_SERVER_BUS_ID, codec, empty_object, signaling_edge::DomainCommand,
+    transport_bootstrap_edge,
+};
 use crate::runtime::{
     channel::Channel,
     metrics::RuntimeMetrics,
@@ -88,11 +91,9 @@ impl SessionController {
         };
         debug!("sending transport bootstrap");
         let request_id = self
-            .send_request(
+            .send_request_value(
                 writer,
-                CurrentServerRequest::BootstrapTransports(
-                    super::bootstrap::legacy_transport_bootstrap_payload(&bootstrap_payload),
-                ),
+                transport_bootstrap_edge::request_value(&bootstrap_payload).map_err(|_error| ())?,
             )
             .await
             .map_err(|_error| ())?;
@@ -124,7 +125,11 @@ impl SessionController {
             return Ok(());
         }
         let request_id = self
-            .send_request(writer, CurrentServerRequest::Ping)
+            .send_request_value(
+                writer,
+                serde_json::to_value(CurrentServerRequest::Ping)
+                    .map_err(|_error| WebSocketCloseCode::Error)?,
+            )
             .await?;
         self.pending_ping_request_id = Some(request_id);
         debug!("sent websocket bus ping request");
@@ -293,13 +298,12 @@ impl SessionController {
         request_id
     }
 
-    async fn send_request(
+    async fn send_request_value(
         &mut self,
         writer: &mut WsWriter,
-        request: CurrentServerRequest,
+        message: Value,
     ) -> Result<CurrentBusRequestId, WebSocketCloseCode> {
         let request_id = self.next_request_id();
-        let message = serde_json::to_value(request).map_err(|_error| WebSocketCloseCode::Error)?;
         let batch = vec![CurrentBusEnvelope {
             message,
             need_response: Some(request_id.clone()),

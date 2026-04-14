@@ -15,13 +15,13 @@ use o_sfu::{
         current_protocol::{
             CurrentClientMessage, CurrentClientRequest, CurrentDownloadStateChangePayload,
             CurrentPublishTrackResponse, CurrentServerMessage, CurrentServerRequest,
-            CurrentTransportBootstrapPayload, CurrentTransportConnectPayload,
-            CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
+            CurrentTransportConnectPayload, CurrentUploadStateChangePayload,
+            CurrentWebSocketCredentials,
         },
         http::{STATS_PATH, StatsResponse},
         protocol::WelcomePayload,
         shared::{DownloadStates, SessionId, StreamType},
-        webrtc::{DtlsFingerprint, DtlsParameters, IceParameters},
+        webrtc::{DtlsFingerprint, DtlsParameters, IceParameters, TransportBootstrap},
     },
 };
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -45,6 +45,12 @@ fn client_dtls_parameters() -> DtlsParameters {
 
 pub struct LocalNetwork {
     server: TestServer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerTransportBootstrap {
+    pub download_transport: TransportBootstrap,
+    pub upload_transport: TransportBootstrap,
 }
 
 impl LocalNetwork {
@@ -90,6 +96,10 @@ impl LocalNetwork {
             return None;
         };
         let request_id = request_id?;
+        let transport_bootstrap = PeerTransportBootstrap {
+            download_transport: transport_bootstrap.download_transport,
+            upload_transport: transport_bootstrap.upload_transport,
+        };
         client
             .respond_to_server_request(&request_id, supported_client_rtp_capabilities())
             .await?;
@@ -108,7 +118,7 @@ pub struct FakePeer {
     session_id: SessionId,
     client: FakeWebSocketClient,
     welcome: WelcomePayload,
-    transport_bootstrap: CurrentTransportBootstrapPayload,
+    transport_bootstrap: PeerTransportBootstrap,
     next_request_counter: u64,
 }
 
@@ -124,7 +134,7 @@ impl FakePeer {
     }
 
     #[must_use]
-    pub fn transport_bootstrap(&self) -> &CurrentTransportBootstrapPayload {
+    pub fn transport_bootstrap(&self) -> &PeerTransportBootstrap {
         &self.transport_bootstrap
     }
 
