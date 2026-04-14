@@ -13,7 +13,7 @@ use crate::runtime::transport_adapter::{
     SessionOffer, TransportAdapterError, TransportConnectDirection, TransportMediaId,
     TransportSessionKey,
 };
-use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
+use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 
 use super::{dtls, state::ParsedRemoteIceCredentials};
 
@@ -27,7 +27,7 @@ pub(super) enum RtcWorkerCommand {
     BuildBootstrap {
         session_key: TransportSessionKey,
         router_capabilities: RtpCapabilities,
-        response: oneshot::Sender<Result<CurrentTransportBootstrapPayload, TransportAdapterError>>,
+        response: oneshot::Sender<Result<SessionTransportBootstrap, TransportAdapterError>>,
     },
     CreateInitialSessionOffer {
         session_key: TransportSessionKey,

@@ -9,8 +9,8 @@ use super::{
     state::{ParsedRemoteIceCredentials, RtcSessionState},
 };
 use crate::runtime::transport_adapter::TransportAdapterError;
-use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
-use crate::signaling::webrtc::{DtlsParameters, IceCandidate, IceParameters};
+use crate::runtime::transport_bootstrap::{SessionTransportBootstrap, TransportIceCandidate};
+use crate::signaling::webrtc::{DtlsParameters, IceParameters};
 
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 
@@ -62,7 +62,7 @@ pub(super) fn validate_dtls_parameters(
 }
 
 pub(super) fn validate_bootstrap_payload(
-    payload: &CurrentTransportBootstrapPayload,
+    payload: &SessionTransportBootstrap,
 ) -> Result<(), TransportAdapterError> {
     validate_ice_candidates(
         payload.download_transport.id.as_str(),
@@ -148,7 +148,7 @@ pub(super) fn local_dtls_active_role(parsed_role: dtls::ParsedDtlsRole) -> bool 
 
 fn validate_ice_candidates(
     transport_id: &str,
-    candidates: &[IceCandidate],
+    candidates: &[TransportIceCandidate],
 ) -> Result<(), TransportAdapterError> {
     for candidate in candidates {
         let line = candidate_to_sdp_line(candidate);
@@ -185,15 +185,15 @@ fn validate_ice_candidates(
     Ok(())
 }
 
-fn candidate_to_sdp_line(candidate: &IceCandidate) -> String {
+fn candidate_to_sdp_line(candidate: &TransportIceCandidate) -> String {
     format!(
         "candidate:{} {CANDIDATE_COMPONENT_ID_RTP} {} {} {} {} typ {}",
         candidate.foundation,
-        candidate.protocol,
+        candidate.protocol.as_str(),
         candidate.priority,
         candidate.ip,
         candidate.port,
-        candidate.candidate_type,
+        candidate.candidate_type.as_str(),
     )
 }
 

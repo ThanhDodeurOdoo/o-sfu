@@ -26,14 +26,16 @@ pub(super) use crate::{
         TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
         TransportSessionKey,
     },
+    runtime::transport_bootstrap::{
+        SessionTransportBootstrap, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm,
+        TransportDtlsParameters, TransportDtlsRole, TransportEndpointBootstrap,
+        TransportIceCandidate, TransportIceCandidateType, TransportIceParameters,
+        TransportIceProtocol, TransportPublishOptions, TransportPublishOptionsByMediaKind,
+        TransportSctpParameters,
+    },
     signaling::{
-        current_protocol::CurrentTransportBootstrapPayload,
         shared::SessionId,
-        webrtc::{
-            DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
-            PublishOptionsByMediaKind, RtpCapabilities as WireRtpCapabilities, SctpParameters,
-            TransportBootstrap,
-        },
+        webrtc::{DtlsFingerprint, DtlsParameters, IceParameters},
     },
 };
 
@@ -75,18 +77,21 @@ pub(super) fn transport_key_on_worker(
 }
 
 pub(super) fn sample_bootstrap_payload(
-    candidate: IceCandidate,
-) -> CurrentTransportBootstrapPayload {
-    CurrentTransportBootstrapPayload {
-        router_capabilities: WireRtpCapabilities(json!({
-            "codecs": [],
-            "headerExtensions": []
-        })),
+    candidate: TransportIceCandidate,
+) -> SessionTransportBootstrap {
+    SessionTransportBootstrap {
+        router_capabilities: empty_router_capabilities(),
         download_transport: sample_transport_bootstrap("stc-rtc", candidate.clone()),
         upload_transport: sample_transport_bootstrap("cts-rtc", candidate),
-        publish_options_by_media_kind: PublishOptionsByMediaKind {
-            audio: PublishOptions(json!({ "stopTracks": false })),
-            video: PublishOptions(json!({ "stopTracks": false })),
+        publish_options_by_media_kind: TransportPublishOptionsByMediaKind {
+            audio: TransportPublishOptions {
+                stop_tracks: false,
+                zero_rtp_on_pause: false,
+            },
+            video: TransportPublishOptions {
+                stop_tracks: false,
+                zero_rtp_on_pause: false,
+            },
         },
     }
 }
@@ -108,33 +113,42 @@ pub(super) fn sample_sha256_dtls_parameters_with_value(role: &str, value: &str) 
     }
 }
 
-pub(super) fn sample_candidate(protocol: &str, port: u64) -> IceCandidate {
-    IceCandidate {
+pub(super) fn sample_candidate(protocol: TransportIceProtocol, port: u16) -> TransportIceCandidate {
+    TransportIceCandidate {
         foundation: String::from("foundation"),
         priority: 2_113_937_151,
-        ip: String::from("203.0.113.10"),
-        protocol: protocol.to_owned(),
+        ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+        protocol,
         port,
-        candidate_type: String::from("host"),
+        candidate_type: TransportIceCandidateType::Host,
     }
 }
 
-pub(super) fn sample_transport_bootstrap(id: &str, candidate: IceCandidate) -> TransportBootstrap {
-    TransportBootstrap {
+pub(super) fn sample_transport_bootstrap(
+    id: &str,
+    candidate: TransportIceCandidate,
+) -> TransportEndpointBootstrap {
+    TransportEndpointBootstrap {
         id: id.to_owned(),
-        ice_parameters: IceParameters(json!({
-            "usernameFragment": "ufrag",
-            "password": "pwd",
-            "iceLite": true
-        })),
+        ice_parameters: TransportIceParameters {
+            username_fragment: String::from("ufrag"),
+            password: String::from("pwd"),
+            ice_lite: true,
+        },
         ice_candidates: vec![candidate],
-        dtls_parameters: sample_sha256_dtls_parameters("auto"),
-        sctp_parameters: SctpParameters(json!({
-            "port": 5000,
-            "OS": 1024,
-            "MIS": 1024,
-            "maxMessageSize": 262_144
-        })),
+        dtls_parameters: TransportDtlsParameters {
+            role: TransportDtlsRole::Auto,
+            fingerprints: vec![TransportDtlsFingerprint {
+                algorithm: TransportDtlsFingerprintAlgorithm::Sha256,
+                value: String::from("AA:BB:CC"),
+            }],
+        },
+        sctp_parameters: TransportSctpParameters {
+            port: 5000,
+            outgoing_streams: 1024,
+            incoming_streams: 1024,
+            max_message_size: 262_144,
+        },
     }
 }
 

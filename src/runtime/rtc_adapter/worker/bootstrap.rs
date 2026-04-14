@@ -11,9 +11,8 @@ use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 use crate::runtime::{
     transport_adapter::{TransportAdapterError, TransportConnectDirection, TransportSessionKey},
-    transport_bootstrap,
+    transport_bootstrap::SessionTransportBootstrap,
 };
-use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
 
 use super::super::{
     bootstrap, dtls,
@@ -49,7 +48,7 @@ pub(super) fn respond_build_bootstrap(
     config: WorkerBootstrapConfig,
     session_key: &TransportSessionKey,
     router_capabilities: &RtpCapabilities,
-    response: oneshot::Sender<Result<CurrentTransportBootstrapPayload, TransportAdapterError>>,
+    response: oneshot::Sender<Result<SessionTransportBootstrap, TransportAdapterError>>,
 ) {
     let _ = response.send(worker_build_bootstrap_payload(
         state,
@@ -92,7 +91,7 @@ fn worker_build_bootstrap_payload(
     config: WorkerBootstrapConfig,
     session_key: &TransportSessionKey,
     router_capabilities: &RtpCapabilities,
-) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+) -> Result<SessionTransportBootstrap, TransportAdapterError> {
     let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
         shared_socket.candidate_addr
     } else {
@@ -115,7 +114,7 @@ fn worker_build_bootstrap_payload(
     let Some(session_state) = state.sessions.get(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    Ok(transport_bootstrap::transport_bootstrap_payload(
+    Ok(SessionTransportBootstrap::new(
         router_capabilities,
         bootstrap::build_transport_bootstrap(
             session_state.transport_ids.download.as_str(),

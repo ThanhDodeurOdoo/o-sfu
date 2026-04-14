@@ -9,8 +9,8 @@ use crate::runtime::transport_adapter::{
     SessionOffer, TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
     TransportMediaId, TransportSessionKey,
 };
+use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use crate::signaling::{
-    current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
     webrtc::{DtlsParameters, MediaKind},
 };
@@ -190,7 +190,7 @@ impl StubWebRtcAdapter {
         &self,
         _session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::BootstrapRequested);
         Ok(bootstrap::transport_bootstrap_payload(router_capabilities))
     }

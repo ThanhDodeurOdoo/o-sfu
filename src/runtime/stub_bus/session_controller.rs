@@ -86,7 +86,9 @@ impl SessionController {
         let request_id = self
             .send_request(
                 writer,
-                CurrentServerRequest::BootstrapTransports(bootstrap_payload),
+                CurrentServerRequest::BootstrapTransports(
+                    super::bootstrap::legacy_transport_bootstrap_payload(&bootstrap_payload),
+                ),
             )
             .await
             .map_err(|_error| ())?;

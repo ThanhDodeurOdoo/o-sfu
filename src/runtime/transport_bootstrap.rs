@@ -1,113 +1,171 @@
-use o_sfu_router::{MediaCapabilities, MediaCodecCapability, MediaKind};
-use serde_json::{Map, Value, json};
+use std::net::IpAddr;
+
+use o_sfu_router::MediaCapabilities;
 
 use crate::rfc::webrtc;
-use crate::signaling::{
-    current_protocol::CurrentTransportBootstrapPayload,
-    webrtc::{
-        PublishOptions, PublishOptionsByMediaKind, RtpCapabilities, SctpParameters,
-        TransportBootstrap, serialize_codec_settings, serialize_rtcp_feedback,
-    },
-};
 
-pub(super) fn transport_bootstrap_payload(
-    router_capabilities: &MediaCapabilities,
-    download_transport: TransportBootstrap,
-    upload_transport: TransportBootstrap,
-) -> CurrentTransportBootstrapPayload {
-    CurrentTransportBootstrapPayload {
-        router_capabilities: to_wire_rtp_capabilities(router_capabilities),
-        download_transport,
-        upload_transport,
-        publish_options_by_media_kind: default_publish_options_by_media_kind(),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionTransportBootstrap {
+    pub(crate) router_capabilities: MediaCapabilities,
+    pub(crate) download_transport: TransportEndpointBootstrap,
+    pub(crate) upload_transport: TransportEndpointBootstrap,
+    pub(crate) publish_options_by_media_kind: TransportPublishOptionsByMediaKind,
+}
+
+impl SessionTransportBootstrap {
+    #[must_use]
+    pub(crate) fn new(
+        router_capabilities: &MediaCapabilities,
+        download_transport: TransportEndpointBootstrap,
+        upload_transport: TransportEndpointBootstrap,
+    ) -> Self {
+        Self {
+            router_capabilities: router_capabilities.clone(),
+            download_transport,
+            upload_transport,
+            publish_options_by_media_kind: default_publish_options_by_media_kind(),
+        }
     }
 }
 
-pub(super) fn default_publish_options_by_media_kind() -> PublishOptionsByMediaKind {
-    PublishOptionsByMediaKind {
-        audio: PublishOptions(json!({
-            "stopTracks": false
-        })),
-        video: PublishOptions(json!({
-            "stopTracks": false,
-            "zeroRtpOnPause": true
-        })),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportEndpointBootstrap {
+    pub(crate) id: String,
+    pub(crate) ice_parameters: TransportIceParameters,
+    pub(crate) ice_candidates: Vec<TransportIceCandidate>,
+    pub(crate) dtls_parameters: TransportDtlsParameters,
+    pub(crate) sctp_parameters: TransportSctpParameters,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportIceParameters {
+    pub(crate) username_fragment: String,
+    pub(crate) password: String,
+    pub(crate) ice_lite: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportIceCandidate {
+    pub(crate) foundation: String,
+    pub(crate) priority: u64,
+    pub(crate) ip: IpAddr,
+    pub(crate) protocol: TransportIceProtocol,
+    pub(crate) port: u16,
+    pub(crate) candidate_type: TransportIceCandidateType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportIceProtocol {
+    Udp,
+    #[cfg(test)]
+    Tcp,
+}
+
+impl TransportIceProtocol {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => webrtc::IceTransport::Udp.as_str(),
+            #[cfg(test)]
+            Self::Tcp => "tcp",
+        }
     }
 }
 
-pub(super) fn default_sctp_parameters() -> SctpParameters {
-    SctpParameters(json!({
-        "port": webrtc::data_channel::SCTP_PORT,
-        "OS": webrtc::data_channel::OUTGOING_STREAMS,
-        "MIS": webrtc::data_channel::INCOMING_STREAMS,
-        "maxMessageSize": webrtc::data_channel::MAX_MESSAGE_SIZE
-    }))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportIceCandidateType {
+    Host,
 }
 
-pub(super) fn to_wire_rtp_capabilities(router_capabilities: &MediaCapabilities) -> RtpCapabilities {
-    let codecs = router_capabilities
-        .codecs()
-        .map(serialize_codec_capability)
-        .collect::<Vec<_>>();
-    let header_extensions = router_capabilities
-        .header_extensions()
-        .flat_map(serialize_header_extensions)
-        .collect::<Vec<_>>();
-    RtpCapabilities(json!({
-        "codecs": codecs,
-        "headerExtensions": header_extensions,
-    }))
-}
-
-fn serialize_codec_capability(codec: &MediaCodecCapability) -> Value {
-    let kind = media_kind_label(codec.media_kind());
-    let mut codec_json = Map::new();
-    codec_json.insert("kind".to_owned(), json!(kind));
-    codec_json.insert(
-        "mimeType".to_owned(),
-        json!(format!("{kind}/{}", codec.codec().as_str())),
-    );
-    codec_json.insert("clockRate".to_owned(), json!(codec.clock_rate()));
-    if let Some(payload_type) = codec.payload_type() {
-        codec_json.insert("preferredPayloadType".to_owned(), json!(payload_type));
+impl TransportIceCandidateType {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => webrtc::IceCandidateType::Host.as_str(),
+        }
     }
-    if let Some(channels) = codec.channels() {
-        codec_json.insert("channels".to_owned(), json!(channels));
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportDtlsParameters {
+    pub(crate) role: TransportDtlsRole,
+    pub(crate) fingerprints: Vec<TransportDtlsFingerprint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportDtlsRole {
+    Auto,
+}
+
+impl TransportDtlsRole {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => webrtc::DtlsRole::Auto.as_str(),
+        }
     }
-    codec_json.insert(
-        "parameters".to_owned(),
-        serialize_codec_settings(codec.settings()),
-    );
-    codec_json.insert(
-        "rtcpFeedback".to_owned(),
-        Value::Array(codec.rtcp_feedback().map(serialize_rtcp_feedback).collect()),
-    );
-    Value::Object(codec_json)
 }
 
-fn serialize_header_extensions(header_extension: &o_sfu_router::RtpHeaderExtension) -> [Value; 2] {
-    [
-        serialize_header_extension(MediaKind::Audio, header_extension),
-        serialize_header_extension(MediaKind::Video, header_extension),
-    ]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportDtlsFingerprint {
+    pub(crate) algorithm: TransportDtlsFingerprintAlgorithm,
+    pub(crate) value: String,
 }
 
-fn serialize_header_extension(
-    media_kind: MediaKind,
-    header_extension: &o_sfu_router::RtpHeaderExtension,
-) -> Value {
-    json!({
-        "kind": media_kind_label(media_kind),
-        "uri": header_extension.uri_kind().as_str(),
-        "preferredId": header_extension.id().value(),
-        "preferredEncrypt": header_extension.encrypt(),
-        "direction": webrtc::sdp::direction::SEND_RECV,
-    })
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportDtlsFingerprintAlgorithm {
+    Sha256,
 }
 
-fn media_kind_label(media_kind: MediaKind) -> &'static str {
-    match media_kind {
-        MediaKind::Audio => webrtc::media_kind::AUDIO,
-        MediaKind::Video => webrtc::media_kind::VIDEO,
+impl TransportDtlsFingerprintAlgorithm {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sha256 => webrtc::DtlsFingerprintAlgorithm::Sha256.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportSctpParameters {
+    pub(crate) port: u16,
+    pub(crate) outgoing_streams: u16,
+    pub(crate) incoming_streams: u16,
+    pub(crate) max_message_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportPublishOptionsByMediaKind {
+    pub(crate) audio: TransportPublishOptions,
+    pub(crate) video: TransportPublishOptions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TransportPublishOptions {
+    pub(crate) stop_tracks: bool,
+    pub(crate) zero_rtp_on_pause: bool,
+}
+
+#[must_use]
+pub(crate) fn default_publish_options_by_media_kind() -> TransportPublishOptionsByMediaKind {
+    TransportPublishOptionsByMediaKind {
+        audio: TransportPublishOptions {
+            stop_tracks: false,
+            zero_rtp_on_pause: false,
+        },
+        video: TransportPublishOptions {
+            stop_tracks: false,
+            zero_rtp_on_pause: true,
+        },
+    }
+}
+
+#[must_use]
+pub(crate) fn default_sctp_parameters() -> TransportSctpParameters {
+    TransportSctpParameters {
+        port: webrtc::data_channel::SCTP_PORT,
+        outgoing_streams: webrtc::data_channel::OUTGOING_STREAMS,
+        incoming_streams: webrtc::data_channel::INCOMING_STREAMS,
+        max_message_size: u64::from(webrtc::data_channel::MAX_MESSAGE_SIZE),
     }
 }

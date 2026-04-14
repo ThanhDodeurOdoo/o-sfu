@@ -21,7 +21,7 @@ use crate::runtime::transport_adapter::{
     RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
     TransportConnectDirection, TransportConnectRequest, TransportMediaId, TransportSessionKey,
 };
-use crate::signaling::current_protocol::CurrentTransportBootstrapPayload;
+use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind;
 #[cfg(test)]
@@ -76,7 +76,7 @@ impl RtcTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
         let payload = self
             .request_worker(|response| RtcWorkerCommand::BuildBootstrap {
                 session_key: session_key.clone(),

@@ -5,7 +5,6 @@ use std::{
     time::Instant,
 };
 
-use serde_json::json;
 use str0m::config::Fingerprint;
 use str0m::{Candidate, IceCreds, Rtc};
 use tokio::net::UdpSocket;
@@ -16,12 +15,14 @@ use super::state::{
 use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 use crate::rfc::webrtc;
-use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
-use crate::signaling::webrtc::{
-    DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, TransportBootstrap,
+use crate::runtime::{
+    transport_adapter::{TransportAdapterError, TransportSessionKey},
+    transport_bootstrap::{
+        self, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm, TransportDtlsParameters,
+        TransportDtlsRole, TransportEndpointBootstrap, TransportIceCandidate,
+        TransportIceCandidateType, TransportIceParameters, TransportIceProtocol,
+    },
 };
-
-use crate::runtime::transport_bootstrap;
 
 const HOST_CANDIDATE_FOUNDATION: &str = "rtc-host";
 const ICE_LOCAL_PREFERENCE_MAX: u16 = u16::MAX;
@@ -124,45 +125,45 @@ pub(super) fn build_transport_bootstrap(
     candidate_addr: SocketAddr,
     local_ice_credentials: &IceCreds,
     local_dtls_fingerprint: &Fingerprint,
-) -> TransportBootstrap {
-    TransportBootstrap {
+) -> TransportEndpointBootstrap {
+    TransportEndpointBootstrap {
         id: id.to_owned(),
         ice_parameters: build_ice_parameters(local_ice_credentials),
         ice_candidates: vec![build_host_candidate(candidate_addr)],
-        dtls_parameters: DtlsParameters {
-            role: webrtc::DtlsRole::Auto.as_str().to_owned(),
+        dtls_parameters: TransportDtlsParameters {
+            role: TransportDtlsRole::Auto,
             fingerprints: vec![wire_dtls_fingerprint(local_dtls_fingerprint)],
         },
         sctp_parameters: transport_bootstrap::default_sctp_parameters(),
     }
 }
 
-fn build_ice_parameters(local_ice_credentials: &IceCreds) -> IceParameters {
-    IceParameters(json!({
-        "usernameFragment": local_ice_credentials.ufrag,
-        "password": local_ice_credentials.pass,
-        "iceLite": true
-    }))
-}
-
-fn build_host_candidate(candidate_addr: SocketAddr) -> IceCandidate {
-    IceCandidate {
-        foundation: String::from(HOST_CANDIDATE_FOUNDATION),
-        priority: host_candidate_priority(),
-        ip: candidate_addr.ip().to_string(),
-        protocol: webrtc::IceTransport::Udp.as_str().to_owned(),
-        port: u64::from(candidate_addr.port()),
-        candidate_type: webrtc::IceCandidateType::Host.as_str().to_owned(),
+fn build_ice_parameters(local_ice_credentials: &IceCreds) -> TransportIceParameters {
+    TransportIceParameters {
+        username_fragment: local_ice_credentials.ufrag.clone(),
+        password: local_ice_credentials.pass.clone(),
+        ice_lite: true,
     }
 }
 
-fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> DtlsFingerprint {
+fn build_host_candidate(candidate_addr: SocketAddr) -> TransportIceCandidate {
+    TransportIceCandidate {
+        foundation: String::from(HOST_CANDIDATE_FOUNDATION),
+        priority: host_candidate_priority(),
+        ip: candidate_addr.ip(),
+        protocol: TransportIceProtocol::Udp,
+        port: candidate_addr.port(),
+        candidate_type: TransportIceCandidateType::Host,
+    }
+}
+
+fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> TransportDtlsFingerprint {
     let rendered = fingerprint.to_string();
-    let (algorithm, value) = rendered
+    let (_algorithm, value) = rendered
         .split_once(' ')
         .unwrap_or((webrtc::DtlsFingerprintAlgorithm::Sha256.as_str(), ""));
-    DtlsFingerprint {
-        algorithm: algorithm.to_owned(),
+    TransportDtlsFingerprint {
+        algorithm: TransportDtlsFingerprintAlgorithm::Sha256,
         value: value.to_owned(),
     }
 }

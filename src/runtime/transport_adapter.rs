@@ -8,10 +8,10 @@ use super::{
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::recording::MediaTap;
+use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 
 use crate::config::RtcPortRange;
 use crate::signaling::{
-    current_protocol::CurrentTransportBootstrapPayload,
     shared::SessionId,
     webrtc::{DtlsParameters, IceParameters, MediaKind as SignalingMediaKind},
 };
@@ -504,7 +504,7 @@ impl RuntimeTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<CurrentTransportBootstrapPayload, TransportAdapterError> {
+    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter

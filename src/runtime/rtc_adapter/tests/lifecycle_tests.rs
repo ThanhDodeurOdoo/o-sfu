@@ -121,14 +121,8 @@ async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
     assert!(payload.download_transport.id.starts_with("stc-rtc-"));
     assert!(payload.upload_transport.id.starts_with("cts-rtc-"));
     assert_ne!(payload.download_transport.id, payload.upload_transport.id);
-    assert_eq!(
-        payload.download_transport.ice_parameters.0.get("iceLite"),
-        Some(&json!(true))
-    );
-    assert_eq!(
-        payload.upload_transport.ice_parameters.0.get("iceLite"),
-        Some(&json!(true))
-    );
+    assert!(payload.download_transport.ice_parameters.ice_lite);
+    assert!(payload.upload_transport.ice_parameters.ice_lite);
     let download_candidate = payload.download_transport.ice_candidates.first();
     let upload_candidate = payload.upload_transport.ice_candidates.first();
     assert!(download_candidate.is_some());
@@ -137,8 +131,8 @@ async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
     else {
         return;
     };
-    assert_eq!(download_candidate.ip, "127.0.0.1");
-    assert_eq!(upload_candidate.ip, "127.0.0.1");
+    assert_eq!(download_candidate.ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert_eq!(upload_candidate.ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(download_candidate.port, upload_candidate.port);
     assert!((40_000..=49_999).contains(&download_candidate.port));
     let fingerprint = payload
@@ -150,7 +144,10 @@ async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
     let Some(fingerprint) = fingerprint else {
         return;
     };
-    assert_eq!(fingerprint.algorithm, "sha-256");
+    assert_eq!(
+        fingerprint.algorithm,
+        TransportDtlsFingerprintAlgorithm::Sha256
+    );
     assert_ne!(fingerprint.value, "AA:BB:CC");
     assert!(fingerprint.value.contains(':'));
 }
