@@ -5,10 +5,7 @@ use axum::extract::ws::Message;
 use crate::runtime::{
     channel::{Channel, SessionOutbound},
     metrics::RuntimeMetrics,
-    stub_bus::{
-        StubBusOutcome, StubBusSession, legacy_server_message, legacy_server_request,
-        send_server_message_batch, send_server_request_batch,
-    },
+    stub_bus::{StubBusOutcome, StubBusSession},
     transport_adapter::RuntimeTransportAdapter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
@@ -126,20 +123,10 @@ impl SessionProtocol {
         outbound: SessionOutbound,
     ) -> Result<usize, WebSocketCloseCode> {
         match (self, outbound) {
-            (Self::LegacyStubBus(_), SessionOutbound::Message(message)) => {
-                let Some(legacy_message) = legacy_server_message(message) else {
-                    return Ok(0);
-                };
-                send_server_message_batch(writer, &legacy_message).await?;
-                Ok(1)
+            (Self::LegacyStubBus(session), outbound) => {
+                session.send_outbound(writer, outbound).await
             }
-            (Self::LegacyStubBus(_), SessionOutbound::Request(request)) => {
-                let legacy_request = legacy_server_request(*request);
-                send_server_request_batch(writer, &legacy_request).await?;
-                Ok(1)
-            }
-            (Self::LegacyStubBus(_), SessionOutbound::TrackBindingUpdate(_)) => Ok(0),
-            (Self::LegacyStubBus(_) | Self::Native(_), SessionOutbound::Close(code)) => Err(code),
+            (Self::Native(_), SessionOutbound::Close(code)) => Err(code),
             (Self::Native(session), SessionOutbound::Message(message)) => {
                 session.send_outbound_message(writer, message).await
             }

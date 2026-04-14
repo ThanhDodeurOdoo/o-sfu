@@ -4,8 +4,10 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use super::{
-    STUB_SERVER_BUS_ID, codec, empty_object, signaling_edge::DomainCommand,
+    STUB_SERVER_BUS_ID, codec, empty_object,
+    signaling_edge::{DomainCommand, LegacyClientMessage},
     transport_bootstrap_edge,
+    wire::LegacyRequestId,
 };
 use crate::runtime::{
     channel::Channel,
@@ -15,8 +17,6 @@ use crate::runtime::{
     websocket_server::WsWriter,
 };
 use crate::signaling::{
-    current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-    current_protocol::{CurrentClientMessage, CurrentPublishTrackResponse},
     ortc_mapper,
     protocol::{RecordingOptions, WebSocketCloseCode},
     shared::SessionId,
@@ -34,8 +34,8 @@ pub(super) struct SessionController {
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
     next_request_counter: u64,
-    pending_transport_bootstrap_request_id: Option<CurrentBusRequestId>,
-    pending_ping_request_id: Option<CurrentBusRequestId>,
+    pending_transport_bootstrap_request_id: Option<LegacyRequestId>,
+    pending_ping_request_id: Option<LegacyRequestId>,
 }
 
 impl SessionController {
@@ -172,7 +172,7 @@ impl SessionController {
 
     async fn handle_client_response_frame(
         &mut self,
-        response_to: CurrentBusRequestId,
+        response_to: LegacyRequestId,
         message: Value,
     ) -> Result<(), super::StubBusOutcome> {
         if !self.handle_response(response_to, message).await {
@@ -185,7 +185,7 @@ impl SessionController {
     async fn handle_publish_track_request_frame(
         &self,
         writer: &mut WsWriter,
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         request: super::publish_request_edge::LegacyPublishTrackRequest,
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_request();
@@ -202,7 +202,7 @@ impl SessionController {
     async fn handle_recording_control_request_frame(
         &self,
         writer: &mut WsWriter,
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         request: super::recording_request_edge::LegacyRecordingControlRequest,
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_request();
@@ -219,7 +219,7 @@ impl SessionController {
     async fn handle_legacy_transport_connect_frame(
         &self,
         writer: &mut WsWriter,
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         request: super::transport_connect_edge::LegacyTransportConnectRequest,
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_request();
@@ -237,7 +237,7 @@ impl SessionController {
     async fn handle_invalid_client_request_frame(
         &self,
         writer: &mut WsWriter,
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_request_decode_failure();
         debug!("failed to decode client bus request, returning empty object");
@@ -248,7 +248,7 @@ impl SessionController {
 
     async fn handle_client_message_frame(
         &self,
-        message: CurrentClientMessage,
+        message: LegacyClientMessage,
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_message();
         debug!("dispatching client bus message");
@@ -261,7 +261,7 @@ impl SessionController {
         debug!("failed to decode client bus message");
     }
 
-    async fn handle_response(&mut self, response_to: CurrentBusRequestId, message: Value) -> bool {
+    async fn handle_response(&mut self, response_to: LegacyRequestId, message: Value) -> bool {
         if self
             .handle_transport_bootstrap_response(&response_to, message.clone())
             .await
@@ -273,7 +273,7 @@ impl SessionController {
 
     async fn handle_transport_bootstrap_response(
         &mut self,
-        response_to: &CurrentBusRequestId,
+        response_to: &LegacyRequestId,
         message: Value,
     ) -> bool {
         let is_transport_bootstrap_response = self
@@ -312,7 +312,7 @@ impl SessionController {
         true
     }
 
-    fn handle_ping_response(&mut self, response_to: &CurrentBusRequestId) -> bool {
+    fn handle_ping_response(&mut self, response_to: &LegacyRequestId) -> bool {
         let is_ping_response = self
             .pending_ping_request_id
             .as_ref()
@@ -328,12 +328,8 @@ impl SessionController {
         true
     }
 
-    fn next_request_id(&mut self) -> CurrentBusRequestId {
-        let request_id = CurrentBusRequestId::new(
-            CurrentBusOrigin::Server,
-            STUB_SERVER_BUS_ID,
-            self.next_request_counter,
-        );
+    fn next_request_id(&mut self) -> LegacyRequestId {
+        let request_id = LegacyRequestId::server(STUB_SERVER_BUS_ID, self.next_request_counter);
         self.next_request_counter += 1;
         request_id
     }
@@ -342,14 +338,9 @@ impl SessionController {
         &mut self,
         writer: &mut WsWriter,
         message: Value,
-    ) -> Result<CurrentBusRequestId, WebSocketCloseCode> {
+    ) -> Result<LegacyRequestId, WebSocketCloseCode> {
         let request_id = self.next_request_id();
-        let batch = vec![CurrentBusEnvelope {
-            message,
-            need_response: Some(request_id.clone()),
-            response_to: None,
-        }];
-        let result = codec::send_batch(writer, batch).await;
+        let result = codec::send_request_value(writer, request_id.clone(), message).await;
         if result.is_ok() {
             self.metrics.record_ws_bus_batch_sent(1);
             Ok(request_id)
@@ -362,18 +353,10 @@ impl SessionController {
     async fn send_response(
         &self,
         writer: &mut WsWriter,
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         response: Value,
     ) -> Result<(), WebSocketCloseCode> {
-        let result = codec::send_batch(
-            writer,
-            vec![CurrentBusEnvelope {
-                message: response,
-                need_response: None,
-                response_to: Some(request_id),
-            }],
-        )
-        .await;
+        let result = codec::send_response_value(writer, request_id, response).await;
         if result.is_ok() {
             self.metrics.record_ws_bus_batch_sent(1);
         } else {
@@ -458,55 +441,52 @@ impl SessionController {
             return empty_object();
         };
         debug!(producer_id, "handled publish request");
-        serde_json::to_value(CurrentPublishTrackResponse { id: producer_id })
-            .unwrap_or_else(|_error| empty_object())
+        json!({ "id": producer_id })
     }
 
     #[allow(
         clippy::cognitive_complexity,
         reason = "message dispatch is a flat compatibility match that keeps the bus controller readable"
     )]
-    async fn execute_message(&self, message: CurrentClientMessage) {
+    async fn execute_message(&self, message: LegacyClientMessage) {
         match message {
-            CurrentClientMessage::Broadcast(payload) => {
+            LegacyClientMessage::Broadcast(payload) => {
                 debug!("relaying broadcast message to channel peers");
                 self.channel.broadcast(&self.session_id, payload).await;
             }
-            CurrentClientMessage::UpdateSessionInfo(payload) => {
+            LegacyClientMessage::UpdateSessionInfo { info, need_refresh } => {
                 debug!("relaying session info update to channel peers");
                 self.channel
-                    .update_session_info(
-                        &self.session_id,
-                        payload.info,
-                        payload.need_refresh.unwrap_or(false),
-                    )
+                    .update_session_info(&self.session_id, info, need_refresh)
                     .await;
             }
-            CurrentClientMessage::Publish(payload) => {
+            LegacyClientMessage::Publish {
+                stream_type,
+                active,
+            } => {
                 debug!(
-                    stream_type = ?payload.stream_type,
-                    active = payload.active,
-                    "relaying compatibility publish state change to channel"
+                    ?stream_type,
+                    active, "relaying compatibility publish state change to channel"
                 );
                 self.channel
                     .set_publication_active(
                         &self.session_id,
-                        payload.stream_type,
-                        payload.active,
+                        stream_type,
+                        active,
                         &self.transport_adapter,
                     )
                     .await;
             }
-            CurrentClientMessage::Subscribe(payload) => {
+            LegacyClientMessage::Subscribe { session_id, states } => {
                 debug!(
-                    target_session = ?payload.session_id,
+                    target_session = ?session_id,
                     "relaying compatibility subscription change to channel"
                 );
                 self.channel
                     .update_subscription(
                         &self.session_id,
-                        &payload.session_id,
-                        &payload.states,
+                        &session_id,
+                        &states,
                         &self.transport_adapter,
                     )
                     .await;

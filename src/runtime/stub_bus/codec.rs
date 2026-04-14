@@ -5,13 +5,13 @@ use futures_util::SinkExt;
 use serde_json::{Value, json};
 use tracing::trace;
 
+use super::wire::{LegacyBatch, LegacyEnvelope, LegacyRequestId};
 use crate::runtime::{
     channel::{ChannelEventMessage, ChannelEventRequest},
     websocket_server::WsWriter,
 };
 use crate::signaling::{
     bundle_api::bundle_session_info_key,
-    current_bus::{CurrentBusBatch, CurrentBusEnvelope},
     ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo},
@@ -25,7 +25,7 @@ pub(crate) async fn send_server_message_batch(
     trace!(server_message = ?message, "encoding server message batch");
     send_batch(
         writer,
-        vec![CurrentBusEnvelope {
+        vec![LegacyEnvelope {
             message: message.clone(),
             need_response: None,
             response_to: None,
@@ -41,9 +41,41 @@ pub(crate) async fn send_server_request_batch(
     trace!(server_request = ?request, "encoding server request batch");
     send_batch(
         writer,
-        vec![CurrentBusEnvelope {
+        vec![LegacyEnvelope {
             message: request.clone(),
             need_response: None,
+            response_to: None,
+        }],
+    )
+    .await
+}
+
+pub(super) async fn send_response_value(
+    writer: &mut WsWriter,
+    request_id: LegacyRequestId,
+    response: Value,
+) -> Result<(), WebSocketCloseCode> {
+    send_batch(
+        writer,
+        vec![LegacyEnvelope {
+            message: response,
+            need_response: None,
+            response_to: Some(request_id),
+        }],
+    )
+    .await
+}
+
+pub(super) async fn send_request_value(
+    writer: &mut WsWriter,
+    request_id: LegacyRequestId,
+    message: Value,
+) -> Result<(), WebSocketCloseCode> {
+    send_batch(
+        writer,
+        vec![LegacyEnvelope {
+            message,
+            need_response: Some(request_id),
             response_to: None,
         }],
     )
@@ -105,23 +137,9 @@ fn legacy_session_info_snapshot(
         .collect()
 }
 
-pub(super) fn parse_batch(message: Message) -> Result<Option<CurrentBusBatch>, WebSocketCloseCode> {
-    trace!("parsing websocket bus frame");
-    let payload = match message {
-        Message::Text(payload) => payload.to_string(),
-        Message::Binary(payload) => String::from_utf8(payload.to_vec())
-            .map_err(|_error| WebSocketCloseCode::ProtocolError)?,
-        Message::Close(_) => return Ok(None),
-        Message::Ping(_) | Message::Pong(_) => return Ok(Some(Vec::new())),
-    };
-    serde_json::from_str::<CurrentBusBatch>(&payload)
-        .map(Some)
-        .map_err(|_error| WebSocketCloseCode::ProtocolError)
-}
-
 pub(super) async fn send_batch(
     writer: &mut WsWriter,
-    batch: CurrentBusBatch,
+    batch: LegacyBatch,
 ) -> Result<(), WebSocketCloseCode> {
     trace!(batch_len = batch.len(), "sending websocket bus batch");
     let payload = serde_json::to_string(&batch).map_err(|_error| WebSocketCloseCode::Error)?;

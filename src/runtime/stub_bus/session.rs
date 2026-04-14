@@ -4,9 +4,11 @@ use axum::extract::ws::Message;
 use serde_json::Value;
 use tracing::trace;
 
-use super::{codec, session_controller::SessionController, signaling_edge::decode_envelope};
+use super::{codec, session_controller::SessionController, signaling_edge::decode_frame};
 use crate::runtime::{
-    channel::Channel, metrics::RuntimeMetrics, transport_adapter::RuntimeTransportAdapter,
+    channel::{Channel, SessionOutbound},
+    metrics::RuntimeMetrics,
+    transport_adapter::RuntimeTransportAdapter,
     websocket_server::WsWriter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
@@ -72,10 +74,10 @@ impl StubBusSession {
         writer: &mut WsWriter,
         message: Message,
     ) -> StubBusOutcome {
-        let batch = match codec::parse_batch(message) {
-            Ok(Some(batch)) => {
-                self.controller.record_batch_received(batch.len());
-                batch
+        let commands = match decode_frame(message) {
+            Ok(Some(commands)) => {
+                self.controller.record_batch_received(commands.len());
+                commands
             }
             Ok(None) => return StubBusOutcome::Break,
             Err(close_code) => {
@@ -83,15 +85,37 @@ impl StubBusSession {
                 return StubBusOutcome::Close(close_code);
             }
         };
-        trace!(batch_len = batch.len(), "dispatching client bus batch");
-        for envelope in batch {
-            let command = decode_envelope(envelope);
+        trace!(batch_len = commands.len(), "dispatching client bus batch");
+        for command in commands {
             match self.controller.handle_command(writer, command).await {
                 Ok(()) => {}
                 Err(outcome) => return outcome,
             }
         }
         StubBusOutcome::Continue
+    }
+
+    pub(crate) async fn send_outbound(
+        &self,
+        writer: &mut WsWriter,
+        outbound: SessionOutbound,
+    ) -> Result<usize, WebSocketCloseCode> {
+        match outbound {
+            SessionOutbound::Message(message) => {
+                let Some(legacy_message) = codec::legacy_server_message(message) else {
+                    return Ok(0);
+                };
+                codec::send_server_message_batch(writer, &legacy_message).await?;
+                Ok(1)
+            }
+            SessionOutbound::Request(request) => {
+                let legacy_request = codec::legacy_server_request(*request);
+                codec::send_server_request_batch(writer, &legacy_request).await?;
+                Ok(1)
+            }
+            SessionOutbound::TrackBindingUpdate(_) => Ok(0),
+            SessionOutbound::Close(code) => Err(code),
+        }
     }
 }
 

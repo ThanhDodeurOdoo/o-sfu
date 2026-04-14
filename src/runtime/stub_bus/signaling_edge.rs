@@ -1,43 +1,139 @@
+use axum::extract::ws::Message;
+use serde::Deserialize;
 use serde_json::Value;
-
-use crate::signaling::{
-    current_bus::{CurrentBusEnvelope, CurrentBusRequestId},
-    current_protocol::CurrentClientMessage,
-};
+use tracing::trace;
 
 use super::{
     publish_request_edge::LegacyPublishTrackRequest,
     recording_request_edge::LegacyRecordingControlRequest,
     transport_connect_edge::LegacyTransportConnectRequest,
+    wire::{LegacyBatch, LegacyEnvelope, LegacyRequestId},
 };
+use crate::signaling::{
+    protocol::WebSocketCloseCode,
+    shared::{DownloadStates, JsonPayload, SessionId, SessionInfo, StreamType},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LegacyClientMessage {
+    Broadcast(JsonPayload),
+    UpdateSessionInfo {
+        info: SessionInfo,
+        need_refresh: bool,
+    },
+    Publish {
+        stream_type: StreamType,
+        active: bool,
+    },
+    Subscribe {
+        session_id: SessionId,
+        states: DownloadStates,
+    },
+}
 
 #[derive(Debug)]
 pub(super) enum DomainCommand {
     Response {
-        response_to: CurrentBusRequestId,
+        response_to: LegacyRequestId,
         payload: Value,
     },
     LegacyTransportConnect {
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         request: LegacyTransportConnectRequest,
     },
     PublishTrack {
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         request: LegacyPublishTrackRequest,
     },
     RecordingControl {
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
         request: LegacyRecordingControlRequest,
     },
     InvalidRequest {
-        request_id: CurrentBusRequestId,
+        request_id: LegacyRequestId,
     },
-    Message(CurrentClientMessage),
+    Message(LegacyClientMessage),
     InvalidMessage,
 }
 
-pub(super) fn decode_envelope(envelope: CurrentBusEnvelope) -> DomainCommand {
-    let CurrentBusEnvelope {
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct LegacyDownloadStateChangePayload {
+    session_id: SessionId,
+    states: DownloadStates,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct LegacySessionInfoUpdatePayload {
+    info: SessionInfo,
+    #[serde(rename = "needRefresh", skip_serializing_if = "Option::is_none")]
+    need_refresh: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct LegacyUploadStateChangePayload {
+    #[serde(rename = "type")]
+    stream_type: StreamType,
+    active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "name", content = "payload")]
+enum LegacyClientMessageWire {
+    #[serde(rename = "BROADCAST")]
+    Broadcast(JsonPayload),
+    #[serde(rename = "CONSUMPTION_CHANGE")]
+    Subscribe(LegacyDownloadStateChangePayload),
+    #[serde(rename = "C_INFO_CHANGE")]
+    UpdateSessionInfo(LegacySessionInfoUpdatePayload),
+    #[serde(rename = "PRODUCTION_CHANGE")]
+    Publish(LegacyUploadStateChangePayload),
+}
+
+impl From<LegacyClientMessageWire> for LegacyClientMessage {
+    fn from(value: LegacyClientMessageWire) -> Self {
+        match value {
+            LegacyClientMessageWire::Broadcast(payload) => Self::Broadcast(payload),
+            LegacyClientMessageWire::Subscribe(payload) => Self::Subscribe {
+                session_id: payload.session_id,
+                states: payload.states,
+            },
+            LegacyClientMessageWire::UpdateSessionInfo(payload) => Self::UpdateSessionInfo {
+                info: payload.info,
+                need_refresh: payload.need_refresh.unwrap_or(false),
+            },
+            LegacyClientMessageWire::Publish(payload) => Self::Publish {
+                stream_type: payload.stream_type,
+                active: payload.active,
+            },
+        }
+    }
+}
+
+pub(super) fn decode_frame(
+    message: Message,
+) -> Result<Option<Vec<DomainCommand>>, WebSocketCloseCode> {
+    let Some(batch) = parse_batch(message)? else {
+        return Ok(None);
+    };
+    Ok(Some(batch.into_iter().map(decode_envelope).collect()))
+}
+
+fn parse_batch(message: Message) -> Result<Option<LegacyBatch>, WebSocketCloseCode> {
+    trace!("parsing websocket bus frame");
+    let payload = match message {
+        Message::Text(payload) => payload.to_string(),
+        Message::Binary(payload) => String::from_utf8(payload.to_vec())
+            .map_err(|_error| WebSocketCloseCode::ProtocolError)?,
+        Message::Close(_) => return Ok(None),
+        Message::Ping(_) | Message::Pong(_) => return Ok(Some(Vec::new())),
+    };
+    serde_json::from_str::<LegacyBatch>(&payload)
+        .map(Some)
+        .map_err(|_error| WebSocketCloseCode::ProtocolError)
+}
+
+fn decode_envelope(envelope: LegacyEnvelope) -> DomainCommand {
+    let LegacyEnvelope {
         message,
         need_response,
         response_to,
@@ -77,8 +173,8 @@ pub(super) fn decode_envelope(envelope: CurrentBusEnvelope) -> DomainCommand {
             }
             DomainCommand::InvalidRequest { request_id }
         }
-        (None, None) => match serde_json::from_value::<CurrentClientMessage>(message) {
-            Ok(message) => DomainCommand::Message(message),
+        (None, None) => match serde_json::from_value::<LegacyClientMessageWire>(message) {
+            Ok(message) => DomainCommand::Message(message.into()),
             Err(_error) => DomainCommand::InvalidMessage,
         },
     }
@@ -86,82 +182,80 @@ pub(super) fn decode_envelope(envelope: CurrentBusEnvelope) -> DomainCommand {
 
 #[cfg(test)]
 mod tests {
+    use axum::extract::ws::Message;
     use serde_json::json;
 
-    use super::{DomainCommand, decode_envelope};
+    use super::{DomainCommand, LegacyClientMessage, decode_frame};
     use crate::{
-        runtime::transport_adapter::TransportConnectDirection,
-        signaling::{
-            current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-            protocol::RecordingOptions,
-            shared::StreamType,
-            webrtc::MediaKind as SignalingMediaKind,
-        },
+        runtime::{stub_bus::wire::LegacyRequestId, transport_adapter::TransportConnectDirection},
+        signaling::{shared::StreamType, webrtc::MediaKind as SignalingMediaKind},
     };
 
+    fn encode_batch(batch: &serde_json::Value) -> Message {
+        Message::Text(batch.to_string().into())
+    }
+
     #[test]
-    fn connect_request_envelope_decodes_to_semantic_domain_command() {
-        let request_id = CurrentBusRequestId::new(CurrentBusOrigin::Client, 1, 2);
-        let envelope = CurrentBusEnvelope {
-            message: json!({
+    fn connect_request_frame_decodes_to_semantic_domain_command() {
+        let request_id = LegacyRequestId::client(1, 2);
+        let command = decode_frame(encode_batch(&json!([{
+            "message": {
                 "name": "CONNECT_CTS_TRANSPORT",
                 "payload": {
                     "dtlsParameters": {
                         "role": "client",
                         "fingerprints": []
-                    },
-                },
-            }),
-            need_response: Some(request_id.clone()),
-            response_to: None,
-        };
-
-        let command = decode_envelope(envelope);
+                    }
+                }
+            },
+            "needResponse": request_id.as_str(),
+        }])));
 
         assert!(matches!(
             command,
-            DomainCommand::LegacyTransportConnect {
-                request_id: actual_request_id,
-                request,
-            } if actual_request_id == request_id
-                && request.direction() == TransportConnectDirection::Upload
+            Ok(Some(commands))
+                if matches!(
+                    commands.as_slice(),
+                    [DomainCommand::LegacyTransportConnect {
+                        request_id: actual_request_id,
+                        request,
+                    }] if actual_request_id == &request_id
+                        && request.direction() == TransportConnectDirection::Upload
+                )
         ));
     }
 
     #[test]
-    fn recording_request_envelope_decodes_to_semantic_command() {
-        let request_id = CurrentBusRequestId::new(CurrentBusOrigin::Client, 5, 7);
-        let envelope = CurrentBusEnvelope {
-            message: json!({
+    fn recording_request_frame_decodes_to_semantic_command() {
+        let request_id = LegacyRequestId::client(5, 7);
+        let command = decode_frame(encode_batch(&json!([{
+            "message": {
                 "name": "START_RECORDING",
                 "payload": {
                     "audio": true
                 }
-            }),
-            need_response: Some(request_id.clone()),
-            response_to: None,
-        };
-
-        let command = decode_envelope(envelope);
+            },
+            "needResponse": request_id.as_str(),
+        }])));
 
         assert!(matches!(
             command,
-            DomainCommand::RecordingControl {
-                request_id: actual_request_id,
-                request: super::LegacyRecordingControlRequest::Start(RecordingOptions {
-                    audio: Some(true),
-                    video: None,
-                    transcription: None,
-                }),
-            } if actual_request_id == request_id
+            Ok(Some(commands))
+                if matches!(
+                    commands.as_slice(),
+                    [DomainCommand::RecordingControl {
+                        request_id: actual_request_id,
+                        request: super::LegacyRecordingControlRequest::Start(options),
+                    }] if actual_request_id == &request_id && options.audio == Some(true)
+                )
         ));
     }
 
     #[test]
-    fn publish_request_envelope_decodes_to_semantic_publish_command() {
-        let request_id = CurrentBusRequestId::new(CurrentBusOrigin::Client, 2, 3);
-        let envelope = CurrentBusEnvelope {
-            message: json!({
+    fn publish_request_frame_decodes_to_semantic_publish_command() {
+        let request_id = LegacyRequestId::client(2, 3);
+        let command = decode_frame(encode_batch(&json!([{
+            "message": {
                 "name": "INIT_PRODUCER",
                 "payload": {
                     "type": "camera",
@@ -178,60 +272,88 @@ mod tests {
                         "encodings": [{ "ssrc": 11111 }]
                     }
                 }
-            }),
-            need_response: Some(request_id.clone()),
-            response_to: None,
-        };
-
-        let command = decode_envelope(envelope);
+            },
+            "needResponse": request_id.as_str(),
+        }])));
 
         assert!(matches!(
             command,
-            DomainCommand::PublishTrack {
-                request_id: actual_request_id,
-                request,
-            } if actual_request_id == request_id
-                && request.stream_type() == StreamType::Camera
-                && request.media_kind() == SignalingMediaKind::Video
+            Ok(Some(commands))
+                if matches!(
+                    commands.as_slice(),
+                    [DomainCommand::PublishTrack {
+                        request_id: actual_request_id,
+                        request,
+                    }] if actual_request_id == &request_id
+                        && request.stream_type() == StreamType::Camera
+                        && request.media_kind() == SignalingMediaKind::Video
+                )
         ));
     }
 
     #[test]
-    fn invalid_request_envelope_keeps_request_identity() {
-        let request_id = CurrentBusRequestId::new(CurrentBusOrigin::Client, 4, 8);
-        let envelope = CurrentBusEnvelope {
-            message: json!({
+    fn invalid_request_frame_keeps_request_identity() {
+        let request_id = LegacyRequestId::client(4, 8);
+        let command = decode_frame(encode_batch(&json!([{
+            "message": {
                 "name": "CONNECT_CTS_TRANSPORT",
                 "payload": "wrong-shape",
-            }),
-            need_response: Some(request_id.clone()),
-            response_to: None,
-        };
-
-        let command = decode_envelope(envelope);
+            },
+            "needResponse": request_id.as_str(),
+        }])));
 
         assert!(matches!(
             command,
-            DomainCommand::InvalidRequest {
-                request_id: actual_request_id,
-            } if actual_request_id == request_id
+            Ok(Some(commands))
+                if matches!(
+                    commands.as_slice(),
+                    [DomainCommand::InvalidRequest {
+                        request_id: actual_request_id,
+                    }] if actual_request_id == &request_id
+                )
         ));
     }
 
     #[test]
-    fn invalid_message_envelope_becomes_invalid_message_command() {
-        let envelope = CurrentBusEnvelope {
-            message: json!({
+    fn invalid_message_frame_becomes_invalid_message_command() {
+        let command = decode_frame(encode_batch(&json!([{
+            "message": {
                 "name": "UPDATE_INFO",
                 "payload": false,
-            }),
-            need_response: None,
-            response_to: None,
-        };
+            }
+        }])));
 
         assert!(matches!(
-            decode_envelope(envelope),
-            DomainCommand::InvalidMessage
+            command,
+            Ok(Some(commands))
+                if matches!(commands.as_slice(), [DomainCommand::InvalidMessage])
+        ));
+    }
+
+    #[test]
+    fn message_frame_decodes_to_semantic_client_message() {
+        let command = decode_frame(encode_batch(&json!([{
+            "message": {
+                "name": "C_INFO_CHANGE",
+                "payload": {
+                    "info": {
+                        "isTalking": true
+                    },
+                    "needRefresh": true
+                }
+            }
+        }])));
+
+        assert!(matches!(
+            command,
+            Ok(Some(commands))
+                if matches!(
+                    commands.as_slice(),
+                    [DomainCommand::Message(LegacyClientMessage::UpdateSessionInfo {
+                        need_refresh: true,
+                        ..
+                    })]
+                )
         ));
     }
 }
