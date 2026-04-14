@@ -1,25 +1,17 @@
 #![allow(
     dead_code,
-    reason = "deterministic media fixtures are introduced ahead of the full RTP-like scenario suite and are shared across integration targets"
+    reason = "deterministic media fixtures are shared across the native integration and fake-stream scenarios"
 )]
 
 use std::time::Duration;
 
-use serde_json::json;
-
-use super::legacy_wire::protocol::CurrentPublishTrackPayload;
-use o_sfu::signaling::{
-    shared::StreamType,
-    webrtc::{MediaKind, RtpParameters},
-};
+use o_sfu::signaling::{shared::StreamType, webrtc::MediaKind};
 
 const AUDIO_FRAME_INTERVAL: Duration = Duration::from_millis(20);
-const AUDIO_CLOCK_RATE: u32 = 48_000;
 const AUDIO_TIMESTAMP_STEP: u32 = 960;
 const AUDIO_PAYLOAD_LEN: usize = 160;
 
 const VIDEO_FRAME_INTERVAL: Duration = Duration::from_millis(33);
-const VIDEO_CLOCK_RATE: u32 = 90_000;
 const VIDEO_TIMESTAMP_STEP: u32 = 2_970;
 const VIDEO_PAYLOAD_LEN: usize = 1_200;
 
@@ -58,7 +50,6 @@ pub struct FakeMediaSource {
     payload_seed: u8,
     next_rtp_timestamp: u32,
     next_sequence_number: u16,
-    rtp_parameters: RtpParameters,
 }
 
 impl FakeMediaSource {
@@ -73,40 +64,6 @@ impl FakeMediaSource {
             payload_seed: 0x11,
             next_rtp_timestamp: 0,
             next_sequence_number: 0,
-            rtp_parameters: RtpParameters(json!({
-                "mid": "0",
-                "codecs": [{
-                    "mimeType": "audio/opus",
-                    "payloadType": 111,
-                    "clockRate": AUDIO_CLOCK_RATE,
-                    "channels": 2,
-                    "parameters": {
-                        "minptime": 10,
-                        "useinbandfec": 1
-                    },
-                    "rtcpFeedback": [{ "type": "transport-cc", "parameter": "" }]
-                }],
-                "headerExtensions": [
-                    {
-                        "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
-                        "id": 1,
-                        "encrypt": false,
-                        "parameters": {}
-                    },
-                    {
-                        "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
-                        "id": 10,
-                        "encrypt": false,
-                        "parameters": {}
-                    }
-                ],
-                "encodings": [{ "ssrc": 11111, "dtx": false }],
-                "rtcp": {
-                    "cname": "o-sfu-audio",
-                    "reducedSize": true,
-                    "mux": true
-                }
-            })),
         }
     }
 
@@ -121,78 +78,6 @@ impl FakeMediaSource {
             payload_seed: 0x41,
             next_rtp_timestamp: 0,
             next_sequence_number: 0,
-            rtp_parameters: RtpParameters(json!({
-                "mid": "1",
-                "codecs": [
-                    {
-                        "mimeType": "video/VP8",
-                        "payloadType": 96,
-                        "clockRate": VIDEO_CLOCK_RATE,
-                        "parameters": {},
-                        "rtcpFeedback": [
-                            { "type": "goog-remb", "parameter": "" },
-                            { "type": "transport-cc", "parameter": "" },
-                            { "type": "ccm", "parameter": "fir" },
-                            { "type": "nack", "parameter": "" },
-                            { "type": "nack", "parameter": "pli" }
-                        ]
-                    },
-                    {
-                        "mimeType": "video/rtx",
-                        "payloadType": 97,
-                        "clockRate": VIDEO_CLOCK_RATE,
-                        "parameters": { "apt": 96 },
-                        "rtcpFeedback": []
-                    }
-                ],
-                "headerExtensions": [
-                    {
-                        "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
-                        "id": 1,
-                        "encrypt": false,
-                        "parameters": {}
-                    },
-                    {
-                        "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
-                        "id": 4,
-                        "encrypt": false,
-                        "parameters": {}
-                    },
-                    {
-                        "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
-                        "id": 5,
-                        "encrypt": false,
-                        "parameters": {}
-                    },
-                    {
-                        "uri": "urn:3gpp:video-orientation",
-                        "id": 11,
-                        "encrypt": false,
-                        "parameters": {}
-                    },
-                    {
-                        "uri": "urn:ietf:params:rtp-hdrext:toffset",
-                        "id": 12,
-                        "encrypt": false,
-                        "parameters": {}
-                    }
-                ],
-                "encodings": [{ "ssrc": 22222, "rtx": { "ssrc": 22223 } }],
-                "rtcp": {
-                    "cname": "o-sfu-camera",
-                    "reducedSize": true,
-                    "mux": true
-                }
-            })),
-        }
-    }
-
-    #[must_use]
-    pub fn publish_payload(&self) -> CurrentPublishTrackPayload {
-        CurrentPublishTrackPayload {
-            stream_type: self.stream_type,
-            media_kind: self.media_kind,
-            rtp_parameters: self.rtp_parameters.clone(),
         }
     }
 
@@ -204,17 +89,6 @@ impl FakeMediaSource {
     #[must_use]
     pub fn stream_type(&self) -> StreamType {
         self.stream_type
-    }
-
-    pub fn primary_ssrc(&self) -> Option<u32> {
-        self.rtp_parameters
-            .0
-            .get("encodings")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|encodings| encodings.first())
-            .and_then(|encoding| encoding.get("ssrc"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|ssrc| u32::try_from(ssrc).ok())
     }
 
     pub fn next_frame(&mut self, clock: &mut FakeClock) -> FakeMediaFrame {

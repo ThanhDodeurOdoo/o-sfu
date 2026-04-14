@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "the native full-stack harness is shared by a subset of integration scenarios while the remaining legacy-wire media flows are migrated incrementally"
+    reason = "the native full-stack harness is shared by multiple RTC integration scenarios"
 )]
 
 use std::{
