@@ -92,9 +92,3 @@ pub fn decode_native_welcome_batch(payload: &str) -> Option<WelcomePayload> {
         | ServerEnvelope::Response { .. } => None,
     }
 }
-
-#[doc(hidden)]
-#[must_use]
-pub fn fuzz_decode_native_client_batch(payload: &str) -> bool {
-    super::websocket_server::fuzz_decode_native_client_batch(payload)
-}

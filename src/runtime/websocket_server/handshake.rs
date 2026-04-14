@@ -10,10 +10,7 @@ use tracing::{Span, field, info};
 use super::{
     WsWriter, close_writer,
     controller::{ConnectedSession, WsReader},
-    session_protocol::{
-        SessionProtocol,
-        frame_codec::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
-    },
+    session_protocol::SessionProtocol,
 };
 use crate::runtime::{
     RuntimeState,
@@ -21,6 +18,7 @@ use crate::runtime::{
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
+    client_batch::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
     protocol::{
         AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
         WelcomePayload,

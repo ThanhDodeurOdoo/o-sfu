@@ -1,7 +1,5 @@
-use super::super::session_protocol::frame_codec::{
-    MAX_CLIENT_BATCH_ENVELOPES, MAX_CLIENT_FRAME_BYTES,
-};
 use super::fixtures::*;
+use crate::signaling::client_batch::{MAX_CLIENT_BATCH_ENVELOPES, MAX_CLIENT_FRAME_BYTES};
 
 #[tokio::test]
 async fn websocket_rejects_unknown_native_envelope_tag() {

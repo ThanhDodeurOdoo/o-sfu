@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod bundle_api;
+pub mod client_batch;
 pub mod http;
 #[allow(
     dead_code,

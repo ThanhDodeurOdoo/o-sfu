@@ -10,16 +10,14 @@ use crate::runtime::{
     websocket_server::WsWriter,
 };
 use crate::signaling::{
+    client_batch::{ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch},
     protocol::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
     shared::SessionId,
 };
 
 use super::super::{
     controller::SessionProtocolOutcome,
-    frame_codec::{
-        ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
-        send_server_messages, send_server_request,
-    },
+    frame_codec::{send_server_messages, send_server_request},
     negotiation::NegotiationState,
     request_state::NativeRequestState,
     track_projection::RemoteTrackProjection,
