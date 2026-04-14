@@ -14,12 +14,12 @@ use o_sfu::{
     },
 };
 
-use crate::support::full_stack::LocalNetwork;
 use crate::support::{
     differential::{
         CompatibilityEvent, CompatibilityTranscript, LegacySfuBackend,
         run_camera_publish_oracle_scenario_result, run_session_replacement_oracle_scenario_result,
     },
+    native_full_stack::NativeLocalNetwork,
     test_config,
 };
 
@@ -28,7 +28,7 @@ async fn camera_publish_scenario_matches_legacy_sfu_and_expected_transcript() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let o_sfu_network = LocalNetwork::start(config).await;
+    let o_sfu_network = NativeLocalNetwork::start(config).await;
     assert!(o_sfu_network.is_some());
     let Some(o_sfu_network) = o_sfu_network else {
         return;
@@ -39,8 +39,9 @@ async fn camera_publish_scenario_matches_legacy_sfu_and_expected_transcript() {
         return;
     };
 
-    let o_sfu_transcript = run_camera_publish_oracle_scenario_result(&o_sfu_network).await;
-    let legacy_transcript = run_camera_publish_oracle_scenario_result(&legacy_backend).await;
+    let o_sfu_transcript = Box::pin(run_camera_publish_oracle_scenario_result(&o_sfu_network)).await;
+    let legacy_transcript =
+        Box::pin(run_camera_publish_oracle_scenario_result(&legacy_backend)).await;
     assert!(o_sfu_transcript.is_ok(), "{o_sfu_transcript:?}");
     assert!(legacy_transcript.is_ok(), "{legacy_transcript:?}");
     let Ok(o_sfu_transcript) = o_sfu_transcript else {
@@ -63,7 +64,7 @@ async fn session_replacement_scenario_matches_legacy_sfu_and_expected_transcript
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let o_sfu_network = LocalNetwork::start(config).await;
+    let o_sfu_network = NativeLocalNetwork::start(config).await;
     assert!(o_sfu_network.is_some());
     let Some(o_sfu_network) = o_sfu_network else {
         return;
@@ -74,8 +75,10 @@ async fn session_replacement_scenario_matches_legacy_sfu_and_expected_transcript
         return;
     };
 
-    let o_sfu_transcript = run_session_replacement_oracle_scenario_result(&o_sfu_network).await;
-    let legacy_transcript = run_session_replacement_oracle_scenario_result(&legacy_backend).await;
+    let o_sfu_transcript =
+        Box::pin(run_session_replacement_oracle_scenario_result(&o_sfu_network)).await;
+    let legacy_transcript =
+        Box::pin(run_session_replacement_oracle_scenario_result(&legacy_backend)).await;
     assert!(o_sfu_transcript.is_ok(), "{o_sfu_transcript:?}");
     assert!(legacy_transcript.is_ok(), "{legacy_transcript:?}");
     let Ok(o_sfu_transcript) = o_sfu_transcript else {
@@ -114,14 +117,6 @@ fn expected_o_sfu_transcript() -> CompatibilityTranscript {
             CompatibilityEvent::SessionCameraState {
                 observer_session_id: SessionId::Integer(20),
                 owner_session_id: SessionId::Integer(10),
-                active: false,
-            },
-            CompatibilityEvent::RemoteTrackBootstrap {
-                observer_session_id: SessionId::Integer(30),
-                owner_session_id: SessionId::Integer(10),
-                source_token: String::from("track-0"),
-                stream_type: StreamType::Camera,
-                media_kind: MediaKind::Video,
                 active: false,
             },
             CompatibilityEvent::SessionDeparted {

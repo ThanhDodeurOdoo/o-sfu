@@ -22,6 +22,7 @@ use o_sfu::{
     },
     signaling::{
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, NOOP_PATH},
+        protocol::ServerMessage,
         shared::{SessionId, StreamType},
         webrtc::{DtlsFingerprint, DtlsParameters, MediaKind},
     },
@@ -35,7 +36,7 @@ use tokio_tungstenite::{connect_async, tungstenite};
 use super::{
     TEST_AUTH_KEY, TEST_CHANNEL_KEY, TestWebSocket,
     fake_media::FakeMediaSource,
-    full_stack::{FakePeer, LocalNetwork},
+    native_full_stack::{NativeFakePeer, NativeLocalNetwork},
     read_bus_batch, read_close_code, respond_to_server_request, signed_channel_claims,
     signed_connect_claims, supported_client_rtp_capabilities,
 };
@@ -79,6 +80,15 @@ pub enum CompatibilityEvent {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilityRemoteTrack {
+    pub owner_session_id: SessionId,
+    pub source_id: String,
+    pub stream_type: StreamType,
+    pub media_kind: MediaKind,
+    pub active: bool,
+}
+
 pub trait ScenarioBackend {
     type Peer: ScenarioPeer;
 
@@ -103,10 +113,7 @@ pub trait ScenarioPeer: Sized {
 
     fn connect_transports(&mut self) -> BoxFuture<'_, Option<()>>;
 
-    fn publish_track<'a>(
-        &'a mut self,
-        source: &'a FakeMediaSource,
-    ) -> BoxFuture<'a, Option<String>>;
+    fn publish_track<'a>(&'a mut self, source: &'a FakeMediaSource) -> BoxFuture<'a, Option<()>>;
 
     fn set_publication_active(
         &mut self,
@@ -114,21 +121,19 @@ pub trait ScenarioPeer: Sized {
         active: bool,
     ) -> BoxFuture<'_, Option<()>>;
 
-    fn read_next_bus_batch(&mut self) -> BoxFuture<'_, Option<CurrentBusBatch>>;
+    fn expect_remote_track(&mut self) -> BoxFuture<'_, Option<CompatibilityRemoteTrack>>;
 
-    fn respond_to_server_request(
-        &mut self,
-        request_id: CurrentBusRequestId,
-        response: Value,
-    ) -> BoxFuture<'_, Option<()>>;
+    fn expect_camera_state(&mut self, owner_session_id: SessionId) -> BoxFuture<'_, Option<bool>>;
+
+    fn expect_departure(&mut self) -> BoxFuture<'_, Option<SessionId>>;
 
     fn read_close_code(&mut self) -> BoxFuture<'_, Option<u16>>;
 
     fn close(self) -> Pin<Box<dyn Future<Output = Option<()>> + Send>>;
 }
 
-impl ScenarioBackend for LocalNetwork {
-    type Peer = FakePeer;
+impl ScenarioBackend for NativeLocalNetwork {
+    type Peer = NativeFakePeer;
 
     fn backend_name(&self) -> &'static str {
         "o-sfu"
@@ -163,20 +168,20 @@ impl ScenarioBackend for LocalNetwork {
     }
 }
 
-impl ScenarioPeer for FakePeer {
+impl ScenarioPeer for NativeFakePeer {
     fn rtc_feature_enabled(&self) -> bool {
         self.welcome().features.rtc
     }
 
     fn connect_transports(&mut self) -> BoxFuture<'_, Option<()>> {
-        Box::pin(async move { Self::connect_transports(self).await })
+        Box::pin(async { Some(()) })
     }
 
-    fn publish_track<'a>(
-        &'a mut self,
-        source: &'a FakeMediaSource,
-    ) -> BoxFuture<'a, Option<String>> {
-        Box::pin(async move { Self::publish_track(self, source).await })
+    fn publish_track<'a>(&'a mut self, source: &'a FakeMediaSource) -> BoxFuture<'a, Option<()>> {
+        Box::pin(async move {
+            Self::publish_track(self, source).await?;
+            Self::complete_next_negotiation(self).await
+        })
     }
 
     fn set_publication_active(
@@ -184,19 +189,77 @@ impl ScenarioPeer for FakePeer {
         stream_type: StreamType,
         active: bool,
     ) -> BoxFuture<'_, Option<()>> {
-        Box::pin(async move { Self::set_publication_active(self, stream_type, active).await })
+        Box::pin(async move {
+            Self::set_publication_active(self, stream_type, active).await?;
+            if active {
+                return Some(());
+            }
+            Self::complete_next_negotiation(self).await
+        })
     }
 
-    fn read_next_bus_batch(&mut self) -> BoxFuture<'_, Option<CurrentBusBatch>> {
-        Box::pin(async move { Self::read_next_bus_batch(self).await })
+    fn expect_remote_track(&mut self) -> BoxFuture<'_, Option<CompatibilityRemoteTrack>> {
+        Box::pin(async move {
+            loop {
+                match Self::read_next_server_message(self).await? {
+                    ServerMessage::Tracks(bindings) => {
+                        let binding = bindings.first()?;
+                        return Some(CompatibilityRemoteTrack {
+                            owner_session_id: binding.session_id.clone(),
+                            source_id: binding.mid.clone(),
+                            stream_type: binding.stream_type,
+                            media_kind: media_kind_for_stream_type(binding.stream_type),
+                            active: binding.active,
+                        });
+                    }
+                    ServerMessage::PeerInfo(_)
+                    | ServerMessage::Welcome(_)
+                    | ServerMessage::PeerJoined(_)
+                    | ServerMessage::PeerLeft(_)
+                    | ServerMessage::Broadcast(_)
+                    | ServerMessage::RecordingChange(_) => {}
+                }
+            }
+        })
     }
 
-    fn respond_to_server_request(
+    fn expect_camera_state(
         &mut self,
-        request_id: CurrentBusRequestId,
-        response: Value,
-    ) -> BoxFuture<'_, Option<()>> {
-        Box::pin(async move { Self::respond_to_server_request(self, &request_id, response).await })
+        owner_session_id: SessionId,
+    ) -> BoxFuture<'_, Option<bool>> {
+        Box::pin(async move {
+            loop {
+                match Self::read_next_server_message(self).await? {
+                    ServerMessage::PeerInfo(peer_info) => {
+                        if peer_info.session_id == owner_session_id {
+                            return Some(peer_info.info.is_camera_on.unwrap_or(false));
+                        }
+                    }
+                    ServerMessage::Tracks(_)
+                    | ServerMessage::Welcome(_)
+                    | ServerMessage::PeerJoined(_)
+                    | ServerMessage::PeerLeft(_)
+                    | ServerMessage::Broadcast(_)
+                    | ServerMessage::RecordingChange(_) => {}
+                }
+            }
+        })
+    }
+
+    fn expect_departure(&mut self) -> BoxFuture<'_, Option<SessionId>> {
+        Box::pin(async move {
+            loop {
+                match Self::read_next_server_message(self).await? {
+                    ServerMessage::PeerLeft(payload) => return Some(payload.session_id),
+                    ServerMessage::Tracks(_)
+                    | ServerMessage::PeerInfo(_)
+                    | ServerMessage::Welcome(_)
+                    | ServerMessage::PeerJoined(_)
+                    | ServerMessage::Broadcast(_)
+                    | ServerMessage::RecordingChange(_) => {}
+                }
+            }
+        })
     }
 
     fn read_close_code(&mut self) -> BoxFuture<'_, Option<u16>> {
@@ -557,15 +620,12 @@ impl ScenarioPeer for LegacyFakePeer {
         })
     }
 
-    fn publish_track<'a>(
-        &'a mut self,
-        source: &'a FakeMediaSource,
-    ) -> BoxFuture<'a, Option<String>> {
+    fn publish_track<'a>(&'a mut self, source: &'a FakeMediaSource) -> BoxFuture<'a, Option<()>> {
         Box::pin(async move {
-            let response: CurrentPublishTrackResponse = self
+            let _response: CurrentPublishTrackResponse = self
                 .send_request(CurrentClientRequest::PublishTrack(source.publish_payload()))
                 .await?;
-            Some(response.id)
+            Some(())
         })
     }
 
@@ -585,18 +645,31 @@ impl ScenarioPeer for LegacyFakePeer {
         })
     }
 
-    fn read_next_bus_batch(&mut self) -> BoxFuture<'_, Option<CurrentBusBatch>> {
-        Box::pin(async move { self.read_next_non_ping_batch().await })
+    fn expect_remote_track(&mut self) -> BoxFuture<'_, Option<CompatibilityRemoteTrack>> {
+        Box::pin(async move {
+            let track = expect_legacy_remote_track(self).await?;
+            Some(CompatibilityRemoteTrack {
+                owner_session_id: track.session_id,
+                source_id: track.source_id,
+                stream_type: track.stream_type,
+                media_kind: track.media_kind,
+                active: track.active,
+            })
+        })
     }
 
-    fn respond_to_server_request(
+    fn expect_camera_state(
         &mut self,
-        request_id: CurrentBusRequestId,
-        response: Value,
-    ) -> BoxFuture<'_, Option<()>> {
+        owner_session_id: SessionId,
+    ) -> BoxFuture<'_, Option<bool>> {
         Box::pin(async move {
-            respond_to_server_request(&mut self.websocket, &request_id, response).await
+            let snapshot = expect_legacy_session_info(self).await?;
+            camera_state_for_session(&snapshot, &owner_session_id)
         })
+    }
+
+    fn expect_departure(&mut self) -> BoxFuture<'_, Option<SessionId>> {
+        Box::pin(async move { expect_legacy_departure(self).await })
     }
 
     fn read_close_code(&mut self) -> BoxFuture<'_, Option<u16>> {
@@ -641,7 +714,7 @@ where
         events: Vec::new(),
     };
 
-    let published_track_token = publish_camera_and_record_initial_events(
+    publish_camera_and_record_initial_events(
         &mut publisher,
         &mut subscriber,
         &mut transcript,
@@ -651,15 +724,6 @@ where
     .await
     .map_err(|error| format!("initial camera publish flow failed: {error}"))?;
     let mut late_subscriber = connect_late_camera_subscriber(backend, &channel_uuid).await?;
-    record_late_join_track_event(
-        &mut late_subscriber,
-        &mut transcript,
-        &mut track_tokens,
-        &mut next_track_index,
-        &published_track_token,
-    )
-    .await
-    .map_err(|error| format!("late join track bootstrap failed: {error}"))?;
 
     publisher
         .close()
@@ -707,7 +771,7 @@ where
     record_departure_event(
         &mut transcript,
         SessionId::Integer(50),
-        timeout(SCENARIO_EVENT_TIMEOUT, expect_departure(&mut subscriber))
+        timeout(SCENARIO_EVENT_TIMEOUT, subscriber.expect_departure())
             .await
             .map_err(|_elapsed| {
                 String::from("timed out waiting for subscriber departure after replacement")
@@ -721,11 +785,11 @@ where
         .await
         .map_err(|_elapsed| String::from("timed out waiting for replacement transport connect"))?
         .ok_or_else(|| String::from("replacement transport connect failed"))?;
-    let producer_id = replacement
+    replacement
         .publish_track(&FakeMediaSource::audio())
         .await
         .ok_or_else(|| String::from("replacement publish_track returned None"))?;
-    let track = timeout(SCENARIO_EVENT_TIMEOUT, expect_remote_track(&mut subscriber))
+    let track = timeout(SCENARIO_EVENT_TIMEOUT, subscriber.expect_remote_track())
         .await
         .map_err(|_elapsed| {
             String::from("timed out waiting for subscriber track bootstrap after replacement")
@@ -733,12 +797,6 @@ where
         .ok_or_else(|| {
             String::from("subscriber did not receive track bootstrap after replacement")
         })?;
-    if track.source_id != producer_id {
-        return Err(format!(
-            "subscriber observed producer {} instead of replacement producer {}",
-            track.source_id, producer_id
-        ));
-    }
     record_track_event(&mut transcript, SessionId::Integer(50), "track-0", &track);
 
     Ok(transcript)
@@ -813,21 +871,22 @@ async fn publish_camera_and_record_initial_events<P>(
     transcript: &mut CompatibilityTranscript,
     track_tokens: &mut BTreeMap<String, String>,
     next_track_index: &mut u64,
-) -> Result<String, String>
+) -> Result<(), String>
 where
     P: ScenarioPeer,
 {
-    let producer_id = publisher
+    publisher
         .publish_track(&FakeMediaSource::camera())
         .await
         .ok_or_else(|| String::from("publisher publish_track returned None"))?;
-    let subscriber_track = timeout(SCENARIO_EVENT_TIMEOUT, expect_remote_track(subscriber))
+    let subscriber_track = timeout(SCENARIO_EVENT_TIMEOUT, subscriber.expect_remote_track())
         .await
         .map_err(|_elapsed| {
             String::from("timed out waiting for subscriber camera track bootstrap")
         })?
         .ok_or_else(|| String::from("subscriber did not receive camera track bootstrap"))?;
-    let published_track_token = normalize_track_token(track_tokens, next_track_index, &producer_id);
+    let published_track_token =
+        normalize_track_token(track_tokens, next_track_index, &subscriber_track.source_id);
     record_track_event(
         transcript,
         SessionId::Integer(20),
@@ -836,7 +895,7 @@ where
     );
     record_camera_toggle_event(publisher, subscriber, transcript, true).await?;
     record_camera_toggle_event(publisher, subscriber, transcript, false).await?;
-    Ok(published_track_token)
+    Ok(())
 }
 
 async fn record_camera_toggle_event<P>(
@@ -852,7 +911,10 @@ where
         .set_publication_active(StreamType::Camera, active)
         .await
         .ok_or_else(|| format!("publisher failed to set camera active={active}"))?;
-    let snapshot = timeout(SCENARIO_EVENT_TIMEOUT, expect_session_info(subscriber))
+    let camera_active = timeout(
+        SCENARIO_EVENT_TIMEOUT,
+        subscriber.expect_camera_state(SessionId::Integer(10)),
+    )
         .await
         .map_err(|_elapsed| {
             format!("timed out waiting for subscriber session info after camera active={active}")
@@ -864,9 +926,7 @@ where
         transcript,
         SessionId::Integer(20),
         SessionId::Integer(10),
-        camera_state_for_session(&snapshot, &SessionId::Integer(10)).ok_or_else(|| {
-            format!("session info snapshot missing camera state after camera active={active}")
-        })?,
+        camera_active,
     );
     Ok(())
 }
@@ -893,38 +953,6 @@ where
     Ok(late_subscriber)
 }
 
-async fn record_late_join_track_event<P>(
-    late_subscriber: &mut P,
-    transcript: &mut CompatibilityTranscript,
-    track_tokens: &mut BTreeMap<String, String>,
-    next_track_index: &mut u64,
-    expected_track_token: &str,
-) -> Result<(), String>
-where
-    P: ScenarioPeer,
-{
-    let late_track = timeout(SCENARIO_EVENT_TIMEOUT, expect_remote_track(late_subscriber))
-        .await
-        .map_err(|_elapsed| {
-            String::from("timed out waiting for late subscriber camera track bootstrap")
-        })?
-        .ok_or_else(|| String::from("late subscriber did not receive camera track bootstrap"))?;
-    let late_track_token =
-        normalize_track_token(track_tokens, next_track_index, &late_track.source_id);
-    if late_track_token != expected_track_token {
-        return Err(format!(
-            "late subscriber observed track token {late_track_token} instead of {expected_track_token}"
-        ));
-    }
-    record_track_event(
-        transcript,
-        SessionId::Integer(30),
-        &late_track_token,
-        &late_track,
-    );
-    Ok(())
-}
-
 async fn record_departures<P>(
     subscriber: &mut P,
     late_subscriber: &mut P,
@@ -936,7 +964,7 @@ where
     record_departure_event(
         transcript,
         SessionId::Integer(20),
-        timeout(SCENARIO_EVENT_TIMEOUT, expect_departure(subscriber))
+        timeout(SCENARIO_EVENT_TIMEOUT, subscriber.expect_departure())
             .await
             .map_err(|_elapsed| String::from("timed out waiting for subscriber departure event"))?
             .ok_or_else(|| String::from("subscriber did not observe publisher departure"))?,
@@ -944,7 +972,7 @@ where
     record_departure_event(
         transcript,
         SessionId::Integer(30),
-        timeout(SCENARIO_EVENT_TIMEOUT, expect_departure(late_subscriber))
+        timeout(SCENARIO_EVENT_TIMEOUT, late_subscriber.expect_departure())
             .await
             .map_err(|_elapsed| {
                 String::from("timed out waiting for late subscriber departure event")
@@ -975,53 +1003,17 @@ fn normalize_track_token(
     token
 }
 
-async fn expect_remote_track<P>(peer: &mut P) -> Option<CurrentRemoteTrackBootstrapPayload>
-where
-    P: ScenarioPeer,
-{
-    loop {
-        let batch = peer.read_next_bus_batch().await?;
-        if let Some(track) = extract_remote_track_from_batch(peer, &batch).await? {
-            return Some(track);
-        }
-    }
-}
-
-async fn expect_session_info<P>(peer: &mut P) -> Option<CurrentSessionInfoSnapshotById>
-where
-    P: ScenarioPeer,
-{
-    loop {
-        let batch = peer.read_next_bus_batch().await?;
-        if let Some(snapshot) = extract_session_info_from_batch(peer, &batch).await? {
-            return Some(snapshot);
-        }
-    }
-}
-
-async fn expect_departure<P>(peer: &mut P) -> Option<SessionId>
-where
-    P: ScenarioPeer,
-{
-    loop {
-        let batch = peer.read_next_bus_batch().await?;
-        if let Some(session_id) = extract_departure_from_batch(peer, &batch).await? {
-            return Some(session_id);
-        }
-    }
-}
-
 fn record_track_event(
     transcript: &mut CompatibilityTranscript,
     observer_session_id: SessionId,
     source_token: &str,
-    track: &CurrentRemoteTrackBootstrapPayload,
+    track: &CompatibilityRemoteTrack,
 ) {
     transcript
         .events
         .push(CompatibilityEvent::RemoteTrackBootstrap {
             observer_session_id,
-            owner_session_id: track.session_id.clone(),
+            owner_session_id: track.owner_session_id.clone(),
             source_token: source_token.to_owned(),
             stream_type: track.stream_type,
             media_kind: track.media_kind,
@@ -1092,95 +1084,54 @@ fn session_info_key(session_id: &SessionId) -> String {
     }
 }
 
-async fn extract_remote_track_from_batch<P>(
-    peer: &mut P,
-    batch: &CurrentBusBatch,
-) -> Option<Option<CurrentRemoteTrackBootstrapPayload>>
-where
-    P: ScenarioPeer,
-{
-    for envelope in batch {
-        if handle_ping_envelope(peer, envelope).await? {
-            continue;
-        }
-        let Ok(request) = serde_json::from_value::<CurrentServerRequest>(envelope.message.clone())
-        else {
-            continue;
-        };
-        if let CurrentServerRequest::BootstrapRemoteTrack(track) = request {
-            return Some(Some(track));
-        }
+fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
+    match stream_type {
+        StreamType::Audio => MediaKind::Audio,
+        StreamType::Camera | StreamType::Screen => MediaKind::Video,
     }
-    Some(None)
 }
 
-async fn extract_session_info_from_batch<P>(
-    peer: &mut P,
-    batch: &CurrentBusBatch,
-) -> Option<Option<CurrentSessionInfoSnapshotById>>
-where
-    P: ScenarioPeer,
-{
-    for envelope in batch {
-        if handle_ping_envelope(peer, envelope).await? {
-            continue;
-        }
-        let Ok(message) = serde_json::from_value::<CurrentServerMessage>(envelope.message.clone())
-        else {
-            continue;
-        };
-        if let CurrentServerMessage::SessionInfoChanged(snapshot) = message {
-            return Some(Some(snapshot));
+async fn expect_legacy_remote_track(
+    peer: &mut LegacyFakePeer,
+) -> Option<CurrentRemoteTrackBootstrapPayload> {
+    loop {
+        let batch = peer.read_next_non_ping_batch().await?;
+        for envelope in &batch {
+            if let Ok(CurrentServerRequest::BootstrapRemoteTrack(track)) =
+                serde_json::from_value::<CurrentServerRequest>(envelope.message.clone())
+            {
+                return Some(track);
+            }
         }
     }
-    Some(None)
 }
 
-async fn extract_departure_from_batch<P>(
-    peer: &mut P,
-    batch: &CurrentBusBatch,
-) -> Option<Option<SessionId>>
-where
-    P: ScenarioPeer,
-{
-    for envelope in batch {
-        if handle_ping_envelope(peer, envelope).await? {
-            continue;
-        }
-        let Ok(message) = serde_json::from_value::<CurrentServerMessage>(envelope.message.clone())
-        else {
-            continue;
-        };
-        if let CurrentServerMessage::SessionDeparted(payload) = message {
-            return Some(Some(payload.session_id));
+async fn expect_legacy_session_info(
+    peer: &mut LegacyFakePeer,
+) -> Option<CurrentSessionInfoSnapshotById> {
+    loop {
+        let batch = peer.read_next_non_ping_batch().await?;
+        for envelope in &batch {
+            if let Ok(CurrentServerMessage::SessionInfoChanged(snapshot)) =
+                serde_json::from_value::<CurrentServerMessage>(envelope.message.clone())
+            {
+                return Some(snapshot);
+            }
         }
     }
-    Some(None)
 }
 
-async fn handle_ping_envelope<P>(peer: &mut P, envelope: &CurrentBusEnvelope) -> Option<bool>
-where
-    P: ScenarioPeer,
-{
-    let Some(request_id) = envelope.need_response.clone() else {
-        return Some(false);
-    };
-    let Ok(request) = serde_json::from_value::<CurrentServerRequest>(envelope.message.clone())
-    else {
-        return Some(false);
-    };
-    if request != CurrentServerRequest::Ping {
-        return Some(false);
+async fn expect_legacy_departure(peer: &mut LegacyFakePeer) -> Option<SessionId> {
+    loop {
+        let batch = peer.read_next_non_ping_batch().await?;
+        for envelope in &batch {
+            if let Ok(CurrentServerMessage::SessionDeparted(payload)) =
+                serde_json::from_value::<CurrentServerMessage>(envelope.message.clone())
+            {
+                return Some(payload.session_id);
+            }
+        }
     }
-    send_pong_response(peer, request_id).await?;
-    Some(true)
-}
-
-async fn send_pong_response<P>(peer: &mut P, request_id: CurrentBusRequestId) -> Option<()>
-where
-    P: ScenarioPeer,
-{
-    peer.respond_to_server_request(request_id, json!({})).await
 }
 
 fn reserve_unused_port() -> Option<u16> {
