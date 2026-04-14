@@ -16,7 +16,6 @@ pub(super) use o_sfu_router::{
     RtpCapabilities as RouterRtpCapabilities, RtpEncoding as RouterRtpEncoding,
     RtpParameters as RouterRtpParameters,
 };
-pub(super) use serde_json::json;
 pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
@@ -33,10 +32,11 @@ pub(super) use crate::{
         TransportIceProtocol, TransportPublishOptions, TransportPublishOptionsByMediaKind,
         TransportSctpParameters,
     },
-    signaling::{
-        shared::SessionId,
-        webrtc::{DtlsFingerprint, DtlsParameters, IceParameters},
+    runtime::transport_connect::{
+        TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
+        TransportConnectIceParameters,
     },
+    signaling::shared::SessionId,
 };
 
 pub(super) const VALID_SDP_OFFER: &str = "v=0\r\n\
@@ -96,17 +96,20 @@ pub(super) fn sample_bootstrap_payload(
     }
 }
 
-pub(super) fn sample_sha256_dtls_parameters(role: &str) -> DtlsParameters {
+pub(super) fn sample_sha256_dtls_parameters(role: &str) -> TransportConnectDtlsParameters {
     sample_sha256_dtls_parameters_with_value(
         role,
         "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
     )
 }
 
-pub(super) fn sample_sha256_dtls_parameters_with_value(role: &str, value: &str) -> DtlsParameters {
-    DtlsParameters {
+pub(super) fn sample_sha256_dtls_parameters_with_value(
+    role: &str,
+    value: &str,
+) -> TransportConnectDtlsParameters {
+    TransportConnectDtlsParameters {
         role: role.to_owned(),
-        fingerprints: vec![DtlsFingerprint {
+        fingerprints: vec![TransportConnectDtlsFingerprint {
             algorithm: String::from("sha-256"),
             value: value.to_owned(),
         }],
@@ -152,12 +155,14 @@ pub(super) fn sample_transport_bootstrap(
     }
 }
 
-pub(super) fn sample_ice_parameters(username_fragment: &str, password: &str) -> IceParameters {
-    IceParameters(json!({
-        "usernameFragment": username_fragment,
-        "password": password,
-        "iceLite": false
-    }))
+pub(super) fn sample_ice_parameters(
+    username_fragment: &str,
+    password: &str,
+) -> TransportConnectIceParameters {
+    TransportConnectIceParameters {
+        username_fragment: Some(username_fragment.to_owned()),
+        password: Some(password.to_owned()),
+    }
 }
 
 pub(super) fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {

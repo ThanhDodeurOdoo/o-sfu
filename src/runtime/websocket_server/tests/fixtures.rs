@@ -31,6 +31,7 @@ pub(super) use crate::{
         transport_adapter::{
             RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportConnectDirection,
         },
+        transport_connect::{TransportConnectDtlsFingerprint, TransportConnectDtlsParameters},
     },
     signaling::{
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -708,6 +709,25 @@ pub(super) fn sample_client_dtls_parameters() -> DtlsParameters {
 
 pub(super) fn invalid_dtls_parameters_for_stub_rejection() -> DtlsParameters {
     DtlsParameters {
+        role: String::new(),
+        fingerprints: vec![],
+    }
+}
+
+pub(super) fn sample_stub_transport_dtls_parameters() -> TransportConnectDtlsParameters {
+    TransportConnectDtlsParameters {
+        role: String::from("client"),
+        fingerprints: vec![TransportConnectDtlsFingerprint {
+            algorithm: String::from("sha-256"),
+            value: String::from(
+                "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+            ),
+        }],
+    }
+}
+
+pub(super) fn invalid_stub_transport_dtls_parameters() -> TransportConnectDtlsParameters {
+    TransportConnectDtlsParameters {
         role: String::new(),
         fingerprints: vec![],
     }

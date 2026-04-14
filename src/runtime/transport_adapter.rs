@@ -9,12 +9,12 @@ use super::{
 use crate::config::MediaCodecFlags;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
+use crate::runtime::transport_connect::{
+    TransportConnectDtlsParameters, TransportConnectIceParameters,
+};
 
 use crate::config::RtcPortRange;
-use crate::signaling::{
-    shared::SessionId,
-    webrtc::{DtlsParameters, IceParameters, MediaKind as SignalingMediaKind},
-};
+use crate::signaling::{shared::SessionId, webrtc::MediaKind as SignalingMediaKind};
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
@@ -100,8 +100,8 @@ pub(crate) enum TransportAdapterError {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TransportConnectRequest<'a> {
     direction: TransportConnectDirection,
-    dtls_parameters: &'a DtlsParameters,
-    ice_parameters: Option<&'a IceParameters>,
+    dtls_parameters: &'a TransportConnectDtlsParameters,
+    ice_parameters: Option<&'a TransportConnectIceParameters>,
     sdp_offer: Option<&'a str>,
 }
 
@@ -109,7 +109,7 @@ impl<'a> TransportConnectRequest<'a> {
     #[must_use]
     pub(crate) fn new(
         direction: TransportConnectDirection,
-        dtls_parameters: &'a DtlsParameters,
+        dtls_parameters: &'a TransportConnectDtlsParameters,
     ) -> Self {
         Self {
             direction,
@@ -120,7 +120,10 @@ impl<'a> TransportConnectRequest<'a> {
     }
 
     #[must_use]
-    pub(crate) fn with_ice_parameters(mut self, ice_parameters: &'a IceParameters) -> Self {
+    pub(crate) fn with_ice_parameters(
+        mut self,
+        ice_parameters: &'a TransportConnectIceParameters,
+    ) -> Self {
         self.ice_parameters = Some(ice_parameters);
         self
     }
@@ -137,12 +140,12 @@ impl<'a> TransportConnectRequest<'a> {
     }
 
     #[must_use]
-    pub(crate) const fn dtls_parameters(self) -> &'a DtlsParameters {
+    pub(crate) const fn dtls_parameters(self) -> &'a TransportConnectDtlsParameters {
         self.dtls_parameters
     }
 
     #[must_use]
-    pub(crate) const fn ice_parameters(self) -> Option<&'a IceParameters> {
+    pub(crate) const fn ice_parameters(self) -> Option<&'a TransportConnectIceParameters> {
         self.ice_parameters
     }
 

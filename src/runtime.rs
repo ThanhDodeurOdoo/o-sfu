@@ -23,6 +23,7 @@ mod stub_bus;
 pub mod testing;
 mod transport_adapter;
 mod transport_bootstrap;
+mod transport_connect;
 mod websocket_server;
 
 use channel::ChannelAdmissionPolicy;

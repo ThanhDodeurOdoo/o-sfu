@@ -58,7 +58,7 @@ async fn websocket_emits_stub_webrtc_directional_connect_events() {
         StubWebRtcEvent::TransportConnectRequested {
             session_id: session_id.clone(),
             direction: TransportConnectDirection::Upload,
-            dtls_parameters: sample_client_dtls_parameters(),
+            dtls_parameters: sample_stub_transport_dtls_parameters(),
         },
         StubWebRtcEvent::TransportConnected {
             session_id: session_id.clone(),
@@ -67,7 +67,7 @@ async fn websocket_emits_stub_webrtc_directional_connect_events() {
         StubWebRtcEvent::TransportConnectRequested {
             session_id: session_id.clone(),
             direction: TransportConnectDirection::Download,
-            dtls_parameters: sample_client_dtls_parameters(),
+            dtls_parameters: sample_stub_transport_dtls_parameters(),
         },
         StubWebRtcEvent::TransportConnected {
             session_id,
@@ -124,7 +124,7 @@ async fn websocket_emits_stub_webrtc_rejected_connect_event_for_invalid_dtls() {
         StubWebRtcEvent::TransportConnectRequested {
             session_id: session_id.clone(),
             direction: TransportConnectDirection::Upload,
-            dtls_parameters: invalid_dtls_parameters_for_stub_rejection(),
+            dtls_parameters: invalid_stub_transport_dtls_parameters(),
         },
         StubWebRtcEvent::TransportConnectRejected {
             session_id,

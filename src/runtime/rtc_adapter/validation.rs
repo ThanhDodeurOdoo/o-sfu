@@ -10,7 +10,9 @@ use super::{
 };
 use crate::runtime::transport_adapter::TransportAdapterError;
 use crate::runtime::transport_bootstrap::{SessionTransportBootstrap, TransportIceCandidate};
-use crate::signaling::webrtc::{DtlsParameters, IceParameters};
+use crate::runtime::transport_connect::{
+    TransportConnectDtlsParameters, TransportConnectIceParameters,
+};
 
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 
@@ -23,7 +25,7 @@ pub(super) fn validate_sdp_offer(sdp_offer: &str) -> Result<(), TransportAdapter
 }
 
 pub(super) fn parse_dtls_parameters(
-    dtls_parameters: &DtlsParameters,
+    dtls_parameters: &TransportConnectDtlsParameters,
 ) -> Result<dtls::ParsedDtlsParameters, TransportAdapterError> {
     match dtls::parse_dtls_parameters(dtls_parameters) {
         Ok(parsed) => Ok(parsed),
@@ -56,7 +58,7 @@ pub(super) fn parse_dtls_parameters(
 
 #[cfg(test)]
 pub(super) fn validate_dtls_parameters(
-    dtls_parameters: &DtlsParameters,
+    dtls_parameters: &TransportConnectDtlsParameters,
 ) -> Result<(), TransportAdapterError> {
     parse_dtls_parameters(dtls_parameters).map(|_parsed| ())
 }
@@ -83,23 +85,15 @@ pub(super) fn parse_remote_fingerprint(
 }
 
 pub(super) fn parse_remote_ice_credentials(
-    ice_parameters: Option<&IceParameters>,
+    ice_parameters: Option<&TransportConnectIceParameters>,
 ) -> Result<Option<ParsedRemoteIceCredentials>, TransportAdapterError> {
     let Some(ice_parameters) = ice_parameters else {
         return Ok(None);
     };
-    let Some(username_fragment) = ice_parameters
-        .0
-        .get("usernameFragment")
-        .and_then(serde_json::Value::as_str)
-    else {
+    let Some(username_fragment) = ice_parameters.username_fragment.as_deref() else {
         return Err(TransportAdapterError::InvalidInput);
     };
-    let Some(password) = ice_parameters
-        .0
-        .get("password")
-        .and_then(serde_json::Value::as_str)
-    else {
+    let Some(password) = ice_parameters.password.as_deref() else {
         return Err(TransportAdapterError::InvalidInput);
     };
     Ok(Some(ParsedRemoteIceCredentials {

@@ -36,7 +36,7 @@ fn validate_sdp_offer_maps_safari_datachannel_fixture_to_unsupported_feature() {
 
 #[test]
 fn validate_dtls_parameters_maps_invalid_payload_to_invalid_input() {
-    let result = validation::validate_dtls_parameters(&DtlsParameters {
+    let result = validation::validate_dtls_parameters(&TransportConnectDtlsParameters {
         role: String::from("client"),
         fingerprints: vec![],
     });
@@ -45,9 +45,9 @@ fn validate_dtls_parameters_maps_invalid_payload_to_invalid_input() {
 
 #[test]
 fn validate_dtls_parameters_maps_unsupported_payload_to_unsupported_feature() {
-    let result = validation::validate_dtls_parameters(&DtlsParameters {
+    let result = validation::validate_dtls_parameters(&TransportConnectDtlsParameters {
         role: String::from("client"),
-        fingerprints: vec![DtlsFingerprint {
+        fingerprints: vec![TransportConnectDtlsFingerprint {
             algorithm: String::from("sha-1"),
             value: String::from("AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD"),
         }],

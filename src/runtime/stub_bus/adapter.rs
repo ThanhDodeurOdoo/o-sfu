@@ -10,10 +10,8 @@ use crate::runtime::transport_adapter::{
     TransportMediaId, TransportSessionKey,
 };
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
-use crate::signaling::{
-    shared::SessionId,
-    webrtc::{DtlsParameters, MediaKind},
-};
+use crate::runtime::transport_connect::TransportConnectDtlsParameters;
+use crate::signaling::{shared::SessionId, webrtc::MediaKind};
 use o_sfu_router::{
     MediaFormat as RouterMediaFormat, MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
     RtpParameters as RouterRtpParameters, StreamBinding,
@@ -54,7 +52,7 @@ pub(crate) enum StubWebRtcEvent {
     TransportConnectRequested {
         session_id: SessionId,
         direction: TransportConnectDirection,
-        dtls_parameters: DtlsParameters,
+        dtls_parameters: TransportConnectDtlsParameters,
     },
     TransportConnected {
         session_id: SessionId,

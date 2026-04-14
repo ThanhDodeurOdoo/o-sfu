@@ -10,7 +10,7 @@ async fn rtc_transport_connect_rejects_invalid_dtls_before_rtc_connect() {
             &session_key,
             TransportConnectRequest::new(
                 TransportConnectDirection::Upload,
-                &DtlsParameters {
+                &TransportConnectDtlsParameters {
                     role: String::from("client"),
                     fingerprints: vec![],
                 },
@@ -99,9 +99,10 @@ async fn rtc_transport_connect_rejects_invalid_remote_ice_credentials() {
                 TransportConnectDirection::Upload,
                 &sample_sha256_dtls_parameters("client"),
             )
-            .with_ice_parameters(&IceParameters(json!({
-                "usernameFragment": "client-ufrag"
-            }))),
+            .with_ice_parameters(&TransportConnectIceParameters {
+                username_fragment: Some(String::from("client-ufrag")),
+                password: None,
+            }),
         )
         .await;
     assert_eq!(result, Err(TransportAdapterError::InvalidInput));

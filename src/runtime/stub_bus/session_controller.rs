@@ -12,6 +12,10 @@ use crate::runtime::{
         RuntimeTransportAdapter, TransportConnectDirection, TransportConnectRequest,
         TransportSessionKey,
     },
+    transport_connect::{
+        TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
+        TransportConnectIceParameters,
+    },
     websocket_server::WsWriter,
 };
 use crate::signaling::{
@@ -374,7 +378,8 @@ impl SessionController {
         payload: &CurrentTransportConnectPayload,
         direction: TransportConnectDirection,
     ) -> Value {
-        let request = Self::transport_connect_request(payload, direction);
+        let payload = legacy_transport_connect_payload(payload);
+        let request = Self::transport_connect_request(&payload, direction);
         if self
             .transport_adapter
             .connect_transport(&self.transport_session_key(), request)
@@ -405,11 +410,11 @@ impl SessionController {
     }
 
     fn transport_connect_request(
-        payload: &CurrentTransportConnectPayload,
+        payload: &LegacyTransportConnectPayload,
         direction: TransportConnectDirection,
     ) -> TransportConnectRequest<'_> {
-        let request = payload.ice_parameters.as_ref().map_or(
-            TransportConnectRequest::new(direction, &payload.dtls_parameters),
+        let request = payload.ice_parameters.as_ref().map_or_else(
+            || TransportConnectRequest::new(direction, &payload.dtls_parameters),
             |ice_parameters| {
                 TransportConnectRequest::new(direction, &payload.dtls_parameters)
                     .with_ice_parameters(ice_parameters)
@@ -525,4 +530,45 @@ fn parse_transport_bootstrap_capabilities(
         return None;
     };
     Some(parsed_capabilities)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LegacyTransportConnectPayload {
+    dtls_parameters: TransportConnectDtlsParameters,
+    ice_parameters: Option<TransportConnectIceParameters>,
+    sdp_offer: Option<String>,
+}
+
+fn legacy_transport_connect_payload(
+    payload: &CurrentTransportConnectPayload,
+) -> LegacyTransportConnectPayload {
+    LegacyTransportConnectPayload {
+        dtls_parameters: TransportConnectDtlsParameters {
+            role: payload.dtls_parameters.role.clone(),
+            fingerprints: payload
+                .dtls_parameters
+                .fingerprints
+                .iter()
+                .map(|fingerprint| TransportConnectDtlsFingerprint {
+                    algorithm: fingerprint.algorithm.clone(),
+                    value: fingerprint.value.clone(),
+                })
+                .collect(),
+        },
+        ice_parameters: payload.ice_parameters.as_ref().map(|ice_parameters| {
+            TransportConnectIceParameters {
+                username_fragment: ice_parameters
+                    .0
+                    .get("usernameFragment")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                password: ice_parameters
+                    .0
+                    .get("password")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+            }
+        }),
+        sdp_offer: payload.sdp_offer.clone(),
+    }
 }
