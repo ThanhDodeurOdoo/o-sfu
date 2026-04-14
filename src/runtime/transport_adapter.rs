@@ -518,7 +518,7 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    /// Build the `INIT_TRANSPORTS` payload for a newly authenticated session.
+    /// Build session transport bootstrap state for a newly authenticated session.
     pub(crate) async fn transport_bootstrap_payload(
         &self,
         session_key: &TransportSessionKey,

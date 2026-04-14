@@ -2,10 +2,14 @@ use serde_json::Value;
 
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusRequestId},
-    current_protocol::{CurrentClientMessage, CurrentClientRequest},
+    current_protocol::CurrentClientMessage,
 };
 
-use super::transport_connect_edge::LegacyTransportConnectRequest;
+use super::{
+    publish_request_edge::LegacyPublishTrackRequest,
+    recording_request_edge::LegacyRecordingControlRequest,
+    transport_connect_edge::LegacyTransportConnectRequest,
+};
 
 #[derive(Debug)]
 pub(super) enum DomainCommand {
@@ -17,9 +21,13 @@ pub(super) enum DomainCommand {
         request_id: CurrentBusRequestId,
         request: LegacyTransportConnectRequest,
     },
-    Request {
+    PublishTrack {
         request_id: CurrentBusRequestId,
-        request: CurrentClientRequest,
+        request: LegacyPublishTrackRequest,
+    },
+    RecordingControl {
+        request_id: CurrentBusRequestId,
+        request: LegacyRecordingControlRequest,
     },
     InvalidRequest {
         request_id: CurrentBusRequestId,
@@ -39,19 +47,36 @@ pub(super) fn decode_envelope(envelope: CurrentBusEnvelope) -> DomainCommand {
             response_to,
             payload: message,
         },
-        (None, Some(request_id)) => match serde_json::from_value::<CurrentClientRequest>(message) {
-            Ok(request) => match LegacyTransportConnectRequest::from_client_request(&request) {
-                Some(request) => DomainCommand::LegacyTransportConnect {
-                    request_id,
-                    request,
-                },
-                None => DomainCommand::Request {
-                    request_id,
-                    request,
-                },
-            },
-            Err(_error) => DomainCommand::InvalidRequest { request_id },
-        },
+        (None, Some(request_id)) => {
+            if let Some(result) = LegacyTransportConnectRequest::decode_wire(&message) {
+                return match result {
+                    Ok(request) => DomainCommand::LegacyTransportConnect {
+                        request_id,
+                        request,
+                    },
+                    Err(()) => DomainCommand::InvalidRequest { request_id },
+                };
+            }
+            if let Some(result) = LegacyPublishTrackRequest::decode_wire(&message) {
+                return match result {
+                    Ok(request) => DomainCommand::PublishTrack {
+                        request_id,
+                        request,
+                    },
+                    Err(()) => DomainCommand::InvalidRequest { request_id },
+                };
+            }
+            if let Some(result) = LegacyRecordingControlRequest::decode_wire(&message) {
+                return match result {
+                    Ok(request) => DomainCommand::RecordingControl {
+                        request_id,
+                        request,
+                    },
+                    Err(()) => DomainCommand::InvalidRequest { request_id },
+                };
+            }
+            DomainCommand::InvalidRequest { request_id }
+        }
         (None, None) => match serde_json::from_value::<CurrentClientMessage>(message) {
             Ok(message) => DomainCommand::Message(message),
             Err(_error) => DomainCommand::InvalidMessage,
@@ -68,8 +93,9 @@ mod tests {
         runtime::transport_adapter::TransportConnectDirection,
         signaling::{
             current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-            current_protocol::CurrentClientRequest,
-            webrtc::DtlsParameters,
+            protocol::RecordingOptions,
+            shared::StreamType,
+            webrtc::MediaKind as SignalingMediaKind,
         },
     };
 
@@ -80,9 +106,9 @@ mod tests {
             message: json!({
                 "name": "CONNECT_CTS_TRANSPORT",
                 "payload": {
-                    "dtlsParameters": DtlsParameters {
-                        role: String::from("client"),
-                        fingerprints: vec![],
+                    "dtlsParameters": {
+                        "role": "client",
+                        "fingerprints": []
                     },
                 },
             }),
@@ -103,10 +129,15 @@ mod tests {
     }
 
     #[test]
-    fn non_connect_request_envelope_stays_protocol_shaped() {
+    fn recording_request_envelope_decodes_to_semantic_command() {
         let request_id = CurrentBusRequestId::new(CurrentBusOrigin::Client, 5, 7);
         let envelope = CurrentBusEnvelope {
-            message: json!({ "name": "STOP_RECORDING" }),
+            message: json!({
+                "name": "START_RECORDING",
+                "payload": {
+                    "audio": true
+                }
+            }),
             need_response: Some(request_id.clone()),
             response_to: None,
         };
@@ -115,10 +146,53 @@ mod tests {
 
         assert!(matches!(
             command,
-            DomainCommand::Request {
+            DomainCommand::RecordingControl {
                 request_id: actual_request_id,
-                request: CurrentClientRequest::StopRecording,
+                request: super::LegacyRecordingControlRequest::Start(RecordingOptions {
+                    audio: Some(true),
+                    video: None,
+                    transcription: None,
+                }),
             } if actual_request_id == request_id
+        ));
+    }
+
+    #[test]
+    fn publish_request_envelope_decodes_to_semantic_publish_command() {
+        let request_id = CurrentBusRequestId::new(CurrentBusOrigin::Client, 2, 3);
+        let envelope = CurrentBusEnvelope {
+            message: json!({
+                "name": "INIT_PRODUCER",
+                "payload": {
+                    "type": "camera",
+                    "kind": "video",
+                    "rtpParameters": {
+                        "codecs": [{
+                            "mimeType": "video/VP8",
+                            "payloadType": 96,
+                            "clockRate": 90000,
+                            "parameters": {},
+                            "rtcpFeedback": [{ "type": "transport-cc" }]
+                        }],
+                        "headerExtensions": [],
+                        "encodings": [{ "ssrc": 11111 }]
+                    }
+                }
+            }),
+            need_response: Some(request_id.clone()),
+            response_to: None,
+        };
+
+        let command = decode_envelope(envelope);
+
+        assert!(matches!(
+            command,
+            DomainCommand::PublishTrack {
+                request_id: actual_request_id,
+                request,
+            } if actual_request_id == request_id
+                && request.stream_type() == StreamType::Camera
+                && request.media_kind() == SignalingMediaKind::Video
         ));
     }
 

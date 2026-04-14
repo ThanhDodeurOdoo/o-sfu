@@ -1,6 +1,8 @@
 mod adapter;
 mod bootstrap;
 mod codec;
+mod publish_request_edge;
+mod recording_request_edge;
 mod session;
 mod session_controller;
 mod signaling_edge;

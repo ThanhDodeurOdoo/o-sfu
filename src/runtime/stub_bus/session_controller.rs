@@ -16,10 +16,7 @@ use crate::runtime::{
 };
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-    current_protocol::{
-        CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
-        CurrentPublishTrackResponse, CurrentServerRequest, CurrentStartRecordingPayload,
-    },
+    current_protocol::{CurrentClientMessage, CurrentPublishTrackResponse, CurrentServerRequest},
     ortc_mapper,
     protocol::{RecordingOptions, WebSocketCloseCode},
     shared::SessionId,
@@ -149,11 +146,18 @@ impl SessionController {
                 self.handle_legacy_transport_connect_frame(writer, request_id, request)
                     .await
             }
-            DomainCommand::Request {
+            DomainCommand::PublishTrack {
                 request_id,
                 request,
             } => {
-                self.handle_client_request_frame(writer, request_id, request)
+                self.handle_publish_track_request_frame(writer, request_id, request)
+                    .await
+            }
+            DomainCommand::RecordingControl {
+                request_id,
+                request,
+            } => {
+                self.handle_recording_control_request_frame(writer, request_id, request)
                     .await
             }
             DomainCommand::InvalidRequest { request_id } => {
@@ -180,15 +184,35 @@ impl SessionController {
         Ok(())
     }
 
-    async fn handle_client_request_frame(
+    async fn handle_publish_track_request_frame(
         &self,
         writer: &mut WsWriter,
         request_id: CurrentBusRequestId,
-        request: CurrentClientRequest,
+        request: super::publish_request_edge::LegacyPublishTrackRequest,
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_request();
-        debug!(request_id = %request_id.as_str(), "dispatching client bus request");
-        let response = self.execute_request(request).await;
+        debug!(
+            request_id = %request_id.as_str(),
+            "dispatching legacy publish request"
+        );
+        let response = self.handle_publish_request(request).await;
+        self.send_response(writer, request_id, response)
+            .await
+            .map_err(|_error| super::StubBusOutcome::Break)
+    }
+
+    async fn handle_recording_control_request_frame(
+        &self,
+        writer: &mut WsWriter,
+        request_id: CurrentBusRequestId,
+        request: super::recording_request_edge::LegacyRecordingControlRequest,
+    ) -> Result<(), super::StubBusOutcome> {
+        self.metrics.record_ws_bus_client_request();
+        debug!(
+            request_id = %request_id.as_str(),
+            "dispatching legacy recording control request"
+        );
+        let response = self.handle_recording_control_request(request).await;
         self.send_response(writer, request_id, response)
             .await
             .map_err(|_error| super::StubBusOutcome::Break)
@@ -360,34 +384,11 @@ impl SessionController {
         result
     }
 
-    async fn execute_request(&self, request: CurrentClientRequest) -> Value {
-        match request {
-            CurrentClientRequest::PublishTrack(payload) => {
-                self.handle_publish_request(&payload).await
-            }
-            CurrentClientRequest::StartRecording(payload) => {
-                self.handle_start_recording_request(payload).await
-            }
-            CurrentClientRequest::StopRecording => self.handle_stop_recording_request().await,
-            CurrentClientRequest::ConnectUploadTransport(_)
-            | CurrentClientRequest::ConnectDownloadTransport(_) => {
-                Self::handle_unexpected_transport_connect_request()
-            }
-        }
-    }
-
-    async fn handle_start_recording_request(&self, payload: CurrentStartRecordingPayload) -> Value {
+    async fn handle_start_recording_request(&self, options: RecordingOptions) -> Value {
         debug!("handling recording start request");
         Value::Bool(
             self.channel
-                .start_recording(
-                    &self.session_id,
-                    RecordingOptions {
-                        audio: payload.audio,
-                        video: payload.video,
-                        transcription: payload.transcription,
-                    },
-                )
+                .start_recording(&self.session_id, options)
                 .await,
         )
     }
@@ -395,11 +396,6 @@ impl SessionController {
     async fn handle_stop_recording_request(&self) -> Value {
         debug!("handling recording stop request");
         Value::Bool(self.channel.stop_recording(&self.session_id).await)
-    }
-
-    fn handle_unexpected_transport_connect_request() -> Value {
-        debug!("ignoring legacy transport connect request outside signaling edge");
-        empty_object()
     }
 
     async fn handle_transport_connect_request(
@@ -430,21 +426,32 @@ impl SessionController {
         empty_object()
     }
 
-    async fn handle_publish_request(&self, payload: &CurrentPublishTrackPayload) -> Value {
+    async fn handle_recording_control_request(
+        &self,
+        request: super::recording_request_edge::LegacyRecordingControlRequest,
+    ) -> Value {
+        match request {
+            super::recording_request_edge::LegacyRecordingControlRequest::Start(options) => {
+                self.handle_start_recording_request(options).await
+            }
+            super::recording_request_edge::LegacyRecordingControlRequest::Stop => {
+                self.handle_stop_recording_request().await
+            }
+        }
+    }
+
+    async fn handle_publish_request(
+        &self,
+        request: super::publish_request_edge::LegacyPublishTrackRequest,
+    ) -> Value {
         self.metrics.record_ws_bus_stub_publish_request();
-        let Some(parsed_rtp_parameters) =
-            ortc_mapper::parse_rtp_parameters(&payload.rtp_parameters.0)
-        else {
-            debug!("failed to parse publish RTP parameters");
-            return empty_object();
-        };
         let producer_id = self
             .channel
             .publish_track(
                 &self.session_id,
-                payload.stream_type,
-                payload.media_kind,
-                parsed_rtp_parameters,
+                request.stream_type(),
+                request.media_kind(),
+                request.into_producer_rtp_parameters(),
                 &self.transport_adapter,
             )
             .await;
