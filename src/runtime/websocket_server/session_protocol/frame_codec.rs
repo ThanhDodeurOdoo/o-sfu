@@ -3,19 +3,67 @@ use futures_util::SinkExt;
 
 use crate::runtime::websocket_server::WsWriter;
 use crate::signaling::protocol::{
-    ClientEnvelope, EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-    ServerResponse, WebSocketCloseCode,
+    ClientEnvelope, EnvelopeBatch, EnvelopeDecodeError, RequestId, ServerEnvelope, ServerMessage,
+    ServerRequest, ServerResponse, WebSocketCloseCode,
 };
 
-pub(super) fn decode_client_batch(
+pub(in crate::runtime::websocket_server) const MAX_CLIENT_FRAME_BYTES: usize = 256 * 1024;
+pub(in crate::runtime::websocket_server) const MAX_CLIENT_BATCH_ENVELOPES: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime::websocket_server) enum ClientBatchDecodeFailureKind {
+    InvalidInput,
+    UnsupportedFeature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::websocket_server) enum ClientBatchDecodeError {
+    FrameTooLarge { actual: usize, limit: usize },
+    BatchTooLarge { actual: usize, limit: usize },
+    InvalidJson,
+    InvalidEnvelope(EnvelopeDecodeError),
+}
+
+impl ClientBatchDecodeError {
+    #[must_use]
+    pub(in crate::runtime::websocket_server) const fn kind(&self) -> ClientBatchDecodeFailureKind {
+        match self {
+            Self::InvalidEnvelope(EnvelopeDecodeError::UnknownTag(_)) => {
+                ClientBatchDecodeFailureKind::UnsupportedFeature
+            }
+            Self::FrameTooLarge { .. }
+            | Self::BatchTooLarge { .. }
+            | Self::InvalidJson
+            | Self::InvalidEnvelope(
+                EnvelopeDecodeError::InvalidRoutingMetadata
+                | EnvelopeDecodeError::InvalidPayload(_)
+                | EnvelopeDecodeError::UnexpectedPayload(_),
+            ) => ClientBatchDecodeFailureKind::InvalidInput,
+        }
+    }
+}
+
+pub(in crate::runtime::websocket_server) fn decode_client_batch(
     payload: &str,
-) -> Result<Vec<ClientEnvelope>, WebSocketCloseCode> {
+) -> Result<Vec<ClientEnvelope>, ClientBatchDecodeError> {
+    if payload.len() > MAX_CLIENT_FRAME_BYTES {
+        return Err(ClientBatchDecodeError::FrameTooLarge {
+            actual: payload.len(),
+            limit: MAX_CLIENT_FRAME_BYTES,
+        });
+    }
     let batch = serde_json::from_str::<EnvelopeBatch>(payload)
-        .map_err(|_error| WebSocketCloseCode::ProtocolError)?;
+        .map_err(|_error| ClientBatchDecodeError::InvalidJson)?;
+    if batch.len() > MAX_CLIENT_BATCH_ENVELOPES {
+        return Err(ClientBatchDecodeError::BatchTooLarge {
+            actual: batch.len(),
+            limit: MAX_CLIENT_BATCH_ENVELOPES,
+        });
+    }
     batch
         .into_iter()
         .map(|envelope| {
-            ClientEnvelope::decode(envelope).map_err(|_error| WebSocketCloseCode::ProtocolError)
+            ClientEnvelope::decode(envelope).map_err(ClientBatchDecodeError::InvalidEnvelope)
         })
         .collect()
 }

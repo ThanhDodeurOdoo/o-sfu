@@ -1,5 +1,5 @@
 mod controller;
-mod frame_codec;
+pub(super) mod frame_codec;
 mod native;
 mod negotiation;
 mod request_state;

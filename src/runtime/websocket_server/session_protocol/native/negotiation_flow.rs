@@ -101,7 +101,6 @@ impl NativeSessionProtocol {
         {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::Error);
         }
-        self.commit_staged_publishes().await;
         if self
             .apply_negotiation_action(&resolved.pending, &answer.sdp)
             .await
@@ -109,6 +108,7 @@ impl NativeSessionProtocol {
         {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
+        self.commit_staged_publishes().await;
         if matches!(resolved.pending.request, ServerRequest::Ping) {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }

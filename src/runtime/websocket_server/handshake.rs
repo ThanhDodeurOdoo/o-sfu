@@ -10,7 +10,10 @@ use tracing::{Span, field, info};
 use super::{
     WsWriter, close_writer,
     controller::{ConnectedSession, WsReader},
-    session_protocol::SessionProtocol,
+    session_protocol::{
+        SessionProtocol,
+        frame_codec::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
+    },
 };
 use crate::runtime::{
     RuntimeState,
@@ -19,8 +22,8 @@ use crate::runtime::{
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
     protocol::{
-        AuthPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, ServerMessage,
-        WebSocketCloseCode, WelcomePayload,
+        AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
+        WelcomePayload,
     },
     shared::SessionId,
 };
@@ -104,22 +107,27 @@ async fn receive_auth_or_reject(
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
     let payload = match message {
         Message::Text(payload) => payload.to_string(),
-        Message::Binary(payload) => String::from_utf8(payload.to_vec())
-            .map_err(|_error| WebSocketCloseCode::ProtocolError)?,
+        Message::Binary(payload) => {
+            if payload.len() > MAX_CLIENT_FRAME_BYTES {
+                return Err(WebSocketCloseCode::ProtocolError);
+            }
+            String::from_utf8(payload.to_vec())
+                .map_err(|_error| WebSocketCloseCode::ProtocolError)?
+        }
         Message::Close(_) => return Err(WebSocketCloseCode::Clean),
         Message::Ping(_) | Message::Pong(_) => {
             return Err(WebSocketCloseCode::ProtocolError);
         }
     };
-    let batch = serde_json::from_str::<EnvelopeBatch>(&payload)
-        .map_err(|_error| WebSocketCloseCode::ProtocolError)?;
+    let batch =
+        decode_client_batch(&payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
     if batch.len() != 1 {
         return Err(WebSocketCloseCode::ProtocolError);
     }
     let Some(envelope) = batch.into_iter().next() else {
         return Err(WebSocketCloseCode::ProtocolError);
     };
-    match ClientEnvelope::decode(envelope).map_err(|_error| WebSocketCloseCode::ProtocolError)? {
+    match envelope {
         ClientEnvelope::Message(ClientMessage::Auth(auth_payload)) => Ok(auth_payload),
         ClientEnvelope::Message(_)
         | ClientEnvelope::Request { .. }

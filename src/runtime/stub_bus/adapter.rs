@@ -130,11 +130,14 @@ impl StubWebRtcAdapter {
 }
 
 impl StubWebRtcAdapter {
-    #[must_use]
     pub(crate) fn compatibility_client_rtp_capabilities(
+        answer_sdp: &str,
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> o_sfu_router::RtpCapabilities {
-        offered_router_capabilities.clone()
+    ) -> Result<o_sfu_router::RtpCapabilities, TransportAdapterError> {
+        if !answer_sdp.trim_start().starts_with("v=0") {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        Ok(offered_router_capabilities.clone())
     }
 
     #[allow(

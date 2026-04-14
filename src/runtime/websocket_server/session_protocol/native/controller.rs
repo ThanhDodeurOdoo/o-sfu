@@ -16,7 +16,10 @@ use crate::signaling::{
 
 use super::super::{
     controller::SessionProtocolOutcome,
-    frame_codec::{decode_client_batch, send_server_messages, send_server_request},
+    frame_codec::{
+        ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
+        send_server_messages, send_server_request,
+    },
     negotiation::NegotiationState,
     request_state::NativeRequestState,
     track_projection::RemoteTrackProjection,
@@ -92,10 +95,19 @@ impl NativeSessionProtocol {
     ) -> SessionProtocolOutcome {
         match message {
             Message::Text(payload) => self.handle_text_payload(writer, &payload).await,
-            Message::Binary(payload) => match String::from_utf8(payload.to_vec()) {
-                Ok(payload) => self.handle_text_payload(writer, &payload).await,
-                Err(_error) => SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError),
-            },
+            Message::Binary(payload) => {
+                if payload.len() > MAX_CLIENT_FRAME_BYTES {
+                    self.metrics.record_ws_bus_invalid_input_failure();
+                    return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+                }
+                match String::from_utf8(payload.to_vec()) {
+                    Ok(payload) => self.handle_text_payload(writer, &payload).await,
+                    Err(_error) => {
+                        self.metrics.record_ws_bus_invalid_input_failure();
+                        SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
+                    }
+                }
+            }
             Message::Close(_) => SessionProtocolOutcome::Break,
             Message::Ping(_) | Message::Pong(_) => SessionProtocolOutcome::Continue,
         }
@@ -106,9 +118,19 @@ impl NativeSessionProtocol {
         writer: &mut WsWriter,
         payload: &str,
     ) -> SessionProtocolOutcome {
-        let Ok(batch) = decode_client_batch(payload) else {
-            self.metrics.record_ws_bus_parse_failure();
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        let batch = match decode_client_batch(payload) {
+            Ok(batch) => batch,
+            Err(error) => {
+                match error.kind() {
+                    ClientBatchDecodeFailureKind::InvalidInput => {
+                        self.metrics.record_ws_bus_invalid_input_failure();
+                    }
+                    ClientBatchDecodeFailureKind::UnsupportedFeature => {
+                        self.metrics.record_ws_bus_unsupported_feature_failure();
+                    }
+                }
+                return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+            }
         };
         self.metrics.record_ws_bus_batch_received(batch.len());
         for envelope in batch {

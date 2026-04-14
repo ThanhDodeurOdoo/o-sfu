@@ -1,3 +1,6 @@
+use super::super::session_protocol::frame_codec::{
+    MAX_CLIENT_BATCH_ENVELOPES, MAX_CLIENT_FRAME_BYTES,
+};
 use super::fixtures::*;
 
 #[tokio::test]
@@ -40,6 +43,11 @@ async fn websocket_rejects_unknown_native_envelope_tag() {
         read_close_code(&mut websocket).await,
         Some(CloseCode::Protocol),
     );
+
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_bus_parse_failures, 1);
+    assert_eq!(metrics.ws_bus_invalid_input_failures, 0);
+    assert_eq!(metrics.ws_bus_unsupported_feature_failures, 1);
 }
 
 #[tokio::test]
@@ -49,11 +57,24 @@ async fn websocket_rejects_invalid_json_payload() {
     let Some(server) = server else {
         return;
     };
-    let websocket = connect_websocket(&server).await;
-    assert!(websocket.is_some());
-    let Some(mut websocket) = websocket else {
+    let channel = create_channel(
+        &server,
+        "issuer-invalid-json",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(14));
+    assert!(token.is_some());
+    let Some(token) = token else {
         return;
     };
+    let authenticated = authenticate_with_jwt(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+    assert!(read_welcome(&mut websocket).await.is_some());
 
     let send_result = websocket
         .send(tungstenite::Message::Text("not-json".into()))
@@ -66,5 +87,180 @@ async fn websocket_rejects_invalid_json_payload() {
     assert_eq!(
         read_close_code(&mut websocket).await,
         Some(CloseCode::Protocol),
+    );
+
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_bus_parse_failures, 1);
+    assert_eq!(metrics.ws_bus_invalid_input_failures, 1);
+    assert_eq!(metrics.ws_bus_unsupported_feature_failures, 0);
+}
+
+#[tokio::test]
+async fn websocket_rejects_oversized_auth_frame() {
+    let server = spawn_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let websocket = connect_websocket(&server).await;
+    assert!(websocket.is_some());
+    let Some(mut websocket) = websocket else {
+        return;
+    };
+    let oversized_jwt = "x".repeat(MAX_CLIENT_FRAME_BYTES);
+    let oversized_auth = serde_json::to_string(&vec![serde_json::json!({
+        "t": "auth",
+        "p": {
+            "jwt": oversized_jwt,
+        },
+    })]);
+    assert!(oversized_auth.is_ok());
+    let Some(oversized_auth) = oversized_auth.ok() else {
+        return;
+    };
+
+    let send_result = websocket
+        .send(tungstenite::Message::Text(oversized_auth.into()))
+        .await;
+    assert!(
+        send_result.is_ok(),
+        "oversized auth payload should still send: {send_result:?}"
+    );
+
+    assert_eq!(
+        read_close_code(&mut websocket).await,
+        Some(CloseCode::Protocol),
+    );
+}
+
+#[tokio::test]
+async fn websocket_rejects_batches_over_native_envelope_limit() {
+    let server = spawn_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-batch-limit",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(18));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_with_jwt(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+    assert!(read_welcome(&mut websocket).await.is_some());
+
+    let oversized_batch = serde_json::to_string(
+        &(0..=MAX_CLIENT_BATCH_ENVELOPES)
+            .map(|_| serde_json::json!({ "t": "info", "p": {} }))
+            .collect::<Vec<_>>(),
+    );
+    assert!(oversized_batch.is_ok());
+    let Some(oversized_batch) = oversized_batch.ok() else {
+        return;
+    };
+
+    let send_result = websocket
+        .send(tungstenite::Message::Text(oversized_batch.into()))
+        .await;
+    assert!(
+        send_result.is_ok(),
+        "oversized envelope batch should still send: {send_result:?}"
+    );
+
+    assert_eq!(
+        read_close_code(&mut websocket).await,
+        Some(CloseCode::Protocol),
+    );
+
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_bus_parse_failures, 1);
+    assert_eq!(metrics.ws_bus_invalid_input_failures, 1);
+    assert_eq!(metrics.ws_bus_unsupported_feature_failures, 0);
+}
+
+#[tokio::test]
+async fn invalid_native_initial_answer_closes_before_session_negotiates() {
+    let server = spawn_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-invalid-publish-answer",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(91));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_with_jwt(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+    assert!(read_welcome(&mut websocket).await.is_some());
+
+    let publish_frame = serde_json::to_string(&vec![serde_json::json!({
+        "t": "publish",
+        "p": {
+            "type": "camera",
+        },
+    })]);
+    assert!(publish_frame.is_ok());
+    let Some(publish_frame) = publish_frame.ok() else {
+        return;
+    };
+    let send_result = websocket
+        .send(tungstenite::Message::Text(publish_frame.into()))
+        .await;
+    assert!(
+        send_result.is_ok(),
+        "native publish intent should still send: {send_result:?}"
+    );
+
+    let initial_offer = wait_for_native_server_request(&mut websocket).await;
+    assert!(initial_offer.is_some());
+    let Some((request_id, request)) = initial_offer else {
+        return;
+    };
+    assert!(matches!(request, ServerRequest::Offer(_)));
+    assert!(
+        respond_to_native_negotiation_request(
+            &mut websocket,
+            request_id,
+            request,
+            "invalid-answer",
+        )
+        .await
+        .is_some(),
+        "invalid answer should still round-trip through the websocket"
+    );
+
+    assert_eq!(
+        timeout(Duration::from_secs(1), read_close_code(&mut websocket))
+            .await
+            .ok()
+            .flatten(),
+        Some(CloseCode::Protocol),
+    );
+    assert!(
+        !channel
+            .is_stream_published(&SessionId::Integer(91), StreamType::Camera)
+            .await,
+        "invalid initial answer must not let queued publish state commit through a fallback-ready session"
     );
 }

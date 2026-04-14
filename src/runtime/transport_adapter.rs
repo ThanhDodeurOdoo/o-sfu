@@ -515,9 +515,10 @@ impl RuntimeTransportAdapter {
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         match self {
-            Self::Stub(_adapter) => Ok(StubWebRtcAdapter::compatibility_client_rtp_capabilities(
+            Self::Stub(_adapter) => StubWebRtcAdapter::compatibility_client_rtp_capabilities(
+                answer_sdp,
                 offered_router_capabilities,
-            )),
+            ),
             Self::Rtc(_adapter) => client_rtp_capabilities_from_answer(answer_sdp)
                 .ok_or(TransportAdapterError::InvalidInput),
         }
@@ -836,6 +837,17 @@ mod tests {
             adapter.negotiated_client_rtp_capabilities("v=0\r\ns=stub-answer\r\n", &offered);
 
         assert_eq!(projected, Ok(offered));
+    }
+
+    #[test]
+    fn stub_adapter_rejects_answers_without_minimal_sdp_shape() {
+        let adapter =
+            RuntimeTransportAdapter::from_stub_adapter(Arc::new(StubWebRtcAdapter::default()));
+
+        let projected = adapter
+            .negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
+
+        assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
     }
 
     #[test]

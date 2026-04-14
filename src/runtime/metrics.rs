@@ -48,6 +48,8 @@ pub(super) struct RuntimeMetrics {
     ws_bus_batches_received: AtomicU64,
     ws_bus_envelopes_received: AtomicU64,
     ws_bus_parse_failures: AtomicU64,
+    ws_bus_invalid_input_failures: AtomicU64,
+    ws_bus_unsupported_feature_failures: AtomicU64,
     ws_bus_client_requests: AtomicU64,
     ws_bus_client_messages: AtomicU64,
     ws_bus_batches_sent: AtomicU64,
@@ -93,6 +95,8 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub ws_bus_batches_received: u64,
     pub ws_bus_envelopes_received: u64,
     pub ws_bus_parse_failures: u64,
+    pub ws_bus_invalid_input_failures: u64,
+    pub ws_bus_unsupported_feature_failures: u64,
     pub ws_bus_client_requests: u64,
     pub ws_bus_client_messages: u64,
     pub ws_bus_batches_sent: u64,
@@ -149,6 +153,8 @@ impl RuntimeMetrics {
             ws_bus_batches_received: load(&self.ws_bus_batches_received),
             ws_bus_envelopes_received: load(&self.ws_bus_envelopes_received),
             ws_bus_parse_failures: load(&self.ws_bus_parse_failures),
+            ws_bus_invalid_input_failures: load(&self.ws_bus_invalid_input_failures),
+            ws_bus_unsupported_feature_failures: load(&self.ws_bus_unsupported_feature_failures),
             ws_bus_client_requests: load(&self.ws_bus_client_requests),
             ws_bus_client_messages: load(&self.ws_bus_client_messages),
             ws_bus_batches_sent: load(&self.ws_bus_batches_sent),
@@ -281,8 +287,14 @@ impl RuntimeMetrics {
         add(&self.ws_bus_envelopes_received, envelope_count);
     }
 
-    pub(super) fn record_ws_bus_parse_failure(&self) {
+    pub(super) fn record_ws_bus_invalid_input_failure(&self) {
         increment(&self.ws_bus_parse_failures);
+        increment(&self.ws_bus_invalid_input_failures);
+    }
+
+    pub(super) fn record_ws_bus_unsupported_feature_failure(&self) {
+        increment(&self.ws_bus_parse_failures);
+        increment(&self.ws_bus_unsupported_feature_failures);
     }
 
     pub(super) fn record_ws_bus_client_request(&self) {
@@ -340,6 +352,8 @@ mod tests {
         metrics.record_ws_session_loop_started();
         metrics.record_ws_session_loop_exit(WsSessionLoopExitReason::PeerClosed);
         metrics.record_ws_bus_batch_received(3);
+        metrics.record_ws_bus_invalid_input_failure();
+        metrics.record_ws_bus_unsupported_feature_failure();
         metrics.record_ws_bus_client_request();
         metrics.record_ws_bus_client_message();
         metrics.record_ws_bus_batch_sent(2);
@@ -358,6 +372,9 @@ mod tests {
         assert_eq!(snapshot.ws_session_loop_exits_peer_closed, 1);
         assert_eq!(snapshot.ws_session_loop_exits_ping_timeout, 0);
         assert_eq!(snapshot.ws_session_loop_exits_transport_disconnected, 0);
+        assert_eq!(snapshot.ws_bus_parse_failures, 2);
+        assert_eq!(snapshot.ws_bus_invalid_input_failures, 1);
+        assert_eq!(snapshot.ws_bus_unsupported_feature_failures, 1);
         assert_eq!(snapshot.ws_bus_batches_received, 1);
         assert_eq!(snapshot.ws_bus_envelopes_received, 3);
         assert_eq!(snapshot.ws_bus_client_requests, 1);
