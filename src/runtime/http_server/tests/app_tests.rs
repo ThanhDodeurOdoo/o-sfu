@@ -53,11 +53,7 @@ async fn publish_video_stream(
     transport_adapter: &RuntimeTransportAdapter,
 ) {
     channel
-        .apply_publish_transport_ready(
-            session_id,
-            connection_id,
-            transport_adapter,
-        )
+        .apply_publish_transport_ready(session_id, connection_id, transport_adapter)
         .await;
     assert!(
         channel

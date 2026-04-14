@@ -247,12 +247,8 @@ pub(super) async fn setup_two_ready_sessions() -> (
         .unwrap();
     let (adapter, _stub) = stub_adapter();
     for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
-        channel
-            .set_publish_transport_ready(session_id)
-            .await;
-        channel
-            .set_consume_transport_ready(session_id)
-            .await;
+        channel.set_publish_transport_ready(session_id).await;
+        channel.set_consume_transport_ready(session_id).await;
         channel
             .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
             .await;
@@ -293,12 +289,8 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
         .unwrap();
     let (adapter, stub) = stub_adapter();
     for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
-        channel
-            .set_publish_transport_ready(session_id)
-            .await;
-        channel
-            .set_consume_transport_ready(session_id)
-            .await;
+        channel.set_publish_transport_ready(session_id).await;
+        channel.set_consume_transport_ready(session_id).await;
         channel
             .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
             .await;

@@ -5,7 +5,7 @@ use tracing::debug;
 
 use super::{
     STUB_SERVER_BUS_ID, codec, empty_object, signaling_edge::DomainCommand,
-    transport_bootstrap_edge, transport_connect_edge::LegacyTransportConnectRequest,
+    transport_bootstrap_edge,
 };
 use crate::runtime::{
     channel::Channel,
@@ -18,7 +18,7 @@ use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
     current_protocol::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
-        CurrentPublishTrackResponse, CurrentServerRequest,
+        CurrentPublishTrackResponse, CurrentServerRequest, CurrentStartRecordingPayload,
     },
     ortc_mapper,
     protocol::{RecordingOptions, WebSocketCloseCode},
@@ -142,6 +142,13 @@ impl SessionController {
                 self.handle_client_response_frame(response_to, payload)
                     .await
             }
+            DomainCommand::LegacyTransportConnect {
+                request_id,
+                request,
+            } => {
+                self.handle_legacy_transport_connect_frame(writer, request_id, request)
+                    .await
+            }
             DomainCommand::Request {
                 request_id,
                 request,
@@ -181,7 +188,25 @@ impl SessionController {
     ) -> Result<(), super::StubBusOutcome> {
         self.metrics.record_ws_bus_client_request();
         debug!(request_id = %request_id.as_str(), "dispatching client bus request");
-        let response = self.execute_request(&request).await;
+        let response = self.execute_request(request).await;
+        self.send_response(writer, request_id, response)
+            .await
+            .map_err(|_error| super::StubBusOutcome::Break)
+    }
+
+    async fn handle_legacy_transport_connect_frame(
+        &self,
+        writer: &mut WsWriter,
+        request_id: CurrentBusRequestId,
+        request: super::transport_connect_edge::LegacyTransportConnectRequest,
+    ) -> Result<(), super::StubBusOutcome> {
+        self.metrics.record_ws_bus_client_request();
+        debug!(
+            request_id = %request_id.as_str(),
+            direction = ?request.direction(),
+            "dispatching legacy transport connect request"
+        );
+        let response = self.handle_transport_connect_request(request).await;
         self.send_response(writer, request_id, response)
             .await
             .map_err(|_error| super::StubBusOutcome::Break)
@@ -335,41 +360,51 @@ impl SessionController {
         result
     }
 
-    async fn execute_request(&self, request: &CurrentClientRequest) -> Value {
-        if let Some(request) = LegacyTransportConnectRequest::from_client_request(request) {
-            return self.handle_transport_connect_request(&request).await;
-        }
+    async fn execute_request(&self, request: CurrentClientRequest) -> Value {
         match request {
             CurrentClientRequest::PublishTrack(payload) => {
-                self.handle_publish_request(payload).await
+                self.handle_publish_request(&payload).await
             }
             CurrentClientRequest::StartRecording(payload) => {
-                debug!("handling recording start request");
-                Value::Bool(
-                    self.channel
-                        .start_recording(
-                            &self.session_id,
-                            RecordingOptions {
-                                audio: payload.audio,
-                                video: payload.video,
-                                transcription: payload.transcription,
-                            },
-                        )
-                        .await,
-                )
+                self.handle_start_recording_request(payload).await
             }
-            CurrentClientRequest::StopRecording => {
-                debug!("handling recording stop request");
-                Value::Bool(self.channel.stop_recording(&self.session_id).await)
-            }
+            CurrentClientRequest::StopRecording => self.handle_stop_recording_request().await,
             CurrentClientRequest::ConnectUploadTransport(_)
-            | CurrentClientRequest::ConnectDownloadTransport(_) => empty_object(),
+            | CurrentClientRequest::ConnectDownloadTransport(_) => {
+                Self::handle_unexpected_transport_connect_request()
+            }
         }
+    }
+
+    async fn handle_start_recording_request(&self, payload: CurrentStartRecordingPayload) -> Value {
+        debug!("handling recording start request");
+        Value::Bool(
+            self.channel
+                .start_recording(
+                    &self.session_id,
+                    RecordingOptions {
+                        audio: payload.audio,
+                        video: payload.video,
+                        transcription: payload.transcription,
+                    },
+                )
+                .await,
+        )
+    }
+
+    async fn handle_stop_recording_request(&self) -> Value {
+        debug!("handling recording stop request");
+        Value::Bool(self.channel.stop_recording(&self.session_id).await)
+    }
+
+    fn handle_unexpected_transport_connect_request() -> Value {
+        debug!("ignoring legacy transport connect request outside signaling edge");
+        empty_object()
     }
 
     async fn handle_transport_connect_request(
         &self,
-        request: &LegacyTransportConnectRequest,
+        request: super::transport_connect_edge::LegacyTransportConnectRequest,
     ) -> Value {
         let direction = request.direction();
         if self

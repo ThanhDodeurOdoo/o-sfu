@@ -11,9 +11,7 @@ use crate::signaling::{
 use super::super::{
     ChannelEventMessage, ChannelJoinError,
     outbound::{MessageFanout, OutboundSender},
-    session_negotiation::{
-        SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady,
-    },
+    session_negotiation::{SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady},
 };
 use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
