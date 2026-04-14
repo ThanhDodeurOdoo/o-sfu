@@ -14,6 +14,7 @@ use o_sfu::{
     },
     signaling::{
         http::IncomingBitRateStats,
+        protocol::ServerMessage,
         shared::{DownloadStates, SessionId, StreamType},
         webrtc::MediaKind,
     },
@@ -24,6 +25,7 @@ use crate::support::{
     fake_media::{FakeClock, FakeMediaSource},
     fake_rtc_peer::FakeRtcPeer,
     full_stack::{FakePeer, LocalNetwork},
+    native_full_stack::{NativeFakePeer, NativeLocalNetwork},
     test_config,
 };
 use tokio::time::{sleep, timeout};
@@ -48,11 +50,11 @@ fn fake_media_source_uses_manual_clock_deterministically() {
 }
 
 #[tokio::test]
-async fn fake_peers_publish_and_receive_consumer_bootstrap_over_real_server_entries() {
+async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = LocalNetwork::start(config).await;
+    let network = NativeLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -83,42 +85,17 @@ async fn fake_peers_publish_and_receive_consumer_bootstrap_over_real_server_entr
 
     assert!(publisher.welcome().features.rtc);
     assert!(subscriber.welcome().features.rtc);
-    assert!(
-        publisher
-            .transport_bootstrap()
-            .download_transport
-            .id
-            .starts_with("stc-rtc-")
-    );
-    assert!(
-        subscriber
-            .transport_bootstrap()
-            .upload_transport
-            .id
-            .starts_with("cts-rtc-")
-    );
-
-    assert!(publisher.connect_transports().await.is_some());
-    assert!(subscriber.connect_transports().await.is_some());
 
     let source = FakeMediaSource::audio();
-    let producer_id = publisher.publish_track(&source).await;
-    assert!(producer_id.is_some());
-    let Some(producer_id) = producer_id else {
-        return;
-    };
-
-    let request = subscriber.read_next_server_request().await;
-    assert!(request.is_some());
-    let Some(CurrentServerRequest::BootstrapRemoteTrack(payload)) = request else {
-        panic!("expected INIT_CONSUMER server request");
-    };
-
-    assert_eq!(payload.source_id, producer_id);
-    assert_eq!(payload.session_id, SessionId::Integer(1));
-    assert_eq!(payload.stream_type, StreamType::Audio);
-    assert_eq!(payload.media_kind, MediaKind::Audio);
-    assert!(payload.active);
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber,
+        SessionId::Integer(1),
+        StreamType::Audio,
+        true,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -126,50 +103,51 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = LocalNetwork::start(config).await;
+    let network = NativeLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
     };
 
-    let peers = connect_two_isolated_audio_flows(&network).await;
+    let peers = Box::pin(connect_two_isolated_audio_flows(&network)).await;
     assert!(peers.is_some());
     let Some((mut publisher_a, mut subscriber_a, mut publisher_b, mut subscriber_b)) = peers else {
         return;
     };
 
     let source = FakeMediaSource::audio();
-    let producer_a = publisher_a.publish_track(&source).await;
-    assert!(producer_a.is_some());
-    let Some(producer_a) = producer_a else {
-        return;
-    };
+    assert!(publisher_a.publish_track(&source).await.is_some());
+    assert!(publisher_a.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber_a,
+        SessionId::Integer(90),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert_no_server_message_native(&mut subscriber_b).await;
 
-    assert_remote_track_bootstrap(&mut subscriber_a, &producer_a, SessionId::Integer(90)).await;
-    assert_no_server_request(&mut subscriber_b).await;
-
-    let producer_b = publisher_b.publish_track(&source).await;
-    assert!(producer_b.is_some());
-    let Some(producer_b) = producer_b else {
-        return;
-    };
-
-    assert_remote_track_bootstrap(&mut subscriber_b, &producer_b, SessionId::Integer(90)).await;
-
-    assert!(producer_a.starts_with("producer-"));
-    assert!(producer_b.starts_with("producer-"));
+    assert!(publisher_b.publish_track(&source).await.is_some());
+    assert!(publisher_b.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber_b,
+        SessionId::Integer(90),
+        StreamType::Audio,
+        true,
+    )
+    .await;
 
     assert!(publisher_a.close().await.is_some());
-    assert_departure_message(&mut subscriber_a, SessionId::Integer(90)).await;
-    assert_no_server_message(&mut subscriber_b).await;
+    assert_departure_message_native(&mut subscriber_a, SessionId::Integer(90)).await;
+    assert_no_server_message_native(&mut subscriber_b).await;
 }
 
 #[tokio::test]
-async fn fake_peers_cover_publish_mute_late_join_and_disconnect_deterministically() {
+async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_deterministically() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = LocalNetwork::start(config).await;
+    let network = NativeLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -189,34 +167,30 @@ async fn fake_peers_cover_publish_mute_late_join_and_disconnect_deterministicall
         return;
     };
 
-    let producer_id = publish_camera_track(&mut publisher, &mut subscriber).await;
-    assert!(producer_id.is_some());
-    let Some(producer_id) = producer_id else {
-        return;
-    };
+    assert!(publish_camera_track(&mut publisher, &mut subscriber).await.is_some());
 
-    assert_consumer_download_toggle_round_trip(&mut subscriber).await;
-    assert_camera_info_update(&mut publisher, &mut subscriber, true).await;
-    assert_camera_info_update(&mut publisher, &mut subscriber, false).await;
+    assert_consumer_download_toggle_round_trip_native(&mut subscriber).await;
+    assert_camera_unpublish_updates_snapshot_and_info(&mut publisher, &mut subscriber).await;
 
     let late_subscriber = connect_late_subscriber(&network, &channel).await;
     assert!(late_subscriber.is_some());
     let Some(mut late_subscriber) = late_subscriber else {
         return;
     };
-    assert_late_join_consumer_is_inactive(&mut late_subscriber, &producer_id).await;
+    assert_peer_joined_message_native(&mut subscriber, SessionId::Integer(30)).await;
+    assert_late_join_has_no_track_snapshot(&mut late_subscriber).await;
 
     assert!(publisher.close().await.is_some());
-    assert_departure_message(&mut subscriber, SessionId::Integer(10)).await;
-    assert_departure_message(&mut late_subscriber, SessionId::Integer(10)).await;
+    assert_departure_message_native(&mut subscriber, SessionId::Integer(10)).await;
+    assert_departure_message_native(&mut late_subscriber, SessionId::Integer(10)).await;
 }
 
 #[tokio::test]
-async fn fake_peers_cover_session_replacement_and_republish_deterministically() {
+async fn fake_peers_cover_session_replacement_and_republish_over_native_protocol() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = LocalNetwork::start(config).await;
+    let network = NativeLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -245,9 +219,6 @@ async fn fake_peers_cover_session_replacement_and_republish_deterministically() 
         return;
     };
 
-    assert!(initial_publisher.connect_transports().await.is_some());
-    assert!(subscriber.connect_transports().await.is_some());
-
     let replacement = network
         .connect_fake_peer(&channel, SessionId::Integer(40), TEST_CHANNEL_KEY)
         .await;
@@ -260,26 +231,19 @@ async fn fake_peers_cover_session_replacement_and_republish_deterministically() 
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message(&mut subscriber, SessionId::Integer(40)).await;
+    assert_departure_message_native(&mut subscriber, SessionId::Integer(40)).await;
+    assert_peer_joined_message_native(&mut subscriber, SessionId::Integer(40)).await;
 
-    assert!(replacement.connect_transports().await.is_some());
     let source = FakeMediaSource::audio();
-    let producer_id = replacement.publish_track(&source).await;
-    assert!(producer_id.is_some());
-    let Some(producer_id) = producer_id else {
-        return;
-    };
-
-    let request = subscriber.read_next_server_request().await;
-    assert!(request.is_some());
-    let Some(CurrentServerRequest::BootstrapRemoteTrack(payload)) = request else {
-        panic!("expected INIT_CONSUMER after session replacement");
-    };
-    assert_eq!(payload.source_id, producer_id);
-    assert_eq!(payload.session_id, SessionId::Integer(40));
-    assert_eq!(payload.stream_type, StreamType::Audio);
-    assert_eq!(payload.media_kind, MediaKind::Audio);
-    assert!(payload.active);
+    assert!(replacement.publish_track(&source).await.is_some());
+    assert!(replacement.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber,
+        SessionId::Integer(40),
+        StreamType::Audio,
+        true,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -701,8 +665,8 @@ async fn connect_rtc_publisher(
 }
 
 async fn connect_two_isolated_audio_flows(
-    network: &LocalNetwork,
-) -> Option<(FakePeer, FakePeer, FakePeer, FakePeer)> {
+    network: &NativeLocalNetwork,
+) -> Option<(NativeFakePeer, NativeFakePeer, NativeFakePeer, NativeFakePeer)> {
     let channel_a = network
         .create_channel("issuer-topology-a", Some(TEST_CHANNEL_KEY))
         .await?;
@@ -723,14 +687,6 @@ async fn connect_two_isolated_audio_flows(
         .connect_fake_peer(&channel_b, SessionId::Integer(91), TEST_CHANNEL_KEY)
         .await?;
 
-    let mut publisher_a = publisher_a;
-    let mut subscriber_a = subscriber_a;
-    let mut publisher_b = publisher_b;
-    let mut subscriber_b = subscriber_b;
-    publisher_a.connect_transports().await?;
-    subscriber_a.connect_transports().await?;
-    publisher_b.connect_transports().await?;
-    subscriber_b.connect_transports().await?;
     Some((publisher_a, subscriber_a, publisher_b, subscriber_b))
 }
 
@@ -794,45 +750,6 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     );
 }
 
-async fn assert_remote_track_bootstrap(
-    subscriber: &mut FakePeer,
-    producer_id: &str,
-    session_id: SessionId,
-) {
-    let request = subscriber.read_next_server_request().await;
-    assert!(request.is_some());
-    let Some(CurrentServerRequest::BootstrapRemoteTrack(request)) = request else {
-        panic!("expected INIT_CONSUMER");
-    };
-    assert_eq!(request.source_id, producer_id);
-    assert_eq!(request.session_id, session_id);
-    assert_eq!(request.stream_type, StreamType::Audio);
-    assert_eq!(request.media_kind, MediaKind::Audio);
-    assert!(request.active);
-}
-
-async fn assert_no_server_request(subscriber: &mut FakePeer) {
-    assert!(
-        timeout(
-            Duration::from_millis(200),
-            subscriber.read_next_server_request()
-        )
-        .await
-        .is_err()
-    );
-}
-
-async fn assert_no_server_message(subscriber: &mut FakePeer) {
-    assert!(
-        timeout(
-            Duration::from_millis(200),
-            subscriber.read_next_server_message()
-        )
-        .await
-        .is_err()
-    );
-}
-
 async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     publisher: &mut FakePeer,
     subscriber: &mut FakePeer,
@@ -881,40 +798,30 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
 }
 
 async fn connect_camera_flow_peers(
-    network: &LocalNetwork,
+    network: &NativeLocalNetwork,
     channel: &str,
-) -> Option<(FakePeer, FakePeer)> {
+) -> Option<(NativeFakePeer, NativeFakePeer)> {
     let publisher = network
         .connect_fake_peer(channel, SessionId::Integer(10), TEST_CHANNEL_KEY)
         .await?;
     let subscriber = network
         .connect_fake_peer(channel, SessionId::Integer(20), TEST_CHANNEL_KEY)
         .await?;
-    let mut publisher = publisher;
-    let mut subscriber = subscriber;
-    publisher.connect_transports().await?;
-    subscriber.connect_transports().await?;
     Some((publisher, subscriber))
 }
 
 async fn publish_camera_track(
-    publisher: &mut FakePeer,
-    subscriber: &mut FakePeer,
-) -> Option<String> {
+    publisher: &mut NativeFakePeer,
+    subscriber: &mut NativeFakePeer,
+) -> Option<()> {
     let source = FakeMediaSource::camera();
-    let producer_id = publisher.publish_track(&source).await?;
-    let first_consumer = subscriber.read_next_server_request().await;
-    assert!(first_consumer.is_some());
-    let Some(CurrentServerRequest::BootstrapRemoteTrack(first_consumer)) = first_consumer else {
-        panic!("expected first INIT_CONSUMER");
-    };
-    assert_eq!(first_consumer.source_id, producer_id);
-    assert_eq!(first_consumer.stream_type, StreamType::Camera);
-    assert!(first_consumer.active);
-    Some(producer_id)
+    publisher.publish_track(&source).await?;
+    publisher.complete_next_negotiation().await?;
+    assert_track_snapshot(subscriber, SessionId::Integer(10), StreamType::Camera, true).await;
+    Some(())
 }
 
-async fn assert_consumer_download_toggle_round_trip(subscriber: &mut FakePeer) {
+async fn assert_consumer_download_toggle_round_trip_native(subscriber: &mut NativeFakePeer) {
     assert!(
         subscriber
             .update_subscription(
@@ -941,53 +848,110 @@ async fn assert_consumer_download_toggle_round_trip(subscriber: &mut FakePeer) {
     );
 }
 
-async fn assert_camera_info_update(
-    publisher: &mut FakePeer,
-    subscriber: &mut FakePeer,
-    active: bool,
+async fn assert_camera_unpublish_updates_snapshot_and_info(
+    publisher: &mut NativeFakePeer,
+    subscriber: &mut NativeFakePeer,
 ) {
     assert!(
         publisher
-            .set_publication_active(StreamType::Camera, active)
+            .set_publication_active(StreamType::Camera, false)
             .await
             .is_some()
     );
-    let message = subscriber.read_next_server_message().await;
-    assert!(message.is_some());
-    let Some(CurrentServerMessage::SessionInfoChanged(snapshot)) = message else {
-        panic!("expected session info change after camera state update");
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_snapshot = subscriber.read_next_server_message().await;
+    assert!(track_snapshot.is_some());
+    let Some(ServerMessage::Tracks(track_snapshot)) = track_snapshot else {
+        panic!("expected track snapshot after camera unpublish");
     };
-    assert_eq!(
-        snapshot.get("10").and_then(|info| info.is_camera_on),
-        Some(active)
+    assert!(
+        track_snapshot.is_empty(),
+        "native unpublish should clear the authoritative camera track snapshot"
+    );
+
+    let peer_info = subscriber.read_next_server_message().await;
+    assert!(peer_info.is_some());
+    let Some(ServerMessage::PeerInfo(peer_info)) = peer_info else {
+        panic!("expected peer info update after camera unpublish");
+    };
+    assert_eq!(peer_info.session_id, SessionId::Integer(10));
+    assert_eq!(peer_info.info.is_camera_on, None);
+}
+
+async fn connect_late_subscriber(
+    network: &NativeLocalNetwork,
+    channel: &str,
+) -> Option<NativeFakePeer> {
+    network
+        .connect_fake_peer(channel, SessionId::Integer(30), TEST_CHANNEL_KEY)
+        .await
+}
+
+async fn assert_late_join_has_no_track_snapshot(late_subscriber: &mut NativeFakePeer) {
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            late_subscriber.read_next_server_message()
+        )
+        .await
+        .is_err()
     );
 }
 
-async fn connect_late_subscriber(network: &LocalNetwork, channel: &str) -> Option<FakePeer> {
-    let mut late_subscriber = network
-        .connect_fake_peer(channel, SessionId::Integer(30), TEST_CHANNEL_KEY)
-        .await?;
-    late_subscriber.connect_transports().await?;
-    Some(late_subscriber)
+async fn assert_departure_message_native(subscriber: &mut NativeFakePeer, session_id: SessionId) {
+    let departure = subscriber.read_next_server_message().await;
+    assert!(departure.is_some());
+    let Some(ServerMessage::PeerLeft(departure)) = departure else {
+        panic!("expected native peer departure notification");
+    };
+    assert_eq!(departure.session_id, session_id);
 }
 
-async fn assert_late_join_consumer_is_inactive(late_subscriber: &mut FakePeer, producer_id: &str) {
-    let late_consumer = late_subscriber.read_next_server_request().await;
-    assert!(late_consumer.is_some());
-    let Some(CurrentServerRequest::BootstrapRemoteTrack(late_consumer)) = late_consumer else {
-        panic!("expected late-join INIT_CONSUMER");
+async fn assert_peer_joined_message_native(subscriber: &mut NativeFakePeer, session_id: SessionId) {
+    let joined = subscriber.read_next_server_message().await;
+    assert!(joined.is_some());
+    let Some(ServerMessage::PeerJoined(joined)) = joined else {
+        panic!("expected native peer joined notification");
     };
-    assert_eq!(late_consumer.source_id, producer_id);
-    assert_eq!(late_consumer.stream_type, StreamType::Camera);
-    assert_eq!(late_consumer.media_kind, MediaKind::Video);
-    assert!(!late_consumer.active);
+    assert_eq!(joined.session_id, session_id);
+}
+
+async fn assert_track_snapshot(
+    subscriber: &mut NativeFakePeer,
+    session_id: SessionId,
+    stream_type: StreamType,
+    active: bool,
+) {
+    let message = subscriber.read_next_server_message().await;
+    assert!(message.is_some());
+    let Some(ServerMessage::Tracks(track_bindings)) = message else {
+        panic!("expected native track snapshot");
+    };
+    assert_eq!(track_bindings.len(), 1);
+    let Some(track_binding) = track_bindings.first() else {
+        panic!("expected one native track binding");
+    };
+    assert_eq!(track_binding.session_id, session_id);
+    assert_eq!(track_binding.stream_type, stream_type);
+    assert_eq!(track_binding.active, active);
+}
+
+async fn assert_no_server_message_native(subscriber: &mut NativeFakePeer) {
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            subscriber.read_next_server_message()
+        )
+        .await
+        .is_err()
+    );
 }
 
 async fn assert_departure_message(subscriber: &mut FakePeer, session_id: SessionId) {
     let departure = subscriber.read_next_server_message().await;
     assert!(departure.is_some());
     let Some(CurrentServerMessage::SessionDeparted(departure)) = departure else {
-        panic!("expected departure notification");
+        panic!("expected legacy departure notification");
     };
     assert_eq!(departure.session_id, session_id);
 }
