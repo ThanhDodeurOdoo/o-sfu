@@ -1,4 +1,5 @@
 use o_sfu_router::{MediaCapabilities, MediaCodecCapability, MediaKind};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -8,28 +9,28 @@ use crate::{
         TransportIceCandidate, TransportPublishOptions, TransportPublishOptionsByMediaKind,
         TransportSctpParameters,
     },
-    signaling::{
-        current_protocol::{CurrentServerRequest, CurrentTransportBootstrapPayload},
-        webrtc::{
-            DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
-            PublishOptionsByMediaKind, RtpCapabilities, SctpParameters, TransportBootstrap,
-            serialize_codec_settings, serialize_rtcp_feedback,
-        },
+    signaling::webrtc::{
+        DtlsFingerprint, DtlsParameters, IceCandidate, IceParameters, PublishOptions,
+        PublishOptionsByMediaKind, RtpCapabilities, SctpParameters, TransportBootstrap,
+        serialize_codec_settings, serialize_rtcp_feedback,
     },
 };
+
+const LEGACY_TRANSPORT_BOOTSTRAP_REQUEST_NAME: &str = "INIT_TRANSPORTS";
 
 pub(super) fn request_value(
     payload: &SessionTransportBootstrap,
 ) -> Result<Value, serde_json::Error> {
-    serde_json::to_value(CurrentServerRequest::BootstrapTransports(
-        legacy_transport_bootstrap_payload(payload),
-    ))
+    serde_json::to_value(LegacyTransportBootstrapRequest {
+        name: LEGACY_TRANSPORT_BOOTSTRAP_REQUEST_NAME,
+        payload: legacy_transport_bootstrap_payload(payload),
+    })
 }
 
 fn legacy_transport_bootstrap_payload(
     payload: &SessionTransportBootstrap,
-) -> CurrentTransportBootstrapPayload {
-    CurrentTransportBootstrapPayload {
+) -> LegacyTransportBootstrapPayload {
+    LegacyTransportBootstrapPayload {
         router_capabilities: to_wire_rtp_capabilities(&payload.router_capabilities),
         download_transport: legacy_transport_bootstrap(&payload.download_transport),
         upload_transport: legacy_transport_bootstrap(&payload.upload_transport),
@@ -179,6 +180,25 @@ fn media_kind_label(media_kind: MediaKind) -> &'static str {
         MediaKind::Audio => webrtc::media_kind::AUDIO,
         MediaKind::Video => webrtc::media_kind::VIDEO,
     }
+}
+
+#[derive(Serialize)]
+struct LegacyTransportBootstrapRequest {
+    name: &'static str,
+    payload: LegacyTransportBootstrapPayload,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyTransportBootstrapPayload {
+    #[serde(rename = "capabilities")]
+    router_capabilities: RtpCapabilities,
+    #[serde(rename = "stcConfig")]
+    download_transport: TransportBootstrap,
+    #[serde(rename = "ctsConfig")]
+    upload_transport: TransportBootstrap,
+    #[serde(rename = "producerOptionsByKind")]
+    publish_options_by_media_kind: PublishOptionsByMediaKind,
 }
 
 #[cfg(test)]

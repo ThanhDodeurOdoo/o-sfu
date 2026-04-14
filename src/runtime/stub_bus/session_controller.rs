@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tracing::debug;
 
 use super::{
@@ -16,13 +16,15 @@ use crate::runtime::{
 };
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-    current_protocol::{CurrentClientMessage, CurrentPublishTrackResponse, CurrentServerRequest},
+    current_protocol::{CurrentClientMessage, CurrentPublishTrackResponse},
     ortc_mapper,
     protocol::{RecordingOptions, WebSocketCloseCode},
     shared::SessionId,
     webrtc::RtpCapabilities,
 };
 use o_sfu_router::MediaCapabilities;
+
+const LEGACY_PING_REQUEST_NAME: &str = "PING";
 
 #[derive(Debug)]
 pub(super) struct SessionController {
@@ -115,11 +117,7 @@ impl SessionController {
             return Ok(());
         }
         let request_id = self
-            .send_request_value(
-                writer,
-                serde_json::to_value(CurrentServerRequest::Ping)
-                    .map_err(|_error| WebSocketCloseCode::Error)?,
-            )
+            .send_request_value(writer, legacy_ping_request_value())
             .await?;
         self.pending_ping_request_id = Some(request_id);
         debug!("sent websocket bus ping request");
@@ -543,6 +541,10 @@ impl SessionController {
             }
         }
     }
+}
+
+fn legacy_ping_request_value() -> Value {
+    json!({ "name": LEGACY_PING_REQUEST_NAME })
 }
 
 fn parse_transport_bootstrap_capabilities(
