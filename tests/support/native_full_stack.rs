@@ -4,16 +4,11 @@
 )]
 
 use std::{
-    net::SocketAddr,
     sync::atomic::{AtomicU16, Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use futures_util::SinkExt;
-use str0m::{
-    Candidate, Rtc,
-    change::SdpOffer,
-};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
@@ -24,15 +19,17 @@ use o_sfu::{
         http::{STATS_PATH, StatsResponse},
         protocol::{
             AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
-            ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
-            StreamIntentPayload, SubscribePayload, WelcomePayload,
+            ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
+            WelcomePayload,
         },
         shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     },
 };
 
 use super::{
-    TestWebSocket, connect_websocket, create_channel, fake_media::FakeMediaSource,
+    TestWebSocket, connect_websocket, create_channel,
+    fake_media::{FakeClock, FakeMediaSource},
+    fake_rtc_peer::{NativeFakeRtcPeer, ReceivedMediaFrame},
     read_close_code, read_text_message, signed_connect_claims,
 };
 
@@ -87,7 +84,7 @@ impl NativeLocalNetwork {
             .ok()?;
 
         let welcome = decode_native_welcome_batch(&read_text_message(&mut websocket).await?)?;
-        let mut rtc_peer = NativeNegotiationRtcPeer::new(next_negotiation_port())?;
+        let mut rtc_peer = NativeFakeRtcPeer::bind(next_negotiation_port()).await?;
         answer_next_server_request(&mut websocket, &mut rtc_peer).await?;
 
         Some(NativeFakePeer {
@@ -108,7 +105,7 @@ pub struct NativeFakePeer {
     session_id: SessionId,
     websocket: TestWebSocket,
     welcome: WelcomePayload,
-    rtc_peer: NativeNegotiationRtcPeer,
+    rtc_peer: NativeFakeRtcPeer,
 }
 
 impl NativeFakePeer {
@@ -180,7 +177,9 @@ impl NativeFakePeer {
         &mut self,
         duration: Duration,
     ) -> Option<ServerMessage> {
-        timeout(duration, self.read_next_server_message()).await.ok()?
+        timeout(duration, self.read_next_server_message())
+            .await
+            .ok()?
     }
 
     pub async fn complete_next_negotiation(&mut self) -> Option<()> {
@@ -203,6 +202,34 @@ impl NativeFakePeer {
         Some(())
     }
 
+    pub async fn wait_until_connected(&mut self, timeout_window: Duration) -> Option<()> {
+        self.rtc_peer.wait_until_connected(timeout_window).await
+    }
+
+    pub async fn send_frames(
+        &mut self,
+        source: &mut FakeMediaSource,
+        clock: &mut FakeClock,
+        frame_count: usize,
+    ) -> Option<()> {
+        self.rtc_peer.send_frames(source, clock, frame_count).await
+    }
+
+    pub async fn send_frame(
+        &mut self,
+        source: &mut FakeMediaSource,
+        clock: &mut FakeClock,
+    ) -> Option<Vec<u8>> {
+        self.rtc_peer.send_frame(source, clock).await
+    }
+
+    pub async fn read_media_frame(
+        &mut self,
+        timeout_window: Duration,
+    ) -> Option<ReceivedMediaFrame> {
+        self.rtc_peer.read_media_frame(timeout_window).await
+    }
+
     pub async fn read_close_code(&mut self) -> Option<CloseCode> {
         read_close_code(&mut self.websocket).await
     }
@@ -223,12 +250,12 @@ impl NativeFakePeer {
         request: ServerRequest,
     ) -> Option<()> {
         let response = match request {
-            ServerRequest::Offer(payload) => ClientResponse::Offer(
-                self.rtc_peer.answer_offer(&payload.sdp)?,
-            ),
-            ServerRequest::Renegotiate(payload) => ClientResponse::Renegotiate(
-                self.rtc_peer.answer_offer(&payload.sdp)?,
-            ),
+            ServerRequest::Offer(payload) => {
+                ClientResponse::Offer(self.rtc_peer.answer_offer(&payload.sdp)?)
+            }
+            ServerRequest::Renegotiate(payload) => {
+                ClientResponse::Renegotiate(self.rtc_peer.answer_offer(&payload.sdp)?)
+            }
             ServerRequest::Ping => ClientResponse::Ping,
         };
         self.websocket
@@ -245,37 +272,9 @@ impl NativeFakePeer {
     }
 }
 
-struct NativeNegotiationRtcPeer {
-    rtc: Rtc,
-}
-
-impl NativeNegotiationRtcPeer {
-    fn new(port: u16) -> Option<Self> {
-        let mut rtc = Rtc::new(Instant::now());
-        rtc.add_local_candidate(
-            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp").ok()?,
-        )?;
-        Some(Self { rtc })
-    }
-
-    fn answer_offer(
-        &mut self,
-        offer_sdp: &str,
-    ) -> Option<SessionDescriptionPayload> {
-        let answer = self
-            .rtc
-            .sdp_api()
-            .accept_offer(SdpOffer::from_sdp_string(offer_sdp).ok()?)
-            .ok()?;
-        Some(SessionDescriptionPayload {
-            sdp: answer.to_sdp_string(),
-        })
-    }
-}
-
 async fn answer_next_server_request(
     websocket: &mut TestWebSocket,
-    rtc_peer: &mut NativeNegotiationRtcPeer,
+    rtc_peer: &mut NativeFakeRtcPeer,
 ) -> Option<()> {
     let batch = read_native_batch(websocket).await?;
     let envelope = batch.into_iter().next()?;
@@ -287,7 +286,9 @@ async fn answer_next_server_request(
         return None;
     };
     let response = match request {
-        ServerRequest::Offer(payload) => ClientResponse::Offer(rtc_peer.answer_offer(&payload.sdp)?),
+        ServerRequest::Offer(payload) => {
+            ClientResponse::Offer(rtc_peer.answer_offer(&payload.sdp)?)
+        }
         ServerRequest::Renegotiate(payload) => {
             ClientResponse::Renegotiate(rtc_peer.answer_offer(&payload.sdp)?)
         }
