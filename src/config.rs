@@ -14,7 +14,7 @@ const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
-const DEFAULT_ENABLE_NATIVE_PROTOCOL: bool = false;
+const DEFAULT_ENABLE_NATIVE_PROTOCOL: bool = true;
 const DEFAULT_ENABLE_TRANSCRIPTION_FEATURE: bool = false;
 const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(config.channel_size, 100);
         assert_eq!(config.session_timeout_ms, 10_000);
         assert_eq!(config.ping_interval_ms, 60_000);
-        assert!(!config.enable_native_protocol);
+        assert!(config.enable_native_protocol);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
         assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
