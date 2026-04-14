@@ -97,15 +97,6 @@ pub(crate) enum TransportDtlsRole {
     Auto,
 }
 
-impl TransportDtlsRole {
-    #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => webrtc::DtlsRole::Auto.as_str(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TransportDtlsFingerprint {
     pub(crate) algorithm: TransportDtlsFingerprintAlgorithm,
@@ -115,15 +106,6 @@ pub(crate) struct TransportDtlsFingerprint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportDtlsFingerprintAlgorithm {
     Sha256,
-}
-
-impl TransportDtlsFingerprintAlgorithm {
-    #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Sha256 => webrtc::DtlsFingerprintAlgorithm::Sha256.as_str(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

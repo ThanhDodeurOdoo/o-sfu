@@ -35,7 +35,7 @@ pub(super) struct RuntimeMetrics {
     ws_handshake_rejected_error: AtomicU64,
     ws_sessions_joined: AtomicU64,
     ws_startup_send_failures: AtomicU64,
-    ws_transport_bootstrap_failures: AtomicU64,
+    ws_session_initialize_failures: AtomicU64,
     ws_session_loops_started: AtomicU64,
     ws_session_loop_exits_peer_closed: AtomicU64,
     ws_session_loop_exits_reader_error: AtomicU64,
@@ -84,7 +84,7 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub ws_handshake_rejected_error: u64,
     pub ws_sessions_joined: u64,
     pub ws_startup_send_failures: u64,
-    pub ws_transport_bootstrap_failures: u64,
+    pub ws_session_initialize_failures: u64,
     pub ws_session_loops_started: u64,
     pub ws_session_loop_exits_peer_closed: u64,
     pub ws_session_loop_exits_reader_error: u64,
@@ -136,7 +136,7 @@ impl RuntimeMetrics {
             ws_handshake_rejected_error: load(&self.ws_handshake_rejected_error),
             ws_sessions_joined: load(&self.ws_sessions_joined),
             ws_startup_send_failures: load(&self.ws_startup_send_failures),
-            ws_transport_bootstrap_failures: load(&self.ws_transport_bootstrap_failures),
+            ws_session_initialize_failures: load(&self.ws_session_initialize_failures),
             ws_session_loops_started: load(&self.ws_session_loops_started),
             ws_session_loop_exits_peer_closed: load(&self.ws_session_loop_exits_peer_closed),
             ws_session_loop_exits_reader_error: load(&self.ws_session_loop_exits_reader_error),
@@ -255,8 +255,8 @@ impl RuntimeMetrics {
         increment(&self.ws_startup_send_failures);
     }
 
-    pub(super) fn record_ws_transport_bootstrap_failure(&self) {
-        increment(&self.ws_transport_bootstrap_failures);
+    pub(super) fn record_ws_session_initialize_failure(&self) {
+        increment(&self.ws_session_initialize_failures);
     }
 
     pub(super) fn record_ws_session_loop_started(&self) {
@@ -292,37 +292,20 @@ impl RuntimeMetrics {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn record_ws_bus_batch_received(&self, envelope_count: usize) {
         increment(&self.ws_bus_batches_received);
         add(&self.ws_bus_envelopes_received, envelope_count);
     }
 
-    pub(super) fn record_ws_bus_parse_failure(&self) {
-        increment(&self.ws_bus_parse_failures);
-    }
-
+    #[cfg(test)]
     pub(super) fn record_ws_bus_client_request(&self) {
         increment(&self.ws_bus_client_requests);
     }
 
+    #[cfg(test)]
     pub(super) fn record_ws_bus_client_message(&self) {
         increment(&self.ws_bus_client_messages);
-    }
-
-    pub(super) fn record_ws_bus_client_response_ignored(&self) {
-        increment(&self.ws_bus_client_responses_ignored);
-    }
-
-    pub(super) fn record_ws_bus_client_request_decode_failure(&self) {
-        increment(&self.ws_bus_client_request_decode_failures);
-    }
-
-    pub(super) fn record_ws_bus_client_message_decode_failure(&self) {
-        increment(&self.ws_bus_client_message_decode_failures);
-    }
-
-    pub(super) fn record_ws_bus_stub_publish_request(&self) {
-        increment(&self.ws_bus_stub_publish_requests);
     }
 
     pub(super) fn record_ws_bus_batch_sent(&self, envelope_count: usize) {

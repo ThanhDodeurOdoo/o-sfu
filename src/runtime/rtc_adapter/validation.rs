@@ -1,21 +1,33 @@
-use std::str::FromStr;
-
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::ParseDiagnosticKind;
+#[cfg(test)]
+use std::str::FromStr;
+#[cfg(test)]
 use str0m::config::Fingerprint;
-use tracing::{debug, error, warn};
+#[cfg(test)]
+use tracing::debug;
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use tracing::{error, warn};
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::ice;
+#[cfg(test)]
 use super::{
-    dtls, ice, sdp,
+    dtls, sdp,
     state::{ParsedRemoteIceCredentials, RtcSessionState},
 };
 use crate::runtime::transport_adapter::TransportAdapterError;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::{SessionTransportBootstrap, TransportIceCandidate};
+#[cfg(test)]
 use crate::runtime::transport_connect::{
     TransportConnectDtlsParameters, TransportConnectIceParameters,
 };
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 const CANDIDATE_COMPONENT_ID_RTP: u16 = 1;
 
+#[cfg(test)]
 pub(super) fn validate_sdp_offer(sdp_offer: &str) -> Result<(), TransportAdapterError> {
     let parsed_offer = sdp::parse_offer_sdp(sdp_offer).map_err(|diagnostic| {
         map_sdp_diagnostic_to_adapter_error(diagnostic.as_ref(), diagnostic.replay_context())
@@ -24,6 +36,7 @@ pub(super) fn validate_sdp_offer(sdp_offer: &str) -> Result<(), TransportAdapter
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn parse_dtls_parameters(
     dtls_parameters: &TransportConnectDtlsParameters,
 ) -> Result<dtls::ParsedDtlsParameters, TransportAdapterError> {
@@ -63,6 +76,7 @@ pub(super) fn validate_dtls_parameters(
     parse_dtls_parameters(dtls_parameters).map(|_parsed| ())
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) fn validate_bootstrap_payload(
     payload: &SessionTransportBootstrap,
 ) -> Result<(), TransportAdapterError> {
@@ -77,6 +91,7 @@ pub(super) fn validate_bootstrap_payload(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn parse_remote_fingerprint(
     fingerprint: &dtls::ParsedDtlsFingerprint,
 ) -> Result<Fingerprint, TransportAdapterError> {
@@ -84,6 +99,7 @@ pub(super) fn parse_remote_fingerprint(
     Fingerprint::from_str(&fingerprint_string).map_err(|_error| TransportAdapterError::InvalidInput)
 }
 
+#[cfg(test)]
 pub(super) fn parse_remote_ice_credentials(
     ice_parameters: Option<&TransportConnectIceParameters>,
 ) -> Result<Option<ParsedRemoteIceCredentials>, TransportAdapterError> {
@@ -102,6 +118,7 @@ pub(super) fn parse_remote_ice_credentials(
     }))
 }
 
+#[cfg(test)]
 pub(super) fn ensure_remote_fingerprint_compatibility(
     session_state: &RtcSessionState,
     remote_fingerprint: &str,
@@ -116,6 +133,7 @@ pub(super) fn ensure_remote_fingerprint_compatibility(
     }
 }
 
+#[cfg(test)]
 pub(super) fn ensure_remote_ice_credentials_compatibility(
     session_state: &RtcSessionState,
     remote_ice_credentials: Option<&ParsedRemoteIceCredentials>,
@@ -133,6 +151,7 @@ pub(super) fn ensure_remote_ice_credentials_compatibility(
     }
 }
 
+#[cfg(test)]
 pub(super) fn local_dtls_active_role(parsed_role: dtls::ParsedDtlsRole) -> bool {
     match parsed_role {
         dtls::ParsedDtlsRole::Server => true,
@@ -140,6 +159,7 @@ pub(super) fn local_dtls_active_role(parsed_role: dtls::ParsedDtlsRole) -> bool 
     }
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn validate_ice_candidates(
     transport_id: &str,
     candidates: &[TransportIceCandidate],
@@ -179,6 +199,7 @@ fn validate_ice_candidates(
     Ok(())
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn candidate_to_sdp_line(candidate: &TransportIceCandidate) -> String {
     format!(
         "candidate:{} {CANDIDATE_COMPONENT_ID_RTP} {} {} {} {} typ {}",
@@ -191,6 +212,7 @@ fn candidate_to_sdp_line(candidate: &TransportIceCandidate) -> String {
     )
 }
 
+#[cfg(test)]
 fn map_sdp_diagnostic_to_adapter_error(
     diagnostic: &sdp::SdpParseDiagnostic,
     replay_context: &str,
@@ -228,6 +250,7 @@ fn map_sdp_diagnostic_to_adapter_error(
     }
 }
 
+#[cfg(test)]
 fn log_validated_sdp_media_sections(media_sections: &[sdp::ParsedMediaSection]) {
     debug!(
         media_section_count = media_sections.len(),

@@ -1,4 +1,6 @@
-use o_sfu_router::{RtpCapabilities, RtpParameters as RouterRtpParameters};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use o_sfu_router::RtpCapabilities;
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
@@ -9,12 +11,15 @@ use std::net::SocketAddr;
 #[cfg(test)]
 use std::time::Instant;
 
+#[cfg(test)]
+use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportConnectDirection, TransportMediaId,
-    TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 
+#[cfg(test)]
 use super::{dtls, state::ParsedRemoteIceCredentials};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +29,7 @@ pub(super) enum CloseSessionOutcome {
 }
 
 pub(super) enum RtcWorkerCommand {
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     BuildBootstrap {
         session_key: TransportSessionKey,
         router_capabilities: RtpCapabilities,
@@ -42,6 +48,7 @@ pub(super) enum RtcWorkerCommand {
         answer_sdp: String,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
+    #[cfg(test)]
     ConnectTransport {
         session_key: TransportSessionKey,
         direction: TransportConnectDirection,

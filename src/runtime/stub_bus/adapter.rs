@@ -4,13 +4,13 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
-    TransportMediaId, TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
+#[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
-use crate::runtime::transport_connect::TransportConnectDtlsParameters;
 use crate::signaling::{shared::SessionId, webrtc::MediaKind};
 use o_sfu_router::{
     MediaFormat as RouterMediaFormat, MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
@@ -23,6 +23,7 @@ const STUB_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n"
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StubWebRtcEvent {
+    #[cfg(test)]
     BootstrapRequested,
     SessionClosed {
         session_id: SessionId,
@@ -48,19 +49,6 @@ pub(crate) enum StubWebRtcEvent {
         consumer_session_id: SessionId,
         source_session_id: SessionId,
         active: bool,
-    },
-    TransportConnectRequested {
-        session_id: SessionId,
-        direction: TransportConnectDirection,
-        dtls_parameters: TransportConnectDtlsParameters,
-    },
-    TransportConnected {
-        session_id: SessionId,
-        direction: TransportConnectDirection,
-    },
-    TransportConnectRejected {
-        session_id: SessionId,
-        direction: TransportConnectDirection,
     },
 }
 
@@ -191,6 +179,7 @@ impl StubWebRtcAdapter {
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
+    #[cfg(test)]
     pub(crate) async fn transport_bootstrap_payload(
         &self,
         _session_key: &TransportSessionKey,
@@ -204,32 +193,6 @@ impl StubWebRtcAdapter {
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
-    pub(crate) async fn connect_transport(
-        &self,
-        session_key: &TransportSessionKey,
-        request: TransportConnectRequest<'_>,
-    ) -> Result<(), TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::TransportConnectRequested {
-            session_id: session_key.session_id().clone(),
-            direction: request.direction(),
-            dtls_parameters: request.dtls_parameters().clone(),
-        });
-        if request.dtls_parameters().role.is_empty()
-            || request.dtls_parameters().fingerprints.is_empty()
-        {
-            self.record_event(StubWebRtcEvent::TransportConnectRejected {
-                session_id: session_key.session_id().clone(),
-                direction: request.direction(),
-            });
-            return Err(TransportAdapterError::TransportUnavailable);
-        }
-        self.record_event(StubWebRtcEvent::TransportConnected {
-            session_id: session_key.session_id().clone(),
-            direction: request.direction(),
-        });
-        Ok(())
-    }
-
     #[allow(
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"

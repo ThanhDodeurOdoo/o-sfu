@@ -5,6 +5,8 @@ use std::{
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::bootstrap;
 #[cfg(test)]
 use super::debug;
 use super::{
@@ -12,7 +14,7 @@ use super::{
         commands::RtcWorkerCommand,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
-    bootstrap, media, negotiation, publication, session,
+    media, negotiation, publication, session,
 };
 
 pub(crate) fn handle_worker_command(
@@ -64,6 +66,7 @@ fn handle_core_worker_command(
     command: RtcWorkerCommand,
 ) {
     match command {
+        #[cfg(any(test, feature = "internal-benchmarks"))]
         RtcWorkerCommand::BuildBootstrap {
             session_key,
             router_capabilities,
@@ -76,6 +79,7 @@ fn handle_core_worker_command(
             &router_capabilities,
             response,
         ),
+        #[cfg(test)]
         RtcWorkerCommand::ConnectTransport {
             session_key,
             direction,

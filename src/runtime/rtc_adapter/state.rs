@@ -9,15 +9,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use str0m::IceCreds;
+use str0m::Rtc;
 use str0m::change::SdpPendingOffer;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use str0m::config::Fingerprint;
 use str0m::media::{Mid, Rid};
 use str0m::rtp::Ssrc;
-use str0m::{IceCreds, Rtc};
 use tokio::net::UdpSocket;
 
+#[cfg(test)]
+use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
-    TransportBitrateSnapshot, TransportConnectDirection, TransportMediaId, TransportSessionKey,
+    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
@@ -30,6 +35,7 @@ pub(super) const BITRATE_WINDOW: Duration = Duration::from_secs(1);
 // Transport lifecycle
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TransportLifecycleState {
     BootstrapSent,
@@ -42,6 +48,7 @@ pub(crate) enum TransportSessionHealth {
     Disconnected,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct TransportStateKey {
     pub(super) session_key: TransportSessionKey,
@@ -59,10 +66,15 @@ pub(super) struct SharedRtcSocket {
 
 pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) local_ice_credentials: IceCreds,
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) local_dtls_fingerprint: Fingerprint,
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) transport_ids: SessionTransportIds,
+    #[cfg(test)]
     pub(super) remote_dtls_fingerprint: Option<String>,
+    #[cfg(test)]
     pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
@@ -85,18 +97,21 @@ pub(super) struct PendingRecvStream {
     pub(super) rid: Option<Rid>,
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SessionTransportIds {
     pub(super) upload: String,
     pub(super) download: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParsedRemoteIceCredentials {
     pub(super) username_fragment: String,
     pub(super) password: String,
 }
 
+#[cfg(test)]
 impl ParsedRemoteIceCredentials {
     pub(super) fn as_ice_creds(&self) -> IceCreds {
         IceCreds {

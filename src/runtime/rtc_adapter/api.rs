@@ -1,7 +1,8 @@
 //! Runtime transport adapter facade for the `rtc` WebRTC backend.
 
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{
-    collections::BTreeMap,
     fmt,
     net::IpAddr,
     sync::{
@@ -19,8 +20,11 @@ use crate::config::RtcPortRange;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
     RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
-    TransportConnectDirection, TransportConnectRequest, TransportMediaId, TransportSessionKey,
+    TransportMediaId, TransportSessionKey,
 };
+#[cfg(test)]
+use crate::runtime::transport_adapter::{TransportConnectDirection, TransportConnectRequest};
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::MediaKind;
@@ -31,15 +35,19 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
+#[cfg(test)]
 use tracing::debug;
 
 #[cfg(test)]
 use super::commands::{DebugRouteEntry, DebugRtcCommand};
+#[cfg(test)]
+use super::state::{TransportLifecycleState, TransportStateKey};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::validation;
 use super::{
     commands::{CloseSessionOutcome, RtcWorkerCommand},
     packet_loop,
-    state::{RtcSnapshotState, TransportLifecycleState, TransportSessionHealth, TransportStateKey},
-    validation,
+    state::{RtcSnapshotState, TransportSessionHealth},
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +63,7 @@ pub(crate) struct RtcTransportAdapter {
     codec_flags: MediaCodecFlags,
     media_tap: Arc<MediaTap>,
     worker_handle: Mutex<Option<RtcWorkerHandle>>,
+    #[cfg(test)]
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
     pub(crate) packet_loop_started: Arc<AtomicBool>,
 }
@@ -67,11 +76,13 @@ impl RtcTransportAdapter {
             codec_flags: config.codec_flags(),
             media_tap: config.media_tap(),
             worker_handle: Mutex::new(None),
+            #[cfg(test)]
             transport_states: Arc::new(Mutex::new(BTreeMap::new())),
             packet_loop_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(crate) async fn transport_bootstrap_payload(
         &self,
         session_key: &TransportSessionKey,
@@ -85,6 +96,7 @@ impl RtcTransportAdapter {
             })
             .await?;
         validation::validate_bootstrap_payload(&payload)?;
+        #[cfg(test)]
         self.mark_bootstrap_sent(session_key)?;
         Ok(payload)
     }
@@ -126,6 +138,7 @@ impl RtcTransportAdapter {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn connect_transport(
         &self,
         session_key: &TransportSessionKey,
@@ -160,6 +173,7 @@ impl RtcTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
+        #[cfg(test)]
         {
             let Ok(mut transport_states) = self.transport_states.lock() else {
                 return Err(TransportAdapterError::TransportUnavailable);
@@ -370,6 +384,7 @@ impl RtcTransportAdapter {
             .map_err(|_error| TransportAdapterError::TransportUnavailable)?
     }
 
+    #[cfg(test)]
     fn mark_bootstrap_sent(
         &self,
         session_key: &TransportSessionKey,
@@ -392,6 +407,7 @@ impl RtcTransportAdapter {
         Ok(())
     }
 
+    #[cfg(test)]
     fn ensure_connect_transition(
         &self,
         session_key: &TransportSessionKey,
@@ -411,6 +427,7 @@ impl RtcTransportAdapter {
         }
     }
 
+    #[cfg(test)]
     fn mark_connected(
         &self,
         session_key: &TransportSessionKey,

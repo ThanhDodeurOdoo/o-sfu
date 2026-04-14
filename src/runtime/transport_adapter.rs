@@ -10,7 +10,9 @@ use super::{
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::recording::MediaTap;
+#[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
+#[cfg(test)]
 use crate::runtime::transport_connect::{
     TransportConnectDtlsParameters, TransportConnectIceParameters,
 };
@@ -80,6 +82,7 @@ impl TransportSessionKey {
 }
 
 /// Direction of a WebRTC transport from the client's perspective.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TransportConnectDirection {
     /// Client sends media to the SFU (producer / upload transport).
@@ -99,6 +102,7 @@ pub(crate) enum TransportAdapterError {
 ///
 /// This keeps the transport boundary readable when optional ICE credentials or
 /// transitional SDP validation are present.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TransportConnectRequest<'a> {
     direction: TransportConnectDirection,
@@ -107,6 +111,7 @@ pub(crate) struct TransportConnectRequest<'a> {
     sdp_offer: Option<&'a str>,
 }
 
+#[cfg(test)]
 impl<'a> TransportConnectRequest<'a> {
     #[must_use]
     pub(crate) fn new(
@@ -518,7 +523,8 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    /// Build session transport bootstrap state for a newly authenticated session.
+    /// Build session transport bootstrap state for transport tests and benchmarks.
+    #[cfg(test)]
     pub(crate) async fn transport_bootstrap_payload(
         &self,
         session_key: &TransportSessionKey,
@@ -534,23 +540,6 @@ impl RuntimeTransportAdapter {
                 adapter
                     .shard_for_session(session_key)
                     .transport_bootstrap_payload(session_key, router_capabilities)
-                    .await
-            }
-        }
-    }
-
-    /// Connect one direction transport with client DTLS parameters.
-    pub(crate) async fn connect_transport(
-        &self,
-        session_key: &TransportSessionKey,
-        request: TransportConnectRequest<'_>,
-    ) -> Result<(), TransportAdapterError> {
-        match self {
-            Self::Stub(adapter) => adapter.connect_transport(session_key, request).await,
-            Self::Rtc(adapter) => {
-                adapter
-                    .shard_for_session(session_key)
-                    .connect_transport(session_key, request)
                     .await
             }
         }

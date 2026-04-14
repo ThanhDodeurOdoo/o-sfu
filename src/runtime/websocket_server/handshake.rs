@@ -242,8 +242,8 @@ async fn initialize_session(
         return None;
     }
     if session_protocol.initialize(writer).await.is_err() {
-        info!("failed to send transport bootstrap");
-        state.metrics.record_ws_transport_bootstrap_failure();
+        info!("failed to initialize websocket session protocol");
+        state.metrics.record_ws_session_initialize_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
     }

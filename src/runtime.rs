@@ -16,38 +16,16 @@ pub mod benchmark_support;
 )]
 pub(crate) mod channel;
 mod http_server;
-#[allow(
-    dead_code,
-    reason = "bus-era metric counters remain in the snapshot schema until the follow-up metrics cleanup removes or renames them consistently"
-)]
 mod metrics;
 mod recording;
-#[allow(
-    dead_code,
-    reason = "the rtc transport boundary still retains staged connect and validation helpers while the native-only signaling path finishes replacing the older transport-connect flow"
-)]
 mod rtc_adapter;
-#[allow(
-    dead_code,
-    reason = "stub transport bootstrap and connect hooks are retained for adapter-side tests while the native websocket deletion pass removes the last runtime callers"
-)]
 mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
-#[allow(
-    dead_code,
-    reason = "the transport facade still exposes bootstrap and connect surfaces that the next native media phase will either wire fully or delete outright"
-)]
 mod transport_adapter;
-#[allow(
-    dead_code,
-    reason = "transport bootstrap payload models remain as the typed boundary for the pending adapter cleanup even though the current native websocket path no longer emits them"
-)]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 mod transport_bootstrap;
-#[allow(
-    dead_code,
-    reason = "transport connect request models are kept until the remaining direct-connect experiments are either wired back in or removed in the next cleanup pass"
-)]
+#[cfg(test)]
 mod transport_connect;
 mod websocket_server;
 

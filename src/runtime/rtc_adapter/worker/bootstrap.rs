@@ -1,25 +1,36 @@
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use std::{
     net::IpAddr,
     sync::{Arc, Mutex},
 };
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::RtpCapabilities;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use tokio::sync::oneshot;
+#[cfg(test)]
 use tracing::debug;
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::config::MediaCodecFlags;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::config::RtcPortRange;
-use crate::runtime::{
-    transport_adapter::{TransportAdapterError, TransportConnectDirection, TransportSessionKey},
-    transport_bootstrap::SessionTransportBootstrap,
-};
+#[cfg(test)]
+use crate::runtime::transport_adapter::TransportConnectDirection;
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use super::super::{
-    bootstrap, dtls,
-    state::{ParsedRemoteIceCredentials, RtcBootstrapState, RtcSnapshotState},
-    validation,
+    bootstrap,
+    state::{RtcBootstrapState, RtcSnapshotState},
 };
+#[cfg(test)]
+use super::super::{dtls, state::ParsedRemoteIceCredentials, validation};
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct WorkerBootstrapConfig {
     public_ip: IpAddr,
@@ -27,6 +38,7 @@ pub(super) struct WorkerBootstrapConfig {
     codec_flags: MediaCodecFlags,
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 impl WorkerBootstrapConfig {
     #[must_use]
     pub(super) const fn new(
@@ -42,6 +54,7 @@ impl WorkerBootstrapConfig {
     }
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) fn respond_build_bootstrap(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -59,6 +72,7 @@ pub(super) fn respond_build_bootstrap(
     ));
 }
 
+#[cfg(test)]
 pub(super) fn respond_connect_transport(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -85,6 +99,7 @@ pub(super) fn respond_connect_transport(
     let _ = response.send(result);
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn worker_build_bootstrap_payload(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -131,6 +146,7 @@ fn worker_build_bootstrap_payload(
     ))
 }
 
+#[cfg(test)]
 fn worker_ensure_transport_connect_compatibility(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -153,6 +169,7 @@ fn worker_ensure_transport_connect_compatibility(
     Ok(())
 }
 
+#[cfg(test)]
 fn worker_apply_transport_connect(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,

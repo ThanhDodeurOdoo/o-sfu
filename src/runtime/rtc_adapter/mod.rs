@@ -20,16 +20,21 @@ mod api;
 mod bootstrap;
 mod commands;
 mod demux;
+#[cfg(test)]
 mod dtls;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 mod ice;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 mod parse_diagnostic;
+#[cfg(test)]
 mod sdp;
 mod state;
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 mod validation;
 mod worker;
 

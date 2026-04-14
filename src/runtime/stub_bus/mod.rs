@@ -1,4 +1,5 @@
 mod adapter;
+#[cfg(test)]
 mod bootstrap;
 
 pub(crate) use adapter::StubWebRtcAdapter;

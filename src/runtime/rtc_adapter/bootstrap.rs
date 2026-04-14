@@ -5,28 +5,34 @@ use std::{
     time::Instant,
 };
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use str0m::IceCreds;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use str0m::config::Fingerprint;
-use str0m::{Candidate, IceCreds, Rtc};
+use str0m::{Candidate, Rtc};
 use tokio::net::UdpSocket;
 
-use super::state::{
-    RtcSessionState, SessionSdpNegotiationState, SessionTransportIds, SharedRtcSocket,
-};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::state::SessionTransportIds;
+use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
 use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 use crate::rfc::webrtc;
-use crate::runtime::{
-    transport_adapter::{TransportAdapterError, TransportSessionKey},
-    transport_bootstrap::{
-        self, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm, TransportDtlsParameters,
-        TransportDtlsRole, TransportEndpointBootstrap, TransportIceCandidate,
-        TransportIceCandidateType, TransportIceParameters, TransportIceProtocol,
-    },
+use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use crate::runtime::transport_bootstrap::{
+    self, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm, TransportDtlsParameters,
+    TransportDtlsRole, TransportEndpointBootstrap, TransportIceCandidate,
+    TransportIceCandidateType, TransportIceParameters, TransportIceProtocol,
 };
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 const HOST_CANDIDATE_FOUNDATION: &str = "rtc-host";
+#[cfg(any(test, feature = "internal-benchmarks"))]
 const ICE_LOCAL_PREFERENCE_MAX: u16 = u16::MAX;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 const SESSION_TRANSPORT_ID_UPLOAD_PREFIX: &str = "cts-rtc";
+#[cfg(any(test, feature = "internal-benchmarks"))]
 const SESSION_TRANSPORT_ID_DOWNLOAD_PREFIX: &str = "stc-rtc";
 
 pub(super) fn bind_shared_rtc_socket(
@@ -79,6 +85,7 @@ pub(super) fn ensure_session_rtc_state(
     if rtc.add_local_candidate(candidate).is_none() {
         return Err(TransportAdapterError::TransportUnavailable);
     }
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     let transport_ids = SessionTransportIds {
         upload: format!(
             "{SESSION_TRANSPORT_ID_UPLOAD_PREFIX}-{}",
@@ -89,16 +96,23 @@ pub(super) fn ensure_session_rtc_state(
             uuid::Uuid::new_v4()
         ),
     };
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     let local_ice_credentials = rtc.direct_api().local_ice_credentials();
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     let local_dtls_fingerprint = rtc.direct_api().local_dtls_fingerprint().clone();
     sessions.insert(
         session_key.clone(),
         RtcSessionState {
             rtc,
+            #[cfg(any(test, feature = "internal-benchmarks"))]
             local_ice_credentials,
+            #[cfg(any(test, feature = "internal-benchmarks"))]
             local_dtls_fingerprint,
+            #[cfg(any(test, feature = "internal-benchmarks"))]
             transport_ids,
+            #[cfg(test)]
             remote_dtls_fingerprint: None,
+            #[cfg(test)]
             remote_ice_credentials: None,
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
@@ -120,6 +134,7 @@ fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
         .enable_av1(codec_flags.av1_enabled())
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) fn build_transport_bootstrap(
     id: &str,
     candidate_addr: SocketAddr,
@@ -138,6 +153,7 @@ pub(super) fn build_transport_bootstrap(
     }
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn build_ice_parameters(local_ice_credentials: &IceCreds) -> TransportIceParameters {
     TransportIceParameters {
         username_fragment: local_ice_credentials.ufrag.clone(),
@@ -146,6 +162,7 @@ fn build_ice_parameters(local_ice_credentials: &IceCreds) -> TransportIceParamet
     }
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn build_host_candidate(candidate_addr: SocketAddr) -> TransportIceCandidate {
     TransportIceCandidate {
         foundation: String::from(HOST_CANDIDATE_FOUNDATION),
@@ -157,6 +174,7 @@ fn build_host_candidate(candidate_addr: SocketAddr) -> TransportIceCandidate {
     }
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> TransportDtlsFingerprint {
     let rendered = fingerprint.to_string();
     let (_algorithm, value) = rendered
@@ -168,6 +186,7 @@ fn wire_dtls_fingerprint(fingerprint: &Fingerprint) -> TransportDtlsFingerprint 
     }
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
 fn host_candidate_priority() -> u64 {
     // RFC 8445 section 5.1.2.1 computes candidate priority as
     // (2^24 * type preference) + (2^8 * local preference) + (256 - component ID).
