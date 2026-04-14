@@ -20,6 +20,6 @@ mod shared;
 
 pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
-    ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack,
+    ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
 };
 pub(in crate::runtime::channel) use self::shared::{ChannelState, TransportMediaRemoval};

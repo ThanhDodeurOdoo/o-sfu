@@ -9,7 +9,7 @@ use crate::signaling::{
 
 use super::{
     Channel, SessionCleanupPolicy,
-    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack},
+    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack},
 };
 
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ impl Channel {
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
         let pending_publish = {
-            let mut state = self.state.write().await;
+            let state = self.state.read().await;
             state.prepare_published_track(
                 session_id,
                 publish.connection_id,
@@ -125,7 +125,7 @@ impl Channel {
                 .ok()?;
 
         let pending_publish = {
-            let mut state = self.state.write().await;
+            let state = self.state.read().await;
             state.prepare_published_track(
                 session_id,
                 publisher_connection_id,
@@ -355,7 +355,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: u64,
-        pending_publish: PendingPublishedTrack,
+        pending_publish: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {

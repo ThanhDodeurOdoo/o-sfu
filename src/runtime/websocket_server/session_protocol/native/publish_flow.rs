@@ -1,10 +1,58 @@
+use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use crate::runtime::{channel::NegotiatedPublish, websocket_server::WsWriter};
 use crate::signaling::{shared::StreamType, webrtc::MediaKind as SignalingMediaKind};
 
 use super::super::controller::SessionProtocolOutcome;
-use super::{controller::NativeSessionProtocol, state::PendingPublishCommit};
+use super::{
+    controller::NativeSessionProtocol,
+    state::{ClearedPublishTransition, StagedPublishTransaction},
+};
+
+impl StagedPublishTransaction {
+    async fn abort(
+        self,
+        transport_adapter: &RuntimeTransportAdapter,
+        session_key: &TransportSessionKey,
+    ) {
+        let _result = transport_adapter
+            .remove_media(session_key, self.transport_media_id)
+            .await;
+    }
+
+    async fn commit(self, session: &NativeSessionProtocol, session_key: &TransportSessionKey) {
+        let consumable_rtp_parameters = match session
+            .transport_adapter
+            .negotiated_producer_parameters(session_key, self.transport_media_id)
+            .await
+        {
+            Ok(rtp_parameters) => rtp_parameters,
+            Err(_error) => {
+                self.abort(&session.transport_adapter, session_key).await;
+                return;
+            }
+        };
+        if session
+            .channel
+            .publish_negotiated_track(
+                &session.session_id,
+                NegotiatedPublish {
+                    connection_id: session.connection_id,
+                    stream_type: self.stream_type,
+                    media_kind: self.media_kind,
+                    transport_media_id: self.transport_media_id,
+                    consumable_rtp_parameters,
+                },
+                &session.transport_adapter,
+            )
+            .await
+            .is_none()
+        {
+            self.abort(&session.transport_adapter, session_key).await;
+        }
+    }
+}
 
 impl NativeSessionProtocol {
     pub(super) async fn handle_publish_intent(
@@ -49,19 +97,19 @@ impl NativeSessionProtocol {
         stream_type: StreamType,
         writer: Option<&mut WsWriter>,
     ) {
-        if self.state.remove_queued_publish_stream(stream_type) {
-            return;
-        }
-        if let Some(pending_publish) = self.state.take_pending_publish_for_stream(stream_type) {
-            let session_key = self
-                .channel
-                .transport_session_key(&self.session_id, self.connection_id);
-            let _result = self
-                .transport_adapter
-                .remove_media(&session_key, pending_publish.transport_media_id)
-                .await;
-            let _disposition = self.negotiation.request_renegotiation();
-            return;
+        match self.state.clear_publish_transition(stream_type) {
+            Some(ClearedPublishTransition::Queued) => return,
+            Some(ClearedPublishTransition::Staged(staged_publish)) => {
+                let session_key = self
+                    .channel
+                    .transport_session_key(&self.session_id, self.connection_id);
+                staged_publish
+                    .abort(&self.transport_adapter, &session_key)
+                    .await;
+                let _disposition = self.negotiation.request_renegotiation();
+                return;
+            }
+            None => {}
         }
         if !self
             .channel
@@ -94,11 +142,12 @@ impl NativeSessionProtocol {
             Ok(transport_media_id) => transport_media_id,
             Err(_error) => return false,
         };
-        self.state.push_pending_publish(PendingPublishCommit {
-            stream_type,
-            media_kind,
-            transport_media_id,
-        });
+        self.state
+            .stage_publish_transaction(StagedPublishTransaction {
+                stream_type,
+                media_kind,
+                transport_media_id,
+            });
         true
     }
 
@@ -113,47 +162,13 @@ impl NativeSessionProtocol {
         staged_any
     }
 
-    pub(super) async fn commit_pending_publishes(&mut self) {
-        let pending_publish_commits = self.state.take_pending_publish_commits();
+    pub(super) async fn commit_staged_publishes(&mut self) {
+        let staged_publishes = self.state.take_staged_publish_transactions();
         let session_key = self
             .channel
             .transport_session_key(&self.session_id, self.connection_id);
-        for pending_publish in pending_publish_commits {
-            let consumable_rtp_parameters = match self
-                .transport_adapter
-                .negotiated_producer_parameters(&session_key, pending_publish.transport_media_id)
-                .await
-            {
-                Ok(rtp_parameters) => rtp_parameters,
-                Err(_error) => {
-                    let _result = self
-                        .transport_adapter
-                        .remove_media(&session_key, pending_publish.transport_media_id)
-                        .await;
-                    continue;
-                }
-            };
-            if self
-                .channel
-                .publish_negotiated_track(
-                    &self.session_id,
-                    NegotiatedPublish {
-                        connection_id: self.connection_id,
-                        stream_type: pending_publish.stream_type,
-                        media_kind: pending_publish.media_kind,
-                        transport_media_id: pending_publish.transport_media_id,
-                        consumable_rtp_parameters,
-                    },
-                    &self.transport_adapter,
-                )
-                .await
-                .is_none()
-            {
-                let _result = self
-                    .transport_adapter
-                    .remove_media(&session_key, pending_publish.transport_media_id)
-                    .await;
-            }
+        for staged_publish in staged_publishes {
+            staged_publish.commit(self, &session_key).await;
         }
     }
 }

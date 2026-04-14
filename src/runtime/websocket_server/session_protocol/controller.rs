@@ -4,6 +4,7 @@ use axum::extract::ws::Message;
 
 use crate::runtime::{
     channel::{Channel, SessionOutbound},
+    metrics::RuntimeMetrics,
     transport_adapter::RuntimeTransportAdapter,
 };
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
@@ -33,12 +34,14 @@ impl SessionProtocol {
         connection_id: u64,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
+        metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self(NativeSessionProtocol::new(
             session_id,
             connection_id,
             channel,
             transport_adapter,
+            metrics,
         ))
     }
 

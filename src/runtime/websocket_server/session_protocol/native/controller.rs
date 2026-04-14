@@ -4,12 +4,13 @@ use axum::extract::ws::Message;
 
 use crate::runtime::{
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
+    metrics::RuntimeMetrics,
     rtc_adapter::TransportSessionHealth,
     transport_adapter::RuntimeTransportAdapter,
     websocket_server::WsWriter,
 };
 use crate::signaling::{
-    protocol::{ServerMessage, ServerRequest, WebSocketCloseCode},
+    protocol::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
     shared::SessionId,
 };
 
@@ -28,6 +29,7 @@ pub(in crate::runtime::websocket_server) struct NativeSessionProtocol {
     pub(super) connection_id: u64,
     pub(super) channel: Arc<Channel>,
     pub(super) transport_adapter: RuntimeTransportAdapter,
+    pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) request_state: NativeRequestState,
     pub(super) negotiation: NegotiationState,
     pub(super) track_projection: RemoteTrackProjection,
@@ -40,12 +42,14 @@ impl NativeSessionProtocol {
         connection_id: u64,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
+        metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
             session_id,
             connection_id,
             channel,
             transport_adapter,
+            metrics,
             request_state: NativeRequestState::default(),
             negotiation: NegotiationState::default(),
             track_projection: RemoteTrackProjection::default(),
@@ -103,9 +107,16 @@ impl NativeSessionProtocol {
         payload: &str,
     ) -> SessionProtocolOutcome {
         let Ok(batch) = decode_client_batch(payload) else {
+            self.metrics.record_ws_bus_parse_failure();
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         };
+        self.metrics.record_ws_bus_batch_received(batch.len());
         for envelope in batch {
+            match &envelope {
+                ClientEnvelope::Request { .. } => self.metrics.record_ws_bus_client_request(),
+                ClientEnvelope::Message(_) => self.metrics.record_ws_bus_client_message(),
+                ClientEnvelope::Response { .. } => {}
+            }
             let outcome = self.dispatch_client_envelope(writer, envelope).await;
             if !matches!(outcome, SessionProtocolOutcome::Continue) {
                 return outcome;

@@ -64,8 +64,7 @@ pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::runtime::channel) struct PendingPublishedTrack {
-    producer_id: ProducerRuntimeId,
+pub(in crate::runtime::channel) struct PreparedPublishedTrack {
     owner_session_id: SessionId,
     owner_connection_id: u64,
     stream_type: StreamType,
@@ -231,19 +230,18 @@ impl ChannelState {
     }
 
     pub(in crate::runtime::channel) fn prepare_published_track(
-        &mut self,
+        &self,
         session_id: &SessionId,
         publisher_connection_id: u64,
         stream_type: StreamType,
         media_kind: SignalingMediaKind,
         consumable_rtp_parameters: RouterRtpParameters,
-    ) -> Option<PendingPublishedTrack> {
+    ) -> Option<PreparedPublishedTrack> {
         let session = self.sessions.get(session_id)?;
         if session.connection_id != publisher_connection_id || !session.negotiation.can_publish() {
             return None;
         }
-        Some(PendingPublishedTrack {
-            producer_id: ProducerRuntimeId::allocate(&mut self.next_producer_id),
+        Some(PreparedPublishedTrack {
             owner_session_id: session_id.clone(),
             owner_connection_id: publisher_connection_id,
             stream_type,
@@ -254,7 +252,7 @@ impl ChannelState {
 
     pub(in crate::runtime::channel) fn commit_published_track(
         &mut self,
-        pending: PendingPublishedTrack,
+        pending: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
     ) -> Option<(ProducerRuntimeId, Vec<PendingConsumerBootstrapTarget>)> {
         let session = self.sessions.get(&pending.owner_session_id)?;
@@ -263,6 +261,7 @@ impl ChannelState {
         {
             return None;
         }
+        let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
         let routed_producer_id = match self.topology.add_producer(
             &pending.owner_session_id,
             to_router_media_kind(pending.media_kind),
@@ -278,7 +277,7 @@ impl ChannelState {
             }
         };
         self.producers.insert(
-            pending.producer_id,
+            producer_id,
             PublishedProducer {
                 owner_session_id: pending.owner_session_id.clone(),
                 owner_connection_id: pending.owner_connection_id,
@@ -292,19 +291,19 @@ impl ChannelState {
         );
         self.producer_ids_by_owner_stream.insert(
             ProducerKey::new(&pending.owner_session_id, pending.stream_type),
-            pending.producer_id,
+            producer_id,
         );
         self.producer_stream_types_by_transport_media_id
             .insert(transport_media_id, pending.stream_type);
         let consumer_targets = self.publish_consumer_targets(
             &pending.owner_session_id,
             pending.owner_connection_id,
-            pending.producer_id,
+            producer_id,
             pending.stream_type,
             pending.media_kind,
             transport_media_id,
         );
-        Some((pending.producer_id, consumer_targets))
+        Some((producer_id, consumer_targets))
     }
 
     #[must_use]

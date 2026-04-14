@@ -50,10 +50,6 @@ pub(super) struct RuntimeMetrics {
     ws_bus_parse_failures: AtomicU64,
     ws_bus_client_requests: AtomicU64,
     ws_bus_client_messages: AtomicU64,
-    ws_bus_client_responses_ignored: AtomicU64,
-    ws_bus_client_request_decode_failures: AtomicU64,
-    ws_bus_client_message_decode_failures: AtomicU64,
-    ws_bus_stub_publish_requests: AtomicU64,
     ws_bus_batches_sent: AtomicU64,
     ws_bus_envelopes_sent: AtomicU64,
     ws_bus_send_failures: AtomicU64,
@@ -99,10 +95,6 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub ws_bus_parse_failures: u64,
     pub ws_bus_client_requests: u64,
     pub ws_bus_client_messages: u64,
-    pub ws_bus_client_responses_ignored: u64,
-    pub ws_bus_client_request_decode_failures: u64,
-    pub ws_bus_client_message_decode_failures: u64,
-    pub ws_bus_stub_publish_requests: u64,
     pub ws_bus_batches_sent: u64,
     pub ws_bus_envelopes_sent: u64,
     pub ws_bus_send_failures: u64,
@@ -159,14 +151,6 @@ impl RuntimeMetrics {
             ws_bus_parse_failures: load(&self.ws_bus_parse_failures),
             ws_bus_client_requests: load(&self.ws_bus_client_requests),
             ws_bus_client_messages: load(&self.ws_bus_client_messages),
-            ws_bus_client_responses_ignored: load(&self.ws_bus_client_responses_ignored),
-            ws_bus_client_request_decode_failures: load(
-                &self.ws_bus_client_request_decode_failures,
-            ),
-            ws_bus_client_message_decode_failures: load(
-                &self.ws_bus_client_message_decode_failures,
-            ),
-            ws_bus_stub_publish_requests: load(&self.ws_bus_stub_publish_requests),
             ws_bus_batches_sent: load(&self.ws_bus_batches_sent),
             ws_bus_envelopes_sent: load(&self.ws_bus_envelopes_sent),
             ws_bus_send_failures: load(&self.ws_bus_send_failures),
@@ -292,18 +276,19 @@ impl RuntimeMetrics {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn record_ws_bus_batch_received(&self, envelope_count: usize) {
         increment(&self.ws_bus_batches_received);
         add(&self.ws_bus_envelopes_received, envelope_count);
     }
 
-    #[cfg(test)]
+    pub(super) fn record_ws_bus_parse_failure(&self) {
+        increment(&self.ws_bus_parse_failures);
+    }
+
     pub(super) fn record_ws_bus_client_request(&self) {
         increment(&self.ws_bus_client_requests);
     }
 
-    #[cfg(test)]
     pub(super) fn record_ws_bus_client_message(&self) {
         increment(&self.ws_bus_client_messages);
     }
