@@ -5,27 +5,20 @@ use tracing::debug;
 
 use super::{
     STUB_SERVER_BUS_ID, codec, empty_object, signaling_edge::DomainCommand,
-    transport_bootstrap_edge,
+    transport_bootstrap_edge, transport_connect_edge::LegacyTransportConnectRequest,
 };
 use crate::runtime::{
     channel::Channel,
     metrics::RuntimeMetrics,
     rtc_adapter::TransportSessionHealth,
-    transport_adapter::{
-        RuntimeTransportAdapter, TransportConnectDirection, TransportConnectRequest,
-        TransportSessionKey,
-    },
-    transport_connect::{
-        TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
-        TransportConnectIceParameters,
-    },
+    transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection, TransportSessionKey},
     websocket_server::WsWriter,
 };
 use crate::signaling::{
     current_bus::{CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
     current_protocol::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
-        CurrentPublishTrackResponse, CurrentServerRequest, CurrentTransportConnectPayload,
+        CurrentPublishTrackResponse, CurrentServerRequest,
     },
     ortc_mapper,
     protocol::{RecordingOptions, WebSocketCloseCode},
@@ -343,15 +336,10 @@ impl SessionController {
     }
 
     async fn execute_request(&self, request: &CurrentClientRequest) -> Value {
+        if let Some(request) = LegacyTransportConnectRequest::from_client_request(request) {
+            return self.handle_transport_connect_request(&request).await;
+        }
         match request {
-            CurrentClientRequest::ConnectUploadTransport(payload) => {
-                self.handle_transport_connect_request(payload, TransportConnectDirection::Upload)
-                    .await
-            }
-            CurrentClientRequest::ConnectDownloadTransport(payload) => {
-                self.handle_transport_connect_request(payload, TransportConnectDirection::Download)
-                    .await
-            }
             CurrentClientRequest::PublishTrack(payload) => {
                 self.handle_publish_request(payload).await
             }
@@ -374,19 +362,22 @@ impl SessionController {
                 debug!("handling recording stop request");
                 Value::Bool(self.channel.stop_recording(&self.session_id).await)
             }
+            CurrentClientRequest::ConnectUploadTransport(_)
+            | CurrentClientRequest::ConnectDownloadTransport(_) => empty_object(),
         }
     }
 
     async fn handle_transport_connect_request(
         &self,
-        payload: &CurrentTransportConnectPayload,
-        direction: TransportConnectDirection,
+        request: &LegacyTransportConnectRequest,
     ) -> Value {
-        let payload = legacy_transport_connect_payload(payload);
-        let request = Self::transport_connect_request(&payload, direction);
+        let direction = request.direction();
         if self
             .transport_adapter
-            .connect_transport(&self.transport_session_key(), request)
+            .connect_transport(
+                &self.transport_session_key(),
+                request.transport_connect_request(),
+            )
             .await
             .is_err()
         {
@@ -402,23 +393,6 @@ impl SessionController {
         }
         debug!(?direction, "handled transport connect request");
         empty_object()
-    }
-
-    fn transport_connect_request(
-        payload: &LegacyTransportConnectPayload,
-        direction: TransportConnectDirection,
-    ) -> TransportConnectRequest<'_> {
-        let request = payload.ice_parameters.as_ref().map_or_else(
-            || TransportConnectRequest::new(direction, &payload.dtls_parameters),
-            |ice_parameters| {
-                TransportConnectRequest::new(direction, &payload.dtls_parameters)
-                    .with_ice_parameters(ice_parameters)
-            },
-        );
-        payload
-            .sdp_offer
-            .as_deref()
-            .map_or(request, |sdp_offer| request.with_sdp_offer(sdp_offer))
     }
 
     async fn handle_publish_request(&self, payload: &CurrentPublishTrackPayload) -> Value {
@@ -505,10 +479,7 @@ impl SessionController {
             .transport_session_key(&self.session_id, self.connection_id)
     }
 
-    async fn apply_legacy_transport_ready(
-        &self,
-        direction: TransportConnectDirection,
-    ) -> bool {
+    async fn apply_legacy_transport_ready(&self, direction: TransportConnectDirection) -> bool {
         match direction {
             TransportConnectDirection::Upload => {
                 self.channel
@@ -551,45 +522,4 @@ fn parse_transport_bootstrap_capabilities(
         return None;
     };
     Some(parsed_capabilities)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LegacyTransportConnectPayload {
-    dtls_parameters: TransportConnectDtlsParameters,
-    ice_parameters: Option<TransportConnectIceParameters>,
-    sdp_offer: Option<String>,
-}
-
-fn legacy_transport_connect_payload(
-    payload: &CurrentTransportConnectPayload,
-) -> LegacyTransportConnectPayload {
-    LegacyTransportConnectPayload {
-        dtls_parameters: TransportConnectDtlsParameters {
-            role: payload.dtls_parameters.role.clone(),
-            fingerprints: payload
-                .dtls_parameters
-                .fingerprints
-                .iter()
-                .map(|fingerprint| TransportConnectDtlsFingerprint {
-                    algorithm: fingerprint.algorithm.clone(),
-                    value: fingerprint.value.clone(),
-                })
-                .collect(),
-        },
-        ice_parameters: payload.ice_parameters.as_ref().map(|ice_parameters| {
-            TransportConnectIceParameters {
-                username_fragment: ice_parameters
-                    .0
-                    .get("usernameFragment")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned),
-                password: ice_parameters
-                    .0
-                    .get("password")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned),
-            }
-        }),
-        sdp_offer: payload.sdp_offer.clone(),
-    }
 }

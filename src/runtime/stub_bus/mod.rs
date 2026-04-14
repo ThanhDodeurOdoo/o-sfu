@@ -5,6 +5,7 @@ mod session;
 mod session_controller;
 mod signaling_edge;
 mod transport_bootstrap_edge;
+mod transport_connect_edge;
 
 pub(crate) use adapter::StubWebRtcAdapter;
 #[cfg(test)]
