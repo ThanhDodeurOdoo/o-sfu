@@ -22,7 +22,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: nightly
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -31,4 +31,4 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       - name: Run native decode fuzz target
-        run: cargo fuzz run native_decode -- -max_total_time=300
+        run: cargo +nightly fuzz run native_decode -- -max_total_time=300

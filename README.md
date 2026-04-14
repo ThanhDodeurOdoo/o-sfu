@@ -29,13 +29,14 @@ parser/auth fuzzing is in `fuzz/` crate.
  Install `cargo-fuzz` separately:
 
 ```bash
+rustup toolchain install nightly
 cargo install cargo-fuzz
 ```
 
 Then run the current target from the repository root:
 
 ```bash
-cargo fuzz run native_decode
+cargo +nightly fuzz run native_decode
 ```
 
 If you only need to verify that the fuzz target still builds after changing the
