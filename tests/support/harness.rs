@@ -17,16 +17,22 @@ use tokio_tungstenite::{
 
 use o_sfu::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TransportBackend},
-    runtime::testing::{TestServer, decode_native_welcome_batch},
+    runtime::testing::{
+        TestServer, decode_native_welcome_batch,
+        legacy_wire::{
+            current_bus::{
+                CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
+            },
+            current_protocol::{
+                CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
+                CurrentWebSocketCredentials,
+            },
+        },
+    },
     signaling::{
         auth::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
             sign,
-        },
-        current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-        current_protocol::{
-            CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
-            CurrentWebSocketCredentials,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
         protocol::{AuthPayload, ClientEnvelope, ClientMessage, WelcomePayload},

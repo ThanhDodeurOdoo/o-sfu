@@ -9,15 +9,22 @@ use serde_json::{Value, json};
 
 use o_sfu::{
     config::Config,
-    runtime::testing::{TestServer, spawn_test_server},
-    signaling::{
-        current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-        current_protocol::{
-            CurrentClientMessage, CurrentClientRequest, CurrentDownloadStateChangePayload,
-            CurrentPublishTrackResponse, CurrentServerMessage, CurrentServerRequest,
-            CurrentTransportConnectPayload, CurrentUploadStateChangePayload,
-            CurrentWebSocketCredentials,
+    runtime::testing::{
+        TestServer,
+        legacy_wire::{
+            current_bus::{
+                CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
+            },
+            current_protocol::{
+                CurrentClientMessage, CurrentClientRequest, CurrentDownloadStateChangePayload,
+                CurrentPublishTrackResponse, CurrentServerMessage, CurrentServerRequest,
+                CurrentTransportConnectPayload, CurrentUploadStateChangePayload,
+                CurrentWebSocketCredentials,
+            },
         },
+        spawn_test_server,
+    },
+    signaling::{
         http::{STATS_PATH, StatsResponse},
         protocol::WelcomePayload,
         shared::{DownloadStates, SessionId, StreamType},

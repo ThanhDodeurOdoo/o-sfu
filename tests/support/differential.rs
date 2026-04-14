@@ -10,17 +10,21 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
-use o_sfu::signaling::{
-    current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-    current_protocol::{
-        CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
-        CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
-        CurrentSessionInfoSnapshotById, CurrentTransportConnectPayload,
-        CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
+use o_sfu::{
+    runtime::testing::legacy_wire::{
+        current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
+        current_protocol::{
+            CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
+            CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
+            CurrentSessionInfoSnapshotById, CurrentTransportConnectPayload,
+            CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
+        },
     },
-    http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, NOOP_PATH},
-    shared::{SessionId, StreamType},
-    webrtc::{DtlsFingerprint, DtlsParameters, MediaKind},
+    signaling::{
+        http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, NOOP_PATH},
+        shared::{SessionId, StreamType},
+        webrtc::{DtlsFingerprint, DtlsParameters, MediaKind},
+    },
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;

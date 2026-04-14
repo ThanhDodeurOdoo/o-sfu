@@ -13,12 +13,12 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use o_sfu::{
     config::TransportBackend,
+    runtime::testing::legacy_wire::current_protocol::{
+        CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
+        CurrentSessionInfoUpdatePayload, CurrentWebSocketCredentials,
+    },
     runtime::testing::spawn_test_server,
     signaling::{
-        current_protocol::{
-            CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
-            CurrentSessionInfoUpdatePayload, CurrentWebSocketCredentials,
-        },
         http::{STATS_PATH, StatsResponse},
         shared::{SessionId, SessionInfo, StreamType},
     },

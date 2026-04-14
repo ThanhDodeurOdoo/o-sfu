@@ -11,9 +11,9 @@ use std::{
 use serde_json::json;
 use tokio::{net::UdpSocket, time::timeout};
 
-use o_sfu::signaling::{
-    current_protocol::CurrentRemoteTrackBootstrapPayload,
-    webrtc::{
+use o_sfu::{
+    runtime::testing::legacy_wire::current_protocol::CurrentRemoteTrackBootstrapPayload,
+    signaling::webrtc::{
         DtlsFingerprint, DtlsParameters, IceParameters, MediaKind as SignalingMediaKind,
         TransportBootstrap,
     },

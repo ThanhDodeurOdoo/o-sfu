@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use o_sfu::{
     config::TransportBackend,
+    runtime::testing::legacy_wire::current_protocol::{
+        CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
+    },
     signaling::{
-        current_protocol::{
-            CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
-        },
         http::IncomingBitRateStats,
         shared::{DownloadStates, SessionId, StreamType},
         webrtc::MediaKind,

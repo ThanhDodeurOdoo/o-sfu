@@ -1,7 +1,7 @@
 pub mod auth;
 pub mod bundle_api;
-pub mod current_bus;
-pub mod current_protocol;
+pub(crate) mod current_bus;
+pub(crate) mod current_protocol;
 pub mod http;
 pub mod ortc_mapper;
 pub mod protocol;

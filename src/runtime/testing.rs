@@ -4,6 +4,9 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use tokio::{net::TcpListener, task::JoinHandle};
 
+#[path = "testing/legacy_wire.rs"]
+pub mod legacy_wire;
+
 use super::{
     RuntimeState, build_transport_adapter,
     channel::{
