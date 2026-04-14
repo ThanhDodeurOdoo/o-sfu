@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["fuzz"]
 members = ["protocol", "rfc", "router"]
 resolver = "3"
 

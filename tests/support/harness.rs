@@ -50,6 +50,7 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
         channel_size,
         session_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
+        trust_proxy_headers: true,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

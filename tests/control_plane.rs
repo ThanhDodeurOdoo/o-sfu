@@ -12,7 +12,7 @@ use tokio::time::{Duration, sleep};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use o_sfu::{
-    config::TransportBackend,
+    config::{RtcPortRange, TransportBackend},
     runtime::testing::spawn_test_server,
     signaling::{
         http::{STATS_PATH, StatsResponse},
@@ -132,6 +132,56 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
         return;
     };
     assert!((40_000..=49_999).contains(&port));
+}
+
+#[tokio::test]
+async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
+    let mut config = native_test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+    config.public_ip = "203.0.113.44".parse().unwrap_or(config.public_ip);
+    config.rtc_port_range = RtcPortRange::new(45_000, 45_099);
+    let server = spawn_test_server(config).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-public-ip", Some(TEST_CHANNEL_KEY)).await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+    let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel, SessionId::Integer(702));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+
+    let client = NativeWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    assert!(client.is_some());
+    let Some(mut client) = client else {
+        return;
+    };
+
+    assert!(client.read_welcome().await.is_some());
+    let request = client.read_server_request().await;
+    assert!(request.is_some(), "initial offer should be sent");
+    let Some((_request_id, request)) = request else {
+        return;
+    };
+    let ServerRequest::Offer(payload) = request else {
+        panic!("expected offer request");
+    };
+    assert!(payload.sdp.contains("a=ice-lite"));
+    assert!(payload.sdp.contains("203.0.113.44"));
+    if let Some(candidate_line) = payload
+        .sdp
+        .lines()
+        .find(|line| line.starts_with("a=candidate:"))
+    {
+        assert!(candidate_line.contains(" 203.0.113.44 "));
+    } else {
+        panic!("expected SDP candidate line");
+    }
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 [![Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/tests.yml)
 [![Client](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client.yml)
 [![Client Browser](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml)
+[![Fuzzing](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml)
 [![Formal Verification](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml)
 [![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql)
 
@@ -16,12 +17,33 @@ Run the regular workspace checks from the repository root:
 
 ```bash
 cargo fmt
+cargo check -p o-sfu
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-cargo clippy --workspace --all-targets --all-features
 npm --prefix client run verify
 ```
 
 TODO: copy the liting and formatting rules from odoo/sfu
+
+parser/auth fuzzing is in `fuzz/` crate.
+ Install `cargo-fuzz` separately:
+
+```bash
+cargo install cargo-fuzz
+```
+
+Then run the current target from the repository root:
+
+```bash
+cargo fuzz run native_decode
+```
+
+If you only need to verify that the fuzz target still builds after changing the
+fuzz boundary, run:
+
+```bash
+cargo check --manifest-path fuzz/Cargo.toml
+```
 
 Kani proofs are not run by `cargo test`. Install Kani separately:
 

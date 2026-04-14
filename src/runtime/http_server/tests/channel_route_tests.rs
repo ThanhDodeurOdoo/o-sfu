@@ -115,7 +115,7 @@ async fn channel_returns_uuid_and_request_base_url() {
 }
 
 #[tokio::test]
-async fn channel_uses_forwarded_remote_address_for_stats() {
+async fn channel_ignores_forwarded_headers_when_proxy_trust_is_disabled() {
     let token = signed_channel_claims(Some("issuer-a"), None);
     assert!(token.is_some());
     let Some(token) = token else {
@@ -142,6 +142,77 @@ async fn channel_uses_forwarded_remote_address_for_stats() {
         return;
     };
     assert_eq!(create_response.status(), StatusCode::OK);
+    let payload: Option<ChannelResponse> = parse_json(create_response).await;
+    assert!(payload.is_some());
+    let Some(payload) = payload else {
+        return;
+    };
+    assert_eq!(payload.url, "http://sfu.example.com");
+
+    let stats_request = build_request(Request::get(STATS_PATH), Body::empty());
+    assert!(stats_request.is_some());
+    let Some(stats_request) = stats_request else {
+        return;
+    };
+    let stats_response = app(state).oneshot(stats_request).await;
+    assert!(
+        stats_response.is_ok(),
+        "stats request should succeed: {stats_response:?}"
+    );
+    let Some(stats_response) = stats_response.ok() else {
+        return;
+    };
+    let payload: Option<StatsResponse> = parse_json(stats_response).await;
+    assert!(payload.is_some());
+    let Some(payload) = payload else {
+        return;
+    };
+    assert_eq!(payload.len(), 1);
+    let first = payload.first();
+    assert!(first.is_some());
+    let Some(first) = first else {
+        return;
+    };
+    assert_eq!(first.remote_address, "unknown");
+}
+
+#[tokio::test]
+async fn channel_uses_forwarded_headers_when_proxy_trust_is_enabled() {
+    let token = signed_channel_claims(Some("issuer-a"), None);
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let create_request = build_request(
+        Request::get(CHANNEL_PATH)
+            .header(header::HOST, "sfu.example.com")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header("x-forwarded-host", "proxy.example.com")
+            .header("x-forwarded-proto", "https")
+            .header("x-forwarded-for", "198.51.100.24, 10.0.0.1"),
+        Body::empty(),
+    );
+    assert!(create_request.is_some());
+    let Some(create_request) = create_request else {
+        return;
+    };
+    let mut state = test_state();
+    state.config.trust_proxy_headers = true;
+    let create_response = app(state.clone()).oneshot(create_request).await;
+    assert!(
+        create_response.is_ok(),
+        "channel request should complete: {create_response:?}"
+    );
+    let Some(create_response) = create_response.ok() else {
+        return;
+    };
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let payload: Option<ChannelResponse> = parse_json(create_response).await;
+    assert!(payload.is_some());
+    let Some(payload) = payload else {
+        return;
+    };
+    assert_eq!(payload.url, "https://proxy.example.com");
 
     let stats_request = build_request(Request::get(STATS_PATH), Body::empty());
     assert!(stats_request.is_some());

@@ -80,6 +80,7 @@ pub(super) fn test_config(
         channel_size,
         session_timeout_ms,
         ping_interval_ms,
+        trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

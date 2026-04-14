@@ -95,6 +95,7 @@ async fn channel(
     }
     let remote_address = request_remote_address(
         &headers,
+        &state.config,
         connect_info.map(|Extension(ConnectInfo(addr))| addr),
     );
     let channel = state
@@ -153,8 +154,8 @@ fn authorization_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
-    let scheme = forwarded_header(headers, "x-forwarded-proto").unwrap_or("http");
-    let host = forwarded_header(headers, "x-forwarded-host")
+    let scheme = trusted_forwarded_header(headers, config, "x-forwarded-proto").unwrap_or("http");
+    let host = trusted_forwarded_header(headers, config, "x-forwarded-host")
         .map(str::to_owned)
         .or_else(|| {
             headers
@@ -166,11 +167,26 @@ fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
     format!("{scheme}://{host}")
 }
 
-fn request_remote_address(headers: &HeaderMap, connect_info: Option<SocketAddr>) -> String {
-    forwarded_header(headers, "x-forwarded-for")
+fn request_remote_address(
+    headers: &HeaderMap,
+    config: &Config,
+    connect_info: Option<SocketAddr>,
+) -> String {
+    trusted_forwarded_header(headers, config, "x-forwarded-for")
         .map(str::to_owned)
         .or_else(|| connect_info.map(|addr| addr.ip().to_string()))
         .unwrap_or_else(|| String::from("unknown"))
+}
+
+fn trusted_forwarded_header<'headers>(
+    headers: &'headers HeaderMap,
+    config: &Config,
+    name: &str,
+) -> Option<&'headers str> {
+    if !config.trust_proxy_headers {
+        return None;
+    }
+    forwarded_header(headers, name)
 }
 
 fn http_channel_stats(snapshot: RuntimeChannelStatsSnapshot) -> ChannelStats {

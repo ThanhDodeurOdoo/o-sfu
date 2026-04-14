@@ -17,6 +17,7 @@ const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
 const DEFAULT_ENABLE_TRANSCRIPTION_FEATURE: bool = false;
 const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
+const DEFAULT_TRUST_PROXY_HEADERS: bool = false;
 const TRANSPORT_BACKEND_STUB: &str = "stub";
 const TRANSPORT_BACKEND_RTC: &str = "rtc";
 const STUB_PUBLIC_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -238,6 +239,7 @@ pub struct Config {
     pub channel_size: usize,
     pub session_timeout_ms: u64,
     pub ping_interval_ms: u64,
+    pub trust_proxy_headers: bool,
     pub feature_flags: RuntimeFeatureFlags,
     pub codec_flags: MediaCodecFlags,
     pub public_ip: IpAddr,
@@ -251,9 +253,9 @@ impl Config {
     ///
     /// Returns an error when `AUTH_KEY` is missing, `BIND_ADDRESS` is invalid,
     /// `AUTHENTICATION_TIMEOUT_MS` is invalid, `CHANNEL_SIZE` is zero,
-    /// `SESSION_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid,
-    /// `PUBLIC_IP` is invalid, `RTC_MIN_PORT`/`RTC_MAX_PORT` are invalid,
-    /// or `TRANSPORT_BACKEND` is invalid.
+    /// `SESSION_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid, `PROXY`
+    /// is invalid, `PUBLIC_IP` is invalid, `RTC_MIN_PORT`/`RTC_MAX_PORT` are
+    /// invalid, or `TRANSPORT_BACKEND` is invalid.
     pub fn from_env() -> Result<Self> {
         Self::from_var_lookup(|key| env::var(key).ok())
     }
@@ -288,6 +290,12 @@ impl Config {
             "PING_INTERVAL_MS must be a valid u64",
         )?
         .unwrap_or(DEFAULT_PING_INTERVAL_MS);
+        let trust_proxy_headers = parse_optional_env(
+            &mut get_var,
+            "PROXY",
+            "PROXY must be either `true` or `false`",
+        )?
+        .unwrap_or(DEFAULT_TRUST_PROXY_HEADERS);
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
         let (public_ip, rtc_port_range, rtc_media_worker_count, transport_backend) =
@@ -308,6 +316,7 @@ impl Config {
             channel_size,
             session_timeout_ms,
             ping_interval_ms,
+            trust_proxy_headers,
             feature_flags,
             codec_flags,
             public_ip,
@@ -460,6 +469,14 @@ fn load_transport_config(
             ));
         }
     };
+    ensure!(
+        transport_backend != TransportBackend::Rtc || !public_ip.is_unspecified(),
+        "PUBLIC_IP must be a concrete advertised address when TRANSPORT_BACKEND=rtc"
+    );
+    ensure!(
+        transport_backend != TransportBackend::Rtc || !public_ip.is_multicast(),
+        "PUBLIC_IP cannot be a multicast address when TRANSPORT_BACKEND=rtc"
+    );
     Ok((
         public_ip,
         rtc_port_range,
@@ -518,6 +535,7 @@ mod tests {
         assert_eq!(config.channel_size, 100);
         assert_eq!(config.session_timeout_ms, 10_000);
         assert_eq!(config.ping_interval_ms, 60_000);
+        assert!(!config.trust_proxy_headers);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
         assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
@@ -547,6 +565,20 @@ mod tests {
                 video_recording: true,
             }
         );
+    }
+
+    #[test]
+    fn config_accepts_proxy_flag() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PROXY" => Some("true".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert!(config.trust_proxy_headers);
     }
 
     #[test]
@@ -619,6 +651,28 @@ mod tests {
     fn config_requires_public_ip_for_rtc_backend() {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "TRANSPORT_BACKEND" => Some("rtc".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_unspecified_public_ip_for_rtc_backend() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("0.0.0.0".to_owned()),
+            "TRANSPORT_BACKEND" => Some("rtc".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_multicast_public_ip_for_rtc_backend() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("239.1.1.1".to_owned()),
             "TRANSPORT_BACKEND" => Some("rtc".to_owned()),
             _ => None,
         });
