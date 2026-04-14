@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::RouterError;
+use o_sfu_router::{MediaCapabilities, RouterError};
 use tracing::error;
 
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
-    ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo, SessionPermissions},
-    webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
 
 use super::super::{
@@ -307,13 +305,12 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
-        capabilities: &SignalingRtpCapabilities,
+        capabilities: &MediaCapabilities,
     ) -> SessionNegotiationUpdate {
         let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
-        session.parsed_client_rtp_capabilities =
-            ortc_mapper::parse_rtp_capabilities(&capabilities.0);
+        session.parsed_client_rtp_capabilities = Some(capabilities.clone());
         session.negotiation.set_client_rtp_capabilities()
     }
 
@@ -333,13 +330,12 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
-        capabilities: &SignalingRtpCapabilities,
+        capabilities: &MediaCapabilities,
     ) -> SessionNegotiationUpdate {
         let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
-        session.parsed_client_rtp_capabilities =
-            ortc_mapper::parse_rtp_capabilities(&capabilities.0);
+        session.parsed_client_rtp_capabilities = Some(capabilities.clone());
         session.negotiation.set_session_negotiated()
     }
 }

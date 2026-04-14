@@ -9,9 +9,8 @@ use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::{
-    ortc_mapper,
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
-    webrtc::{MediaKind as SignalingMediaKind, RtpParameters},
+    webrtc::MediaKind as SignalingMediaKind,
 };
 
 use super::super::{
@@ -54,7 +53,6 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrapTarget {
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
     consumer_rtp_parameters: RouterRtpParameters,
-    consumer_wire_rtp_parameters: RtpParameters,
     sender: OutboundSender,
     producer_owner_session_id: SessionId,
     producer_connection_id: u64,
@@ -93,7 +91,7 @@ pub(crate) struct RemoteTrackBootstrap {
     consumer_id: ConsumerRuntimeId,
     media_kind: SignalingMediaKind,
     producer_id: ProducerRuntimeId,
-    rtp_parameters: RtpParameters,
+    rtp_parameters: RouterRtpParameters,
     session_id: SessionId,
     active: bool,
     stream_type: StreamType,
@@ -446,7 +444,7 @@ impl ChannelState {
                 consumer_id: ConsumerRuntimeId::allocate(&mut self.next_consumer_id),
                 media_kind: prepared.producer_media_kind,
                 producer_id: prepared.producer_id,
-                rtp_parameters: prepared.consumer_wire_rtp_parameters.clone(),
+                rtp_parameters: prepared.consumer_rtp_parameters.clone(),
                 session_id: prepared.producer_owner_session_id.clone(),
                 active: prepared.producer_active,
                 stream_type: prepared.producer_stream_type,
@@ -501,12 +499,8 @@ impl ChannelState {
             client_capabilities,
         )
         .ok()?;
-        let consumer_wire_rtp_parameters = RtpParameters(ortc_mapper::serialize_rtp_parameters(
-            &negotiated_rtp_parameters,
-        ));
         Some(PreparedConsumerBootstrap {
             consumer_rtp_parameters: negotiated_rtp_parameters,
-            consumer_wire_rtp_parameters,
             sender,
             producer_owner_session_id,
             producer_connection_id: producer.owner_connection_id,
@@ -744,7 +738,7 @@ impl RemoteTrackBootstrap {
         self.producer_id.into_wire_id()
     }
 
-    pub(crate) fn rtp_parameters(&self) -> &RtpParameters {
+    pub(crate) fn rtp_parameters(&self) -> &RouterRtpParameters {
         &self.rtp_parameters
     }
 

@@ -15,8 +15,10 @@ use crate::signaling::{
         CurrentBroadcastPayload, CurrentRemoteTrackBootstrapPayload, CurrentServerMessage,
         CurrentServerRequest, CurrentSessionDeparturePayload, CurrentSessionInfoSnapshotById,
     },
+    ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo},
+    webrtc::RtpParameters,
 };
 
 pub(crate) async fn send_server_message_batch(
@@ -81,7 +83,9 @@ pub(crate) fn legacy_server_request(request: ChannelEventRequest) -> CurrentServ
                 id: payload.consumer_id(),
                 media_kind: payload.media_kind(),
                 source_id: payload.producer_id(),
-                rtp_parameters: payload.rtp_parameters().clone(),
+                rtp_parameters: RtpParameters(ortc_mapper::serialize_rtp_parameters(
+                    payload.rtp_parameters(),
+                )),
                 session_id: payload.session_id().clone(),
                 active: payload.active(),
                 stream_type: payload.stream_type(),

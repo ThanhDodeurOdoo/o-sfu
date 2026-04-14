@@ -1,11 +1,9 @@
+use o_sfu_router::MediaCapabilities;
 use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
-use crate::signaling::{
-    shared::{SessionId, SessionInfo, SessionPermissions},
-    webrtc::RtpCapabilities as SignalingRtpCapabilities,
-};
+use crate::signaling::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
     Channel, ChannelEventMessage, ChannelJoinError, SessionOutbound,
@@ -248,7 +246,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: u64,
-        capabilities: SignalingRtpCapabilities,
+        capabilities: MediaCapabilities,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let update = {
@@ -278,7 +276,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: u64,
-        capabilities: SignalingRtpCapabilities,
+        capabilities: MediaCapabilities,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let update = {
@@ -329,7 +327,7 @@ impl Channel {
     pub(super) async fn set_client_rtp_capabilities(
         &self,
         session_id: &SessionId,
-        capabilities: SignalingRtpCapabilities,
+        capabilities: MediaCapabilities,
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);

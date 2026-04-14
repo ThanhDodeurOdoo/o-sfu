@@ -187,15 +187,10 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
         })
         .expect("subscriber should receive INIT_CONSUMER");
     let ChannelEventRequest::BootstrapRemoteTrack(payload) = request;
-    let codecs = payload
-        .rtp_parameters()
-        .0
-        .get("codecs")
-        .and_then(serde_json::Value::as_array)
-        .expect("consumer bootstrap should include codecs");
+    let codecs = payload.rtp_parameters().codecs().collect::<Vec<_>>();
     assert_eq!(codecs.len(), 1);
-    assert_eq!(codecs[0].get("mimeType"), Some(&json!("video/VP8")));
-    assert_eq!(codecs[0].get("payloadType"), Some(&json!(96)));
+    assert_eq!(codecs[0].codec_name(), "VP8");
+    assert_eq!(codecs[0].payload_type(), 96);
 }
 
 #[tokio::test]
@@ -1222,7 +1217,7 @@ async fn apply_offer_answer(
 }
 
 fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> RtpParameters {
-    RtpParameters(json!({
+    ortc_mapper::parse_rtp_parameters(&json!({
         "mid": mid,
         "codecs": [
             {
@@ -1253,4 +1248,5 @@ fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> RtpParameters {
         ],
         "encodings": [{ "ssrc": ssrc }]
     }))
+    .expect("test RTP parameters should parse")
 }

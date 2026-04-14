@@ -29,6 +29,7 @@ use str0m::{
 
 use super::fixtures::*;
 use crate::runtime::{rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey};
+use crate::signaling::ortc_mapper;
 use crate::signaling::shared::SessionPermissions;
 
 const BATCH_FLUSH_DELAY_MS: u32 = 100;
@@ -2403,8 +2404,8 @@ fn peer_reached_state(peer: &ProtocolHarnessPeer, state: BundleConnectionState) 
         .any(|change| change.state == state && change.cause.is_none())
 }
 
-fn sample_video_rtp_parameters(mid: &str) -> RtpParameters {
-    RtpParameters(json!({
+fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::RtpParameters {
+    let parsed = ortc_mapper::parse_rtp_parameters(&json!({
         "mid": mid,
         "codecs": [
             {
@@ -2434,5 +2435,10 @@ fn sample_video_rtp_parameters(mid: &str) -> RtpParameters {
             { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
         ],
         "encodings": [{ "ssrc": 22222 }]
-    }))
+    }));
+    assert!(
+        parsed.is_some(),
+        "protocol harness RTP parameters should parse"
+    );
+    parsed.unwrap_or_else(|| o_sfu_router::RtpParameters::new(Vec::new(), Vec::new(), Vec::new()))
 }

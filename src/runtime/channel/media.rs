@@ -1,11 +1,10 @@
-use o_sfu_router::derive_consumable_rtp_parameters;
+use o_sfu_router::{RtpParameters as RouterRtpParameters, derive_consumable_rtp_parameters};
 use tracing::warn;
 
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 use crate::signaling::{
-    ortc_mapper,
     shared::{DownloadStates, SessionId, StreamType},
-    webrtc::{MediaKind as SignalingMediaKind, RtpParameters},
+    webrtc::MediaKind as SignalingMediaKind,
 };
 
 use super::{
@@ -104,7 +103,7 @@ impl Channel {
         session_id: &SessionId,
         stream_type: StreamType,
         media_kind: SignalingMediaKind,
-        rtp_parameters: RtpParameters,
+        producer_rtp_parameters: RouterRtpParameters,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
         let publish_prerequisites = {
@@ -114,16 +113,8 @@ impl Channel {
         let publisher_connection_id = publish_prerequisites.connection_id();
         let router_capabilities = publish_prerequisites.router_capabilities();
 
-        let parsed_rtp_parameters =
-            ortc_mapper::parse_rtp_parameters(&rtp_parameters.0).or_else(|| {
-                warn!(
-                    ?session_id,
-                    "failed to parse producer RTP parameters from wire format"
-                );
-                None
-            })?;
         let consumable_rtp_parameters =
-            derive_consumable_rtp_parameters(&parsed_rtp_parameters, &router_capabilities)
+            derive_consumable_rtp_parameters(&producer_rtp_parameters, &router_capabilities)
                 .map_err(|error| {
                     warn!(
                         ?session_id,
@@ -148,7 +139,7 @@ impl Channel {
             .publish_media(
                 &self.transport_session_key(session_id, publisher_connection_id),
                 media_kind,
-                &parsed_rtp_parameters,
+                &producer_rtp_parameters,
             )
             .await
         {

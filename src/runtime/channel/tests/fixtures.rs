@@ -1,7 +1,7 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
 pub(super) use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, RouterId,
+    ConsumerCapability, MediaKind as RouterMediaKind, RouterId, RtpCapabilities, RtpParameters,
     SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
 };
 pub(super) use tokio::sync::mpsc;
@@ -17,15 +17,16 @@ pub(super) use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportConnectDirection,
 };
 pub(super) use crate::signaling::{
+    ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
-    webrtc::{MediaKind, RtpCapabilities, RtpParameters},
+    webrtc::MediaKind,
 };
 pub(super) use serde_json::json;
 
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> RtpCapabilities {
-    RtpCapabilities(json!({
+    parse_rtp_capabilities(&json!({
         "codecs": [
             {
                 "mimeType": "audio/opus",
@@ -93,7 +94,7 @@ pub(super) fn test_client_rtp_capabilities() -> RtpCapabilities {
 }
 
 pub(super) fn test_audio_rtp_parameters() -> RtpParameters {
-    RtpParameters(json!({
+    parse_rtp_parameters(&json!({
         "codecs": [{
             "mimeType": "audio/opus",
             "payloadType": 111,
@@ -111,7 +112,7 @@ pub(super) fn test_audio_rtp_parameters() -> RtpParameters {
 }
 
 pub(super) fn test_client_rtp_capabilities_without_video_rtx() -> RtpCapabilities {
-    RtpCapabilities(json!({
+    parse_rtp_capabilities(&json!({
         "codecs": [
             {
                 "mimeType": "audio/opus",
@@ -149,7 +150,7 @@ pub(super) fn test_client_rtp_capabilities_without_video_rtx() -> RtpCapabilitie
 }
 
 pub(super) fn test_video_rtp_parameters() -> RtpParameters {
-    RtpParameters(json!({
+    parse_rtp_parameters(&json!({
         "codecs": [
             {
                 "mimeType": "video/VP8",
@@ -179,6 +180,24 @@ pub(super) fn test_video_rtp_parameters() -> RtpParameters {
         ],
         "encodings": [{ "ssrc": 22222 }]
     }))
+}
+
+fn parse_rtp_capabilities(value: &serde_json::Value) -> RtpCapabilities {
+    let parsed = ortc_mapper::parse_rtp_capabilities(value);
+    assert!(
+        parsed.is_some(),
+        "channel test capabilities should parse into router-native RTP capabilities"
+    );
+    parsed.unwrap_or_else(|| RtpCapabilities::new(Vec::new(), Vec::new()))
+}
+
+fn parse_rtp_parameters(value: &serde_json::Value) -> RtpParameters {
+    let parsed = ortc_mapper::parse_rtp_parameters(value);
+    assert!(
+        parsed.is_some(),
+        "channel test RTP parameters should parse into router-native RTP parameters"
+    );
+    parsed.unwrap_or_else(|| RtpParameters::new(Vec::new(), Vec::new(), Vec::new()))
 }
 
 pub(super) fn test_sender() -> (

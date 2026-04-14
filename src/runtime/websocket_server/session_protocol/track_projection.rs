@@ -70,12 +70,7 @@ impl RemoteTrackProjection {
         &mut self,
         payload: &RemoteTrackBootstrap,
     ) -> Result<(), WebSocketCloseCode> {
-        let Some(mid) = payload
-            .rtp_parameters()
-            .0
-            .get("mid")
-            .and_then(serde_json::Value::as_str)
-        else {
+        let Some(mid) = payload.rtp_parameters().mid() else {
             return Err(WebSocketCloseCode::Error);
         };
         let mid = mid.to_owned();

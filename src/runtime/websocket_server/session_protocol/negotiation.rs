@@ -1,12 +1,11 @@
-use crate::signaling::{
-    protocol::{RequestId, ServerRequest},
-    webrtc::RtpCapabilities as SignalingRtpCapabilities,
-};
+use o_sfu_router::MediaCapabilities;
+
+use crate::signaling::protocol::{RequestId, ServerRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PendingNegotiationAction {
     EstablishSession {
-        fallback_client_rtp_capabilities: SignalingRtpCapabilities,
+        fallback_client_rtp_capabilities: MediaCapabilities,
     },
     RefreshSession,
 }

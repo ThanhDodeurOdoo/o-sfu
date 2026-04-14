@@ -1,11 +1,14 @@
 use super::fixtures::*;
+use o_sfu_router::RtpParameters;
+
 use crate::runtime::channel::Channel;
 use crate::runtime::transport_adapter::TransportConnectDirection;
+use crate::signaling::ortc_mapper;
 use crate::signaling::shared::StreamType;
-use crate::signaling::webrtc::{MediaKind, RtpParameters};
+use crate::signaling::webrtc::MediaKind;
 
 fn test_video_rtp_parameters(ssrc: u64) -> RtpParameters {
-    RtpParameters(serde_json::json!({
+    let parsed = ortc_mapper::parse_rtp_parameters(&serde_json::json!({
         "codecs": [
             {
                 "mimeType": "video/VP8",
@@ -34,7 +37,12 @@ fn test_video_rtp_parameters(ssrc: u64) -> RtpParameters {
             { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
         ],
         "encodings": [{ "ssrc": ssrc }]
-    }))
+    }));
+    assert!(
+        parsed.is_some(),
+        "HTTP app test RTP parameters should parse"
+    );
+    parsed.unwrap_or_else(|| RtpParameters::new(Vec::new(), Vec::new(), Vec::new()))
 }
 
 async fn publish_video_stream(

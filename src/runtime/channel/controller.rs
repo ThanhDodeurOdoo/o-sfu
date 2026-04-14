@@ -9,8 +9,8 @@
 //! - `router_state`: compatibility bridge from signaling session ids into the pure router
 //! - `topology`: channel-local routing placement boundary
 //! - `rtp_capabilities`: default router RTP capability surface
-//! - the legacy signaling edge owns RTP/ORTC wire mapping through `crate::signaling::ortc_mapper`
-//!   until the native Phase 9 negotiation path replaces the current websocket protocol
+//! - signaling edges own any legacy RTP/ORTC wire mapping; the channel boundary consumes
+//!   router-native RTP capabilities, negotiated parameters, and track bootstrap data
 
 use std::fmt;
 use std::sync::Arc;

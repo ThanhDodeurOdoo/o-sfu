@@ -20,10 +20,12 @@ use crate::signaling::{
         CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackPayload,
         CurrentPublishTrackResponse, CurrentServerRequest, CurrentTransportConnectPayload,
     },
+    ortc_mapper,
     protocol::{RecordingOptions, WebSocketCloseCode},
     shared::SessionId,
     webrtc::RtpCapabilities,
 };
+use o_sfu_router::MediaCapabilities;
 
 #[derive(Debug)]
 pub(super) struct SessionController {
@@ -231,11 +233,9 @@ impl SessionController {
             return false;
         }
         self.pending_transport_bootstrap_request_id = None;
-        let Ok(capabilities) = serde_json::from_value::<RtpCapabilities>(message) else {
-            debug!(
-                response_to = %response_to.as_str(),
-                "failed to decode transport bootstrap response capabilities"
-            );
+        let Some(parsed_capabilities) =
+            parse_transport_bootstrap_capabilities(response_to.as_str(), message)
+        else {
             return true;
         };
         if self
@@ -243,7 +243,7 @@ impl SessionController {
             .apply_client_rtp_capabilities(
                 &self.session_id,
                 self.connection_id,
-                capabilities,
+                parsed_capabilities,
                 &self.transport_adapter,
             )
             .await
@@ -421,13 +421,19 @@ impl SessionController {
 
     async fn handle_publish_request(&self, payload: &CurrentPublishTrackPayload) -> Value {
         self.metrics.record_ws_bus_stub_publish_request();
+        let Some(parsed_rtp_parameters) =
+            ortc_mapper::parse_rtp_parameters(&payload.rtp_parameters.0)
+        else {
+            debug!("failed to parse publish RTP parameters");
+            return empty_object();
+        };
         let producer_id = self
             .channel
             .publish_track(
                 &self.session_id,
                 payload.stream_type,
                 payload.media_kind,
-                payload.rtp_parameters.clone(),
+                parsed_rtp_parameters,
                 &self.transport_adapter,
             )
             .await;
@@ -496,4 +502,25 @@ impl SessionController {
         self.channel
             .transport_session_key(&self.session_id, self.connection_id)
     }
+}
+
+fn parse_transport_bootstrap_capabilities(
+    response_to: &str,
+    message: Value,
+) -> Option<MediaCapabilities> {
+    let Ok(capabilities) = serde_json::from_value::<RtpCapabilities>(message) else {
+        debug!(
+            response_to,
+            "failed to decode transport bootstrap response capabilities"
+        );
+        return None;
+    };
+    let Some(parsed_capabilities) = ortc_mapper::parse_rtp_capabilities(&capabilities.0) else {
+        debug!(
+            response_to,
+            "failed to parse transport bootstrap response capabilities"
+        );
+        return None;
+    };
+    Some(parsed_capabilities)
 }

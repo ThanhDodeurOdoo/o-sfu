@@ -1,13 +1,15 @@
+use o_sfu_router::MediaCapabilities;
+
 use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
 use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportAdapterError, TransportSessionKey,
 };
-use crate::runtime::transport_bootstrap::to_wire_rtp_capabilities;
 use crate::runtime::websocket_server::WsWriter;
-use crate::signaling::protocol::{
-    RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
+use crate::signaling::{
+    ortc_mapper,
+    protocol::{RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode},
+    webrtc::RtpCapabilities as SignalingRtpCapabilities,
 };
-use crate::signaling::webrtc::RtpCapabilities as SignalingRtpCapabilities;
 
 use super::super::{
     controller::SessionProtocolOutcome,
@@ -37,7 +39,7 @@ impl NativeSessionProtocol {
             writer,
             offer_request,
             PendingNegotiationAction::EstablishSession {
-                fallback_client_rtp_capabilities: to_wire_rtp_capabilities(&router_capabilities),
+                fallback_client_rtp_capabilities: router_capabilities,
             },
         )
         .await
@@ -105,7 +107,9 @@ impl NativeSessionProtocol {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::Error);
         }
         self.commit_pending_publishes().await;
-        let negotiated_client_rtp_capabilities = client_rtp_capabilities_from_answer(&answer.sdp);
+        let negotiated_client_rtp_capabilities = client_rtp_capabilities_from_answer(&answer.sdp)
+            .as_ref()
+            .and_then(parse_client_rtp_capabilities);
         if self
             .apply_negotiation_action(&resolved.pending, negotiated_client_rtp_capabilities)
             .await
@@ -133,7 +137,7 @@ impl NativeSessionProtocol {
     async fn apply_negotiation_action(
         &self,
         pending: &PendingNegotiationRequest,
-        negotiated_client_rtp_capabilities: Option<SignalingRtpCapabilities>,
+        negotiated_client_rtp_capabilities: Option<MediaCapabilities>,
     ) -> Result<(), ()> {
         match &pending.action {
             PendingNegotiationAction::EstablishSession {
@@ -170,6 +174,12 @@ impl NativeSessionProtocol {
         }
         Ok(())
     }
+}
+
+fn parse_client_rtp_capabilities(
+    capabilities: &SignalingRtpCapabilities,
+) -> Option<MediaCapabilities> {
+    ortc_mapper::parse_rtp_capabilities(&capabilities.0)
 }
 
 async fn staged_renegotiation_request(
