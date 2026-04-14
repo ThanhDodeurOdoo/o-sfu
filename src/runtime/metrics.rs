@@ -31,6 +31,7 @@ pub(super) struct RuntimeMetrics {
     ws_handshake_credentials_received: AtomicU64,
     ws_handshake_rejected_timeout: AtomicU64,
     ws_handshake_rejected_authentication_failed: AtomicU64,
+    ws_handshake_rejected_protocol_error: AtomicU64,
     ws_handshake_rejected_channel_full: AtomicU64,
     ws_handshake_rejected_error: AtomicU64,
     ws_sessions_joined: AtomicU64,
@@ -78,6 +79,7 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub ws_handshake_credentials_received: u64,
     pub ws_handshake_rejected_timeout: u64,
     pub ws_handshake_rejected_authentication_failed: u64,
+    pub ws_handshake_rejected_protocol_error: u64,
     pub ws_handshake_rejected_channel_full: u64,
     pub ws_handshake_rejected_error: u64,
     pub ws_sessions_joined: u64,
@@ -128,6 +130,7 @@ impl RuntimeMetrics {
             ws_handshake_rejected_authentication_failed: load(
                 &self.ws_handshake_rejected_authentication_failed,
             ),
+            ws_handshake_rejected_protocol_error: load(&self.ws_handshake_rejected_protocol_error),
             ws_handshake_rejected_channel_full: load(&self.ws_handshake_rejected_channel_full),
             ws_handshake_rejected_error: load(&self.ws_handshake_rejected_error),
             ws_sessions_joined: load(&self.ws_sessions_joined),
@@ -223,6 +226,9 @@ impl RuntimeMetrics {
             Some(WebSocketCloseCode::AuthFailed) => {
                 increment(&self.ws_handshake_rejected_authentication_failed);
             }
+            Some(WebSocketCloseCode::ProtocolError) => {
+                increment(&self.ws_handshake_rejected_protocol_error);
+            }
             Some(WebSocketCloseCode::ChannelFull) => {
                 increment(&self.ws_handshake_rejected_channel_full);
             }
@@ -230,7 +236,6 @@ impl RuntimeMetrics {
                 WebSocketCloseCode::Error
                 | WebSocketCloseCode::Clean
                 | WebSocketCloseCode::Leaving
-                | WebSocketCloseCode::ProtocolError
                 | WebSocketCloseCode::Kicked,
             )
             | None => increment(&self.ws_handshake_rejected_error),
@@ -367,6 +372,7 @@ mod tests {
         assert_eq!(snapshot.ws_connections_accepted, 1);
         assert_eq!(snapshot.ws_handshake_credentials_received, 1);
         assert_eq!(snapshot.ws_handshake_rejected_timeout, 1);
+        assert_eq!(snapshot.ws_handshake_rejected_protocol_error, 0);
         assert_eq!(snapshot.ws_sessions_joined, 1);
         assert_eq!(snapshot.ws_session_loops_started, 1);
         assert_eq!(snapshot.ws_session_loop_exits_peer_closed, 1);
@@ -388,11 +394,13 @@ mod tests {
     fn handshake_rejection_buckets_are_distinct() {
         let metrics = RuntimeMetrics::default();
         metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::AuthFailed));
+        metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::ProtocolError));
         metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::ChannelFull));
         metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::Error));
         let snapshot = metrics.snapshot();
 
         assert_eq!(snapshot.ws_handshake_rejected_authentication_failed, 1);
+        assert_eq!(snapshot.ws_handshake_rejected_protocol_error, 1);
         assert_eq!(snapshot.ws_handshake_rejected_channel_full, 1);
         assert_eq!(snapshot.ws_handshake_rejected_error, 1);
     }

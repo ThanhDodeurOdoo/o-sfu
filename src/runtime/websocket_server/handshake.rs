@@ -314,3 +314,81 @@ async fn send_welcome(
         .await
         .map_err(|_error| ())
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::extract::ws::Message;
+    use serde_json::json;
+
+    use super::parse_auth_payload;
+    use crate::signaling::protocol::WebSocketCloseCode;
+
+    #[test]
+    fn parse_auth_payload_accepts_single_auth_message() {
+        let frame = Message::Text(
+            serde_json::to_string(&vec![json!({
+                "t": "auth",
+                "p": {
+                    "jwt": "token",
+                    "channel": "channel-1",
+                },
+            })])
+            .unwrap_or_default()
+            .into(),
+        );
+
+        let payload = parse_auth_payload(frame);
+        assert!(payload.is_ok());
+        let Some(payload) = payload.ok() else {
+            return;
+        };
+        assert_eq!(payload.jwt, "token");
+        assert_eq!(payload.channel.as_deref(), Some("channel-1"));
+    }
+
+    #[test]
+    fn parse_auth_payload_rejects_generated_non_auth_first_frames() {
+        let cases = [
+            Message::Text("not-json".into()),
+            Message::Text(
+                serde_json::to_string(&vec![json!({
+                    "t": "info",
+                    "p": {},
+                })])
+                .unwrap_or_default()
+                .into(),
+            ),
+            Message::Text(
+                serde_json::to_string(&vec![
+                    json!({
+                        "t": "auth",
+                        "p": { "jwt": "token-a" },
+                    }),
+                    json!({
+                        "t": "auth",
+                        "p": { "jwt": "token-b" },
+                    }),
+                ])
+                .unwrap_or_default()
+                .into(),
+            ),
+            Message::Binary(vec![0xff].into()),
+            Message::Ping(Vec::new().into()),
+        ];
+
+        for frame in cases {
+            assert_eq!(
+                parse_auth_payload(frame),
+                Err(WebSocketCloseCode::ProtocolError)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_auth_payload_treats_close_frame_as_clean_shutdown() {
+        assert_eq!(
+            parse_auth_payload(Message::Close(None)),
+            Err(WebSocketCloseCode::Clean)
+        );
+    }
+}

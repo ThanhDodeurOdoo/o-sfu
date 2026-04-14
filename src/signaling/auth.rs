@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -67,7 +67,8 @@ impl StdError for AuthenticationError {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct JwtHeader {
     alg: String,
-    typ: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    typ: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,17 +111,17 @@ where
     let key = decode_base64(key_b64)?;
     let header = JwtHeader {
         alg: "HS256".to_owned(),
-        typ: "JWT".to_owned(),
+        typ: Some("JWT".to_owned()),
     };
     let header_json =
         serde_json::to_vec(&header).map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
     let claims_json =
         serde_json::to_vec(claims).map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
-    let header_b64 = STANDARD.encode(header_json);
-    let claims_b64 = STANDARD.encode(claims_json);
+    let header_b64 = URL_SAFE_NO_PAD.encode(header_json);
+    let claims_b64 = URL_SAFE_NO_PAD.encode(claims_json);
     let signed_data = format!("{header_b64}.{claims_b64}");
     let signature = sign_hs256(signed_data.as_bytes(), &key)?;
-    let signature_b64 = STANDARD.encode(signature);
+    let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
     Ok(format!("{signed_data}.{signature_b64}"))
 }
 
@@ -133,18 +134,18 @@ where
 {
     let key = decode_base64(key_b64)?;
     let (header_b64, claims_b64, signature_b64) = split_token(token)?;
-    let header_bytes = decode_base64(header_b64)?;
+    let header_bytes = decode_jwt_segment(header_b64)?;
     let header: JwtHeader = serde_json::from_slice(&header_bytes)
         .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
     if header.alg != "HS256" {
         return Err(AuthenticationError::UnsupportedAlgorithm(header.alg));
     }
-    let claims_bytes = decode_base64(claims_b64)?;
+    let claims_bytes = decode_jwt_segment(claims_b64)?;
     let claims_value: serde_json::Value = serde_json::from_slice(&claims_bytes)
         .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
     let registered_claims: RegisteredJwtClaims = serde_json::from_value(claims_value.clone())
         .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
-    let actual_signature = decode_base64(signature_b64)?;
+    let actual_signature = decode_jwt_segment(signature_b64)?;
     verify_hs256(
         format!("{header_b64}.{claims_b64}").as_bytes(),
         &key,
@@ -192,13 +193,25 @@ fn split_token(token: &str) -> Result<(&str, &str, &str), AuthenticationError> {
     else {
         return Err(AuthenticationError::InvalidJwtFormat);
     };
+    if header.is_empty() || claims.is_empty() || signature.is_empty() {
+        return Err(AuthenticationError::InvalidJwtFormat);
+    }
     Ok((header, claims, signature))
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, AuthenticationError> {
-    let padded = pad_base64(input);
     STANDARD
-        .decode(padded.as_bytes())
+        .decode(pad_base64(input).as_bytes())
+        .or_else(|_error| URL_SAFE.decode(pad_base64(input).as_bytes()))
+        .or_else(|_error| URL_SAFE_NO_PAD.decode(input.as_bytes()))
+        .map_err(|_error| AuthenticationError::InvalidBase64Encoding)
+}
+
+fn decode_jwt_segment(input: &str) -> Result<Vec<u8>, AuthenticationError> {
+    URL_SAFE_NO_PAD
+        .decode(input.as_bytes())
+        .or_else(|_error| URL_SAFE.decode(pad_base64(input).as_bytes()))
+        .or_else(|_error| STANDARD.decode(pad_base64(input).as_bytes()))
         .map_err(|_error| AuthenticationError::InvalidBase64Encoding)
 }
 
@@ -215,11 +228,14 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use serde::Serialize;
     use serde_json::json;
 
     use super::{
-        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
-        WebSocketConnectClaims, sign, verify,
+        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, JwtHeader,
+        RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, sign, sign_hs256, verify,
     };
     use crate::signaling::shared::{SessionId, SessionPermissions};
 
@@ -351,5 +367,117 @@ mod tests {
             return;
         };
         assert_eq!(error, AuthenticationError::TokenExpired);
+    }
+
+    #[test]
+    fn sign_emits_jose_base64url_segments_without_padding() {
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims::default(),
+            key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        };
+
+        let token = sign(&claims, TEST_AUTH_KEY);
+        assert!(token.is_ok());
+        let Some(token) = token.ok() else {
+            return;
+        };
+
+        let segments = token.split('.').collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3);
+        for segment in segments {
+            assert!(!segment.contains('='));
+            assert!(!segment.contains('+'));
+            assert!(!segment.contains('/'));
+        }
+    }
+
+    #[test]
+    fn verify_accepts_jose_token_without_typ_header() {
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims::default(),
+            key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        };
+
+        let token =
+            sign_token_for_test(&claims, TEST_AUTH_KEY, None, SegmentEncoding::UrlSafeNoPad);
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+
+        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        assert_eq!(verified.ok(), Some(claims));
+    }
+
+    #[test]
+    fn verify_accepts_legacy_standard_base64_segments_for_compatibility() {
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims::default(),
+            key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        };
+
+        let token = sign_token_for_test(
+            &claims,
+            TEST_AUTH_KEY,
+            Some("JWT"),
+            SegmentEncoding::Standard,
+        );
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+
+        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        assert_eq!(verified.ok(), Some(claims));
+    }
+
+    #[test]
+    fn verify_rejects_generated_invalid_token_shapes() {
+        for token in [
+            "",
+            "header",
+            "header.claims",
+            ".claims.sig",
+            "header..sig",
+            "header.claims.",
+            "a.b.c.d",
+        ] {
+            let error = verify::<HttpChannelClaims>(token, TEST_AUTH_KEY).err();
+            assert_eq!(error, Some(AuthenticationError::InvalidJwtFormat));
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum SegmentEncoding {
+        UrlSafeNoPad,
+        Standard,
+    }
+
+    fn sign_token_for_test<T: Serialize>(
+        claims: &T,
+        key_b64: &str,
+        typ: Option<&str>,
+        segment_encoding: SegmentEncoding,
+    ) -> Option<String> {
+        let key = decode_base64(key_b64).ok()?;
+        let header = JwtHeader {
+            alg: "HS256".to_owned(),
+            typ: typ.map(str::to_owned),
+        };
+        let header_json = serde_json::to_vec(&header).ok()?;
+        let claims_json = serde_json::to_vec(claims).ok()?;
+        let header_b64 = encode_segment(&header_json, segment_encoding);
+        let claims_b64 = encode_segment(&claims_json, segment_encoding);
+        let signed_data = format!("{header_b64}.{claims_b64}");
+        let signature = sign_hs256(signed_data.as_bytes(), &key).ok()?;
+        let signature_b64 = encode_segment(&signature, segment_encoding);
+        Some(format!("{signed_data}.{signature_b64}"))
+    }
+
+    fn encode_segment(bytes: &[u8], encoding: SegmentEncoding) -> String {
+        match encoding {
+            SegmentEncoding::UrlSafeNoPad => URL_SAFE_NO_PAD.encode(bytes),
+            SegmentEncoding::Standard => STANDARD.encode(bytes),
+        }
     }
 }

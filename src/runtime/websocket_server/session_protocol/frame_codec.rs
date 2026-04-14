@@ -129,3 +129,74 @@ async fn send_serialized_batch(
         .await
         .map_err(|_error| WebSocketCloseCode::Error)
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,
+        MAX_CLIENT_FRAME_BYTES, decode_client_batch,
+    };
+
+    #[test]
+    fn decode_client_batch_classifies_generated_failures() {
+        let oversized_batch = serde_json::to_string(
+            &(0..=MAX_CLIENT_BATCH_ENVELOPES)
+                .map(|_| json!({ "t": "info", "p": {} }))
+                .collect::<Vec<_>>(),
+        );
+        assert!(oversized_batch.is_ok());
+        let Some(oversized_batch) = oversized_batch.ok() else {
+            return;
+        };
+        let cases = [
+            (
+                "not-json".to_owned(),
+                ClientBatchDecodeFailureKind::InvalidInput,
+            ),
+            (
+                serde_json::to_string(&vec![json!({ "t": "not-a-real-message", "p": {} })])
+                    .unwrap_or_default(),
+                ClientBatchDecodeFailureKind::UnsupportedFeature,
+            ),
+            (
+                serde_json::to_string(&vec![json!({
+                    "t": "ping",
+                    "q": "1",
+                    "r": "2",
+                })])
+                .unwrap_or_default(),
+                ClientBatchDecodeFailureKind::InvalidInput,
+            ),
+            (
+                serde_json::to_string(&vec![json!({ "t": "broadcast" })]).unwrap_or_default(),
+                ClientBatchDecodeFailureKind::InvalidInput,
+            ),
+            (oversized_batch, ClientBatchDecodeFailureKind::InvalidInput),
+        ];
+
+        for (payload, expected_kind) in cases {
+            let error = decode_client_batch(&payload);
+            assert!(error.is_err());
+            let Some(error) = error.err() else {
+                return;
+            };
+            assert_eq!(error.kind(), expected_kind);
+        }
+    }
+
+    #[test]
+    fn decode_client_batch_rejects_oversized_frame_before_json_decode() {
+        let oversized_payload = "x".repeat(MAX_CLIENT_FRAME_BYTES + 1);
+
+        let error = decode_client_batch(&oversized_payload);
+        assert!(matches!(
+            error,
+            Err(ClientBatchDecodeError::FrameTooLarge {
+                actual,
+                limit: MAX_CLIENT_FRAME_BYTES,
+            }) if actual == MAX_CLIENT_FRAME_BYTES + 1
+        ));
+    }
+}

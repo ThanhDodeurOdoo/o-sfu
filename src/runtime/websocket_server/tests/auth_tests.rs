@@ -135,3 +135,40 @@ async fn websocket_accepts_global_key_without_explicit_channel_uuid() {
     let welcome = read_welcome(&mut websocket).await;
     assert!(welcome.is_some(), "welcome payload should exist");
 }
+
+#[tokio::test]
+async fn websocket_rejects_non_auth_handshake_frame_with_protocol_metric() {
+    let server = spawn_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let websocket = connect_websocket(&server).await;
+    assert!(websocket.is_some());
+    let Some(mut websocket) = websocket else {
+        return;
+    };
+
+    let send_result = websocket
+        .send(tungstenite::Message::Text(
+            serde_json::to_string(&vec![serde_json::json!({
+                "t": "info",
+                "p": {},
+            })])
+            .unwrap_or_default()
+            .into(),
+        ))
+        .await;
+    assert!(send_result.is_ok());
+
+    assert_eq!(
+        read_close_code(&mut websocket).await,
+        Some(CloseCode::Protocol),
+    );
+
+    sleep(Duration::from_millis(20)).await;
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_handshake_credentials_received, 0);
+    assert_eq!(metrics.ws_handshake_rejected_protocol_error, 1);
+    assert_eq!(metrics.ws_handshake_rejected_error, 0);
+}
