@@ -2,7 +2,6 @@ use super::fixtures::*;
 use o_sfu_router::RtpParameters;
 
 use crate::runtime::channel::Channel;
-use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::ortc_mapper;
 use crate::signaling::shared::StreamType;
 use crate::signaling::webrtc::MediaKind;
@@ -54,10 +53,9 @@ async fn publish_video_stream(
     transport_adapter: &RuntimeTransportAdapter,
 ) {
     channel
-        .apply_transport_connected(
+        .apply_publish_transport_ready(
             session_id,
             connection_id,
-            TransportConnectDirection::Upload,
             transport_adapter,
         )
         .await;

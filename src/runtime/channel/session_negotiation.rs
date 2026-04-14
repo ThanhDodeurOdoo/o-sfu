@@ -1,24 +1,22 @@
-use crate::runtime::transport_adapter::TransportConnectDirection;
-
-/// Tracks the two independent axes of session readiness: **transport connections**
-/// (upload / download ICE) and **RTP capability exchange**.
+/// Tracks the two independent axes of session readiness: semantic transport
+/// readiness for publishing/consuming and RTP capability exchange.
 ///
-/// A session can only publihs once its upload transport is conected, and can only
-/// consume once *both* the download transport is conected *and* RTP capabilities
-/// have been received. The two axes can advance in any order; the state machine
+/// A session can only publish once its publish transport is ready, and can only
+/// consume once both the consume transport is ready and RTP capabilities have
+/// been received. The two axes can advance in any order; the state machine
 /// merges them into a single enum so every legal combination is represented.
 ///
 /// Each state is a combination of two independents axes:
-/// 1. Transport Connection: None, Upload only, Download only, or Both.
+/// 1. Transport readiness: None, Publish only, Consume only, or Both.
 /// 2. RTP Capabilities: Not yet received, or Ready.
 ///
 /// ```text
-///                      TRANSPORT CONNECTION
-///               None        Upload (P)  Download    Both (P)
+///                      TRANSPORT READINESS
+///               None        Publish (P) Consume     Both (P)
 ///            ┌─────────────┬───────────┬────────────┬────────────┐
-/// NO CAPS    │ `Awaiting`  │ `UpConn`  │ `DownConn` │ `TransConn`│
+/// NO CAPS    │ `Awaiting`  │ `PubConn` │ `ConConn`  │ `TransConn`│
 ///            ├─────────────┼───────────┼────────────┼────────────┤
-/// CAPS READY │ `CapsReady` │ `UpReady` │ `DownReady`│  `Ready`   │
+/// CAPS READY │ `CapsReady` │ `PubReady`│ `ConReady` │  `Ready`   │
 ///            └─────────────┴───────────┴────────────┴────────────┘
 ///                            (P)        (C)        (P, C)
 /// ```
@@ -27,26 +25,32 @@ use crate::runtime::transport_adapter::TransportConnectDirection;
 /// (C) = `can_consume()` is true
 ///
 /// **Gate conditions:**
-/// - `can_publish()`: true when the upload transport is connected (regardeless of whether capabilities have arrived).
-/// - `can_consume()`: true only when *both* the download transport is connected *and* capabilities are available (`DownloadReady` or `Ready`).
+/// - `can_publish()`: true when the publish transport is ready, regardless of whether capabilities have arrived.
+/// - `can_consume()`: true only when both the consume transport is ready and capabilities are available (`ConsumeReady` or `Ready`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SessionNegotiationState {
-    /// Neither transport connected nor capabilities received.
+    /// Neither transport ready nor capabilities received.
     AwaitingCapabilities,
     /// Capabilities received, but no transport connected yet.
     CapabilitiesReady,
-    /// Upload transport connected; still waiting for capabilities.
-    UploadConnectedAwaitingCapabilities,
-    /// Download transport connected; still waiting for capabilities.
-    DownloadConnectedAwaitingCapabilities,
-    /// Both transports connected; still waiting for capabilities.
-    TransportsConnectedAwaitingCapabilities,
-    /// Upload transport connected and capabilities received; download pending.
-    UploadReady,
-    /// Download transport connected and capabilities received; upload pending.
-    DownloadReady,
-    /// Fully negotiated: both transports conected and capabilities received.
+    /// Publish transport ready; still waiting for capabilities.
+    PublishTransportReadyAwaitingCapabilities,
+    /// Consume transport ready; still waiting for capabilities.
+    ConsumeTransportReadyAwaitingCapabilities,
+    /// Both transports ready; still waiting for capabilities.
+    BothTransportsReadyAwaitingCapabilities,
+    /// Publish transport ready and capabilities received; consume pending.
+    PublishReady,
+    /// Consume transport ready and capabilities received; publish pending.
+    ConsumeReady,
+    /// Fully negotiated: both transports ready and capabilities received.
     Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SessionTransportReady {
+    Publish,
+    Consume,
 }
 
 /// Returned after each state transition to tell the caller what changed.
@@ -83,9 +87,9 @@ impl SessionNegotiation {
     pub(super) fn can_publish(&self) -> bool {
         matches!(
             self.state,
-            SessionNegotiationState::UploadConnectedAwaitingCapabilities
-                | SessionNegotiationState::TransportsConnectedAwaitingCapabilities
-                | SessionNegotiationState::UploadReady
+            SessionNegotiationState::PublishTransportReadyAwaitingCapabilities
+                | SessionNegotiationState::BothTransportsReadyAwaitingCapabilities
+                | SessionNegotiationState::PublishReady
                 | SessionNegotiationState::Ready
         )
     }
@@ -94,7 +98,7 @@ impl SessionNegotiation {
     pub(super) fn can_consume(&self) -> bool {
         matches!(
             self.state,
-            SessionNegotiationState::DownloadReady | SessionNegotiationState::Ready
+            SessionNegotiationState::ConsumeReady | SessionNegotiationState::Ready
         )
     }
 
@@ -105,15 +109,15 @@ impl SessionNegotiation {
             | SessionNegotiationState::CapabilitiesReady => {
                 SessionNegotiationState::CapabilitiesReady
             }
-            SessionNegotiationState::UploadConnectedAwaitingCapabilities => {
-                SessionNegotiationState::UploadReady
+            SessionNegotiationState::PublishTransportReadyAwaitingCapabilities => {
+                SessionNegotiationState::PublishReady
             }
-            SessionNegotiationState::DownloadConnectedAwaitingCapabilities
-            | SessionNegotiationState::DownloadReady => SessionNegotiationState::DownloadReady,
-            SessionNegotiationState::TransportsConnectedAwaitingCapabilities => {
+            SessionNegotiationState::ConsumeTransportReadyAwaitingCapabilities
+            | SessionNegotiationState::ConsumeReady => SessionNegotiationState::ConsumeReady,
+            SessionNegotiationState::BothTransportsReadyAwaitingCapabilities => {
                 SessionNegotiationState::Ready
             }
-            SessionNegotiationState::UploadReady => SessionNegotiationState::UploadReady,
+            SessionNegotiationState::PublishReady => SessionNegotiationState::PublishReady,
             SessionNegotiationState::Ready => SessionNegotiationState::Ready,
         };
         SessionNegotiationUpdate {
@@ -122,35 +126,34 @@ impl SessionNegotiation {
         }
     }
 
-    pub(super) fn set_transport_connected(
+    pub(super) fn set_transport_ready(
         &mut self,
-        direction: TransportConnectDirection,
+        readiness: SessionTransportReady,
     ) -> SessionNegotiationUpdate {
         let was_consumer_ready = self.can_consume();
-        self.state = match (&self.state, direction) {
-            (SessionNegotiationState::AwaitingCapabilities, TransportConnectDirection::Upload) => {
-                SessionNegotiationState::UploadConnectedAwaitingCapabilities
+        self.state = match (&self.state, readiness) {
+            (SessionNegotiationState::AwaitingCapabilities, SessionTransportReady::Publish) => {
+                SessionNegotiationState::PublishTransportReadyAwaitingCapabilities
+            }
+            (SessionNegotiationState::AwaitingCapabilities, SessionTransportReady::Consume) => {
+                SessionNegotiationState::ConsumeTransportReadyAwaitingCapabilities
+            }
+            (SessionNegotiationState::CapabilitiesReady, SessionTransportReady::Publish) => {
+                SessionNegotiationState::PublishReady
+            }
+            (SessionNegotiationState::CapabilitiesReady, SessionTransportReady::Consume) => {
+                SessionNegotiationState::ConsumeReady
             }
             (
-                SessionNegotiationState::AwaitingCapabilities,
-                TransportConnectDirection::Download,
-            ) => SessionNegotiationState::DownloadConnectedAwaitingCapabilities,
-            (SessionNegotiationState::CapabilitiesReady, TransportConnectDirection::Upload) => {
-                SessionNegotiationState::UploadReady
-            }
-            (SessionNegotiationState::CapabilitiesReady, TransportConnectDirection::Download) => {
-                SessionNegotiationState::DownloadReady
-            }
-            (
-                SessionNegotiationState::UploadConnectedAwaitingCapabilities,
-                TransportConnectDirection::Download,
+                SessionNegotiationState::PublishTransportReadyAwaitingCapabilities,
+                SessionTransportReady::Consume,
             )
             | (
-                SessionNegotiationState::DownloadConnectedAwaitingCapabilities,
-                TransportConnectDirection::Upload,
-            ) => SessionNegotiationState::TransportsConnectedAwaitingCapabilities,
-            (SessionNegotiationState::UploadReady, TransportConnectDirection::Download)
-            | (SessionNegotiationState::DownloadReady, TransportConnectDirection::Upload) => {
+                SessionNegotiationState::ConsumeTransportReadyAwaitingCapabilities,
+                SessionTransportReady::Publish,
+            ) => SessionNegotiationState::BothTransportsReadyAwaitingCapabilities,
+            (SessionNegotiationState::PublishReady, SessionTransportReady::Consume)
+            | (SessionNegotiationState::ConsumeReady, SessionTransportReady::Publish) => {
                 SessionNegotiationState::Ready
             }
             _ => self.state.clone(),
@@ -173,22 +176,20 @@ impl SessionNegotiation {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionNegotiation, SessionNegotiationState};
-    use crate::runtime::transport_adapter::TransportConnectDirection;
+    use super::{SessionNegotiation, SessionNegotiationState, SessionTransportReady};
 
     #[test]
     fn session_negotiation_transitions_to_ready_when_capabilities_follow_connections() {
         let mut negotiation = SessionNegotiation::default();
 
-        let upload_update = negotiation.set_transport_connected(TransportConnectDirection::Upload);
-        let download_update =
-            negotiation.set_transport_connected(TransportConnectDirection::Download);
+        let publish_update = negotiation.set_transport_ready(SessionTransportReady::Publish);
+        let consume_update = negotiation.set_transport_ready(SessionTransportReady::Consume);
         let capabilities_update = negotiation.set_client_rtp_capabilities();
 
-        assert!(upload_update.session_present);
-        assert!(!upload_update.became_consumer_ready);
-        assert!(download_update.session_present);
-        assert!(!download_update.became_consumer_ready);
+        assert!(publish_update.session_present);
+        assert!(!publish_update.became_consumer_ready);
+        assert!(consume_update.session_present);
+        assert!(!consume_update.became_consumer_ready);
         assert!(capabilities_update.session_present);
         assert!(capabilities_update.became_consumer_ready);
         assert!(negotiation.can_publish());
@@ -201,16 +202,15 @@ mod tests {
         let mut negotiation = SessionNegotiation::default();
 
         let capabilities_update = negotiation.set_client_rtp_capabilities();
-        let download_update =
-            negotiation.set_transport_connected(TransportConnectDirection::Download);
+        let consume_update = negotiation.set_transport_ready(SessionTransportReady::Consume);
 
         assert!(capabilities_update.session_present);
         assert!(!capabilities_update.became_consumer_ready);
-        assert!(download_update.session_present);
-        assert!(download_update.became_consumer_ready);
+        assert!(consume_update.session_present);
+        assert!(consume_update.became_consumer_ready);
         assert!(!negotiation.can_publish());
         assert!(negotiation.can_consume());
-        assert_eq!(negotiation.state(), &SessionNegotiationState::DownloadReady);
+        assert_eq!(negotiation.state(), &SessionNegotiationState::ConsumeReady);
     }
 
     #[test]

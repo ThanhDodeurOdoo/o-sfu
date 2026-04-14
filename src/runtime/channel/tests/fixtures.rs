@@ -13,9 +13,7 @@ pub(super) use super::super::{
     topology::ChannelTopology,
 };
 pub(super) use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
-pub(super) use crate::runtime::transport_adapter::{
-    RuntimeTransportAdapter, TransportConnectDirection,
-};
+pub(super) use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 pub(super) use crate::signaling::{
     ortc_mapper,
     protocol::WebSocketCloseCode,
@@ -250,10 +248,10 @@ pub(super) async fn setup_two_ready_sessions() -> (
     let (adapter, _stub) = stub_adapter();
     for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
         channel
-            .set_transport_connected(session_id, TransportConnectDirection::Upload)
+            .set_publish_transport_ready(session_id)
             .await;
         channel
-            .set_transport_connected(session_id, TransportConnectDirection::Download)
+            .set_consume_transport_ready(session_id)
             .await;
         channel
             .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
@@ -296,10 +294,10 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
     let (adapter, stub) = stub_adapter();
     for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
         channel
-            .set_transport_connected(session_id, TransportConnectDirection::Upload)
+            .set_publish_transport_ready(session_id)
             .await;
         channel
-            .set_transport_connected(session_id, TransportConnectDirection::Download)
+            .set_consume_transport_ready(session_id)
             .await;
         channel
             .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
@@ -342,10 +340,10 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
 
     let (transport_adapter, stub) = stub_adapter();
     channel
-        .set_transport_connected(&SessionId::Integer(1), TransportConnectDirection::Upload)
+        .set_publish_transport_ready(&SessionId::Integer(1))
         .await;
     channel
-        .set_transport_connected(&SessionId::Integer(1), TransportConnectDirection::Download)
+        .set_consume_transport_ready(&SessionId::Integer(1))
         .await;
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(1), test_client_rtp_capabilities())

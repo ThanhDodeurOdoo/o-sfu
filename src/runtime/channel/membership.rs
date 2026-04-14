@@ -2,12 +2,13 @@ use o_sfu_router::MediaCapabilities;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportConnectDirection};
+use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
     Channel, ChannelEventMessage, ChannelJoinError, SessionOutbound,
-    session_negotiation::SessionNegotiationUpdate, state::TransportMediaRemoval,
+    session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
+    state::TransportMediaRemoval,
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -257,19 +258,49 @@ impl Channel {
             .await
     }
 
-    pub(crate) async fn apply_transport_connected(
+    async fn apply_transport_ready(
         &self,
         session_id: &SessionId,
         connection_id: u64,
-        direction: TransportConnectDirection,
+        readiness: SessionTransportReady,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_transport_connected(session_id, connection_id, direction)
+            state.set_transport_ready(session_id, connection_id, readiness)
         };
         self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
             .await
+    }
+
+    pub(crate) async fn apply_publish_transport_ready(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        self.apply_transport_ready(
+            session_id,
+            connection_id,
+            SessionTransportReady::Publish,
+            transport_adapter,
+        )
+        .await
+    }
+
+    pub(crate) async fn apply_consume_transport_ready(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        self.apply_transport_ready(
+            session_id,
+            connection_id,
+            SessionTransportReady::Consume,
+            transport_adapter,
+        )
+        .await
     }
 
     pub(crate) async fn apply_session_negotiated(
@@ -335,14 +366,23 @@ impl Channel {
     }
 
     #[cfg(test)]
-    pub(super) async fn set_transport_connected(
+    pub(super) async fn set_publish_transport_ready(
         &self,
         session_id: &SessionId,
-        direction: TransportConnectDirection,
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_transport_connected(session_id, connection_id, direction)
+        state.set_transport_ready(session_id, connection_id, SessionTransportReady::Publish)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn set_consume_transport_ready(
+        &self,
+        session_id: &SessionId,
+    ) -> SessionNegotiationUpdate {
+        let mut state = self.state.write().await;
+        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
+        state.set_transport_ready(session_id, connection_id, SessionTransportReady::Consume)
     }
 
     #[cfg(test)]

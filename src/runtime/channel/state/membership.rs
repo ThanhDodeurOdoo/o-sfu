@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::{MediaCapabilities, RouterError};
 use tracing::error;
 
-use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::signaling::{
     protocol::WebSocketCloseCode,
     shared::{SessionId, SessionInfo, SessionPermissions},
@@ -12,7 +11,9 @@ use crate::signaling::{
 use super::super::{
     ChannelEventMessage, ChannelJoinError,
     outbound::{MessageFanout, OutboundSender},
-    session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
+    session_negotiation::{
+        SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady,
+    },
 };
 use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
@@ -314,16 +315,16 @@ impl ChannelState {
         session.negotiation.set_client_rtp_capabilities()
     }
 
-    pub(in crate::runtime::channel) fn set_transport_connected(
+    pub(in crate::runtime::channel) fn set_transport_ready(
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
-        direction: TransportConnectDirection,
+        readiness: SessionTransportReady,
     ) -> SessionNegotiationUpdate {
         let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
             return SessionNegotiationUpdate::default();
         };
-        session.negotiation.set_transport_connected(direction)
+        session.negotiation.set_transport_ready(readiness)
     }
 
     pub(in crate::runtime::channel) fn set_session_negotiated(

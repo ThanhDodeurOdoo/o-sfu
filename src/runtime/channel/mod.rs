@@ -3,8 +3,8 @@
 //! Internal modules:
 //! - `controller`: channel identity, immutable configuration, and shared accessors
 //! - `manager`: server-global channel lookup, creation, and cleanup coordination
-//! - `membership`: join/leave, session-info fan-out, and transport readiness
-//! - `media`: producer/consumer bootstrap plus upload/download activity transitions
+//! - `membership`: join/leave, session-info fan-out, and publish/consume readiness
+//! - `media`: producer/consumer bootstrap plus publication/subscription activity transitions
 //! - `outbound`: shared outbound fan-out helpers for session handlers
 //! - `session_negotiation`: explicit transport/bootstrap readiness state for one session
 //! - `state`: channel-local mutable state and internal bootstrap bookkeeping

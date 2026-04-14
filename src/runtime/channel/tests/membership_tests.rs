@@ -462,10 +462,9 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
 
     assert!(
         !channel
-            .apply_transport_connected(
+            .apply_publish_transport_ready(
                 &SessionId::Integer(1),
                 first_connection,
-                TransportConnectDirection::Upload,
                 &transport_adapter,
             )
             .await

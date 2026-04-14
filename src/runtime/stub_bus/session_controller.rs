@@ -393,16 +393,7 @@ impl SessionController {
             debug!(?direction, "transport adapter failed to connect transport");
             return empty_object();
         }
-        if !self
-            .channel
-            .apply_transport_connected(
-                &self.session_id,
-                self.connection_id,
-                direction,
-                &self.transport_adapter,
-            )
-            .await
-        {
+        if !self.apply_legacy_transport_ready(direction).await {
             debug!(
                 ?direction,
                 "channel no longer tracks session during transport connect"
@@ -512,6 +503,32 @@ impl SessionController {
     fn transport_session_key(&self) -> TransportSessionKey {
         self.channel
             .transport_session_key(&self.session_id, self.connection_id)
+    }
+
+    async fn apply_legacy_transport_ready(
+        &self,
+        direction: TransportConnectDirection,
+    ) -> bool {
+        match direction {
+            TransportConnectDirection::Upload => {
+                self.channel
+                    .apply_publish_transport_ready(
+                        &self.session_id,
+                        self.connection_id,
+                        &self.transport_adapter,
+                    )
+                    .await
+            }
+            TransportConnectDirection::Download => {
+                self.channel
+                    .apply_consume_transport_ready(
+                        &self.session_id,
+                        self.connection_id,
+                        &self.transport_adapter,
+                    )
+                    .await
+            }
+        }
     }
 }
 

@@ -588,7 +588,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
     drain_outbound(&mut subscriber_rx);
 
     channel
-        .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+        .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
@@ -663,7 +663,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     drain_outbound(&mut subscriber_rx);
 
     channel
-        .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+        .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
@@ -707,7 +707,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     drain_outbound(&mut subscriber_rx);
 
     channel
-        .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+        .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
@@ -774,7 +774,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     drain_outbound(&mut subscriber_rx);
 
     let download_update = channel
-        .set_transport_connected(&SessionId::Integer(2), TransportConnectDirection::Download)
+        .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     assert!(download_update.session_present);
     assert!(!download_update.became_consumer_ready);
@@ -838,13 +838,12 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
 
     assert!(
         channel
-            .apply_transport_connected(
+            .apply_consume_transport_ready(
                 &SessionId::Integer(2),
                 channel
                     .session_connection_id(&SessionId::Integer(2))
                     .await
                     .unwrap_or(u64::MAX),
-                TransportConnectDirection::Download,
                 &transport_adapter,
             )
             .await
