@@ -22,7 +22,7 @@ use o_sfu::{
                 CurrentWebSocketCredentials,
             },
         },
-        spawn_test_server,
+        spawn_legacy_wire_test_server,
     },
     signaling::{
         http::{STATS_PATH, StatsResponse},
@@ -63,7 +63,7 @@ pub struct PeerTransportBootstrap {
 impl LocalNetwork {
     pub async fn start(config: Config) -> Option<Self> {
         Some(Self {
-            server: spawn_test_server(config).await.ok()?,
+            server: spawn_legacy_wire_test_server(config).await.ok()?,
         })
     }
 

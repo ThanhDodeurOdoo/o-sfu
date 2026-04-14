@@ -10,7 +10,7 @@ use tracing::{Span, field, info};
 use super::{
     WsWriter, close_writer,
     controller::{ConnectedSession, WsReader},
-    session_protocol::SessionProtocol,
+    session_protocol::{SessionProtocol, SessionProtocolMode},
 };
 use crate::runtime::{
     RuntimeState,
@@ -36,21 +36,20 @@ pub(super) async fn establish_session(
         join_authenticated_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut session_protocol = if state.config.enable_native_protocol {
-        SessionProtocol::native(
+    let mut session_protocol = match state.session_protocol_mode {
+        SessionProtocolMode::Native => SessionProtocol::native(
             session_id.clone(),
             connection_id,
             Arc::clone(&channel),
             state.transport_adapter.clone(),
-        )
-    } else {
-        SessionProtocol::legacy_stub_bus(
+        ),
+        SessionProtocolMode::LegacyWireTestOnly => SessionProtocol::legacy_stub_bus(
             session_id.clone(),
             connection_id,
             Arc::clone(&channel),
             Arc::clone(&state.metrics),
             state.transport_adapter.clone(),
-        )
+        ),
     };
     initialize_session(
         state,

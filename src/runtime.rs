@@ -35,6 +35,7 @@ use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
 use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter};
+use websocket_server::SessionProtocolMode;
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -51,15 +52,15 @@ pub(super) struct RuntimeState {
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
+    session_protocol_mode: SessionProtocolMode,
 }
 
 impl RuntimeState {
     #[must_use]
     pub(super) const fn session_cleanup_policy(&self) -> SessionCleanupPolicy {
-        if self.config.enable_native_protocol {
-            SessionCleanupPolicy::StateAndTransportMedia
-        } else {
-            SessionCleanupPolicy::StateOnly
+        match self.session_protocol_mode {
+            SessionProtocolMode::Native => SessionCleanupPolicy::StateAndTransportMedia,
+            SessionProtocolMode::LegacyWireTestOnly => SessionCleanupPolicy::StateOnly,
         }
     }
 }
@@ -93,6 +94,7 @@ impl Runtime {
             channels: self.channels,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,
+            session_protocol_mode: SessionProtocolMode::Native,
         })
         .await
     }

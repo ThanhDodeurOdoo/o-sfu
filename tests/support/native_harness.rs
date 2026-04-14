@@ -22,9 +22,7 @@ use super::harness::{
 const STUB_NEGOTIATION_ANSWER_SDP: &str = "v=0\r\ns=integration-answer\r\n";
 
 pub fn native_test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
-    let mut config = test_config(authentication_timeout_ms, channel_size);
-    config.enable_native_protocol = true;
-    config
+    test_config(authentication_timeout_ms, channel_size)
 }
 
 pub struct NativeWebSocketClient {

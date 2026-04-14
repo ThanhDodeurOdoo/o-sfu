@@ -1,4 +1,5 @@
 use super::fixtures::*;
+use crate::runtime::websocket_server::SessionProtocolMode;
 use crate::signaling::{
     current_protocol::CurrentStartRecordingPayload,
     shared::{RecordingState, RecordingStateUpdate, SessionPermissions, StopCode},
@@ -278,7 +279,7 @@ async fn recording_request_broadcasts_channel_state_and_returns_allowed_response
         1_000,
         10,
         RuntimeTransportAdapter::builder().stub().build(),
-        false,
+        SessionProtocolMode::LegacyWireTestOnly,
         RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,

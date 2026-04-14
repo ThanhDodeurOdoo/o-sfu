@@ -1,6 +1,7 @@
 use super::fixtures::*;
 use crate::runtime::channel::SessionCleanupPolicy;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
+use crate::runtime::websocket_server::SessionProtocolMode;
 
 #[tokio::test]
 async fn websocket_sends_ping_requests_and_accepts_responses() {
@@ -133,7 +134,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         20,
         100,
         build_real_rtc_transport_adapter(),
-        true,
+        SessionProtocolMode::Native,
     )
     .await;
     assert!(server.is_some());

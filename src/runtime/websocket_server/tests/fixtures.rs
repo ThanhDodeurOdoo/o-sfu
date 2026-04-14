@@ -32,6 +32,7 @@ pub(super) use crate::{
             RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportConnectDirection,
         },
         transport_connect::{TransportConnectDtlsFingerprint, TransportConnectDtlsParameters},
+        websocket_server::SessionProtocolMode,
     },
     signaling::{
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -92,7 +93,6 @@ pub(super) fn test_config(
         channel_size,
         session_timeout_ms,
         ping_interval_ms,
-        enable_native_protocol: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -112,7 +112,7 @@ pub(super) async fn spawn_test_server(
         60_000,
         channel_size,
         RuntimeTransportAdapter::builder().stub().build(),
-        false,
+        SessionProtocolMode::LegacyWireTestOnly,
     )
     .await
 }
@@ -130,7 +130,7 @@ pub(super) async fn spawn_test_server_with_timeouts(
         ping_interval_ms,
         channel_size,
         transport_adapter,
-        false,
+        SessionProtocolMode::LegacyWireTestOnly,
     )
     .await
 }
@@ -141,9 +141,9 @@ pub(super) async fn spawn_test_server_with_timeouts_and_protocol(
     ping_interval_ms: u64,
     channel_size: usize,
     transport_adapter: RuntimeTransportAdapter,
-    enable_native_protocol: bool,
+    session_protocol_mode: SessionProtocolMode,
 ) -> Option<TestServer> {
-    let mut config = test_config(
+    let config = test_config(
         authentication_timeout_ms,
         session_timeout_ms,
         ping_interval_ms,
@@ -152,12 +152,12 @@ pub(super) async fn spawn_test_server_with_timeouts_and_protocol(
     let channels = Arc::new(ChannelManager::for_test_with_admission_policy(
         ChannelAdmissionPolicy::new(config.channel_size),
     ));
-    config.enable_native_protocol = enable_native_protocol;
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter,
+        session_protocol_mode,
     };
     let state_for_server = state.clone();
     let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
@@ -202,7 +202,7 @@ pub(super) async fn spawn_native_protocol_test_server(
         60_000,
         channel_size,
         RuntimeTransportAdapter::builder().stub().build(),
-        true,
+        SessionProtocolMode::Native,
     )
     .await
 }
@@ -211,7 +211,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
     authentication_timeout_ms: u64,
     channel_size: usize,
     transport_adapter: RuntimeTransportAdapter,
-    enable_native_protocol: bool,
+    session_protocol_mode: SessionProtocolMode,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
     let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, channel_size);
@@ -225,13 +225,13 @@ pub(super) async fn spawn_test_server_with_feature_flags(
             ),
         ),
     ));
-    config.enable_native_protocol = enable_native_protocol;
     config.feature_flags = feature_flags;
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter,
+        session_protocol_mode,
     };
     let state_for_server = state.clone();
     let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
@@ -273,7 +273,7 @@ pub(super) async fn spawn_native_protocol_rtc_test_server(
         60_000,
         channel_size,
         build_real_rtc_transport_adapter(),
-        true,
+        SessionProtocolMode::Native,
     )
     .await
 }

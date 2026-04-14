@@ -28,7 +28,10 @@ use str0m::{
 };
 
 use super::fixtures::*;
-use crate::runtime::{rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey};
+use crate::runtime::{
+    rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey,
+    websocket_server::SessionProtocolMode,
+};
 use crate::signaling::ortc_mapper;
 use crate::signaling::shared::SessionPermissions;
 
@@ -1174,7 +1177,7 @@ async fn protocol_core_native_publish_round_trips_through_real_server_session_pr
         60_000,
         100,
         RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
-        true,
+        SessionProtocolMode::Native,
     )
     .await;
     assert!(server.is_some());
@@ -1852,7 +1855,7 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
         60_000,
         100,
         RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
-        true,
+        SessionProtocolMode::Native,
     )
     .await;
     assert!(server.is_some());
@@ -2003,7 +2006,7 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
         1_000,
         100,
         RuntimeTransportAdapter::builder().stub().build(),
-        true,
+        SessionProtocolMode::Native,
         RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,

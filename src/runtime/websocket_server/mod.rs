@@ -8,3 +8,4 @@ mod tests;
 
 pub(crate) use controller::{close_writer, upgrade};
 pub(crate) use io::WsWriter;
+pub(crate) use session_protocol::SessionProtocolMode;

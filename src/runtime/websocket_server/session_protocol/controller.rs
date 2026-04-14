@@ -14,6 +14,12 @@ use super::super::WsWriter;
 use super::native::NativeSessionProtocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionProtocolMode {
+    Native,
+    LegacyWireTestOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::websocket_server) enum SessionProtocolOutcome {
     Continue,
     Break,

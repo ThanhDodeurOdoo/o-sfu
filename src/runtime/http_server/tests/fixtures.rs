@@ -42,7 +42,6 @@ pub(super) fn test_config() -> Config {
         channel_size: 100,
         session_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
-        enable_native_protocol: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -61,6 +60,7 @@ pub(super) fn test_state() -> RuntimeState {
         config,
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter: RuntimeTransportAdapter::builder().stub().build(),
+        session_protocol_mode: super::super::super::websocket_server::SessionProtocolMode::Native,
     }
 }
 

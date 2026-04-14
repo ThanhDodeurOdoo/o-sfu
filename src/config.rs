@@ -14,7 +14,6 @@ const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
-const DEFAULT_ENABLE_NATIVE_PROTOCOL: bool = true;
 const DEFAULT_ENABLE_TRANSCRIPTION_FEATURE: bool = false;
 const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
@@ -239,7 +238,6 @@ pub struct Config {
     pub channel_size: usize,
     pub session_timeout_ms: u64,
     pub ping_interval_ms: u64,
-    pub enable_native_protocol: bool,
     pub feature_flags: RuntimeFeatureFlags,
     pub codec_flags: MediaCodecFlags,
     pub public_ip: IpAddr,
@@ -290,12 +288,6 @@ impl Config {
             "PING_INTERVAL_MS must be a valid u64",
         )?
         .unwrap_or(DEFAULT_PING_INTERVAL_MS);
-        let enable_native_protocol = parse_optional_env(
-            &mut get_var,
-            "ENABLE_NATIVE_PROTOCOL",
-            "ENABLE_NATIVE_PROTOCOL must be either `true` or `false`",
-        )?
-        .unwrap_or(DEFAULT_ENABLE_NATIVE_PROTOCOL);
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
         let (public_ip, rtc_port_range, rtc_media_worker_count, transport_backend) =
@@ -316,7 +308,6 @@ impl Config {
             channel_size,
             session_timeout_ms,
             ping_interval_ms,
-            enable_native_protocol,
             feature_flags,
             codec_flags,
             public_ip,
@@ -527,27 +518,12 @@ mod tests {
         assert_eq!(config.channel_size, 100);
         assert_eq!(config.session_timeout_ms, 10_000);
         assert_eq!(config.ping_interval_ms, 60_000);
-        assert!(config.enable_native_protocol);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
         assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.rtc_media_worker_count, 1);
         assert_eq!(config.transport_backend, TransportBackend::Stub);
-    }
-
-    #[test]
-    fn config_accepts_native_protocol_flag() {
-        let config = Config::from_var_lookup(|key| match key {
-            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
-            "ENABLE_NATIVE_PROTOCOL" => Some("true".to_owned()),
-            _ => None,
-        });
-        assert!(config.is_ok());
-        let Some(config) = config.ok() else {
-            return;
-        };
-        assert!(config.enable_native_protocol);
     }
 
     #[test]
