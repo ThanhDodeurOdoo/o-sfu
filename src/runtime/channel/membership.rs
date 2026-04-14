@@ -17,14 +17,14 @@ use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::shared::StreamType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TransportCleanupMode {
-    LegacyCompatibility,
-    NativeSessionProtocol,
+pub(crate) enum SessionCleanupPolicy {
+    StateOnly,
+    StateAndTransportMedia,
 }
 
-impl TransportCleanupMode {
+impl SessionCleanupPolicy {
     const fn removes_transport_media(self) -> bool {
-        matches!(self, Self::NativeSessionProtocol)
+        matches!(self, Self::StateAndTransportMedia)
     }
 }
 
@@ -43,7 +43,7 @@ impl Channel {
             permissions,
             sender,
             None,
-            TransportCleanupMode::LegacyCompatibility,
+            SessionCleanupPolicy::StateOnly,
         )
         .await
     }
@@ -55,7 +55,7 @@ impl Channel {
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) -> Result<u64, ChannelJoinError> {
         self.join_session_with_cleanup(
             session_id,
@@ -63,7 +63,7 @@ impl Channel {
             permissions,
             sender,
             Some(transport_adapter),
-            cleanup_mode,
+            cleanup_policy,
         )
         .await
     }
@@ -75,7 +75,7 @@ impl Channel {
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
         transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) -> Result<u64, ChannelJoinError> {
         let outcome = {
             let mut state = self.state.write().await;
@@ -84,13 +84,13 @@ impl Channel {
                 label,
                 permissions,
                 sender,
-                cleanup_mode == TransportCleanupMode::NativeSessionProtocol,
+                cleanup_policy.removes_transport_media(),
             )?
         };
         self.cleanup_transport_removals(
             transport_adapter,
             &outcome.transport_removals,
-            cleanup_mode,
+            cleanup_policy,
         )
         .await;
         let connection_id = outcome.connection_id;
@@ -104,7 +104,7 @@ impl Channel {
             session_id,
             connection_id,
             None,
-            TransportCleanupMode::LegacyCompatibility,
+            SessionCleanupPolicy::StateOnly,
         )
         .await
     }
@@ -114,13 +114,13 @@ impl Channel {
         session_id: &SessionId,
         connection_id: u64,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
         self.leave_session_with_cleanup(
             session_id,
             connection_id,
             Some(transport_adapter),
-            cleanup_mode,
+            cleanup_policy,
         )
         .await
     }
@@ -130,7 +130,7 @@ impl Channel {
         session_id: &SessionId,
         connection_id: u64,
         transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
         let outcome = {
             let mut state = self.state.write().await;
@@ -142,7 +142,7 @@ impl Channel {
         self.cleanup_transport_removals(
             transport_adapter,
             &outcome.transport_removals,
-            cleanup_mode,
+            cleanup_policy,
         )
         .await;
         outcome.emit();
@@ -180,21 +180,17 @@ impl Channel {
 
     #[cfg(test)]
     pub async fn disconnect_sessions(&self, session_ids: &[SessionId]) {
-        self.disconnect_sessions_with_cleanup(
-            session_ids,
-            None,
-            TransportCleanupMode::LegacyCompatibility,
-        )
-        .await;
+        self.disconnect_sessions_with_cleanup(session_ids, None, SessionCleanupPolicy::StateOnly)
+            .await;
     }
 
     pub(crate) async fn disconnect_sessions_runtime(
         &self,
         session_ids: &[SessionId],
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) {
-        self.disconnect_sessions_with_cleanup(session_ids, Some(transport_adapter), cleanup_mode)
+        self.disconnect_sessions_with_cleanup(session_ids, Some(transport_adapter), cleanup_policy)
             .await;
     }
 
@@ -202,7 +198,7 @@ impl Channel {
         &self,
         session_ids: &[SessionId],
         transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) {
         let outcome = {
             let mut state = self.state.write().await;
@@ -211,7 +207,7 @@ impl Channel {
         self.cleanup_transport_removals(
             transport_adapter,
             &outcome.transport_removals,
-            cleanup_mode,
+            cleanup_policy,
         )
         .await;
         outcome.emit();
@@ -221,12 +217,12 @@ impl Channel {
         &self,
         transport_adapter: Option<&RuntimeTransportAdapter>,
         removals: &[TransportMediaRemoval],
-        cleanup_mode: TransportCleanupMode,
+        cleanup_policy: SessionCleanupPolicy,
     ) {
         let Some(transport_adapter) = transport_adapter else {
             return;
         };
-        if !cleanup_mode.removes_transport_media() {
+        if !cleanup_policy.removes_transport_media() {
             return;
         }
         for removal in removals {

@@ -14,9 +14,7 @@ use super::{
 };
 use crate::runtime::{
     RuntimeState,
-    channel::{
-        Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound, TransportCleanupMode,
-    },
+    channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
 };
 use crate::signaling::{
     auth::{self, WebSocketConnectClaims},
@@ -34,14 +32,8 @@ pub(super) async fn establish_session(
 ) -> Option<ConnectedSession> {
     let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
     let (channel, claims) = authenticate_session(state, writer, &auth_payload).await?;
-    let (session_id, outbound_rx, channel, connection_id) = join_authenticated_session(
-        state,
-        writer,
-        channel,
-        claims,
-        state.config.enable_native_protocol,
-    )
-    .await?;
+    let (session_id, outbound_rx, channel, connection_id) =
+        join_authenticated_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
     let mut session_protocol = if state.config.enable_native_protocol {
@@ -196,7 +188,6 @@ async fn join_authenticated_session(
     writer: &mut WsWriter,
     channel: Arc<Channel>,
     claims: WebSocketConnectClaims,
-    use_native_session_protocol: bool,
 ) -> Option<(
     SessionId,
     mpsc::UnboundedReceiver<SessionOutbound>,
@@ -216,11 +207,7 @@ async fn join_authenticated_session(
                 sender: outbound_tx,
             },
             &state.transport_adapter,
-            if use_native_session_protocol {
-                TransportCleanupMode::NativeSessionProtocol
-            } else {
-                TransportCleanupMode::LegacyCompatibility
-            },
+            state.session_cleanup_policy(),
         )
         .await;
     match join_result {
@@ -286,11 +273,7 @@ async fn cleanup_failed_session(
             session_id,
             connection_id,
             &state.transport_adapter,
-            if state.config.enable_native_protocol {
-                TransportCleanupMode::NativeSessionProtocol
-            } else {
-                TransportCleanupMode::LegacyCompatibility
-            },
+            state.session_cleanup_policy(),
         )
         .await;
     let _result = state

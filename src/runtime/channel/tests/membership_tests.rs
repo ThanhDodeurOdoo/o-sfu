@@ -149,7 +149,7 @@ async fn join_session_notifies_existing_peers_with_session_joined() {
             SessionPermissions::default(),
             tx1,
             &transport_adapter,
-            super::super::TransportCleanupMode::NativeSessionProtocol,
+            super::super::SessionCleanupPolicy::StateAndTransportMedia,
         )
         .await;
     let second_join = channel
@@ -159,7 +159,7 @@ async fn join_session_notifies_existing_peers_with_session_joined() {
             SessionPermissions::default(),
             tx2,
             &transport_adapter,
-            super::super::TransportCleanupMode::NativeSessionProtocol,
+            super::super::SessionCleanupPolicy::StateAndTransportMedia,
         )
         .await;
     assert!(first_join.is_ok());
@@ -243,7 +243,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
                 SessionPermissions::default(),
                 tx1,
                 &transport_adapter,
-                super::super::TransportCleanupMode::NativeSessionProtocol,
+                super::super::SessionCleanupPolicy::StateAndTransportMedia,
             )
             .await
             .is_ok()
@@ -256,7 +256,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
                 SessionPermissions::default(),
                 tx2,
                 &transport_adapter,
-                super::super::TransportCleanupMode::NativeSessionProtocol,
+                super::super::SessionCleanupPolicy::StateAndTransportMedia,
             )
             .await
             .is_ok()
@@ -275,7 +275,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
                 SessionPermissions::default(),
                 tx3,
                 &transport_adapter,
-                super::super::TransportCleanupMode::NativeSessionProtocol,
+                super::super::SessionCleanupPolicy::StateAndTransportMedia,
             )
             .await
             .is_ok()
@@ -375,7 +375,7 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
                 &SessionId::Integer(1),
                 connection_id,
                 &transport_adapter,
-                super::super::TransportCleanupMode::NativeSessionProtocol,
+                super::super::SessionCleanupPolicy::StateAndTransportMedia,
             )
             .await
     );
@@ -429,7 +429,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
                 SessionPermissions::default(),
                 replacement_tx,
                 &transport_adapter,
-                super::super::TransportCleanupMode::NativeSessionProtocol,
+                super::super::SessionCleanupPolicy::StateAndTransportMedia,
             )
             .await
             .is_ok()

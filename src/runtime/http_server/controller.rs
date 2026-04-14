@@ -16,7 +16,7 @@ use crate::{
     config::Config,
     runtime::{
         RuntimeState,
-        channel::{ChannelConfig, RuntimeChannelStatsSnapshot, TransportCleanupMode},
+        channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
         websocket_server,
     },
     signaling::{
@@ -137,11 +137,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
                 channel_uuid,
                 session_ids,
                 &state.transport_adapter,
-                if state.config.enable_native_protocol {
-                    TransportCleanupMode::NativeSessionProtocol
-                } else {
-                    TransportCleanupMode::LegacyCompatibility
-                },
+                state.session_cleanup_policy(),
             )
             .await;
     }

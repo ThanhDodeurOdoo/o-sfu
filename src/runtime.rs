@@ -29,6 +29,7 @@ use channel::ChannelAdmissionPolicy;
 use channel::ChannelManager;
 use channel::ChannelManagerConfig;
 use channel::ChannelRuntimePolicy;
+use channel::SessionCleanupPolicy;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
@@ -49,6 +50,17 @@ pub(super) struct RuntimeState {
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
+}
+
+impl RuntimeState {
+    #[must_use]
+    pub(super) const fn session_cleanup_policy(&self) -> SessionCleanupPolicy {
+        if self.config.enable_native_protocol {
+            SessionCleanupPolicy::StateAndTransportMedia
+        } else {
+            SessionCleanupPolicy::StateOnly
+        }
+    }
 }
 
 impl Runtime {

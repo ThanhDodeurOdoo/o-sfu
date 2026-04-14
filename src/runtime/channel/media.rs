@@ -9,7 +9,7 @@ use crate::signaling::{
 };
 
 use super::{
-    Channel, TransportCleanupMode,
+    Channel, SessionCleanupPolicy,
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PendingPublishedTrack},
 };
 
@@ -353,7 +353,7 @@ impl Channel {
         self.cleanup_transport_removals(
             Some(transport_adapter),
             &outcome.transport_removals,
-            TransportCleanupMode::NativeSessionProtocol,
+            SessionCleanupPolicy::StateAndTransportMedia,
         )
         .await;
         outcome.emit(session_id, stream_type);
