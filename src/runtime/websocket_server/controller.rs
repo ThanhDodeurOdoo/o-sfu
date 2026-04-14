@@ -68,7 +68,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 &session.session_id,
                 session.connection_id,
                 &state.transport_adapter,
-                state.session_cleanup_policy(),
+                RuntimeState::session_cleanup_policy(),
             )
             .await;
         if state

@@ -7,12 +7,10 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use o_sfu::{
-    runtime::testing::legacy_wire::current_protocol::CurrentPublishTrackPayload,
-    signaling::{
-        shared::StreamType,
-        webrtc::{MediaKind, RtpParameters},
-    },
+use super::legacy_wire::protocol::CurrentPublishTrackPayload;
+use o_sfu::signaling::{
+    shared::StreamType,
+    webrtc::{MediaKind, RtpParameters},
 };
 
 const AUDIO_FRAME_INTERVAL: Duration = Duration::from_millis(20);

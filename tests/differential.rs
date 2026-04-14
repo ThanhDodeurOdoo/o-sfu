@@ -39,7 +39,8 @@ async fn camera_publish_scenario_matches_legacy_sfu_and_expected_transcript() {
         return;
     };
 
-    let o_sfu_transcript = Box::pin(run_camera_publish_oracle_scenario_result(&o_sfu_network)).await;
+    let o_sfu_transcript =
+        Box::pin(run_camera_publish_oracle_scenario_result(&o_sfu_network)).await;
     let legacy_transcript =
         Box::pin(run_camera_publish_oracle_scenario_result(&legacy_backend)).await;
     assert!(o_sfu_transcript.is_ok(), "{o_sfu_transcript:?}");
@@ -75,10 +76,14 @@ async fn session_replacement_scenario_matches_legacy_sfu_and_expected_transcript
         return;
     };
 
-    let o_sfu_transcript =
-        Box::pin(run_session_replacement_oracle_scenario_result(&o_sfu_network)).await;
-    let legacy_transcript =
-        Box::pin(run_session_replacement_oracle_scenario_result(&legacy_backend)).await;
+    let o_sfu_transcript = Box::pin(run_session_replacement_oracle_scenario_result(
+        &o_sfu_network,
+    ))
+    .await;
+    let legacy_transcript = Box::pin(run_session_replacement_oracle_scenario_result(
+        &legacy_backend,
+    ))
+    .await;
     assert!(o_sfu_transcript.is_ok(), "{o_sfu_transcript:?}");
     assert!(legacy_transcript.is_ok(), "{legacy_transcript:?}");
     let Ok(o_sfu_transcript) = o_sfu_transcript else {

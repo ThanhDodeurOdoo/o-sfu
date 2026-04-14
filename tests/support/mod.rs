@@ -8,6 +8,7 @@ pub mod differential;
 pub mod fake_media;
 pub mod fake_rtc_peer;
 mod harness;
+pub mod legacy_wire;
 pub mod native_full_stack;
 pub mod native_harness;
 

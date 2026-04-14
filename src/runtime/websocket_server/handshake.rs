@@ -10,7 +10,7 @@ use tracing::{Span, field, info};
 use super::{
     WsWriter, close_writer,
     controller::{ConnectedSession, WsReader},
-    session_protocol::{SessionProtocol, SessionProtocolMode},
+    session_protocol::SessionProtocol,
 };
 use crate::runtime::{
     RuntimeState,
@@ -36,21 +36,12 @@ pub(super) async fn establish_session(
         join_authenticated_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut session_protocol = match state.session_protocol_mode {
-        SessionProtocolMode::Native => SessionProtocol::native(
-            session_id.clone(),
-            connection_id,
-            Arc::clone(&channel),
-            state.transport_adapter.clone(),
-        ),
-        SessionProtocolMode::LegacyWireTestOnly => SessionProtocol::legacy_stub_bus(
-            session_id.clone(),
-            connection_id,
-            Arc::clone(&channel),
-            Arc::clone(&state.metrics),
-            state.transport_adapter.clone(),
-        ),
-    };
+    let mut session_protocol = SessionProtocol::native(
+        session_id.clone(),
+        connection_id,
+        Arc::clone(&channel),
+        state.transport_adapter.clone(),
+    );
     initialize_session(
         state,
         writer,
@@ -206,7 +197,7 @@ async fn join_authenticated_session(
                 sender: outbound_tx,
             },
             &state.transport_adapter,
-            state.session_cleanup_policy(),
+            RuntimeState::session_cleanup_policy(),
         )
         .await;
     match join_result {
@@ -272,7 +263,7 @@ async fn cleanup_failed_session(
             session_id,
             connection_id,
             &state.transport_adapter,
-            state.session_cleanup_policy(),
+            RuntimeState::session_cleanup_policy(),
         )
         .await;
     let _result = state

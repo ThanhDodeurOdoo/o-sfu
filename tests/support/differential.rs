@@ -9,23 +9,21 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::legacy_wire::{
+    bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
+    protocol::{
+        CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
+        CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
+        CurrentSessionInfoSnapshotById, CurrentTransportConnectPayload,
+        CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
+    },
+};
 use futures_util::{SinkExt, StreamExt};
-use o_sfu::{
-    runtime::testing::legacy_wire::{
-        current_bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
-        current_protocol::{
-            CurrentClientMessage, CurrentClientRequest, CurrentPublishTrackResponse,
-            CurrentRemoteTrackBootstrapPayload, CurrentServerMessage, CurrentServerRequest,
-            CurrentSessionInfoSnapshotById, CurrentTransportConnectPayload,
-            CurrentUploadStateChangePayload, CurrentWebSocketCredentials,
-        },
-    },
-    signaling::{
-        http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, NOOP_PATH},
-        protocol::ServerMessage,
-        shared::{SessionId, StreamType},
-        webrtc::{DtlsFingerprint, DtlsParameters, MediaKind},
-    },
+use o_sfu::signaling::{
+    http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, NOOP_PATH},
+    protocol::ServerMessage,
+    shared::{SessionId, StreamType},
+    webrtc::{DtlsFingerprint, DtlsParameters, MediaKind},
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -223,10 +221,7 @@ impl ScenarioPeer for NativeFakePeer {
         })
     }
 
-    fn expect_camera_state(
-        &mut self,
-        owner_session_id: SessionId,
-    ) -> BoxFuture<'_, Option<bool>> {
+    fn expect_camera_state(&mut self, owner_session_id: SessionId) -> BoxFuture<'_, Option<bool>> {
         Box::pin(async move {
             loop {
                 match Self::read_next_server_message(self).await? {
@@ -658,10 +653,7 @@ impl ScenarioPeer for LegacyFakePeer {
         })
     }
 
-    fn expect_camera_state(
-        &mut self,
-        owner_session_id: SessionId,
-    ) -> BoxFuture<'_, Option<bool>> {
+    fn expect_camera_state(&mut self, owner_session_id: SessionId) -> BoxFuture<'_, Option<bool>> {
         Box::pin(async move {
             let snapshot = expect_legacy_session_info(self).await?;
             camera_state_for_session(&snapshot, &owner_session_id)
@@ -915,13 +907,13 @@ where
         SCENARIO_EVENT_TIMEOUT,
         subscriber.expect_camera_state(SessionId::Integer(10)),
     )
-        .await
-        .map_err(|_elapsed| {
-            format!("timed out waiting for subscriber session info after camera active={active}")
-        })?
-        .ok_or_else(|| {
-            format!("subscriber did not receive session info after camera active={active}")
-        })?;
+    .await
+    .map_err(|_elapsed| {
+        format!("timed out waiting for subscriber session info after camera active={active}")
+    })?
+    .ok_or_else(|| {
+        format!("subscriber did not receive session info after camera active={active}")
+    })?;
     record_camera_state_event(
         transcript,
         SessionId::Integer(20),

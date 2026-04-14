@@ -137,7 +137,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
                 channel_uuid,
                 session_ids,
                 &state.transport_adapter,
-                state.session_cleanup_policy(),
+                RuntimeState::session_cleanup_policy(),
             )
             .await;
     }

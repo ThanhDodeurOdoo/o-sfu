@@ -34,6 +34,7 @@ use crate::runtime::{
 };
 use crate::signaling::ortc_mapper;
 use crate::signaling::shared::SessionPermissions;
+use crate::signaling::webrtc::MediaKind;
 
 const BATCH_FLUSH_DELAY_MS: u32 = 100;
 const RECOVERY_DELAY_MS: u32 = 1_000;

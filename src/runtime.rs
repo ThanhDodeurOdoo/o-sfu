@@ -5,24 +5,49 @@ use anyhow::anyhow;
 use tokio::runtime::Builder;
 use tracing_subscriber::EnvFilter;
 
-use crate::{
-    config::{Config, TransportBackend},
-    signaling::CURRENT_WIRE_PROTOCOL_VERSION,
-};
+use crate::config::{Config, TransportBackend};
 
 #[cfg(feature = "internal-benchmarks")]
 #[doc(hidden)]
 pub mod benchmark_support;
+#[allow(
+    dead_code,
+    reason = "native session establishment does not yet exercise the remaining publish and transport-readiness channel paths that stay scheduled for the next implementation phase"
+)]
 pub(crate) mod channel;
 mod http_server;
+#[allow(
+    dead_code,
+    reason = "bus-era metric counters remain in the snapshot schema until the follow-up metrics cleanup removes or renames them consistently"
+)]
 mod metrics;
 mod recording;
+#[allow(
+    dead_code,
+    reason = "the rtc transport boundary still retains staged connect and validation helpers while the native-only signaling path finishes replacing the older transport-connect flow"
+)]
 mod rtc_adapter;
+#[allow(
+    dead_code,
+    reason = "stub transport bootstrap and connect hooks are retained for adapter-side tests while the native websocket deletion pass removes the last runtime callers"
+)]
 mod stub_bus;
 #[doc(hidden)]
 pub mod testing;
+#[allow(
+    dead_code,
+    reason = "the transport facade still exposes bootstrap and connect surfaces that the next native media phase will either wire fully or delete outright"
+)]
 mod transport_adapter;
+#[allow(
+    dead_code,
+    reason = "transport bootstrap payload models remain as the typed boundary for the pending adapter cleanup even though the current native websocket path no longer emits them"
+)]
 mod transport_bootstrap;
+#[allow(
+    dead_code,
+    reason = "transport connect request models are kept until the remaining direct-connect experiments are either wired back in or removed in the next cleanup pass"
+)]
 mod transport_connect;
 mod websocket_server;
 
@@ -35,12 +60,10 @@ use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
 use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter};
-use websocket_server::SessionProtocolMode;
 
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
-    pub current_wire_protocol_version: u16,
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
@@ -52,16 +75,12 @@ pub(super) struct RuntimeState {
     channels: Arc<ChannelManager>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
-    session_protocol_mode: SessionProtocolMode,
 }
 
 impl RuntimeState {
     #[must_use]
-    pub(super) const fn session_cleanup_policy(&self) -> SessionCleanupPolicy {
-        match self.session_protocol_mode {
-            SessionProtocolMode::Native => SessionCleanupPolicy::StateAndTransportMedia,
-            SessionProtocolMode::LegacyWireTestOnly => SessionCleanupPolicy::StateOnly,
-        }
+    pub(super) const fn session_cleanup_policy() -> SessionCleanupPolicy {
+        SessionCleanupPolicy::StateAndTransportMedia
     }
 }
 
@@ -78,7 +97,6 @@ impl Runtime {
         );
         Self {
             config,
-            current_wire_protocol_version: CURRENT_WIRE_PROTOCOL_VERSION,
             channels: Arc::new(ChannelManager::new(
                 ChannelManagerConfig::new(rtc_media_worker_count, channel_runtime_policy),
                 recording_media_tap,
@@ -94,7 +112,6 @@ impl Runtime {
             channels: self.channels,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,
-            session_protocol_mode: SessionProtocolMode::Native,
         })
         .await
     }

@@ -60,7 +60,6 @@ pub(super) fn test_state() -> RuntimeState {
         config,
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter: RuntimeTransportAdapter::builder().stub().build(),
-        session_protocol_mode: super::super::super::websocket_server::SessionProtocolMode::Native,
     }
 }
 

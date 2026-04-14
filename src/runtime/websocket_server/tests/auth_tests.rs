@@ -45,14 +45,7 @@ async fn websocket_authenticates_with_channel_key_and_sends_welcome_payload() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_with_credentials(
-        &server,
-        &CurrentWebSocketCredentials {
-            channel_uuid: Some(channel.uuid().to_owned()),
-            jwt: token,
-        },
-    )
-    .await;
+    let authenticated = authenticate_with_channel(&server, &token, Some(channel.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;
@@ -108,14 +101,8 @@ async fn websocket_rejects_explicit_channel_uuid_that_disagrees_with_claims() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_with_credentials(
-        &server,
-        &CurrentWebSocketCredentials {
-            channel_uuid: Some(second_channel.uuid().to_owned()),
-            jwt: token,
-        },
-    )
-    .await;
+    let authenticated =
+        authenticate_with_channel(&server, &token, Some(second_channel.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;

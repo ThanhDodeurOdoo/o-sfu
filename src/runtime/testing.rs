@@ -4,9 +4,6 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use tokio::{net::TcpListener, task::JoinHandle};
 
-#[path = "testing/legacy_wire.rs"]
-pub mod legacy_wire;
-
 use super::{
     RuntimeState, build_transport_adapter,
     channel::{
@@ -16,7 +13,6 @@ use super::{
     http_server::app,
     metrics::RuntimeMetrics,
     recording::MediaTap,
-    websocket_server::SessionProtocolMode,
 };
 use crate::config::Config;
 use crate::signaling::protocol::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
@@ -52,23 +48,6 @@ impl Drop for TestServer {
 ///
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
-    spawn_test_server_with_protocol_mode(config, SessionProtocolMode::Native).await
-}
-
-/// Spawn the real axum server on an ephemeral port using the preserved legacy-wire websocket
-/// session. This exists only for hidden compatibility and differential test helpers.
-///
-/// # Errors
-///
-/// Returns an error when the test listener cannot bind or the local socket address cannot be read.
-pub async fn spawn_legacy_wire_test_server(config: Config) -> Result<TestServer> {
-    spawn_test_server_with_protocol_mode(config, SessionProtocolMode::LegacyWireTestOnly).await
-}
-
-async fn spawn_test_server_with_protocol_mode(
-    config: Config,
-    session_protocol_mode: SessionProtocolMode,
-) -> Result<TestServer> {
     let recording_media_tap = Arc::new(MediaTap::default());
     let channels = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
@@ -87,7 +66,6 @@ async fn spawn_test_server_with_protocol_mode(
         channels: Arc::clone(&channels),
         metrics: Arc::new(RuntimeMetrics::default()),
         transport_adapter,
-        session_protocol_mode,
     };
     let listener = TcpListener::bind(state.config.bind_address).await?;
     let addr = listener

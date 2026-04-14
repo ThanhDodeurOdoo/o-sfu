@@ -15,20 +15,16 @@ use tokio_tungstenite::{
     tungstenite::{self, protocol::frame::coding::CloseCode},
 };
 
+use super::legacy_wire::{
+    bus::{CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId},
+    protocol::{
+        CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
+        CurrentWebSocketCredentials,
+    },
+};
 use o_sfu::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TransportBackend},
-    runtime::testing::{
-        TestServer, decode_native_welcome_batch,
-        legacy_wire::{
-            current_bus::{
-                CurrentBusBatch, CurrentBusEnvelope, CurrentBusOrigin, CurrentBusRequestId,
-            },
-            current_protocol::{
-                CurrentClientMessage, CurrentServerMessage, CurrentServerRequest,
-                CurrentWebSocketCredentials,
-            },
-        },
-    },
+    runtime::testing::{TestServer, decode_native_welcome_batch},
     signaling::{
         auth::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,

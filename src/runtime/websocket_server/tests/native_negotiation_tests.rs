@@ -3,6 +3,7 @@ use serde_json::json;
 use super::fixtures::*;
 use crate::signaling::ortc_mapper;
 use crate::signaling::protocol::{ServerMessage, ServerRequest, TrackBinding};
+use crate::signaling::webrtc::MediaKind;
 
 #[tokio::test]
 async fn native_session_serializes_topology_renegotiations() {
