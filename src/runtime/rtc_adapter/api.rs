@@ -20,8 +20,8 @@ use crate::config::RtcPortRange;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterConfig, SessionOffer, SourceMediaRoutingPolicy, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
+    TransportMediaId, TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::{TransportConnectDirection, TransportConnectRequest};
@@ -362,16 +362,20 @@ impl RtcTransportAdapter {
         .await
     }
 
-    pub(crate) async fn set_source_routing_policy(
+    #[allow(
+        dead_code,
+        reason = "Phase 6 introduces the server-owned source gate before the channel/runtime policy caller lands, so this adapter entry point is intentionally staged"
+    )]
+    pub(super) async fn set_source_packet_gate(
         &self,
-        session_key: &TransportSessionKey,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        policy: SourceMediaRoutingPolicy,
+        packet_gate: Option<super::route_control::PacketLayerGate>,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| RtcWorkerCommand::SetSourceRoutingPolicy {
-            session_key: session_key.clone(),
+        self.request_worker(|response| RtcWorkerCommand::SetSourcePacketGate {
+            source_session_key: source_session_key.clone(),
             source_transport_media_id,
-            policy,
+            packet_gate,
             response,
         })
         .await

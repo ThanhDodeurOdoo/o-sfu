@@ -14,8 +14,7 @@ use std::time::Instant;
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
-    SessionOffer, SourceMediaRoutingPolicy, TransportAdapterError, TransportMediaId,
-    TransportSessionKey,
+    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -245,6 +244,16 @@ pub(super) enum RtcWorkerCommand {
         target_id: RelayTargetId,
         packet_gate: PacketLayerGate,
     },
+    #[allow(
+        dead_code,
+        reason = "Phase 6 stages the source-owned layer policy command ahead of the lasting runtime caller so tests can verify the worker boundary first"
+    )]
+    SetSourcePacketGate {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: Option<PacketLayerGate>,
+        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+    },
     SetProducerActive {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -257,12 +266,6 @@ pub(super) enum RtcWorkerCommand {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
-    },
-    SetSourceRoutingPolicy {
-        session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        policy: SourceMediaRoutingPolicy,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
     #[cfg(test)]

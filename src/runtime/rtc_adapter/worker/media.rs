@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::transport_adapter::{
-    SourceMediaRoutingPolicy, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 use super::super::{
@@ -129,6 +129,21 @@ pub(super) fn respond_set_remote_source_packet_gate(
     );
 }
 
+pub(super) fn respond_set_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: Option<PacketLayerGate>,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_source_packet_gate(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        packet_gate,
+    ));
+}
+
 pub(super) struct RemoteKeyframeRequest<'a> {
     pub(super) source_session_key: &'a TransportSessionKey,
     pub(super) source_transport_media_id: TransportMediaId,
@@ -168,21 +183,6 @@ pub(super) fn respond_set_consumer_active(
         source_session_key,
         source_transport_media_id,
         active,
-    ));
-}
-
-pub(super) fn respond_set_source_routing_policy(
-    state: &mut RtcBootstrapState,
-    session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    policy: SourceMediaRoutingPolicy,
-    response: oneshot::Sender<Result<(), TransportAdapterError>>,
-) {
-    let _ = response.send(worker_set_source_routing_policy(
-        state,
-        session_key,
-        source_transport_media_id,
-        policy,
     ));
 }
 
@@ -545,6 +545,28 @@ fn worker_set_producer_active(
     Ok(())
 }
 
+fn worker_set_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: Option<PacketLayerGate>,
+) -> Result<(), TransportAdapterError> {
+    match state.mid_registry.get(&source_transport_media_id.as_u64()) {
+        Some(RegisteredMediaHandle::Producer {
+            session_key: owner_session_key,
+            ..
+        }) if owner_session_key == source_session_key => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    state
+        .route_control
+        .set_source_packet_gate(source_transport_media_id, packet_gate);
+    Ok(())
+}
+
 fn worker_set_consumer_active(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,
@@ -602,32 +624,6 @@ fn worker_set_consumer_active(
                 active,
             );
     }
-    Ok(())
-}
-
-fn worker_set_source_routing_policy(
-    state: &mut RtcBootstrapState,
-    session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    policy: SourceMediaRoutingPolicy,
-) -> Result<(), TransportAdapterError> {
-    match state.mid_registry.get(&source_transport_media_id.as_u64()) {
-        Some(RegisteredMediaHandle::Producer {
-            session_key: owner_session_key,
-            ..
-        }) if owner_session_key == session_key => {}
-        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
-            return Err(TransportAdapterError::InvalidInput);
-        }
-        None => return Err(TransportAdapterError::TransportUnavailable),
-    }
-    state.route_control.set_policy_packet_gate(
-        source_transport_media_id,
-        match policy {
-            SourceMediaRoutingPolicy::Default => None,
-            SourceMediaRoutingPolicy::Suppress => Some(PacketLayerGate::Block),
-        },
-    );
     Ok(())
 }
 
@@ -997,5 +993,46 @@ mod tests {
         assert_eq!(snapshot.rtc_route_control_forwarded, 1);
         assert_eq!(snapshot.rtc_route_control_absorbed, 1);
         assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 0);
+    }
+
+    #[test]
+    fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
+        let source_session = TransportSessionKey::new(121, 0, 122, SessionId::Integer(123));
+        let source_mid = Mid::from("cam-up");
+        let mut state = RtcBootstrapState::default();
+        let source_transport_media_id =
+            prepare_source_session(&mut state, &source_session, source_mid, 88_888);
+
+        assert!(
+            worker_set_source_packet_gate(
+                &mut state,
+                &source_session,
+                source_transport_media_id,
+                Some(PacketLayerGate::Rid("hi".into())),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            state
+                .route_control
+                .effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::Rid("hi".into()))
+        );
+
+        assert!(
+            worker_set_source_packet_gate(
+                &mut state,
+                &source_session,
+                source_transport_media_id,
+                None,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            state
+                .route_control
+                .effective_packet_gate(source_transport_media_id),
+            None
+        );
     }
 }

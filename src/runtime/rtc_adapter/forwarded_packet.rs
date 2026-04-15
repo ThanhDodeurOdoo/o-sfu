@@ -1,14 +1,14 @@
 use std::{mem::take, time::Instant};
 
 use str0m::{
-    media::{MediaData, Rid},
+    media::{ExtensionValues, MediaData, Rid},
     rtp::{RtpHeader, RtpPacket, SeqNo},
 };
 
 #[cfg(test)]
 use str0m::{
     format::{Codec, CodecExtra, CodecSpec, FormatParams, PayloadParams},
-    media::{ExtensionValues, Frequency, MediaTime, Mid, Pt},
+    media::{Frequency, MediaTime, Mid, Pt},
 };
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
@@ -116,6 +116,14 @@ impl ForwardedPacket {
         }
     }
 
+    pub(super) fn route_control_audio_level(&self) -> Option<i8> {
+        self.route_control_extension_values().audio_level
+    }
+
+    pub(super) fn route_control_voice_activity(&self) -> Option<bool> {
+        self.route_control_extension_values().voice_activity
+    }
+
     pub(super) fn share_for_relay(&self, source_transport_media_id: TransportMediaId) -> Self {
         let shared_payload = self.payload().to_shared();
         let data = match &self.data {
@@ -203,6 +211,14 @@ impl ForwardedPacket {
             }
         }
     }
+
+    fn route_control_extension_values(&self) -> &ExtensionValues {
+        match &self.data {
+            ForwardedPacketData::Str0mFrame(frame_data) => &frame_data.media_data.ext_vals,
+            ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.rtp_packet.header.ext_vals,
+            ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.header.ext_vals,
+        }
+    }
 }
 
 fn clone_media_data_without_payload(media_data: &MediaData, network_time: Instant) -> MediaData {
@@ -239,6 +255,44 @@ pub(crate) fn sample_forwarded_packet_with_rid(
     rid: Option<&str>,
     payload: &[u8],
 ) -> ForwardedPacket {
+    sample_forwarded_packet_with_extensions(
+        source_session_key,
+        mid,
+        rid,
+        ExtensionValues::default(),
+        payload,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn sample_forwarded_packet_with_audio_activity(
+    source_session_key: TransportSessionKey,
+    mid: &str,
+    voice_activity: Option<bool>,
+    audio_level: Option<i8>,
+    payload: &[u8],
+) -> ForwardedPacket {
+    sample_forwarded_packet_with_extensions(
+        source_session_key,
+        mid,
+        None,
+        ExtensionValues {
+            audio_level,
+            voice_activity,
+            ..ExtensionValues::default()
+        },
+        payload,
+    )
+}
+
+#[cfg(test)]
+fn sample_forwarded_packet_with_extensions(
+    source_session_key: TransportSessionKey,
+    mid: &str,
+    rid: Option<&str>,
+    ext_vals: ExtensionValues,
+    payload: &[u8],
+) -> ForwardedPacket {
     ForwardedPacket::from_media_data(
         source_session_key,
         MediaData {
@@ -251,7 +305,7 @@ pub(crate) fn sample_forwarded_packet_with_rid(
             seq_range: SeqNo::from(1)..=SeqNo::from(1),
             contiguous: true,
             data: payload.to_vec(),
-            ext_vals: ExtensionValues::default(),
+            ext_vals,
             codec_extra: CodecExtra::None,
             last_sender_info: None,
             audio_start_of_talk_spurt: false,

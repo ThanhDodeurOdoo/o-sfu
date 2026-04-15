@@ -1,9 +1,7 @@
 use o_sfu_router::{RtpParameters as RouterRtpParameters, derive_consumable_rtp_parameters};
 use tracing::warn;
 
-use crate::runtime::transport_adapter::{
-    RuntimeTransportAdapter, SourceMediaRoutingPolicy, TransportMediaId,
-};
+use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 use crate::signaling::{
     shared::{DownloadStates, SessionId, StreamType},
     webrtc::MediaKind as SignalingMediaKind,
@@ -12,8 +10,8 @@ use crate::signaling::{
 use super::{
     Channel,
     state::{
-        AudioSourceRoutingTarget, ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget,
-        PreparedPublishedTrack, TransportMediaRemoval,
+        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
+        TransportMediaRemoval,
     },
 };
 
@@ -415,14 +413,6 @@ impl Channel {
             return None;
         };
 
-        if let Some(audio_target) = {
-            let state = self.state.read().await;
-            state.audio_source_routing_target(session_id, connection_id)
-        } {
-            self.apply_audio_source_routing_target(session_id, audio_target, transport_adapter)
-                .await;
-        }
-
         for target in consumer_targets {
             self.bootstrap_consumer_target(
                 &target,
@@ -432,35 +422,5 @@ impl Channel {
             .await;
         }
         Some(producer_id.into_wire_id())
-    }
-
-    pub(super) async fn apply_audio_source_routing_target(
-        &self,
-        session_id: &SessionId,
-        target: AudioSourceRoutingTarget,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
-        let policy = if target.suppress() {
-            SourceMediaRoutingPolicy::Suppress
-        } else {
-            SourceMediaRoutingPolicy::Default
-        };
-        if transport_adapter
-            .set_source_routing_policy(
-                &self.transport_session_key(session_id, target.connection_id()),
-                target.transport_media_id(),
-                policy,
-            )
-            .await
-            .is_err()
-        {
-            warn!(
-                ?session_id,
-                connection_id = target.connection_id(),
-                transport_media_id = ?target.transport_media_id(),
-                ?policy,
-                "transport adapter failed to update audio source routing policy"
-            );
-        }
     }
 }

@@ -193,26 +193,12 @@ impl Channel {
         session_id: &SessionId,
         info: SessionInfo,
         need_refresh: bool,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
+        _transport_adapter: Option<&RuntimeTransportAdapter>,
     ) {
-        let (outcome, audio_target) = {
+        let outcome = {
             let mut state = self.state.write().await;
-            let outcome = state.apply_presence_update(session_id, &info, need_refresh);
-            let audio_target = if info.is_talking.is_some() {
-                state
-                    .session_connection_id(session_id)
-                    .and_then(|connection_id| {
-                        state.audio_source_routing_target(session_id, connection_id)
-                    })
-            } else {
-                None
-            };
-            (outcome, audio_target)
+            state.apply_presence_update(session_id, &info, need_refresh)
         };
-        if let (Some(audio_target), Some(transport_adapter)) = (audio_target, transport_adapter) {
-            self.apply_audio_source_routing_target(session_id, audio_target, transport_adapter)
-                .await;
-        }
         if let Some(outcome) = outcome {
             outcome.emit();
         }

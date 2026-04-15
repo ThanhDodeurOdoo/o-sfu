@@ -105,13 +105,6 @@ pub(in crate::runtime::channel) struct ConsumerState {
     pub(super) consumer_media: TransportMediaId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::runtime::channel) struct AudioSourceRoutingTarget {
-    connection_id: u64,
-    transport_media_id: TransportMediaId,
-    suppress: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct TransportMediaRemoval {
     pub(in crate::runtime::channel) session: SessionId,
@@ -305,44 +298,6 @@ impl ChannelState {
             return None;
         }
         producer.transport_media_id
-    }
-
-    pub(in crate::runtime::channel) fn audio_source_routing_target(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-    ) -> Option<AudioSourceRoutingTarget> {
-        let session = self.sessions.get(session_id)?;
-        if session.connection_id != connection_id {
-            return None;
-        }
-        let producer_id = self
-            .producer_ids_by_owner_stream
-            .get(&ProducerKey::new(session_id, StreamType::Audio))?;
-        let producer = self.producers.get(producer_id)?;
-        if producer.owner_connection_id != connection_id {
-            return None;
-        }
-        let transport_media_id = producer.transport_media_id?;
-        Some(AudioSourceRoutingTarget {
-            connection_id,
-            transport_media_id,
-            suppress: session.presence.talking() == Some(false),
-        })
-    }
-}
-
-impl AudioSourceRoutingTarget {
-    pub(in crate::runtime::channel) const fn connection_id(self) -> u64 {
-        self.connection_id
-    }
-
-    pub(in crate::runtime::channel) const fn transport_media_id(self) -> TransportMediaId {
-        self.transport_media_id
-    }
-
-    pub(in crate::runtime::channel) const fn suppress(self) -> bool {
-        self.suppress
     }
 }
 

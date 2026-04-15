@@ -460,7 +460,7 @@ fn handle_socket_receive_result(
 }
 
 fn record_incoming_stats(
-    state: &RtcBootstrapState,
+    state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     metrics: &RuntimeMetrics,
     buffers: &PacketLoopBuffers,
@@ -470,6 +470,12 @@ fn record_incoming_stats(
     };
     for packet in &buffers.pending_packets {
         if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
+            state.route_control.observe_audio_activity(
+                transport_media_id,
+                packet.route_control_voice_activity(),
+                packet.route_control_audio_level(),
+                packet.received_at(),
+            );
             snapshot.record_incoming_media(
                 packet.source_session_key(),
                 transport_media_id,
@@ -1103,9 +1109,11 @@ mod tests {
     use crate::runtime::rtc_adapter::{
         bootstrap,
         commands::{RemoteSourceControl, RtcWorkerCommand},
+        demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayPacketMailbox, RelayTargetId},
-        sample_forwarded_packet,
+        route_control::PacketLayerGate,
+        sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
     };
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
@@ -1327,6 +1335,66 @@ mod tests {
         assert_eq!(buffers.forwards.len(), 1);
         assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.snapshot().rtp_payload_bytes_egress, 0);
+    }
+
+    #[test]
+    fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_tracking() {
+        let producer_session = TransportSessionKey::new(28, 0, 29, SessionId::Integer(30));
+        let consumer_session = TransportSessionKey::new(28, 0, 31, SessionId::Integer(32));
+        let mut state = RtcBootstrapState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("aud-up"),
+            });
+        let consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: Mid::from("aud-down"),
+                source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: consumer_session,
+                    dest_transport_media_id: consumer_transport_media_id,
+                    dest_mid: Mid::from("aud-down"),
+                    active: true,
+                    packet_gate: PacketLayerGate::Open,
+                }],
+            },
+        );
+        let mut buffers = PacketLoopBuffers::new();
+        buffers
+            .pending_packets
+            .push(sample_forwarded_packet_with_audio_activity(
+                producer_session,
+                "aud-up",
+                Some(false),
+                Some(-72),
+                b"payload",
+            ));
+
+        record_incoming_stats(&mut state, &snapshot_state, &metrics, &buffers);
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &buffers.pending_packets,
+            &mut buffers.forwards,
+        );
+
+        assert!(buffers.forwards.is_empty());
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 0);
     }
 
     #[test]

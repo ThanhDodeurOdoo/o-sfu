@@ -57,10 +57,12 @@ mod worker;
 pub(crate) use api::RtcTransportAdapter;
 pub(crate) use commands::RelayCleanup;
 #[cfg(test)]
-pub(crate) use commands::{DebugPacketGate, DebugRouteEntry};
+pub(crate) use commands::DebugRouteEntry;
 pub(crate) use forwarded_packet::ForwardedPacket;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet;
+#[cfg(test)]
+pub(crate) use forwarded_packet::sample_forwarded_packet_with_audio_activity;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet_with_rid;
 pub(crate) use negotiated_capabilities::client_rtp_capabilities_from_answer;

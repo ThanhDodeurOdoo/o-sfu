@@ -217,6 +217,82 @@ async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
 }
 
 #[tokio::test]
+async fn rtc_source_packet_gate_composes_with_consumer_policy() {
+    let adapter = RtcTransportAdapter::default();
+    let producer_session_key = transport_key(1, 123, SessionId::Integer(123));
+    let consumer_session_key = transport_key(1, 124, SessionId::Integer(124));
+    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 81_000);
+    let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
+
+    for session_key in [&producer_session_key, &consumer_session_key] {
+        assert!(
+            adapter
+                .transport_bootstrap_payload(session_key, &empty_router_capabilities())
+                .await
+                .is_ok()
+        );
+    }
+
+    let source_media_id = adapter
+        .add_recv_media(
+            &producer_session_key,
+            Str0mMediaKind::Video,
+            &producer_rtp_parameters,
+        )
+        .await
+        .expect("producer media should register");
+
+    let _consumer_media_id = adapter
+        .add_send_media(
+            &consumer_session_key,
+            Str0mMediaKind::Video,
+            &producer_session_key,
+            source_media_id,
+            None,
+            &consumer_rtp_parameters,
+        )
+        .await
+        .expect("consumer media should register");
+
+    assert!(
+        adapter
+            .set_source_packet_gate(
+                &producer_session_key,
+                source_media_id,
+                Some(super::super::route_control::PacketLayerGate::Rid("hi".into())),
+            )
+            .await
+            .is_ok()
+    );
+
+    let route_entry = adapter
+        .debug_route_entry_by_media_id(source_media_id)
+        .await
+        .expect("route entry should exist after source gate update");
+    assert_eq!(
+        route_entry.effective_packet_gate,
+        DebugPacketGate::Rid(String::from("hi"))
+    );
+
+    assert!(
+        adapter
+            .set_source_packet_gate(
+                &producer_session_key,
+                source_media_id,
+                Some(super::super::route_control::PacketLayerGate::Rid("lo".into())),
+            )
+            .await
+            .is_ok()
+    );
+
+    let route_entry = adapter
+        .debug_route_entry_by_media_id(source_media_id)
+        .await
+        .expect("route entry should still exist after conflicting source gate update");
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
+}
+
+#[tokio::test]
 async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let adapter = RtcTransportAdapter::default();
     let producer_session_key = transport_key(1, 23, SessionId::Integer(23));

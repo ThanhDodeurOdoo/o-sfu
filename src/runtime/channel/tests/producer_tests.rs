@@ -6,7 +6,6 @@ use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::channel::{Channel, NegotiatedPublish};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
-use crate::runtime::rtc_adapter::DebugPacketGate;
 use crate::runtime::stub_bus::StubWebRtcEvent;
 use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
 use str0m::{Candidate, Rtc, change::SdpOffer};
@@ -1136,81 +1135,6 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         StreamType::Camera,
     );
     assert_eq!(scenario.channel.consumer_count().await, 1);
-}
-
-#[tokio::test]
-async fn talking_updates_drive_audio_source_routing_policy_on_real_rtc() {
-    let mut scenario = setup_real_rtc_refresh_scenario().await;
-    let publisher_connection_id = scenario
-        .channel
-        .session_connection_id(&scenario.publisher_session_id)
-        .await
-        .expect("publisher connection should exist");
-
-    scenario
-        .channel
-        .update_session_info_runtime(
-            &scenario.publisher_session_id,
-            SessionInfo {
-                is_talking: Some(false),
-                ..SessionInfo::default()
-            },
-            false,
-            &scenario.transport_adapter,
-        )
-        .await;
-
-    assert!(
-        scenario
-            .channel
-            .publish_track(
-                &scenario.publisher_session_id,
-                StreamType::Audio,
-                MediaKind::Audio,
-                test_audio_rtp_parameters(),
-                &scenario.transport_adapter,
-            )
-            .await
-            .is_some()
-    );
-    let producer_media_id = scenario
-        .channel
-        .producer_transport_media_id(
-            &scenario.publisher_session_id,
-            publisher_connection_id,
-            StreamType::Audio,
-        )
-        .await
-        .expect("published audio should expose a transport media id");
-    let _ = drain_outbound(&mut scenario.publisher_rx);
-    let _ = drain_outbound(&mut scenario.subscriber_rx);
-
-    let route_entry = scenario
-        .transport_adapter
-        .debug_route_entry_by_media_id(producer_media_id)
-        .await
-        .expect("audio publish should create a route entry");
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
-
-    scenario
-        .channel
-        .update_session_info_runtime(
-            &scenario.publisher_session_id,
-            SessionInfo {
-                is_talking: Some(true),
-                ..SessionInfo::default()
-            },
-            false,
-            &scenario.transport_adapter,
-        )
-        .await;
-
-    let route_entry = scenario
-        .transport_adapter
-        .debug_route_entry_by_media_id(producer_media_id)
-        .await
-        .expect("audio route entry should remain present after talking resumes");
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
 }
 
 struct RealRtcRefreshScenario {
