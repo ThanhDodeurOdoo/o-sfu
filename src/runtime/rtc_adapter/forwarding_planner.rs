@@ -27,14 +27,16 @@ pub(super) fn populate_forward_routes(
                     sink,
                 ));
             }
-            if let Some(sink) =
-                relay_registry.mailbox_for_channel(packet.source_session_key().channel_runtime_id())
+            if let Some(relay_mailboxes) =
+                relay_registry.mailboxes_for_source(source_transport_media_id)
             {
-                forwards.push(PacketForward::from_relay_sink(
-                    packet_idx,
-                    source_transport_media_id,
-                    sink,
-                ));
+                for relay_mailbox in relay_mailboxes.iter().cloned() {
+                    forwards.push(PacketForward::from_relay_sink(
+                        packet_idx,
+                        source_transport_media_id,
+                        relay_mailbox,
+                    ));
+                }
             }
         }
         let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
@@ -71,7 +73,7 @@ mod tests {
         demux::{MediaRouteDestination, MediaRouteEntry},
         forwarding_destination::ForwardingDestination,
         media_registry::RegisteredMediaHandle,
-        relay_registry::{RelayPacketMailbox, RelayRegistry},
+        relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
         sample_forwarded_packet,
     };
     use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
@@ -224,7 +226,8 @@ mod tests {
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
         let recording_sink = Arc::new(CountingSink::new());
-        let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+        let (first_relay_mailbox, _first_relay_rx) = RelayPacketMailbox::channel_for_test();
+        let (second_relay_mailbox, _second_relay_rx) = RelayPacketMailbox::channel_for_test();
         let source_transport_media_id =
             state.register_media_handle(RegisteredMediaHandle::Producer {
                 session_key: producer_session.clone(),
@@ -252,7 +255,18 @@ mod tests {
             producer_session.channel_runtime_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
-        relay_registry.activate_channel(producer_session.channel_runtime_id(), relay_mailbox);
+        relay_registry.activate_source_target(
+            producer_session.channel_runtime_id(),
+            source_transport_media_id,
+            RelayTargetId::new(1),
+            first_relay_mailbox,
+        );
+        relay_registry.activate_source_target(
+            producer_session.channel_runtime_id(),
+            source_transport_media_id,
+            RelayTargetId::new(2),
+            second_relay_mailbox,
+        );
         let pending_packets = vec![sample_forwarded_packet(
             producer_session,
             "aud-up",
@@ -268,7 +282,7 @@ mod tests {
             &mut forwards,
         );
 
-        assert_eq!(forwards.len(), 3);
+        assert_eq!(forwards.len(), 4);
         assert!(matches!(
             forwards.first().map(PacketForward::destination),
             Some(ForwardingDestination::Recording(_))
@@ -279,6 +293,10 @@ mod tests {
         ));
         assert!(matches!(
             forwards.get(2).map(PacketForward::destination),
+            Some(ForwardingDestination::Relay(_))
+        ));
+        assert!(matches!(
+            forwards.get(3).map(PacketForward::destination),
             Some(ForwardingDestination::LocalRtc(_))
         ));
     }
@@ -315,13 +333,16 @@ mod tests {
             producer_session.channel_runtime_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
-        relay_registry.activate_channel(producer_session.channel_runtime_id(), relay_mailbox);
-        let pending_packets = vec![sample_forwarded_packet(
-            producer_session,
-            "aud-up",
-            b"payload",
-        )
-        .share_for_relay(source_transport_media_id)];
+        relay_registry.activate_source_target(
+            producer_session.channel_runtime_id(),
+            source_transport_media_id,
+            RelayTargetId::new(1),
+            relay_mailbox,
+        );
+        let pending_packets = vec![
+            sample_forwarded_packet(producer_session, "aud-up", b"payload")
+                .share_for_relay(source_transport_media_id),
+        ];
         let mut forwards = Vec::new();
 
         populate_forward_routes(
@@ -337,5 +358,79 @@ mod tests {
             forwards.first().map(PacketForward::destination),
             Some(ForwardingDestination::LocalRtc(_))
         ));
+    }
+
+    #[test]
+    fn populate_forward_routes_only_relays_the_registered_source_media() {
+        let first_producer_session = TransportSessionKey::new(52, 0, 53, SessionId::Integer(54));
+        let second_producer_session = TransportSessionKey::new(52, 0, 53, SessionId::Integer(55));
+        let remote_consumer_session = TransportSessionKey::new(52, 1, 56, SessionId::Integer(57));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+        let first_source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: first_producer_session.clone(),
+                mid: Mid::from("aud-up-1"),
+            });
+        let second_source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: second_producer_session.clone(),
+                mid: Mid::from("aud-up-2"),
+            });
+        let consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: remote_consumer_session.clone(),
+                mid: Mid::from("aud-down"),
+                source_transport_media_id: first_source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            first_source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: remote_consumer_session,
+                    dest_transport_media_id: consumer_transport_media_id,
+                    dest_mid: Mid::from("aud-down"),
+                    active: true,
+                }],
+            },
+        );
+        relay_registry.activate_source_target(
+            first_producer_session.channel_runtime_id(),
+            first_source_transport_media_id,
+            RelayTargetId::new(1),
+            relay_mailbox,
+        );
+        let pending_packets = vec![
+            sample_forwarded_packet(first_producer_session, "aud-up-1", b"payload-1"),
+            sample_forwarded_packet(second_producer_session, "aud-up-2", b"payload-2"),
+        ];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 2);
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(ForwardingDestination::Relay(_))
+        ));
+        assert!(matches!(
+            forwards.get(1).map(PacketForward::destination),
+            Some(ForwardingDestination::LocalRtc(_))
+        ));
+        assert_eq!(
+            pending_packets
+                .get(1)
+                .and_then(|packet| packet.resolve_source_transport_media_id(&state)),
+            Some(second_source_transport_media_id)
+        );
     }
 }

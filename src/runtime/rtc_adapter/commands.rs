@@ -23,9 +23,87 @@ use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use super::{dtls, state::ParsedRemoteIceCredentials};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CloseSessionOutcome {
+pub(crate) enum CloseSessionState {
     SessionClosed,
     WorkerDrained,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RelayCleanup {
+    source_session_key: TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+}
+
+impl RelayCleanup {
+    pub(super) fn new(
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Self {
+        Self {
+            source_session_key,
+            source_transport_media_id,
+        }
+    }
+
+    pub(crate) fn source_session_key(&self) -> &TransportSessionKey {
+        &self.source_session_key
+    }
+
+    pub(crate) const fn source_transport_media_id(&self) -> TransportMediaId {
+        self.source_transport_media_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CloseSessionOutcome {
+    state: CloseSessionState,
+    relay_cleanup: Vec<RelayCleanup>,
+}
+
+impl CloseSessionOutcome {
+    pub(super) fn new(state: CloseSessionState, relay_cleanup: Vec<RelayCleanup>) -> Self {
+        Self {
+            state,
+            relay_cleanup,
+        }
+    }
+
+    pub(crate) const fn state(&self) -> CloseSessionState {
+        self.state
+    }
+
+    pub(crate) fn relay_cleanup(&self) -> &[RelayCleanup] {
+        &self.relay_cleanup
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoveMediaOutcome {
+    relay_cleanup: Option<RelayCleanup>,
+}
+
+impl RemoveMediaOutcome {
+    pub(super) const fn without_relay_cleanup() -> Self {
+        Self {
+            relay_cleanup: None,
+        }
+    }
+
+    pub(super) fn with_relay_cleanup(
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Self {
+        Self {
+            relay_cleanup: Some(RelayCleanup::new(
+                source_session_key,
+                source_transport_media_id,
+            )),
+        }
+    }
+
+    pub(crate) fn relay_cleanup(&self) -> Option<&RelayCleanup> {
+        self.relay_cleanup.as_ref()
+    }
 }
 
 pub(super) enum RtcWorkerCommand {
@@ -63,7 +141,7 @@ pub(super) enum RtcWorkerCommand {
     RemoveMedia {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: oneshot::Sender<Result<RemoveMediaOutcome, TransportAdapterError>>,
     },
     ResolveNegotiatedProducerParameters {
         session_key: TransportSessionKey,

@@ -9,6 +9,7 @@ use crate::runtime::transport_adapter::{
 };
 
 use super::super::{
+    commands::{RelayCleanup, RemoveMediaOutcome},
     demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     state::RtcBootstrapState,
@@ -23,7 +24,7 @@ pub(super) fn respond_remove_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
-    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+    response: oneshot::Sender<Result<RemoveMediaOutcome, TransportAdapterError>>,
 ) {
     let _ = response.send(worker_remove_media(state, session_key, transport_media_id));
 }
@@ -100,7 +101,7 @@ fn worker_remove_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
-) -> Result<(), TransportAdapterError> {
+) -> Result<RemoveMediaOutcome, TransportAdapterError> {
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -127,12 +128,14 @@ fn worker_remove_media(
             }
             state.media_route_index.remove(&transport_media_id);
             state.mark_session_dirty(&session_key);
+            Ok(RemoveMediaOutcome::without_relay_cleanup())
         }
         RegisteredMediaHandle::Consumer {
             session_key,
             mid,
             source_transport_media_id,
         } => {
+            let relay_cleanup = relay_cleanup_for_source(state, source_transport_media_id);
             let should_remove_media = !state.session_has_mid(&session_key, mid);
             if let Some(session_state) = state.sessions.get_mut(&session_key)
                 && should_remove_media
@@ -156,9 +159,31 @@ fn worker_remove_media(
             }
             state.prune_remote_source_if_unrouted(source_transport_media_id);
             state.mark_session_dirty(&session_key);
+            relay_cleanup.map_or_else(
+                || Ok(RemoveMediaOutcome::without_relay_cleanup()),
+                |cleanup| {
+                    Ok(RemoveMediaOutcome::with_relay_cleanup(
+                        cleanup.source_session_key().clone(),
+                        source_transport_media_id,
+                    ))
+                },
+            )
         }
     }
-    Ok(())
+}
+
+fn relay_cleanup_for_source(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) -> Option<RelayCleanup> {
+    state
+        .remote_source_registration(source_transport_media_id)
+        .map(|registration| {
+            RelayCleanup::new(
+                registration.source_session_key().clone(),
+                source_transport_media_id,
+            )
+        })
 }
 
 fn worker_stage_native_media_removal(
@@ -480,9 +505,9 @@ fn ensure_route_source_registered(
             RegisteredMediaHandle::Producer {
                 session_key: owner_session_key,
                 mid,
-            } if owner_session_key == source_session_key => Ok(RouteSourceKind::Local {
-                source_mid: *mid,
-            }),
+            } if owner_session_key == source_session_key => {
+                Ok(RouteSourceKind::Local { source_mid: *mid })
+            }
             RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => {
                 Err(TransportAdapterError::InvalidInput)
             }

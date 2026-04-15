@@ -7,7 +7,7 @@ use std::{
     net::IpAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -46,11 +46,13 @@ use super::state::{TransportLifecycleState, TransportStateKey};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::validation;
 use super::{
-    commands::{CloseSessionOutcome, RtcWorkerCommand},
+    commands::{CloseSessionOutcome, CloseSessionState, RemoveMediaOutcome, RtcWorkerCommand},
     packet_loop::{self, PacketLoopConfig},
-    relay_registry::{RelayPacketMailbox, RelayRegistry},
+    relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     state::{RtcSnapshotState, TransportSessionHealth},
 };
+
+static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub(crate) struct RtcWorkerHandle {
@@ -71,6 +73,7 @@ impl fmt::Debug for RtcWorkerHandle {
 }
 
 pub(crate) struct RtcTransportAdapter {
+    relay_target_id: RelayTargetId,
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
@@ -86,6 +89,9 @@ pub(crate) struct RtcTransportAdapter {
 impl RtcTransportAdapter {
     pub(crate) fn new(config: &RtcTransportAdapterConfig) -> Self {
         Self {
+            relay_target_id: RelayTargetId::new(
+                NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
+            ),
             public_ip: config.public_ip(),
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
@@ -186,10 +192,19 @@ impl RtcTransportAdapter {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
+        let _ = self.close_session_with_outcome(session_key).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn close_session_with_outcome(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<CloseSessionOutcome, TransportAdapterError> {
         #[cfg(test)]
         {
             let Ok(mut transport_states) = self.transport_states.lock() else {
@@ -198,7 +213,10 @@ impl RtcTransportAdapter {
             transport_states.retain(|key, _| key.session_key != *session_key);
         }
         let Some(worker_handle) = self.worker_handle()? else {
-            return Ok(());
+            return Ok(CloseSessionOutcome::new(
+                CloseSessionState::SessionClosed,
+                Vec::new(),
+            ));
         };
         let close_outcome = self
             .send_worker_command(&worker_handle, |response| RtcWorkerCommand::CloseSession {
@@ -206,21 +224,33 @@ impl RtcTransportAdapter {
                 response,
             })
             .await?;
-        if close_outcome == CloseSessionOutcome::WorkerDrained {
+        if close_outcome.state() == CloseSessionState::WorkerDrained {
             worker_handle.shutdown_token.cancel();
             if let Ok(mut worker_slot) = self.worker_handle.lock() {
                 *worker_slot = None;
             }
             self.packet_loop_started.store(false, Ordering::Release);
         }
-        Ok(())
+        Ok(close_outcome)
     }
 
+    #[cfg(test)]
     pub(crate) async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
+        let _ = self
+            .remove_media_with_outcome(session_key, transport_media_id)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn remove_media_with_outcome(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Result<RemoveMediaOutcome, TransportAdapterError> {
         self.request_worker(|response| RtcWorkerCommand::RemoveMedia {
             session_key: session_key.clone(),
             transport_media_id,
@@ -496,14 +526,29 @@ impl RtcTransportAdapter {
         snapshot_state.transport_health(session_key)
     }
 
-    pub(crate) fn activate_relay_channel(
+    pub(crate) fn activate_relay_route(
         &self,
         channel_runtime_id: u64,
+        source_transport_media_id: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.relay_registry.activate_channel(channel_runtime_id, mailbox);
+        self.relay_registry.activate_source_target(
+            channel_runtime_id,
+            source_transport_media_id,
+            target.relay_target_id,
+            mailbox,
+        );
         Ok(())
+    }
+
+    pub(crate) fn deactivate_relay_route(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        target: &Self,
+    ) {
+        self.relay_registry
+            .deactivate_source_target(source_transport_media_id, target.relay_target_id);
     }
 }
 
@@ -726,22 +771,34 @@ impl RtcTransportAdapter {
             .await;
     }
 
-    pub(crate) fn debug_activate_relay_channel(
+    pub(crate) fn debug_activate_relay_route(
         &self,
         channel_runtime_id: u64,
+        source_transport_media_id: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        self.activate_relay_channel(channel_runtime_id, target)
+        self.activate_relay_route(channel_runtime_id, source_transport_media_id, target)
     }
 
-    pub(crate) fn debug_deactivate_relay_channel(&self, channel_runtime_id: u64) {
-        self.relay_registry.deactivate_channel(channel_runtime_id);
+    pub(crate) fn debug_deactivate_relay_route(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        target: &Self,
+    ) {
+        self.deactivate_relay_route(source_transport_media_id, target);
     }
 
     pub(crate) fn debug_has_relay_channel(&self, channel_runtime_id: u64) -> bool {
         self.relay_registry
-            .mailbox_for_channel(channel_runtime_id)
-            .is_some()
+            .has_any_source_for_channel(channel_runtime_id)
+    }
+
+    pub(crate) fn debug_relay_target_count_for_source(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> usize {
+        self.relay_registry
+            .target_count_for_source(source_transport_media_id)
     }
 }
 

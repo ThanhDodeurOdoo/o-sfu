@@ -292,19 +292,28 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
 }
 
 #[tokio::test]
-async fn rtc_debug_relay_channel_helpers_register_and_remove_target_mailboxes() {
+async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
     let source_adapter = RtcTransportAdapter::default();
     let target_adapter = RtcTransportAdapter::default();
     let channel_runtime_id = 77;
+    let source_transport_media_id = TransportMediaId::new(91);
 
     assert!(
         source_adapter
-            .debug_activate_relay_channel(channel_runtime_id, &target_adapter)
+            .debug_activate_relay_route(
+                channel_runtime_id,
+                source_transport_media_id,
+                &target_adapter,
+            )
             .is_ok()
     );
     assert!(source_adapter.debug_has_relay_channel(channel_runtime_id));
+    assert_eq!(
+        source_adapter.debug_relay_target_count_for_source(source_transport_media_id),
+        1
+    );
 
-    source_adapter.debug_deactivate_relay_channel(channel_runtime_id);
+    source_adapter.debug_deactivate_relay_route(source_transport_media_id, &target_adapter);
 
     assert!(!source_adapter.debug_has_relay_channel(channel_runtime_id));
 }

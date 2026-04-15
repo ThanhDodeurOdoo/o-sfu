@@ -151,16 +151,21 @@ impl RtcBootstrapState {
         &mut self,
         source_transport_media_id: TransportMediaId,
     ) {
-        if self.media_route_index.contains_key(&source_transport_media_id) {
+        if self
+            .media_route_index
+            .contains_key(&source_transport_media_id)
+        {
             return;
         }
-        self.remote_source_registry.remove(&source_transport_media_id);
+        self.remote_source_registry
+            .remove(&source_transport_media_id);
     }
 
     pub(super) fn prune_unrouted_remote_sources(&mut self) {
         self.remote_source_registry
             .retain(|source_transport_media_id, _registration| {
-                self.media_route_index.contains_key(source_transport_media_id)
+                self.media_route_index
+                    .contains_key(source_transport_media_id)
             });
     }
 
@@ -180,7 +185,7 @@ impl RtcBootstrapState {
     pub(super) fn remove_session_media_handles(
         &mut self,
         session_key: &TransportSessionKey,
-    ) -> Vec<TransportMediaId> {
+    ) -> Vec<(TransportMediaId, RegisteredMediaHandle)> {
         let removed_ids = self
             .mid_registry
             .iter()
@@ -188,9 +193,12 @@ impl RtcBootstrapState {
                 (handle.session_key() == session_key).then_some(TransportMediaId::new(*raw_id))
             })
             .collect::<Vec<_>>();
+        let mut removed_handles = Vec::with_capacity(removed_ids.len());
         for transport_media_id in &removed_ids {
-            let _ = self.remove_media_handle(*transport_media_id);
+            if let Some(handle) = self.remove_media_handle(*transport_media_id) {
+                removed_handles.push((*transport_media_id, handle));
+            }
         }
-        removed_ids
+        removed_handles
     }
 }

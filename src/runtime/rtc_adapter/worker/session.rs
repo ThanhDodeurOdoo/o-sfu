@@ -7,10 +7,13 @@ use std::net::SocketAddr;
 use tokio::sync::oneshot;
 
 use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
+};
 
 use super::super::{
-    commands::CloseSessionOutcome,
+    commands::{CloseSessionOutcome, CloseSessionState, RelayCleanup},
+    media_registry::RegisteredMediaHandle,
     state::{RtcBootstrapState, RtcSnapshotState},
 };
 
@@ -61,7 +64,12 @@ fn worker_close_session(
     state
         .remote_addr_demux
         .forget_session_remote_addrs(session_key);
-    let removed_media_ids = state.remove_session_media_handles(session_key);
+    let removed_media_handles = state.remove_session_media_handles(session_key);
+    let relay_cleanup = relay_cleanup_for_removed_media(state, &removed_media_handles);
+    let removed_media_ids = removed_media_handles
+        .iter()
+        .map(|(transport_media_id, _handle)| *transport_media_id)
+        .collect::<Vec<_>>();
     state
         .media_route_index
         .retain(|source_transport_media_id, _| {
@@ -88,8 +96,31 @@ fn worker_close_session(
         metrics.add_active_transport_sessions(-1);
     }
     if state.sessions.is_empty() {
-        CloseSessionOutcome::WorkerDrained
+        CloseSessionOutcome::new(CloseSessionState::WorkerDrained, relay_cleanup)
     } else {
-        CloseSessionOutcome::SessionClosed
+        CloseSessionOutcome::new(CloseSessionState::SessionClosed, relay_cleanup)
     }
+}
+
+fn relay_cleanup_for_removed_media(
+    state: &RtcBootstrapState,
+    removed_media_handles: &[(TransportMediaId, RegisteredMediaHandle)],
+) -> Vec<RelayCleanup> {
+    removed_media_handles
+        .iter()
+        .filter_map(|(_transport_media_id, handle)| match handle {
+            RegisteredMediaHandle::Producer { .. } => None,
+            RegisteredMediaHandle::Consumer {
+                source_transport_media_id,
+                ..
+            } => state
+                .remote_source_registration(*source_transport_media_id)
+                .map(|registration| {
+                    RelayCleanup::new(
+                        registration.source_session_key().clone(),
+                        *source_transport_media_id,
+                    )
+                }),
+        })
+        .collect()
 }

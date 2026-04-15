@@ -23,7 +23,7 @@ pub(super) use super::super::{RtcTransportAdapter, shared_payload::SharedPayload
 pub(super) use crate::{
     runtime::transport_adapter::{
         TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
-        TransportSessionKey,
+        TransportMediaId, TransportSessionKey,
     },
     runtime::transport_bootstrap::{
         SessionTransportBootstrap, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm,
