@@ -1,7 +1,9 @@
 use o_sfu_router::{RtpParameters as RouterRtpParameters, derive_consumable_rtp_parameters};
 use tracing::warn;
 
-use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
+use crate::runtime::transport_adapter::{
+    RuntimeTransportAdapter, SourcePacketSelection, TransportMediaId,
+};
 use crate::signaling::{
     shared::{DownloadStates, SessionId, StreamType},
     webrtc::MediaKind as SignalingMediaKind,
@@ -14,6 +16,8 @@ use super::{
         TransportMediaRemoval,
     },
 };
+
+const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;
 
 #[derive(Debug, Clone)]
 pub(crate) struct NegotiatedPublish {
@@ -31,6 +35,14 @@ impl Channel {
         publish: NegotiatedPublish,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
+        let initial_source_packet_selection = {
+            let state = self.state.read().await;
+            initial_source_packet_selection(
+                state.session_count(),
+                publish.stream_type,
+                &publish.consumable_rtp_parameters,
+            )
+        };
         let pending_publish = {
             let state = self.state.read().await;
             state.prepare_published_track(
@@ -46,6 +58,7 @@ impl Channel {
             publish.connection_id,
             pending_publish,
             publish.transport_media_id,
+            initial_source_packet_selection,
             transport_adapter,
         )
         .await
@@ -137,6 +150,14 @@ impl Channel {
                 consumable_rtp_parameters,
             )?
         };
+        let initial_source_packet_selection = {
+            let state = self.state.read().await;
+            initial_source_packet_selection(
+                state.session_count(),
+                stream_type,
+                &producer_rtp_parameters,
+            )
+        };
 
         let transport_media_id = match transport_adapter
             .publish_media(
@@ -161,6 +182,7 @@ impl Channel {
             publisher_connection_id,
             pending_publish,
             transport_media_id,
+            initial_source_packet_selection,
             transport_adapter,
         )
         .await
@@ -397,6 +419,7 @@ impl Channel {
         connection_id: u64,
         pending_publish: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
+        initial_source_packet_selection: Option<SourcePacketSelection>,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
         let consumer_targets = {
@@ -412,6 +435,23 @@ impl Channel {
                 .await;
             return None;
         };
+        if let Some(selection) = initial_source_packet_selection
+            && transport_adapter
+                .set_source_packet_selection(
+                    &self.transport_session_key(session_id, connection_id),
+                    transport_media_id,
+                    selection,
+                )
+                .await
+                .is_err()
+        {
+            warn!(
+                ?session_id,
+                connection_id,
+                transport_media_id = ?transport_media_id,
+                "transport adapter rejected the initial source packet selection"
+            );
+        }
 
         for target in consumer_targets {
             self.bootstrap_consumer_target(
@@ -423,4 +463,38 @@ impl Channel {
         }
         Some(producer_id.into_wire_id())
     }
+}
+
+fn initial_source_packet_selection(
+    session_count: usize,
+    stream_type: StreamType,
+    producer_rtp_parameters: &RouterRtpParameters,
+) -> Option<SourcePacketSelection> {
+    if stream_type != StreamType::Camera
+        || session_count < MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD
+    {
+        return None;
+    }
+    lowest_declared_rid(producer_rtp_parameters).map(SourcePacketSelection::Rid)
+}
+
+fn lowest_declared_rid(producer_rtp_parameters: &RouterRtpParameters) -> Option<String> {
+    let encodings = producer_rtp_parameters.encodings().collect::<Vec<_>>();
+    if encodings.len() < 2 || encodings.iter().any(|encoding| encoding.rid().is_none()) {
+        return None;
+    }
+    let use_declared_order = encodings
+        .iter()
+        .all(|encoding| encoding.max_bitrate().is_none());
+    encodings
+        .into_iter()
+        .enumerate()
+        .min_by_key(|(index, encoding)| {
+            if use_declared_order {
+                (0_u64, *index)
+            } else {
+                (encoding.max_bitrate().unwrap_or(u64::MAX), *index)
+            }
+        })
+        .and_then(|(_index, encoding)| encoding.rid().map(str::to_owned))
 }

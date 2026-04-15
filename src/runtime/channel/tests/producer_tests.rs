@@ -7,7 +7,9 @@ use crate::runtime::channel::{Channel, NegotiatedPublish};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::stub_bus::StubWebRtcEvent;
-use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
+use crate::runtime::transport_adapter::{
+    RtcTransportAdapterShardSetConfig, SourcePacketSelection, TransportSessionKey,
+};
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
 #[tokio::test]
@@ -152,6 +154,98 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         .filter(|event| matches!(event, StubWebRtcEvent::MediaRemoved { .. }))
         .count();
     assert_eq!(removed_media_events, 2);
+}
+
+#[tokio::test]
+async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
+    let manager = ChannelManager::for_test();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let (adapter, stub) = stub_adapter();
+    for raw_session_id in [1_i64, 2, 3] {
+        let (sender, _receiver) = test_sender();
+        let session_id = SessionId::Integer(raw_session_id);
+        channel
+            .join_session(
+                session_id.clone(),
+                None,
+                SessionPermissions::default(),
+                sender,
+            )
+            .await
+            .expect("session should join");
+        channel.set_publish_transport_ready(&session_id).await;
+        channel.set_consume_transport_ready(&session_id).await;
+        channel
+            .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
+            .await;
+    }
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_simulcast_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+
+    let Some(transport_media_id) = channel
+        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .await
+    else {
+        panic!("published camera should expose a transport media id");
+    };
+
+    assert!(stub.snapshot_events().iter().any(|event| {
+        matches!(
+            event,
+            StubWebRtcEvent::SourcePacketSelectionUpdated {
+                session_id,
+                transport_media_id: updated_media_id,
+                selection: SourcePacketSelection::Rid(rid),
+            } if *session_id == SessionId::Integer(1)
+                && *updated_media_id == transport_media_id
+                && rid == "lo"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() {
+    let (channel, adapter, stub, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_stub().await;
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_simulcast_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(
+        drain_outbound(&mut subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, SessionOutbound::Request(_)))
+    );
+    assert!(
+        !stub
+            .snapshot_events()
+            .iter()
+            .any(|event| matches!(event, StubWebRtcEvent::SourcePacketSelectionUpdated { .. })),
+        "two-party camera publish should not force a shared source layer yet"
+    );
 }
 
 #[tokio::test]

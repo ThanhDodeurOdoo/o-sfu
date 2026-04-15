@@ -7,7 +7,8 @@ use std::{
 #[cfg(test)]
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    SessionOffer, SourcePacketSelection, TransportAdapterError, TransportMediaId,
+    TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -49,6 +50,11 @@ pub(crate) enum StubWebRtcEvent {
         consumer_session_id: SessionId,
         source_session_id: SessionId,
         active: bool,
+    },
+    SourcePacketSelectionUpdated {
+        session_id: SessionId,
+        transport_media_id: TransportMediaId,
+        selection: SourcePacketSelection,
     },
 }
 
@@ -343,6 +349,24 @@ impl StubWebRtcAdapter {
             consumer_session_id: consumer_session_key.session_id().clone(),
             source_session_id: source_session_key.session_id().clone(),
             active,
+        });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn set_source_packet_selection(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        selection: SourcePacketSelection,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(StubWebRtcEvent::SourcePacketSelectionUpdated {
+            session_id: session_key.session_id().clone(),
+            transport_media_id,
+            selection,
         });
         Ok(())
     }

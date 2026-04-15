@@ -190,6 +190,17 @@ impl TransportMediaId {
     }
 }
 
+/// Channel-owned source-layer choice applied at the transport boundary.
+///
+/// The room runtime expresses intent in terms of transport-owned media ids and
+/// stable layer labels. The RTC adapter translates that intent into its
+/// packet-gating primitives without leaking `str0m`-specific control types
+/// back into channel orchestration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourcePacketSelection {
+    Rid(String),
+}
+
 /// Transitional server-authored SDP offer returned by the transport boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionOffer {
@@ -820,6 +831,36 @@ impl RuntimeTransportAdapter {
                         source_session_key,
                         source_transport_media_id,
                         active,
+                    )
+                    .await
+            }
+        }
+    }
+
+    /// Apply a room-owned source-layer choice to one published media source.
+    pub(crate) async fn set_source_packet_selection(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        selection: SourcePacketSelection,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .set_source_packet_selection(
+                        source_session_key,
+                        source_transport_media_id,
+                        selection,
+                    )
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .shard_for_session(source_session_key)
+                    .set_source_packet_selection(
+                        source_session_key,
+                        source_transport_media_id,
+                        selection,
                     )
                     .await
             }

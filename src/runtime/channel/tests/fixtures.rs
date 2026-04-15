@@ -180,6 +180,33 @@ pub(super) fn test_video_rtp_parameters() -> RtpParameters {
     }))
 }
 
+pub(super) fn test_simulcast_video_rtp_parameters() -> RtpParameters {
+    parse_rtp_parameters(&json!({
+        "codecs": [
+            {
+                "mimeType": "video/VP8",
+                "payloadType": 96,
+                "clockRate": 90000,
+                "parameters": {},
+                "rtcpFeedback": [
+                    { "type": "nack" },
+                    { "type": "nack", "parameter": "pli" },
+                    { "type": "ccm", "parameter": "fir" },
+                    { "type": "goog-remb" },
+                    { "type": "transport-cc" }
+                ]
+            }
+        ],
+        "headerExtensions": [
+            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false }
+        ],
+        "encodings": [
+            { "ssrc": 31_001, "rid": "lo", "maxBitrate": 150_000 },
+            { "ssrc": 31_002, "rid": "hi", "maxBitrate": 900_000 }
+        ]
+    }))
+}
+
 fn parse_rtp_capabilities(value: &serde_json::Value) -> RtpCapabilities {
     let parsed = ortc_mapper::parse_rtp_capabilities(value);
     assert!(

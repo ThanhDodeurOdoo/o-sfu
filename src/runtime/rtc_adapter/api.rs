@@ -20,8 +20,8 @@ use crate::config::RtcPortRange;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
-    TransportMediaId, TransportSessionKey,
+    RtcTransportAdapterConfig, SessionOffer, SourcePacketSelection, TransportAdapterError,
+    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::{TransportConnectDirection, TransportConnectRequest};
@@ -378,6 +378,25 @@ impl RtcTransportAdapter {
             packet_gate,
             response,
         })
+        .await
+    }
+
+    pub(crate) async fn set_source_packet_selection(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        selection: SourcePacketSelection,
+    ) -> Result<(), TransportAdapterError> {
+        let packet_gate = match selection {
+            SourcePacketSelection::Rid(rid) => {
+                super::route_control::PacketLayerGate::Rid(rid.as_str().into())
+            }
+        };
+        self.set_source_packet_gate(
+            source_session_key,
+            source_transport_media_id,
+            Some(packet_gate),
+        )
         .await
     }
 
