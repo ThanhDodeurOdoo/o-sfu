@@ -61,15 +61,12 @@ fn worker_close_session(
     state
         .remote_addr_demux
         .forget_session_remote_addrs(session_key);
-    state
-        .mid_registry
-        .retain(|_id, handle| handle.session_key() != session_key);
-    state
-        .recv_media_ids
-        .retain(|(source_session, _), _| source_session != session_key);
+    let removed_media_ids = state.remove_session_media_handles(session_key);
     state
         .media_route_index
-        .retain(|(source_session, _), _| source_session != session_key);
+        .retain(|source_transport_media_id, _| {
+            !removed_media_ids.contains(source_transport_media_id)
+        });
     state.media_route_index.retain(|_source, entry| {
         entry
             .destinations

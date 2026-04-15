@@ -256,7 +256,8 @@ impl RtcTransportAdapter {
     }
 
     /// Declare a send-only media line on the consumer's `Rtc` instance and register
-    /// a media route from the source producer session/mid to this new destination
+    /// a media route from the source producer transport media id to this
+    /// new destination
     ///
     /// Returns the allocated `Mid` for the new send-only media line.
     pub(crate) async fn add_send_media(
@@ -649,6 +650,18 @@ impl RtcTransportAdapter {
         self.request_debug_worker(|response| DebugRtcCommand::RouteEntry {
             source_session_key: source_session_key.clone(),
             source_mid,
+            response,
+        })
+        .await
+        .flatten()
+    }
+
+    pub(crate) async fn debug_route_entry_by_media_id(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<DebugRouteEntry> {
+        self.request_debug_worker(|response| DebugRtcCommand::RouteEntryByMediaId {
+            source_transport_media_id,
             response,
         })
         .await

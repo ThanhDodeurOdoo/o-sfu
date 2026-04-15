@@ -57,6 +57,10 @@ pub(super) fn handle_debug_command(
             source_mid,
             response,
         } => respond_debug_route_entry(state, &source_session_key, source_mid, response),
+        DebugRtcCommand::RouteEntryByMediaId {
+            source_transport_media_id,
+            response,
+        } => respond_debug_route_entry_by_media_id(state, source_transport_media_id, response),
         DebugRtcCommand::RecordIncomingMedia {
             session_key,
             transport_media_id,
@@ -169,21 +173,42 @@ fn respond_debug_route_entry(
     response: oneshot::Sender<Option<DebugRouteEntry>>,
 ) {
     let value = state
+        .source_transport_media_id_for_mid(source_session_key, source_mid)
+        .and_then(|source_transport_media_id| {
+            build_debug_route_entry(state, source_transport_media_id)
+        });
+    let _ = response.send(value);
+}
+
+fn respond_debug_route_entry_by_media_id(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    response: oneshot::Sender<Option<DebugRouteEntry>>,
+) {
+    let _ = response.send(build_debug_route_entry(state, source_transport_media_id));
+}
+
+fn build_debug_route_entry(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) -> Option<DebugRouteEntry> {
+    state
         .media_route_index
-        .get(&(source_session_key.clone(), source_mid))
+        .get(&source_transport_media_id)
         .map(|entry| DebugRouteEntry {
+            source_transport_media_id,
             source_active: entry.source_active,
             destinations: entry
                 .destinations
                 .iter()
                 .map(|destination| DebugRouteDestination {
                     dest_session: destination.dest_session.clone(),
+                    dest_transport_media_id: destination.dest_transport_media_id,
                     dest_mid: destination.dest_mid,
                     active: destination.active,
                 })
                 .collect(),
-        });
-    let _ = response.send(value);
+        })
 }
 
 fn respond_debug_record_incoming_media(

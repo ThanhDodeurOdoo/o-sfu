@@ -105,7 +105,6 @@ fn worker_remove_media(
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
             let should_remove_media = !state.session_has_mid(&session_key, mid);
-            let should_remove_stream_type = !state.session_has_producer_mid(&session_key, mid);
             if let Some(session_state) = state.sessions.get_mut(&session_key) {
                 session_state
                     .sdp_negotiation
@@ -121,17 +120,13 @@ fn worker_remove_media(
                     session_state.rtc.direct_api().remove_media(mid);
                 }
             }
-            if should_remove_stream_type {
-                state.recv_media_ids.remove(&(session_key.clone(), mid));
-                state.media_route_index.remove(&(session_key.clone(), mid));
-            }
+            state.media_route_index.remove(&transport_media_id);
             state.mark_session_dirty(&session_key);
         }
         RegisteredMediaHandle::Consumer {
             session_key,
             mid,
-            source_session_key,
-            source_mid,
+            source_transport_media_id,
         } => {
             let should_remove_media = !state.session_has_mid(&session_key, mid);
             if let Some(session_state) = state.sessions.get_mut(&session_key)
@@ -143,19 +138,15 @@ fn worker_remove_media(
                     session_state.rtc.direct_api().remove_media(mid);
                 }
             }
-            if let Some(route_entry) = state
-                .media_route_index
-                .get_mut(&(source_session_key.clone(), source_mid))
-            {
+            if let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) {
                 if let Some(position) = route_entry.destinations.iter().position(|destination| {
-                    destination.dest_session == session_key && destination.dest_mid == mid
+                    destination.dest_session == session_key
+                        && destination.dest_transport_media_id == transport_media_id
                 }) {
                     route_entry.destinations.remove(position);
                 }
                 if route_entry.destinations.is_empty() {
-                    state
-                        .media_route_index
-                        .remove(&(source_session_key, source_mid));
+                    state.media_route_index.remove(&source_transport_media_id);
                 }
             }
             state.mark_session_dirty(&session_key);
@@ -229,9 +220,6 @@ fn worker_add_recv_media(
         session_key: session_key.clone(),
         mid,
     });
-    state
-        .recv_media_ids
-        .insert((session_key.clone(), mid), transport_media_id);
     debug!(
         session_id = ?session_key.session_id(),
         channel_runtime_id = session_key.channel_runtime_id(),
@@ -286,9 +274,16 @@ fn worker_add_send_media(
     source_transport_media_id: TransportMediaId,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Result<TransportMediaId, TransportAdapterError> {
-    let source_mid = state
-        .resolve_mid(source_transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let source_mid = match state.mid_registry.get(&source_transport_media_id.as_u64()) {
+        Some(RegisteredMediaHandle::Producer {
+            session_key: owner_session_key,
+            mid,
+        }) if owner_session_key == source_session_key => *mid,
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    };
     let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -303,12 +298,11 @@ fn worker_add_send_media(
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session_key.clone(),
         mid,
-        source_session_key: source_session_key.clone(),
-        source_mid,
+        source_transport_media_id,
     });
     state
         .media_route_index
-        .entry((source_session_key.clone(), source_mid))
+        .entry(source_transport_media_id)
         .or_insert_with(|| MediaRouteEntry {
             source_active: true,
             destinations: Vec::new(),
@@ -316,6 +310,7 @@ fn worker_add_send_media(
         .destinations
         .push(MediaRouteDestination {
             dest_session: consumer_session_key.clone(),
+            dest_transport_media_id: transport_media_id,
             dest_mid: mid,
             active: true,
         });
@@ -324,6 +319,7 @@ fn worker_add_send_media(
         consumer_channel_runtime_id = consumer_session_key.channel_runtime_id(),
         source_session_id = ?source_session_key.session_id(),
         source_channel_runtime_id = source_session_key.channel_runtime_id(),
+        ?source_transport_media_id,
         ?source_mid,
         ?transport_media_id,
         ?media_kind,
@@ -378,12 +374,19 @@ fn worker_set_producer_active(
     transport_media_id: TransportMediaId,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    let source_mid = state
-        .resolve_mid(transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    match state.mid_registry.get(&transport_media_id.as_u64()) {
+        Some(RegisteredMediaHandle::Producer {
+            session_key: owner_session_key,
+            ..
+        }) if owner_session_key == session_key => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
     let route_entry = state
         .media_route_index
-        .get_mut(&(session_key.clone(), source_mid))
+        .get_mut(&transport_media_id)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     route_entry.source_active = active;
     Ok(())
@@ -397,22 +400,41 @@ fn worker_set_consumer_active(
     source_transport_media_id: TransportMediaId,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    let source_mid = state
-        .resolve_mid(source_transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
-    let consumer_mid = state
-        .resolve_mid(consumer_transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    match state.mid_registry.get(&source_transport_media_id.as_u64()) {
+        Some(RegisteredMediaHandle::Producer {
+            session_key: owner_session_key,
+            ..
+        }) if owner_session_key == source_session_key => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    match state
+        .mid_registry
+        .get(&consumer_transport_media_id.as_u64())
+    {
+        Some(RegisteredMediaHandle::Consumer {
+            session_key,
+            source_transport_media_id: consumer_source_transport_media_id,
+            ..
+        }) if session_key == consumer_session_key
+            && *consumer_source_transport_media_id == source_transport_media_id => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
     let route_entry = state
         .media_route_index
-        .get_mut(&(source_session_key.clone(), source_mid))
+        .get_mut(&source_transport_media_id)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     let destination = route_entry
         .destinations
         .iter_mut()
         .find(|destination| {
             destination.dest_session == *consumer_session_key
-                && destination.dest_mid == consumer_mid
+                && destination.dest_transport_media_id == consumer_transport_media_id
         })
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     destination.active = active;

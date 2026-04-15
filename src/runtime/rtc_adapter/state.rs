@@ -27,7 +27,7 @@ use crate::runtime::transport_adapter::{
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
-use super::media_registry::RegisteredMediaHandle;
+use super::media_registry::{ProducerMidLookupKey, RegisteredMediaHandle};
 
 pub(super) const BITRATE_WINDOW: Duration = Duration::from_secs(1);
 
@@ -206,7 +206,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
-    pub(super) recv_media_ids: BTreeMap<MediaRouteKey, TransportMediaId>,
+    pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     pub(super) dirty_sessions: BTreeSet<TransportSessionKey>,

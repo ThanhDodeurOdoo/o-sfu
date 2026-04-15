@@ -7,12 +7,13 @@ use std::{
 
 use str0m::media::Mid;
 
-use crate::runtime::transport_adapter::TransportSessionKey;
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 /// A single forwarding destination within the media route index.
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteDestination {
     pub(super) dest_session: TransportSessionKey,
+    pub(super) dest_transport_media_id: TransportMediaId,
     pub(super) dest_mid: Mid,
     pub(super) active: bool,
 }
@@ -23,8 +24,8 @@ pub(super) struct MediaRouteEntry {
     pub(super) destinations: Vec<MediaRouteDestination>,
 }
 
-/// Media route source key: `(producer session, producer mid)`.
-pub(super) type MediaRouteKey = (TransportSessionKey, Mid);
+/// Media route source key: transport-native producer media identity.
+pub(super) type MediaRouteKey = TransportMediaId;
 
 #[derive(Debug, Default)]
 pub(super) struct RemoteAddrDemux {

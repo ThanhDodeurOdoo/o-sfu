@@ -1,7 +1,7 @@
 //! Media handle tracking for the RTC transport adapter.
 //!
-//! Owns the `mid_registry` and `(session_key, mid)` reverse lookups
-//! within `RtcBootstrapState`.
+//! Owns the transport-media registry and the negotiation-facing producer
+//! `(session_key, mid)` reverse lookup within `RtcBootstrapState`.
 
 use str0m::media::Mid;
 
@@ -22,8 +22,7 @@ pub(super) enum RegisteredMediaHandle {
     Consumer {
         session_key: TransportSessionKey,
         mid: Mid,
-        source_session_key: TransportSessionKey,
-        source_mid: Mid,
+        source_transport_media_id: TransportMediaId,
     },
 }
 
@@ -39,15 +38,17 @@ impl RegisteredMediaHandle {
             Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
         }
     }
+}
 
-    pub(super) fn is_producer_for(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
-        matches!(
-            self,
-            Self::Producer {
-                session_key: owner_session_key,
-                mid: owner_mid,
-            } if owner_session_key == session_key && *owner_mid == mid
-        )
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ProducerMidLookupKey {
+    session_key: TransportSessionKey,
+    mid: Mid,
+}
+
+impl ProducerMidLookupKey {
+    fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
+        Self { session_key, mid }
     }
 }
 
@@ -62,10 +63,17 @@ impl RtcBootstrapState {
     ) -> TransportMediaId {
         let id = self.next_media_id;
         self.next_media_id = self.next_media_id.saturating_add(1);
+        if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
+            self.producer_mid_registry.insert(
+                ProducerMidLookupKey::new(session_key.clone(), *mid),
+                TransportMediaId::new(id),
+            );
+        }
         self.mid_registry.insert(id, handle);
         TransportMediaId::new(id)
     }
 
+    #[cfg(test)]
     pub(super) fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
         self.mid_registry
             .get(&transport_media_id.as_u64())
@@ -76,7 +84,12 @@ impl RtcBootstrapState {
         &mut self,
         transport_media_id: TransportMediaId,
     ) -> Option<RegisteredMediaHandle> {
-        self.mid_registry.remove(&transport_media_id.as_u64())
+        let handle = self.mid_registry.remove(&transport_media_id.as_u64())?;
+        if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
+            self.producer_mid_registry
+                .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
+        }
+        Some(handle)
     }
 
     pub(super) fn session_has_mid(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
@@ -85,29 +98,39 @@ impl RtcBootstrapState {
             .any(|handle| handle.session_key() == session_key && handle.mid() == mid)
     }
 
-    pub(super) fn session_has_producer_mid(
-        &self,
-        session_key: &TransportSessionKey,
-        mid: Mid,
-    ) -> bool {
-        self.mid_registry
-            .values()
-            .any(|handle| handle.is_producer_for(session_key, mid))
-    }
-
     pub(super) fn session_has_registered_media(&self, session_key: &TransportSessionKey) -> bool {
         self.mid_registry
             .values()
             .any(|handle| handle.session_key() == session_key)
     }
 
-    pub(super) fn transport_media_id_for_source(
+    pub(super) fn source_transport_media_id_for_mid(
         &self,
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<TransportMediaId> {
-        self.recv_media_ids
-            .get(&(source_session_key.clone(), source_mid))
+        self.producer_mid_registry
+            .get(&ProducerMidLookupKey::new(
+                source_session_key.clone(),
+                source_mid,
+            ))
             .copied()
+    }
+
+    pub(super) fn remove_session_media_handles(
+        &mut self,
+        session_key: &TransportSessionKey,
+    ) -> Vec<TransportMediaId> {
+        let removed_ids = self
+            .mid_registry
+            .iter()
+            .filter_map(|(raw_id, handle)| {
+                (handle.session_key() == session_key).then_some(TransportMediaId::new(*raw_id))
+            })
+            .collect::<Vec<_>>();
+        for transport_media_id in &removed_ids {
+            let _ = self.remove_media_handle(*transport_media_id);
+        }
+        removed_ids
     }
 }

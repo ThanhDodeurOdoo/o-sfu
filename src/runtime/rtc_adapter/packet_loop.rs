@@ -399,7 +399,7 @@ fn record_incoming_stats(
     };
     for (source_session, media) in &buffers.pending_media {
         if let Some(transport_media_id) =
-            state.transport_media_id_for_source(source_session, media.mid)
+            state.source_transport_media_id_for_mid(source_session, media.mid)
         {
             snapshot.record_incoming_media(
                 source_session,
@@ -486,10 +486,12 @@ fn snapshot_and_pump(
 
 fn populate_forward_routes(state: &RtcBootstrapState, buffers: &mut PacketLoopBuffers) {
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
-        let Some(route_entry) = state
-            .media_route_index
-            .get(&(source_session.clone(), media.mid))
+        let Some(source_transport_media_id) =
+            state.source_transport_media_id_for_mid(source_session, media.mid)
         else {
+            continue;
+        };
+        let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
             continue;
         };
         if !route_entry.source_active {

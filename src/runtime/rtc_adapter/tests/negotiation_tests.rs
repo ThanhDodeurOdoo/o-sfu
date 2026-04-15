@@ -341,10 +341,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         )
         .await
         .expect("source media should register");
-    let source_mid = adapter
-        .debug_resolve_mid(source_media_id)
-        .await
-        .expect("source media should expose its mid");
 
     let mut remote = build_remote_rtc(55_004);
     let initial_offer = adapter
@@ -393,9 +389,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         Ok(())
     );
     assert_eq!(
-        adapter
-            .debug_route_entry(&source_session_key, source_mid)
-            .await,
+        adapter.debug_route_entry_by_media_id(source_media_id).await,
         None
     );
 
@@ -552,7 +546,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     let source_session_key = transport_key(1, 42, SessionId::Integer(42));
     let consumer_session_key = transport_key(1, 43, SessionId::Integer(43));
 
-    let (first_source_media_id, first_source_mid, second_source_media_id) =
+    let (first_source_media_id, second_source_media_id) =
         setup_queued_removal_sources(&adapter, &source_session_key).await;
 
     let mut remote = build_remote_rtc(55_005);
@@ -601,16 +595,11 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
             .await,
         Ok(())
     );
-    assert!(
+    assert_eq!(
         adapter
-            .debug_route_entry(&source_session_key, first_source_mid)
-            .await
-            .is_some_and(|entry| {
-                !entry
-                    .destinations
-                    .iter()
-                    .any(|destination| destination.dest_mid == first_consumer_mid)
-            })
+            .debug_route_entry_by_media_id(first_source_media_id)
+            .await,
+        None
     );
     assert_eq!(
         adapter
@@ -742,7 +731,7 @@ async fn apply_offer_answer(
 async fn setup_queued_removal_sources(
     adapter: &RtcTransportAdapter,
     source_session_key: &TransportSessionKey,
-) -> (TransportMediaId, Mid, TransportMediaId) {
+) -> (TransportMediaId, TransportMediaId) {
     assert!(
         adapter
             .transport_bootstrap_payload(source_session_key, &empty_router_capabilities())
@@ -757,10 +746,6 @@ async fn setup_queued_removal_sources(
         )
         .await
         .expect("first source media should register");
-    let first_source_mid = adapter
-        .debug_resolve_mid(first_source_media_id)
-        .await
-        .expect("first source media should expose its mid");
     let second_source_media_id = adapter
         .add_recv_media(
             source_session_key,
@@ -769,11 +754,7 @@ async fn setup_queued_removal_sources(
         )
         .await
         .expect("second source media should register");
-    (
-        first_source_media_id,
-        first_source_mid,
-        second_source_media_id,
-    )
+    (first_source_media_id, second_source_media_id)
 }
 
 async fn add_negotiated_consumer_media(

@@ -106,7 +106,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
         return;
     };
 
-    let result = adapter
+    let consumer_media_id = adapter
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Audio,
@@ -115,20 +115,23 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
             &consumer_rtp_parameters,
         )
         .await;
-    assert!(result.is_ok());
+    assert!(consumer_media_id.is_ok());
+    let Some(consumer_media_id) = consumer_media_id.ok() else {
+        return;
+    };
 
-    let expected_source_mid: Mid = "aud-up".into();
     let expected_dest_mid: Mid = "aud-down".into();
-    let route_entry = adapter
-        .debug_route_entry(&producer_session_key, expected_source_mid)
-        .await;
+    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
     assert!(route_entry.is_some());
     let Some(route_entry) = route_entry else {
         return;
     };
+    assert_eq!(route_entry.source_transport_media_id, source_media_id);
     assert!(route_entry.source_active);
     assert!(route_entry.destinations.iter().any(|dest| {
-        dest.dest_session == consumer_session_key && dest.dest_mid == expected_dest_mid
+        dest.dest_session == consumer_session_key
+            && dest.dest_transport_media_id == consumer_media_id
+            && dest.dest_mid == expected_dest_mid
     }));
     assert_eq!(
         adapter
@@ -204,16 +207,16 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
             .is_ok()
     );
 
-    let route_entry = adapter
-        .debug_route_entry(&producer_session_key, Mid::from("vid-up"))
-        .await;
+    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
     assert!(route_entry.is_some());
     let Some(route_entry) = route_entry else {
         return;
     };
+    assert_eq!(route_entry.source_transport_media_id, source_media_id);
     assert!(!route_entry.source_active);
     assert!(route_entry.destinations.iter().any(|destination| {
         destination.dest_session == consumer_session_key
+            && destination.dest_transport_media_id == consumer_media_id
             && destination.dest_mid == Mid::from("vid-down")
             && !destination.active
     }));

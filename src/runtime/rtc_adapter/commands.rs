@@ -141,6 +141,10 @@ pub(super) enum DebugRtcCommand {
         source_mid: Mid,
         response: oneshot::Sender<Option<DebugRouteEntry>>,
     },
+    RouteEntryByMediaId {
+        source_transport_media_id: TransportMediaId,
+        response: oneshot::Sender<Option<DebugRouteEntry>>,
+    },
     RecordIncomingMedia {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -154,6 +158,7 @@ pub(super) enum DebugRtcCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DebugRouteDestination {
     pub(crate) dest_session: TransportSessionKey,
+    pub(crate) dest_transport_media_id: TransportMediaId,
     pub(crate) dest_mid: Mid,
     pub(crate) active: bool,
 }
@@ -161,6 +166,7 @@ pub(crate) struct DebugRouteDestination {
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DebugRouteEntry {
+    pub(crate) source_transport_media_id: TransportMediaId,
     pub(crate) source_active: bool,
     pub(crate) destinations: Vec<DebugRouteDestination>,
 }
