@@ -369,6 +369,105 @@ async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run
 }
 
 #[tokio::test]
+async fn fake_rtc_peers_keep_transport_health_and_indexed_datagram_metrics_stable_during_live_media()
+ {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = NativeLocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-live-metrics", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let setup = Box::pin(connect_audio_media_flow_peers_for_sessions(
+        &network,
+        &channel,
+        SessionId::Integer(64),
+        SessionId::Integer(65),
+    ))
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber)) = setup else {
+        return;
+    };
+
+    let mut source = FakeMediaSource::audio();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber,
+        SessionId::Integer(64),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+
+    let mut clock = FakeClock::default();
+    assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+    assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+
+    let before_live_metrics = wait_for_live_rtc_metrics(&network, 2).await;
+    assert!(before_live_metrics.is_some());
+    let Some(before_live_metrics) = before_live_metrics else {
+        return;
+    };
+    assert_eq!(before_live_metrics.connected_transport_sessions, 2);
+    assert_eq!(before_live_metrics.disconnected_transport_sessions, 0);
+
+    for _ in 0..4 {
+        assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
+            .await;
+    }
+
+    let during_live_metrics = wait_for_live_rtc_metrics(&network, 2).await;
+    assert!(during_live_metrics.is_some());
+    let Some(during_live_metrics) = during_live_metrics else {
+        return;
+    };
+
+    assert_eq!(during_live_metrics.connected_transport_sessions, 2);
+    assert_eq!(during_live_metrics.disconnected_transport_sessions, 0);
+    assert!(
+        during_live_metrics.indexed_routes > before_live_metrics.indexed_routes,
+        "expected steady-state media to increase indexed datagram routing"
+    );
+    assert_eq!(
+        during_live_metrics.scan_routes,
+        before_live_metrics.scan_routes
+    );
+    assert_eq!(
+        during_live_metrics.fallback_scans,
+        before_live_metrics.fallback_scans
+    );
+    assert_eq!(
+        during_live_metrics.scan_sessions,
+        before_live_metrics.scan_sessions
+    );
+
+    assert!(publisher.close().await.is_some());
+    assert!(subscriber.close().await.is_some());
+
+    let after_live_metrics = wait_for_live_rtc_metrics(&network, 0).await;
+    assert!(after_live_metrics.is_some());
+    let Some(after_live_metrics) = after_live_metrics else {
+        return;
+    };
+
+    assert_eq!(after_live_metrics.connected_transport_sessions, 0);
+    assert_eq!(after_live_metrics.disconnected_transport_sessions, 0);
+}
+
+#[tokio::test]
 async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_routes() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
@@ -932,6 +1031,16 @@ struct TransportSessionLifetimeMetrics {
     sum_seconds: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LiveRtcMetrics {
+    connected_transport_sessions: i64,
+    disconnected_transport_sessions: i64,
+    indexed_routes: u64,
+    scan_routes: u64,
+    fallback_scans: u64,
+    scan_sessions: u64,
+}
+
 async fn wait_for_transport_lifetime_metrics(
     network: &NativeLocalNetwork,
     expected_count: u64,
@@ -940,6 +1049,24 @@ async fn wait_for_transport_lifetime_metrics(
         loop {
             let metrics = parse_transport_lifetime_metrics(&network.metrics_text().await?)?;
             if metrics.count >= expected_count {
+                return Some(metrics);
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn wait_for_live_rtc_metrics(
+    network: &NativeLocalNetwork,
+    expected_connected_sessions: i64,
+) -> Option<LiveRtcMetrics> {
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let metrics = parse_live_rtc_metrics(&network.metrics_text().await?)?;
+            if metrics.connected_transport_sessions == expected_connected_sessions {
                 return Some(metrics);
             }
             sleep(Duration::from_millis(25)).await;
@@ -977,6 +1104,38 @@ fn parse_transport_lifetime_metrics(metrics_text: &str) -> Option<TransportSessi
             "osfu_transport_session_lifetime_seconds_sum",
         )?,
     })
+}
+
+fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
+    Some(LiveRtcMetrics {
+        connected_transport_sessions: parse_prometheus_i64(
+            metrics_text,
+            "osfu_transport_health_sessions{state=\"connected\"}",
+        )?,
+        disconnected_transport_sessions: parse_prometheus_i64(
+            metrics_text,
+            "osfu_transport_health_sessions{state=\"disconnected\"}",
+        )?,
+        indexed_routes: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtc_datagram_routes_total{path=\"indexed\"}",
+        )?,
+        scan_routes: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtc_datagram_routes_total{path=\"scan\"}",
+        )?,
+        fallback_scans: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtc_datagram_fallback_scans_total",
+        )?,
+        scan_sessions: parse_prometheus_u64(metrics_text, "osfu_rtc_datagram_scan_sessions_total")?,
+    })
+}
+
+fn parse_prometheus_i64(metrics_text: &str, metric_name: &str) -> Option<i64> {
+    metrics_text
+        .lines()
+        .find_map(|line| line.strip_prefix(metric_name)?.trim().parse().ok())
 }
 
 fn parse_prometheus_u64(metrics_text: &str, metric_name: &str) -> Option<u64> {
