@@ -1,11 +1,12 @@
 use std::{
+    cmp::Reverse,
     collections::BTreeMap,
     time::{Duration, Instant},
 };
 
 use str0m::media::{KeyframeRequestKind, Rid};
 
-use crate::runtime::transport_adapter::TransportMediaId;
+use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportMediaId};
 
 use super::relay_registry::RelayTargetId;
 
@@ -157,6 +158,18 @@ impl RouteControlState {
             .retain(|source_transport_media_id, _source_control| keep(source_transport_media_id));
     }
 
+    pub(super) fn active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
+        let mut sources = self
+            .sources
+            .iter()
+            .filter_map(|(source_transport_media_id, source_control)| {
+                source_control.active_speaker_source(*source_transport_media_id, now)
+            })
+            .collect::<Vec<_>>();
+        sources.sort_by_key(|source| Reverse(source.observed_at()));
+        sources
+    }
+
     #[cfg(test)]
     pub(super) fn set_packet_gate(
         &mut self,
@@ -253,6 +266,17 @@ struct SourceRouteControl {
 }
 
 impl SourceRouteControl {
+    fn active_speaker_source(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        now: Instant,
+    ) -> Option<ActiveSpeakerSource> {
+        self.source_audio_policy
+            .as_ref()
+            .and_then(|source_audio_policy| source_audio_policy.active_speaker_observed_at(now))
+            .map(|observed_at| ActiveSpeakerSource::new(source_transport_media_id, observed_at))
+    }
+
     fn observe_audio_activity(
         &mut self,
         voice_activity: Option<bool>,
@@ -297,6 +321,7 @@ impl SourceRouteControl {
 #[derive(Debug, Clone, Default)]
 struct SourceAudioPolicyState {
     active_until: Option<Instant>,
+    last_spoke_at: Option<Instant>,
     packet_gate: PacketLayerGate,
 }
 
@@ -315,6 +340,7 @@ impl SourceAudioPolicyState {
         };
         if speech_detected {
             self.active_until = Some(now + ACTIVE_SPEAKER_HOLD_WINDOW);
+            self.last_spoke_at = Some(now);
             self.packet_gate = PacketLayerGate::Open;
             return;
         }
@@ -328,6 +354,11 @@ impl SourceAudioPolicyState {
 
     fn packet_gate(&self) -> PacketLayerGate {
         self.packet_gate.clone()
+    }
+
+    fn active_speaker_observed_at(&self, now: Instant) -> Option<Instant> {
+        self.last_spoke_at
+            .filter(|_| self.active_until.is_some_and(|deadline| now < deadline))
     }
 }
 

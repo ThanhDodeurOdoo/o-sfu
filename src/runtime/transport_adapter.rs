@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc};
+use std::{cmp::Reverse, collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc, time::Instant};
 
 #[cfg(test)]
 use super::rtc_adapter::DebugRouteEntry;
@@ -187,6 +187,33 @@ impl TransportMediaId {
 
     pub(crate) fn as_u64(self) -> u64 {
         self.0
+    }
+}
+
+/// Transport-observed active speaker keyed by the producing media source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActiveSpeakerSource {
+    transport_media_id: TransportMediaId,
+    observed_at: Instant,
+}
+
+impl ActiveSpeakerSource {
+    #[must_use]
+    pub(crate) const fn new(transport_media_id: TransportMediaId, observed_at: Instant) -> Self {
+        Self {
+            transport_media_id,
+            observed_at,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn transport_media_id(self) -> TransportMediaId {
+        self.transport_media_id
+    }
+
+    #[must_use]
+    pub(crate) const fn observed_at(self) -> Instant {
+        self.observed_at
     }
 }
 
@@ -494,6 +521,26 @@ impl RtcTransportAdapterShardSet {
         }
         snapshot
     }
+
+    async fn active_speaker_source_snapshot(
+        &self,
+        channel_runtime_id: u64,
+    ) -> Vec<ActiveSpeakerSource> {
+        let mut snapshot = self
+            .primary_shard
+            .active_speaker_source_snapshot(channel_runtime_id)
+            .await;
+        for shard in &self.extra_shards {
+            snapshot.extend(
+                shard
+                    .active_speaker_source_snapshot(channel_runtime_id)
+                    .await,
+            );
+        }
+        snapshot.sort_by_key(|source| Reverse(source.observed_at()));
+        snapshot.dedup_by_key(|source| source.transport_media_id());
+        snapshot
+    }
 }
 
 impl RuntimeTransportAdapter {
@@ -759,6 +806,24 @@ impl RuntimeTransportAdapter {
         match self {
             Self::Stub(_adapter) => TransportBitrateSnapshot::default(),
             Self::Rtc(adapter) => adapter.transport_bitrate_snapshot(session_keys),
+        }
+    }
+
+    pub(crate) async fn active_speaker_source_snapshot(
+        &self,
+        channel_runtime_id: u64,
+    ) -> Vec<ActiveSpeakerSource> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .active_speaker_source_snapshot(channel_runtime_id)
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .active_speaker_source_snapshot(channel_runtime_id)
+                    .await
+            }
         }
     }
 

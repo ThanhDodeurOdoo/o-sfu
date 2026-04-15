@@ -8,7 +8,7 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::stub_bus::StubWebRtcEvent;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterShardSetConfig, SourcePacketSelection, TransportSessionKey,
+    RtcTransportAdapterShardSetConfig, SourcePacketSelection, TransportMediaId, TransportSessionKey,
 };
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
@@ -374,6 +374,266 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
                 selection: None,
             } if *session_id == SessionId::Integer(1)
                 && *updated_media_id == transport_media_id
+        )
+    }));
+}
+
+async fn setup_ready_sessions_with_stub(
+    session_ids: &[i64],
+) -> (
+    Arc<Channel>,
+    RuntimeTransportAdapter,
+    Arc<StubWebRtcAdapter>,
+) {
+    let manager = ChannelManager::for_test();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let (adapter, stub) = stub_adapter();
+    for &raw_session_id in session_ids {
+        let (sender, _receiver) = test_sender();
+        let session_id = SessionId::Integer(raw_session_id);
+        channel
+            .join_session_runtime(
+                session_id.clone(),
+                None,
+                SessionPermissions::default(),
+                sender,
+                &adapter,
+                super::super::SessionCleanupPolicy::StateOnly,
+            )
+            .await
+            .expect("session should join");
+        channel.set_publish_transport_ready(&session_id).await;
+        channel.set_consume_transport_ready(&session_id).await;
+        channel
+            .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
+            .await;
+    }
+    (channel, adapter, stub)
+}
+
+async fn setup_three_ready_sessions_with_stub() -> (
+    Arc<Channel>,
+    RuntimeTransportAdapter,
+    Arc<StubWebRtcAdapter>,
+) {
+    setup_ready_sessions_with_stub(&[1, 2, 3]).await
+}
+
+async fn publish_audio_and_camera(
+    channel: &Arc<Channel>,
+    session_id: &SessionId,
+    adapter: &RuntimeTransportAdapter,
+) {
+    assert!(
+        channel
+            .publish_track(
+                session_id,
+                StreamType::Audio,
+                MediaKind::Audio,
+                test_audio_rtp_parameters(),
+                adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(
+        channel
+            .publish_track(
+                session_id,
+                StreamType::Camera,
+                MediaKind::Video,
+                test_simulcast_video_rtp_parameters(),
+                adapter,
+            )
+            .await
+            .is_some()
+    );
+}
+
+async fn source_media_ids(
+    channel: &Arc<Channel>,
+    session_id: &SessionId,
+) -> (TransportMediaId, TransportMediaId) {
+    let Some(connection_id) = channel.session_connection_id(session_id).await else {
+        panic!("session should exist");
+    };
+    let Some(audio_media_id) = channel
+        .producer_transport_media_id(session_id, connection_id, StreamType::Audio)
+        .await
+    else {
+        panic!("audio producer should expose a transport media id");
+    };
+    let Some(camera_media_id) = channel
+        .producer_transport_media_id(session_id, connection_id, StreamType::Camera)
+        .await
+    else {
+        panic!("camera producer should expose a transport media id");
+    };
+    (audio_media_id, camera_media_id)
+}
+
+fn assert_source_packet_selection_update(
+    events: &[StubWebRtcEvent],
+    session_id: &SessionId,
+    transport_media_id: TransportMediaId,
+    selection: Option<&str>,
+) {
+    assert!(events.iter().any(|event| match (event, selection) {
+        (
+            StubWebRtcEvent::SourcePacketSelectionUpdated {
+                session_id: updated_session_id,
+                transport_media_id: updated_media_id,
+                selection: None,
+            },
+            None,
+        ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
+        (
+            StubWebRtcEvent::SourcePacketSelectionUpdated {
+                session_id: updated_session_id,
+                transport_media_id: updated_media_id,
+                selection: Some(SourcePacketSelection::Rid(rid)),
+            },
+            Some(expected_rid),
+        ) => {
+            updated_session_id == session_id
+                && *updated_media_id == transport_media_id
+                && rid == expected_rid
+        }
+        _ => false,
+    }));
+}
+
+#[tokio::test]
+async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate() {
+    let (channel, adapter, stub) = setup_three_ready_sessions_with_stub().await;
+    for session_id in [SessionId::Integer(1), SessionId::Integer(2)] {
+        publish_audio_and_camera(&channel, &session_id, &adapter).await;
+    }
+
+    let (first_audio_media_id, first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+    let (second_audio_media_id, second_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(2)).await;
+
+    let baseline_event_count = stub.snapshot_events().len();
+    stub.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        second_audio_media_id,
+        Instant::now(),
+    )]);
+    channel
+        .update_session_info_runtime(
+            &SessionId::Integer(2),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+
+    let events = stub.snapshot_events();
+    let speaker_two_events = &events[baseline_event_count..];
+    assert_source_packet_selection_update(
+        speaker_two_events,
+        &SessionId::Integer(2),
+        second_camera_media_id,
+        None,
+    );
+    assert!(!speaker_two_events.iter().any(|event| {
+        matches!(
+            event,
+            StubWebRtcEvent::SourcePacketSelectionUpdated {
+                session_id,
+                transport_media_id,
+                selection: None,
+            } if *session_id == SessionId::Integer(1)
+                && *transport_media_id == first_camera_media_id
+        )
+    }));
+
+    let second_baseline_event_count = events.len();
+    stub.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        first_audio_media_id,
+        Instant::now(),
+    )]);
+    channel
+        .update_session_info_runtime(
+            &SessionId::Integer(1),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+
+    let events = stub.snapshot_events();
+    let speaker_one_events = &events[second_baseline_event_count..];
+    assert_source_packet_selection_update(
+        speaker_one_events,
+        &SessionId::Integer(1),
+        first_camera_media_id,
+        None,
+    );
+    assert_source_packet_selection_update(
+        speaker_one_events,
+        &SessionId::Integer(2),
+        second_camera_media_id,
+        Some("lo"),
+    );
+}
+
+#[tokio::test]
+async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates() {
+    let (channel, adapter, stub) = setup_ready_sessions_with_stub(&[1, 2, 3, 4, 5, 6, 7]).await;
+    for raw_session_id in 1_i64..=6 {
+        publish_audio_and_camera(&channel, &SessionId::Integer(raw_session_id), &adapter).await;
+    }
+
+    let mut ordered_audio_media_ids = Vec::new();
+    let mut ordered_camera_media_ids = Vec::new();
+    for raw_session_id in 1_i64..=6 {
+        let (audio_media_id, camera_media_id) =
+            source_media_ids(&channel, &SessionId::Integer(raw_session_id)).await;
+        ordered_audio_media_ids.push(audio_media_id);
+        ordered_camera_media_ids.push(camera_media_id);
+    }
+
+    let baseline_event_count = stub.snapshot_events().len();
+    stub.set_active_speaker_source_snapshot(
+        ordered_audio_media_ids
+            .iter()
+            .rev()
+            .copied()
+            .map(|transport_media_id| ActiveSpeakerSource::new(transport_media_id, Instant::now()))
+            .collect(),
+    );
+    channel
+        .update_session_info_runtime(
+            &SessionId::Integer(6),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+
+    let events = stub.snapshot_events();
+    let active_speaker_events = &events[baseline_event_count..];
+    for (camera_idx, raw_session_id) in (2_i64..=6).enumerate() {
+        assert_source_packet_selection_update(
+            active_speaker_events,
+            &SessionId::Integer(raw_session_id),
+            ordered_camera_media_ids[camera_idx + 1],
+            None,
+        );
+    }
+    assert!(!active_speaker_events.iter().any(|event| {
+        matches!(
+            event,
+            StubWebRtcEvent::SourcePacketSelectionUpdated {
+                session_id,
+                transport_media_id,
+                selection: None,
+            } if *session_id == SessionId::Integer(1)
+                && *transport_media_id == ordered_camera_media_ids[0]
         )
     }));
 }

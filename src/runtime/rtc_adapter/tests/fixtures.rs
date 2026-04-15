@@ -24,8 +24,8 @@ pub(super) use super::super::{
 };
 pub(super) use crate::{
     runtime::transport_adapter::{
-        TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
-        TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, TransportAdapterError, TransportConnectDirection,
+        TransportConnectRequest, TransportMediaId, TransportSessionKey,
     },
     runtime::transport_bootstrap::{
         SessionTransportBootstrap, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm,

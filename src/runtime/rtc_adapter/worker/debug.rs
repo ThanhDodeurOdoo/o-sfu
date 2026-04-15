@@ -79,6 +79,20 @@ pub(super) fn handle_debug_command(
             now,
             response,
         ),
+        DebugRtcCommand::ObserveAudioActivity {
+            transport_media_id,
+            voice_activity,
+            audio_level_dbov,
+            now,
+            response,
+        } => respond_debug_observe_audio_activity(
+            state,
+            transport_media_id,
+            voice_activity,
+            audio_level_dbov,
+            now,
+            response,
+        ),
     }
 }
 
@@ -254,5 +268,22 @@ fn respond_debug_record_incoming_media(
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.record_incoming_media(session_key, transport_media_id, now, payload_bytes);
     }
+    let _ = response.send(());
+}
+
+fn respond_debug_observe_audio_activity(
+    state: &mut RtcBootstrapState,
+    transport_media_id: TransportMediaId,
+    voice_activity: Option<bool>,
+    audio_level_dbov: Option<i8>,
+    now: Instant,
+    response: oneshot::Sender<()>,
+) {
+    state.route_control.observe_audio_activity(
+        transport_media_id,
+        voice_activity,
+        audio_level_dbov,
+        now,
+    );
     let _ = response.send(());
 }

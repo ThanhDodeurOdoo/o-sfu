@@ -448,6 +448,63 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
 }
 
 #[tokio::test]
+async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
+    let adapter = RtcTransportAdapter::default();
+    let first_session_key = transport_key(9, 31, SessionId::Integer(31));
+    let second_session_key = transport_key(9, 32, SessionId::Integer(32));
+    let first_rtp_parameters = sample_router_rtp_parameters("aud-up-1", 93_001);
+    let second_rtp_parameters = sample_router_rtp_parameters("aud-up-2", 93_002);
+
+    for session_key in [&first_session_key, &second_session_key] {
+        assert!(
+            adapter
+                .transport_bootstrap_payload(session_key, &empty_router_capabilities())
+                .await
+                .is_ok()
+        );
+    }
+
+    let first_media_id = adapter
+        .add_recv_media(
+            &first_session_key,
+            Str0mMediaKind::Audio,
+            &first_rtp_parameters,
+        )
+        .await
+        .expect("first audio media should register");
+    let second_media_id = adapter
+        .add_recv_media(
+            &second_session_key,
+            Str0mMediaKind::Audio,
+            &second_rtp_parameters,
+        )
+        .await
+        .expect("second audio media should register");
+
+    let now = Instant::now();
+    adapter
+        .debug_observe_audio_activity(first_media_id, Some(true), None, now)
+        .await;
+    adapter
+        .debug_observe_audio_activity(
+            second_media_id,
+            Some(true),
+            None,
+            now + Duration::from_millis(10),
+        )
+        .await;
+
+    let snapshot = adapter.active_speaker_source_snapshot(9).await;
+    assert_eq!(
+        snapshot
+            .into_iter()
+            .map(ActiveSpeakerSource::transport_media_id)
+            .collect::<Vec<_>>(),
+        vec![second_media_id, first_media_id]
+    );
+}
+
+#[tokio::test]
 async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
     let source_adapter = RtcTransportAdapter::default();
     let target_adapter = RtcTransportAdapter::default();

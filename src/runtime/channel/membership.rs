@@ -197,13 +197,15 @@ impl Channel {
         session_id: &SessionId,
         info: SessionInfo,
         need_refresh: bool,
-        _transport_adapter: Option<&RuntimeTransportAdapter>,
+        transport_adapter: Option<&RuntimeTransportAdapter>,
     ) {
         let outcome = {
             let mut state = self.state.write().await;
             state.apply_presence_update(session_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
+            self.sync_source_packet_selection_policy(transport_adapter)
+                .await;
             outcome.emit();
         }
     }

@@ -14,7 +14,7 @@ use std::time::Instant;
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -183,6 +183,10 @@ pub(super) enum RtcWorkerCommand {
         session_key: TransportSessionKey,
         response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
     },
+    ActiveSpeakerSourceSnapshot {
+        channel_runtime_id: u64,
+        response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
+    },
     ApplySessionAnswer {
         session_key: TransportSessionKey,
         answer_sdp: String,
@@ -323,6 +327,13 @@ pub(super) enum DebugRtcCommand {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
         payload_bytes: usize,
+        now: Instant,
+        response: oneshot::Sender<()>,
+    },
+    ObserveAudioActivity {
+        transport_media_id: TransportMediaId,
+        voice_activity: Option<bool>,
+        audio_level_dbov: Option<i8>,
         now: Instant,
         response: oneshot::Sender<()>,
     },

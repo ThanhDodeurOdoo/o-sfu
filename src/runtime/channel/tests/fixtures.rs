@@ -13,7 +13,7 @@ pub(super) use super::super::{
     topology::ChannelTopology,
 };
 pub(super) use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
-pub(super) use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+pub(super) use crate::runtime::transport_adapter::{ActiveSpeakerSource, RuntimeTransportAdapter};
 pub(super) use crate::signaling::{
     ortc_mapper,
     protocol::WebSocketCloseCode,

@@ -20,8 +20,8 @@ use crate::config::RtcPortRange;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterConfig, SessionOffer, SourcePacketSelection, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, RtcTransportAdapterConfig, SessionOffer, SourcePacketSelection,
+    TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::{TransportConnectDirection, TransportConnectRequest};
@@ -576,6 +576,23 @@ impl RtcTransportAdapter {
         snapshot_state.transport_health(session_key)
     }
 
+    pub(crate) async fn active_speaker_source_snapshot(
+        &self,
+        channel_runtime_id: u64,
+    ) -> Vec<ActiveSpeakerSource> {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+            return Vec::new();
+        };
+        self.send_worker_command(&worker_handle, |response| {
+            RtcWorkerCommand::ActiveSpeakerSourceSnapshot {
+                channel_runtime_id,
+                response,
+            }
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     pub(crate) fn activate_relay_route(
         &self,
         channel_runtime_id: u64,
@@ -828,6 +845,24 @@ impl RtcTransportAdapter {
                 session_key: session_key.clone(),
                 transport_media_id,
                 payload_bytes,
+                now,
+                response,
+            })
+            .await;
+    }
+
+    pub(crate) async fn debug_observe_audio_activity(
+        &self,
+        transport_media_id: TransportMediaId,
+        voice_activity: Option<bool>,
+        audio_level_dbov: Option<i8>,
+        now: Instant,
+    ) {
+        let _ = self
+            .request_debug_worker(|response| DebugRtcCommand::ObserveAudioActivity {
+                transport_media_id,
+                voice_activity,
+                audio_level_dbov,
                 now,
                 response,
             })

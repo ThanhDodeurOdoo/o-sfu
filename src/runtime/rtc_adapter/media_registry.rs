@@ -4,10 +4,12 @@
 //! `(session_key, mid)` reverse lookup within `RtcBootstrapState`, plus the
 //! worker-local remote-source placeholders used by cross-worker relay routes.
 
+use std::time::Instant;
+
 use str0m::media::Mid;
 
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 use super::commands::RemoteSourceControl;
@@ -193,6 +195,36 @@ impl RtcBootstrapState {
                         .remote_source_registry
                         .contains_key(source_transport_media_id)
             });
+    }
+
+    pub(super) fn source_session_key_for_transport_media_id(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<&TransportSessionKey> {
+        match self.mid_registry.get(&source_transport_media_id.as_u64()) {
+            Some(RegisteredMediaHandle::Producer { session_key, .. }) => Some(session_key),
+            Some(RegisteredMediaHandle::Consumer { .. }) => None,
+            None => self
+                .remote_source_registration(source_transport_media_id)
+                .map(RemoteSourceRegistration::source_session_key),
+        }
+    }
+
+    pub(super) fn active_speaker_source_snapshot(
+        &self,
+        channel_runtime_id: u64,
+        now: Instant,
+    ) -> Vec<ActiveSpeakerSource> {
+        self.route_control
+            .active_speaker_sources(now)
+            .into_iter()
+            .filter(|source| {
+                self.source_session_key_for_transport_media_id(source.transport_media_id())
+                    .is_some_and(|session_key| {
+                        session_key.channel_runtime_id() == channel_runtime_id
+                    })
+            })
+            .collect()
     }
 
     pub(super) fn source_transport_media_id_for_mid(

@@ -7,8 +7,8 @@ use std::{
 #[cfg(test)]
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    SessionOffer, SourcePacketSelection, TransportAdapterError, TransportMediaId,
-    TransportSessionKey,
+    ActiveSpeakerSource, SessionOffer, SourcePacketSelection, TransportAdapterError,
+    TransportMediaId, TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -63,6 +63,7 @@ pub(crate) struct StubWebRtcAdapter {
     events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
     next_media_id: Arc<AtomicU64>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
+    active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     delays: Arc<Mutex<StubWebRtcAdapterDelays>>,
 }
 
@@ -133,9 +134,35 @@ impl StubWebRtcAdapter {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_active_speaker_source_snapshot(&self, sources: Vec<ActiveSpeakerSource>) {
+        match self.active_speaker_sources.lock() {
+            Ok(mut active_speaker_sources) => {
+                *active_speaker_sources = sources;
+            }
+            Err(poisoned) => {
+                *poisoned.into_inner() = sources;
+            }
+        }
+    }
 }
 
 impl StubWebRtcAdapter {
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn active_speaker_source_snapshot(
+        &self,
+        _channel_runtime_id: u64,
+    ) -> Vec<ActiveSpeakerSource> {
+        match self.active_speaker_sources.lock() {
+            Ok(active_speaker_sources) => active_speaker_sources.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
     pub(crate) fn compatibility_client_rtp_capabilities(
         answer_sdp: &str,
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,

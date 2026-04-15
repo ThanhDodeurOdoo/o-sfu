@@ -12,9 +12,12 @@ impl Channel {
         let Some(transport_adapter) = transport_adapter else {
             return;
         };
+        let active_speaker_sources = transport_adapter
+            .active_speaker_source_snapshot(self.runtime_id)
+            .await;
         let updates = {
             let state = self.state.read().await;
-            state.source_packet_selection_updates()
+            state.source_packet_selection_updates(&active_speaker_sources)
         };
         if updates.is_empty() {
             return;

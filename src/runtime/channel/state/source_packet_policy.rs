@@ -1,9 +1,16 @@
-use crate::runtime::transport_adapter::{SourcePacketSelection, TransportMediaId};
+use crate::runtime::transport_adapter::{
+    ActiveSpeakerSource, SourcePacketSelection, TransportMediaId,
+};
 use crate::signaling::shared::{SessionId, StreamType};
+use std::collections::BTreeSet;
 
-use super::{ids::ProducerRuntimeId, shared::ChannelState};
+use super::{
+    ids::ProducerRuntimeId,
+    shared::{ChannelState, ProducerKey},
+};
 
 const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;
+const ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct SourcePacketSelectionUpdate {
@@ -39,8 +46,11 @@ impl SourcePacketSelectionUpdate {
 impl ChannelState {
     pub(in crate::runtime::channel) fn source_packet_selection_updates(
         &self,
+        active_speaker_sources: &[ActiveSpeakerSource],
     ) -> Vec<SourcePacketSelectionUpdate> {
         let session_count = self.session_count();
+        let cleared_camera_session_ids =
+            self.cleared_camera_session_ids_for_active_speakers(active_speaker_sources);
         self.producers
             .iter()
             .filter_map(|(producer_id, producer)| {
@@ -49,6 +59,8 @@ impl ChannelState {
                     session_count,
                     producer.stream_type,
                     &producer.consumable_rtp_parameters,
+                    &cleared_camera_session_ids,
+                    &producer.owner_session_id,
                 );
                 if desired_selection == producer.source_packet_selection {
                     return None;
@@ -62,6 +74,37 @@ impl ChannelState {
                 })
             })
             .collect()
+    }
+
+    fn cleared_camera_session_ids_for_active_speakers(
+        &self,
+        active_speaker_sources: &[ActiveSpeakerSource],
+    ) -> BTreeSet<SessionId> {
+        active_speaker_sources
+            .iter()
+            .filter_map(|source| {
+                let owner_session_id = self.producer_owner_session_id_for_transport_media_id(
+                    source.transport_media_id(),
+                    StreamType::Audio,
+                )?;
+                self.producer_ids_by_owner_stream
+                    .contains_key(&ProducerKey::new(&owner_session_id, StreamType::Camera))
+                    .then_some(owner_session_id)
+            })
+            .take(ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT)
+            .collect()
+    }
+
+    fn producer_owner_session_id_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+        stream_type: StreamType,
+    ) -> Option<SessionId> {
+        self.producers.values().find_map(|producer| {
+            (producer.transport_media_id == Some(transport_media_id)
+                && producer.stream_type == stream_type)
+                .then(|| producer.owner_session_id.clone())
+        })
     }
 
     pub(in crate::runtime::channel) fn commit_source_packet_selection_updates(
@@ -89,13 +132,20 @@ fn desired_source_packet_selection(
     session_count: usize,
     stream_type: StreamType,
     producer_rtp_parameters: &o_sfu_router::RtpParameters,
+    cleared_camera_session_ids: &BTreeSet<SessionId>,
+    owner_session_id: &SessionId,
 ) -> Option<SourcePacketSelection> {
     if stream_type != StreamType::Camera
         || session_count < MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD
     {
         return None;
     }
-    lowest_declared_rid(producer_rtp_parameters).map(SourcePacketSelection::Rid)
+    let shared_selection =
+        lowest_declared_rid(producer_rtp_parameters).map(SourcePacketSelection::Rid)?;
+    if cleared_camera_session_ids.contains(owner_session_id) {
+        return None;
+    }
+    Some(shared_selection)
 }
 
 fn lowest_declared_rid(producer_rtp_parameters: &o_sfu_router::RtpParameters) -> Option<String> {

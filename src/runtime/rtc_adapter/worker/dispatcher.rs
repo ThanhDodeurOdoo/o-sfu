@@ -1,10 +1,13 @@
 use std::{
     net::IpAddr,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::metrics::RuntimeMetrics;
+use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportAdapterError};
+use tokio::sync::oneshot;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::bootstrap;
@@ -100,6 +103,7 @@ fn handle_core_worker_command(
             response,
         ),
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
+        | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
             handle_negotiation_command(state, context, command);
@@ -163,6 +167,10 @@ fn handle_negotiation_command(
             &session_key,
             response,
         ),
+        RtcWorkerCommand::ActiveSpeakerSourceSnapshot {
+            channel_runtime_id,
+            response,
+        } => respond_active_speaker_source_snapshot(state, channel_runtime_id, response),
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,
@@ -174,6 +182,15 @@ fn handle_negotiation_command(
         } => negotiation::respond_apply_session_answer(state, &session_key, &answer_sdp, response),
         _ => {}
     }
+}
+
+fn respond_active_speaker_source_snapshot(
+    state: &RtcBootstrapState,
+    channel_runtime_id: u64,
+    response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
+) {
+    let snapshot = state.active_speaker_source_snapshot(channel_runtime_id, Instant::now());
+    let _ = response.send(Ok(snapshot));
 }
 
 fn handle_media_command(
