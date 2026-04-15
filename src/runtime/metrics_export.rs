@@ -339,6 +339,19 @@ fn append_transport_lifecycle_metrics(output: &mut String, snapshot: &RuntimeMet
         "Total RTC DTLS-connected events observed from the transport adapter.",
         snapshot.transport_dtls_connected,
     );
+    append_histogram(
+        output,
+        "osfu_transport_session_lifetime_seconds",
+        "Lifetime of closed RTC transport sessions observed at cold-path teardown.",
+        &[
+            HistogramBucketValue::new("1", snapshot.transport_session_lifetime_le_1_second),
+            HistogramBucketValue::new("10", snapshot.transport_session_lifetime_le_10_seconds),
+            HistogramBucketValue::new("60", snapshot.transport_session_lifetime_le_60_seconds),
+            HistogramBucketValue::new("300", snapshot.transport_session_lifetime_le_300_seconds),
+        ],
+        snapshot.transport_session_lifetime_sum_micros,
+        snapshot.transport_session_lifetime_count,
+    );
 }
 
 fn append_rtc_datagram_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
@@ -422,6 +435,18 @@ struct LabeledGaugeValue {
 impl LabeledGaugeValue {
     const fn new(label_value: &'static str, value: i64) -> Self {
         Self { label_value, value }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HistogramBucketValue {
+    upper_bound: &'static str,
+    value: u64,
+}
+
+impl HistogramBucketValue {
+    const fn new(upper_bound: &'static str, value: u64) -> Self {
+        Self { upper_bound, value }
     }
 }
 
@@ -540,8 +565,62 @@ fn append_labeled_gauge_family(
     }
 }
 
+fn append_histogram(
+    output: &mut String,
+    name: &str,
+    help: &str,
+    buckets: &[HistogramBucketValue],
+    sum_micros: u64,
+    count: u64,
+) {
+    output.push_str("# HELP ");
+    output.push_str(name);
+    output.push(' ');
+    output.push_str(help);
+    output.push('\n');
+    output.push_str("# TYPE ");
+    output.push_str(name);
+    output.push_str(" histogram\n");
+    for bucket in buckets {
+        output.push_str(name);
+        output.push_str("_bucket{le=\"");
+        output.push_str(bucket.upper_bound);
+        output.push_str("\"} ");
+        append_u64(output, bucket.value);
+        output.push('\n');
+    }
+    output.push_str(name);
+    output.push_str("_bucket{le=\"+Inf\"} ");
+    append_u64(output, count);
+    output.push('\n');
+    output.push_str(name);
+    output.push_str("_sum ");
+    append_seconds_from_micros(output, sum_micros);
+    output.push('\n');
+    output.push_str(name);
+    output.push_str("_count ");
+    append_u64(output, count);
+    output.push('\n');
+}
+
 fn append_u64(output: &mut String, value: u64) {
     output.push_str(&value.to_string());
+}
+
+fn append_seconds_from_micros(output: &mut String, micros: u64) {
+    let whole_seconds = micros / 1_000_000;
+    let fractional_micros = micros % 1_000_000;
+    output.push_str(&whole_seconds.to_string());
+    if fractional_micros == 0 {
+        output.push_str(".0");
+        return;
+    }
+    output.push('.');
+    let mut fractional = format!("{fractional_micros:06}");
+    while fractional.ends_with('0') {
+        fractional.pop();
+    }
+    output.push_str(&fractional);
 }
 
 const fn close_code_label(close_code: WebSocketCloseCode) -> &'static str {
@@ -568,6 +647,55 @@ mod tests {
         runtime::rtc_adapter::TransportSessionHealth,
         signaling::protocol::WebSocketCloseCode,
     };
+    use std::time::Duration;
+
+    fn assert_http_and_websocket_metrics(rendered: &str) {
+        assert!(rendered.contains("# TYPE osfu_http_noop_requests_total counter"));
+        assert!(rendered.contains("osfu_http_noop_requests_total 1"));
+        assert!(rendered.contains("osfu_http_metrics_requests_total 1"));
+        assert!(
+            rendered
+                .contains("osfu_ws_handshake_rejections_total{close_code=\"protocol_error\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("osfu_ws_session_loop_exits_total{reason=\"transport_disconnected\"} 1")
+        );
+        assert!(rendered.contains("osfu_ws_bus_batches_total{direction=\"received\"} 1"));
+        assert!(rendered.contains("osfu_ws_bus_envelopes_total{direction=\"received\"} 2"));
+        assert!(rendered.contains("osfu_ws_bus_failures_total{kind=\"send\"} 1"));
+    }
+
+    fn assert_live_and_recording_metrics(rendered: &str) {
+        assert!(rendered.contains("# TYPE osfu_channels_active gauge"));
+        assert!(rendered.contains("osfu_sessions_active 2"));
+        assert!(rendered.contains("osfu_recording_channels_active 1"));
+        assert!(rendered.contains("osfu_transport_sessions_active 1"));
+        assert!(rendered.contains("osfu_transport_health_sessions{state=\"connected\"} 1"));
+        assert!(
+            rendered
+                .contains("osfu_recording_actions_total{action=\"start\",outcome=\"accepted\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("osfu_recording_actions_total{action=\"stop\",outcome=\"rejected\"} 1")
+        );
+        assert!(rendered.contains("osfu_recording_captured_packets_total 1"));
+        assert!(rendered.contains("osfu_recording_captured_streams_total 1"));
+    }
+
+    fn assert_transport_lifecycle_metrics(rendered: &str) {
+        assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
+        assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
+        assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
+        assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
+        assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
+        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"1\"} 0"));
+        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"10\"} 1"));
+        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"+Inf\"} 1"));
+        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_sum 1.5"));
+        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_count 1"));
+    }
 
     fn sample_metrics() -> RuntimeMetrics {
         let metrics = RuntimeMetrics::default();
@@ -592,6 +720,7 @@ mod tests {
         metrics.record_transport_ice_state_change(TransportIceState::Checking);
         metrics.record_transport_ice_state_change(TransportIceState::Connected);
         metrics.record_transport_dtls_connected();
+        metrics.record_transport_session_lifetime(Duration::from_millis(1500));
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
@@ -607,40 +736,9 @@ mod tests {
             PROMETHEUS_CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8"
         );
-        assert!(rendered.contains("# TYPE osfu_http_noop_requests_total counter"));
-        assert!(rendered.contains("osfu_http_noop_requests_total 1"));
-        assert!(rendered.contains("osfu_http_metrics_requests_total 1"));
-        assert!(
-            rendered
-                .contains("osfu_ws_handshake_rejections_total{close_code=\"protocol_error\"} 1")
-        );
-        assert!(
-            rendered
-                .contains("osfu_ws_session_loop_exits_total{reason=\"transport_disconnected\"} 1")
-        );
-        assert!(rendered.contains("osfu_ws_bus_batches_total{direction=\"received\"} 1"));
-        assert!(rendered.contains("osfu_ws_bus_envelopes_total{direction=\"received\"} 2"));
-        assert!(rendered.contains("osfu_ws_bus_failures_total{kind=\"send\"} 1"));
-        assert!(rendered.contains("# TYPE osfu_channels_active gauge"));
-        assert!(rendered.contains("osfu_sessions_active 2"));
-        assert!(rendered.contains("osfu_recording_channels_active 1"));
-        assert!(rendered.contains("osfu_transport_sessions_active 1"));
-        assert!(rendered.contains("osfu_transport_health_sessions{state=\"connected\"} 1"));
-        assert!(
-            rendered
-                .contains("osfu_recording_actions_total{action=\"start\",outcome=\"accepted\"} 1")
-        );
-        assert!(
-            rendered
-                .contains("osfu_recording_actions_total{action=\"stop\",outcome=\"rejected\"} 1")
-        );
-        assert!(rendered.contains("osfu_recording_captured_packets_total 1"));
-        assert!(rendered.contains("osfu_recording_captured_streams_total 1"));
-        assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
-        assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
-        assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
-        assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
-        assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
+        assert_http_and_websocket_metrics(&rendered);
+        assert_live_and_recording_metrics(&rendered);
+        assert_transport_lifecycle_metrics(&rendered);
     }
 
     #[test]

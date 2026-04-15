@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[cfg(feature = "internal-benchmarks")]
 use std::net::SocketAddr;
@@ -55,7 +56,7 @@ fn worker_close_session(
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
 ) -> CloseSessionOutcome {
-    let removed_session = state.sessions.remove(session_key).is_some();
+    let removed_session = state.sessions.remove(session_key);
     state.clear_session_schedule(session_key);
     state
         .remote_addr_demux
@@ -82,7 +83,10 @@ fn worker_close_session(
         let previous = snapshot.remove_session(session_key);
         metrics.record_transport_health_transition(previous, None);
     }
-    if removed_session {
+    if let Some(removed_session) = removed_session {
+        metrics.record_transport_session_lifetime(
+            Instant::now().saturating_duration_since(removed_session.started_at),
+        );
         metrics.add_active_transport_sessions(-1);
     }
     if state.sessions.is_empty() {

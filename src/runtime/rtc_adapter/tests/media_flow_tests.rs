@@ -36,7 +36,10 @@ async fn rtc_metrics_track_live_transport_sessions_without_double_counting() {
     assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
 
     assert!(adapter.close_session(&session_key).await.is_ok());
-    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 0);
+    let snapshot = adapter.metrics.snapshot();
+    assert_eq!(snapshot.active_transport_sessions, 0);
+    assert_eq!(snapshot.transport_session_lifetime_le_1_second, 1);
+    assert_eq!(snapshot.transport_session_lifetime_count, 1);
 }
 
 #[tokio::test]

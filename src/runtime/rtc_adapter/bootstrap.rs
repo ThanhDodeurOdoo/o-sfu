@@ -77,9 +77,10 @@ pub(super) fn ensure_session_rtc_state(
     if sessions.contains_key(session_key) {
         return Ok(false);
     }
+    let started_at = Instant::now();
     let mut rtc = rtc_builder(codec_flags)
         .set_ice_lite(true)
-        .build(Instant::now());
+        .build(started_at);
     let candidate = Candidate::host(candidate_addr, webrtc::IceTransport::Udp.as_str())
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
@@ -104,6 +105,7 @@ pub(super) fn ensure_session_rtc_state(
         session_key.clone(),
         RtcSessionState {
             rtc,
+            started_at,
             #[cfg(any(test, feature = "internal-benchmarks"))]
             local_ice_credentials,
             #[cfg(any(test, feature = "internal-benchmarks"))]

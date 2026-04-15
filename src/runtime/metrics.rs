@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 use crate::signaling::protocol::WebSocketCloseCode;
@@ -101,6 +102,14 @@ pub(super) enum TransportIceState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TransportSessionLifetimeBucket {
+    Le1Second,
+    Le10Seconds,
+    Le60Seconds,
+    Le300Seconds,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordingActionOutcome {
     StartAccepted,
     StartRejected,
@@ -128,6 +137,10 @@ impl Counter {
         if let Ok(value) = u64::try_from(value) {
             self.value.fetch_add(value, Ordering::Relaxed);
         }
+    }
+
+    fn add_u64(&self, value: u64) {
+        self.value.fetch_add(value, Ordering::Relaxed);
     }
 
     fn load(&self) -> u64 {
@@ -365,6 +378,19 @@ impl MetricLabel for TransportIceState {
     }
 }
 
+impl MetricLabel for TransportSessionLifetimeBucket {
+    const COUNT: usize = 4;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::Le1Second => 0,
+            Self::Le10Seconds => 1,
+            Self::Le60Seconds => 2,
+            Self::Le300Seconds => 3,
+        }
+    }
+}
+
 impl MetricLabel for RecordingActionOutcome {
     const COUNT: usize = 4;
 
@@ -407,6 +433,9 @@ pub(crate) struct RuntimeMetrics {
     rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
     transport_ice_state_changes: CounterFamily<TransportIceState>,
     transport_dtls_connected: Counter,
+    transport_session_lifetime_buckets: CounterFamily<TransportSessionLifetimeBucket>,
+    transport_session_lifetime_count: Counter,
+    transport_session_lifetime_sum_micros: Counter,
     rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
     rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
     rtc_datagram_fallback_scans: Counter,
@@ -482,6 +511,12 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub transport_ice_state_changes_completed: u64,
     pub transport_ice_state_changes_disconnected: u64,
     pub transport_dtls_connected: u64,
+    pub transport_session_lifetime_le_1_second: u64,
+    pub transport_session_lifetime_le_10_seconds: u64,
+    pub transport_session_lifetime_le_60_seconds: u64,
+    pub transport_session_lifetime_le_300_seconds: u64,
+    pub transport_session_lifetime_count: u64,
+    pub transport_session_lifetime_sum_micros: u64,
     pub rtc_datagram_routes_indexed: u64,
     pub rtc_datagram_routes_scan: u64,
     pub rtc_datagram_drops_recent_miss_cache: u64,
@@ -570,6 +605,12 @@ struct TransportLifecycleSnapshot {
     ice_state_changes_completed: u64,
     ice_state_changes_disconnected: u64,
     dtls_connected: u64,
+    session_lifetime_le_1_second: u64,
+    session_lifetime_le_10_seconds: u64,
+    session_lifetime_le_60_seconds: u64,
+    session_lifetime_le_300_seconds: u64,
+    session_lifetime_count: u64,
+    session_lifetime_sum_micros: u64,
 }
 
 struct RtcDatagramSnapshot {
@@ -665,6 +706,16 @@ impl RuntimeMetrics {
             transport_ice_state_changes_disconnected: transport_lifecycle
                 .ice_state_changes_disconnected,
             transport_dtls_connected: transport_lifecycle.dtls_connected,
+            transport_session_lifetime_le_1_second: transport_lifecycle
+                .session_lifetime_le_1_second,
+            transport_session_lifetime_le_10_seconds: transport_lifecycle
+                .session_lifetime_le_10_seconds,
+            transport_session_lifetime_le_60_seconds: transport_lifecycle
+                .session_lifetime_le_60_seconds,
+            transport_session_lifetime_le_300_seconds: transport_lifecycle
+                .session_lifetime_le_300_seconds,
+            transport_session_lifetime_count: transport_lifecycle.session_lifetime_count,
+            transport_session_lifetime_sum_micros: transport_lifecycle.session_lifetime_sum_micros,
             rtc_datagram_routes_indexed: rtc_datagram.routes_indexed,
             rtc_datagram_routes_scan: rtc_datagram.routes_scan,
             rtc_datagram_drops_recent_miss_cache: rtc_datagram.drops_recent_miss_cache,
@@ -833,6 +884,20 @@ impl RuntimeMetrics {
                 .transport_ice_state_changes
                 .load(TransportIceState::Disconnected),
             dtls_connected: self.transport_dtls_connected.load(),
+            session_lifetime_le_1_second: self
+                .transport_session_lifetime_buckets
+                .load(TransportSessionLifetimeBucket::Le1Second),
+            session_lifetime_le_10_seconds: self
+                .transport_session_lifetime_buckets
+                .load(TransportSessionLifetimeBucket::Le10Seconds),
+            session_lifetime_le_60_seconds: self
+                .transport_session_lifetime_buckets
+                .load(TransportSessionLifetimeBucket::Le60Seconds),
+            session_lifetime_le_300_seconds: self
+                .transport_session_lifetime_buckets
+                .load(TransportSessionLifetimeBucket::Le300Seconds),
+            session_lifetime_count: self.transport_session_lifetime_count.load(),
+            session_lifetime_sum_micros: self.transport_session_lifetime_sum_micros.load(),
         }
     }
 
@@ -1084,6 +1149,28 @@ impl RuntimeMetrics {
         self.transport_dtls_connected.increment();
     }
 
+    pub(super) fn record_transport_session_lifetime(&self, duration: Duration) {
+        self.transport_session_lifetime_count.increment();
+        self.transport_session_lifetime_sum_micros
+            .add_u64(u64::try_from(duration.as_micros()).unwrap_or(u64::MAX));
+        if duration <= Duration::from_secs(1) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le1Second);
+        }
+        if duration <= Duration::from_secs(10) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le10Seconds);
+        }
+        if duration <= Duration::from_secs(60) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le60Seconds);
+        }
+        if duration <= Duration::from_secs(300) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le300Seconds);
+        }
+    }
+
     pub(super) fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
         self.rtc_datagram_routes.increment(path);
     }
@@ -1107,6 +1194,7 @@ mod tests {
     use crate::{
         runtime::rtc_adapter::TransportSessionHealth, signaling::protocol::WebSocketCloseCode,
     };
+    use std::time::Duration;
 
     fn assert_live_gauges(snapshot: &super::RuntimeMetricsSnapshot) {
         assert_eq!(snapshot.active_channels, 1);
@@ -1130,6 +1218,12 @@ mod tests {
         assert_eq!(snapshot.transport_ice_state_changes_completed, 0);
         assert_eq!(snapshot.transport_ice_state_changes_disconnected, 0);
         assert_eq!(snapshot.transport_dtls_connected, 1);
+        assert_eq!(snapshot.transport_session_lifetime_le_1_second, 0);
+        assert_eq!(snapshot.transport_session_lifetime_le_10_seconds, 1);
+        assert_eq!(snapshot.transport_session_lifetime_le_60_seconds, 1);
+        assert_eq!(snapshot.transport_session_lifetime_le_300_seconds, 1);
+        assert_eq!(snapshot.transport_session_lifetime_count, 1);
+        assert_eq!(snapshot.transport_session_lifetime_sum_micros, 1_500_000);
     }
 
     fn assert_rtp_and_datagram_metrics(snapshot: &super::RuntimeMetricsSnapshot) {
@@ -1212,6 +1306,7 @@ mod tests {
         metrics.record_transport_ice_state_change(TransportIceState::Checking);
         metrics.record_transport_ice_state_change(TransportIceState::Connected);
         metrics.record_transport_dtls_connected();
+        metrics.record_transport_session_lifetime(Duration::from_millis(1500));
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
@@ -1255,6 +1350,7 @@ mod tests {
         metrics.record_transport_ice_state_change(TransportIceState::Completed);
         metrics.record_transport_ice_state_change(TransportIceState::Disconnected);
         metrics.record_transport_dtls_connected();
+        metrics.record_transport_session_lifetime(Duration::from_secs(301));
 
         let snapshot = metrics.snapshot();
 
@@ -1264,6 +1360,12 @@ mod tests {
         assert_eq!(snapshot.transport_ice_state_changes_completed, 1);
         assert_eq!(snapshot.transport_ice_state_changes_disconnected, 1);
         assert_eq!(snapshot.transport_dtls_connected, 1);
+        assert_eq!(snapshot.transport_session_lifetime_le_1_second, 0);
+        assert_eq!(snapshot.transport_session_lifetime_le_10_seconds, 0);
+        assert_eq!(snapshot.transport_session_lifetime_le_60_seconds, 0);
+        assert_eq!(snapshot.transport_session_lifetime_le_300_seconds, 0);
+        assert_eq!(snapshot.transport_session_lifetime_count, 1);
+        assert_eq!(snapshot.transport_session_lifetime_sum_micros, 301_000_000);
     }
 
     #[test]

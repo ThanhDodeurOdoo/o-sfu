@@ -66,6 +66,7 @@ pub(super) struct SharedRtcSocket {
 
 pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
+    pub(super) started_at: Instant,
     #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) local_ice_credentials: IceCreds,
     #[cfg(any(test, feature = "internal-benchmarks"))]
