@@ -17,6 +17,7 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     append_recording_metrics(&mut output, snapshot);
     append_transport_health_gauges(&mut output, snapshot);
     append_rtp_metrics(&mut output, snapshot);
+    append_rtc_datagram_metrics(&mut output, snapshot);
     output
 }
 
@@ -314,6 +315,45 @@ fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     );
 }
 
+fn append_rtc_datagram_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_labeled_counter_family(
+        output,
+        "osfu_rtc_datagram_routes_total",
+        "Total RTC UDP datagrams accepted by routing path.",
+        "path",
+        &[
+            LabeledValue::new("indexed", snapshot.rtc_datagram_routes_indexed),
+            LabeledValue::new("scan", snapshot.rtc_datagram_routes_scan),
+        ],
+    );
+    append_labeled_counter_family(
+        output,
+        "osfu_rtc_datagram_drops_total",
+        "Total RTC UDP datagrams dropped before reaching a live session.",
+        "reason",
+        &[
+            LabeledValue::new(
+                "recent_miss_cache",
+                snapshot.rtc_datagram_drops_recent_miss_cache,
+            ),
+            LabeledValue::new("no_session", snapshot.rtc_datagram_drops_no_session),
+            LabeledValue::new("malformed", snapshot.rtc_datagram_drops_malformed),
+        ],
+    );
+    append_counter(
+        output,
+        "osfu_rtc_datagram_fallback_scans_total",
+        "Total fallback scans across RTC sessions for UDP datagram routing.",
+        snapshot.rtc_datagram_fallback_scans,
+    );
+    append_counter(
+        output,
+        "osfu_rtc_datagram_scan_sessions_total",
+        "Total RTC sessions examined by UDP fallback scans.",
+        snapshot.rtc_datagram_scan_sessions,
+    );
+}
+
 #[derive(Clone, Copy)]
 struct LabeledValue {
     label_value: &'static str,
@@ -495,13 +535,14 @@ const fn close_code_label(close_code: WebSocketCloseCode) -> &'static str {
 mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
-        runtime::metrics::{RuntimeMetrics, WsSessionLoopExitReason},
+        runtime::metrics::{
+            RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, WsSessionLoopExitReason,
+        },
         runtime::rtc_adapter::TransportSessionHealth,
         signaling::protocol::WebSocketCloseCode,
     };
 
-    #[test]
-    fn prometheus_export_renders_expected_metric_families() {
+    fn sample_metrics() -> RuntimeMetrics {
         let metrics = RuntimeMetrics::default();
         metrics.record_http_noop_request();
         metrics.record_http_metrics_request();
@@ -521,8 +562,16 @@ mod tests {
         metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
+        metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
+        metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+        metrics.record_rtc_datagram_fallback_scan(4);
+        metrics
+    }
 
-        let rendered = render_prometheus(&metrics);
+    #[test]
+    fn prometheus_export_renders_existing_metric_families() {
+        let rendered = render_prometheus(&sample_metrics());
 
         assert_eq!(
             PROMETHEUS_CONTENT_TYPE,
@@ -559,5 +608,16 @@ mod tests {
         assert!(rendered.contains("osfu_recording_captured_streams_total 1"));
         assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
         assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
+    }
+
+    #[test]
+    fn prometheus_export_renders_rtc_datagram_metric_families() {
+        let rendered = render_prometheus(&sample_metrics());
+
+        assert!(rendered.contains("osfu_rtc_datagram_routes_total{path=\"indexed\"} 1"));
+        assert!(rendered.contains("osfu_rtc_datagram_routes_total{path=\"scan\"} 1"));
+        assert!(rendered.contains("osfu_rtc_datagram_drops_total{reason=\"malformed\"} 1"));
+        assert!(rendered.contains("osfu_rtc_datagram_fallback_scans_total 1"));
+        assert!(rendered.contains("osfu_rtc_datagram_scan_sessions_total 4"));
     }
 }

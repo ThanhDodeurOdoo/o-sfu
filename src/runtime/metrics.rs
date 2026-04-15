@@ -79,6 +79,19 @@ pub(super) enum RtpFlowDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RtcDatagramRoutePath {
+    Indexed,
+    Scan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RtcDatagramDropReason {
+    RecentMissCache,
+    NoSession,
+    Malformed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordingActionOutcome {
     StartAccepted,
     StartRejected,
@@ -306,6 +319,29 @@ impl MetricLabel for RtpFlowDirection {
     }
 }
 
+impl MetricLabel for RtcDatagramRoutePath {
+    const COUNT: usize = 2;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::Indexed => 0,
+            Self::Scan => 1,
+        }
+    }
+}
+
+impl MetricLabel for RtcDatagramDropReason {
+    const COUNT: usize = 3;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::RecentMissCache => 0,
+            Self::NoSession => 1,
+            Self::Malformed => 2,
+        }
+    }
+}
+
 impl MetricLabel for RecordingActionOutcome {
     const COUNT: usize = 4;
 
@@ -346,6 +382,10 @@ pub(crate) struct RuntimeMetrics {
     recording_captured_streams: Counter,
     rtp_packets: CounterFamily<RtpFlowDirection>,
     rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
+    rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
+    rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
+    rtc_datagram_fallback_scans: Counter,
+    rtc_datagram_scan_sessions: Counter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,6 +451,13 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtp_packets_egress: u64,
     pub rtp_payload_bytes_ingress: u64,
     pub rtp_payload_bytes_egress: u64,
+    pub rtc_datagram_routes_indexed: u64,
+    pub rtc_datagram_routes_scan: u64,
+    pub rtc_datagram_drops_recent_miss_cache: u64,
+    pub rtc_datagram_drops_no_session: u64,
+    pub rtc_datagram_drops_malformed: u64,
+    pub rtc_datagram_fallback_scans: u64,
+    pub rtc_datagram_scan_sessions: u64,
 }
 
 struct HttpSnapshot {
@@ -485,6 +532,16 @@ struct RtpSnapshot {
     payload_bytes_egress: u64,
 }
 
+struct RtcDatagramSnapshot {
+    routes_indexed: u64,
+    routes_scan: u64,
+    drops_recent_miss_cache: u64,
+    drops_no_session: u64,
+    drops_malformed: u64,
+    fallback_scans: u64,
+    scan_sessions: u64,
+}
+
 impl RuntimeMetrics {
     #[allow(
         dead_code,
@@ -496,6 +553,7 @@ impl RuntimeMetrics {
         let live = self.snapshot_live();
         let recording = self.snapshot_recording();
         let rtp = self.snapshot_rtp();
+        let rtc_datagram = self.snapshot_rtc_datagram();
         RuntimeMetricsSnapshot {
             http_noop_requests: http.noop_requests,
             http_stats_requests: http.stats_requests,
@@ -559,6 +617,13 @@ impl RuntimeMetrics {
             rtp_packets_egress: rtp.packets_egress,
             rtp_payload_bytes_ingress: rtp.payload_bytes_ingress,
             rtp_payload_bytes_egress: rtp.payload_bytes_egress,
+            rtc_datagram_routes_indexed: rtc_datagram.routes_indexed,
+            rtc_datagram_routes_scan: rtc_datagram.routes_scan,
+            rtc_datagram_drops_recent_miss_cache: rtc_datagram.drops_recent_miss_cache,
+            rtc_datagram_drops_no_session: rtc_datagram.drops_no_session,
+            rtc_datagram_drops_malformed: rtc_datagram.drops_malformed,
+            rtc_datagram_fallback_scans: rtc_datagram.fallback_scans,
+            rtc_datagram_scan_sessions: rtc_datagram.scan_sessions,
         }
     }
 
@@ -699,6 +764,24 @@ impl RuntimeMetrics {
             packets_egress: self.rtp_packets.load(RtpFlowDirection::Egress),
             payload_bytes_ingress: self.rtp_payload_bytes.load(RtpFlowDirection::Ingress),
             payload_bytes_egress: self.rtp_payload_bytes.load(RtpFlowDirection::Egress),
+        }
+    }
+
+    fn snapshot_rtc_datagram(&self) -> RtcDatagramSnapshot {
+        RtcDatagramSnapshot {
+            routes_indexed: self.rtc_datagram_routes.load(RtcDatagramRoutePath::Indexed),
+            routes_scan: self.rtc_datagram_routes.load(RtcDatagramRoutePath::Scan),
+            drops_recent_miss_cache: self
+                .rtc_datagram_drops
+                .load(RtcDatagramDropReason::RecentMissCache),
+            drops_no_session: self
+                .rtc_datagram_drops
+                .load(RtcDatagramDropReason::NoSession),
+            drops_malformed: self
+                .rtc_datagram_drops
+                .load(RtcDatagramDropReason::Malformed),
+            fallback_scans: self.rtc_datagram_fallback_scans.load(),
+            scan_sessions: self.rtc_datagram_scan_sessions.load(),
         }
     }
 
@@ -923,11 +1006,26 @@ impl RuntimeMetrics {
         self.rtp_payload_bytes
             .add(RtpFlowDirection::Egress, payload_bytes);
     }
+
+    pub(super) fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
+        self.rtc_datagram_routes.increment(path);
+    }
+
+    pub(super) fn record_rtc_datagram_drop(&self, reason: RtcDatagramDropReason) {
+        self.rtc_datagram_drops.increment(reason);
+    }
+
+    pub(super) fn record_rtc_datagram_fallback_scan(&self, examined_sessions: usize) {
+        self.rtc_datagram_fallback_scans.increment();
+        self.rtc_datagram_scan_sessions.add(examined_sessions);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeMetrics, WsSessionLoopExitReason};
+    use super::{
+        RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, WsSessionLoopExitReason,
+    };
     use crate::{
         runtime::rtc_adapter::TransportSessionHealth, signaling::protocol::WebSocketCloseCode,
     };
@@ -995,6 +1093,12 @@ mod tests {
         metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
+        metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
+        metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+        metrics.record_rtc_datagram_fallback_scan(3);
 
         let snapshot = metrics.snapshot();
 
@@ -1011,6 +1115,13 @@ mod tests {
         assert_eq!(snapshot.rtp_packets_egress, 1);
         assert_eq!(snapshot.rtp_payload_bytes_ingress, 1200);
         assert_eq!(snapshot.rtp_payload_bytes_egress, 900);
+        assert_eq!(snapshot.rtc_datagram_routes_indexed, 1);
+        assert_eq!(snapshot.rtc_datagram_routes_scan, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_no_session, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
+        assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
+        assert_eq!(snapshot.rtc_datagram_scan_sessions, 3);
     }
 
     #[test]
