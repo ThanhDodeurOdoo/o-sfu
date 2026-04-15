@@ -1,23 +1,19 @@
 use std::{mem::take, time::Instant};
 
-use str0m::{
-    RtcError,
-    media::{MediaData, Mid},
-    rtp::RtpPacket,
-};
+use str0m::{media::MediaData, rtp::RtpPacket};
 
 #[cfg(test)]
 use str0m::{
     format::{Codec, CodecExtra, CodecSpec, FormatParams, PayloadParams},
-    media::{ExtensionValues, Frequency, MediaTime, Pt},
+    media::{ExtensionValues, Frequency, MediaTime, Mid, Pt},
     rtp::SeqNo,
 };
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
-use super::packet_mode::{ACTIVE_PACKET_MODE, PacketMode};
+use super::local_forwarding::{LocalForwardedFrame, LocalForwardedPacket, LocalForwardedRtp};
 use super::shared_payload::SharedPayload;
-use super::state::{RtcBootstrapState, RtcSessionState};
+use super::state::RtcBootstrapState;
 
 #[derive(Debug)]
 pub(crate) struct ForwardedPacket {
@@ -108,110 +104,14 @@ impl ForwardedPacket {
         }
     }
 
-    pub(super) fn forward_to_session(
-        &mut self,
-        session_state: &mut RtcSessionState,
-        dest_mid: Mid,
-        is_last_destination: bool,
-    ) -> Result<Option<usize>, RtcError> {
+    pub(super) fn local_send_packet(&mut self) -> LocalForwardedPacket<'_> {
         match &mut self.data {
-            ForwardedPacketData::Str0mFrame(frame_data) => {
-                if ACTIVE_PACKET_MODE != PacketMode::Frame {
-                    return Ok(None);
-                }
-                let media_data = &mut frame_data.media_data;
-                let Some(writer) = session_state.rtc.writer(dest_mid) else {
-                    return Ok(None);
-                };
-                let Some(pt) = writer.match_params(media_data.params) else {
-                    return Ok(None);
-                };
-                let mut data_writer = writer;
-                if let Some(rid) = media_data.rid {
-                    data_writer = data_writer.rid(rid);
-                }
-                if media_data.audio_start_of_talk_spurt {
-                    data_writer = data_writer.start_of_talkspurt(true);
-                }
-                let payload_len = media_data.data.len();
-                data_writer.write(
-                    pt,
-                    media_data.network_time,
-                    media_data.time,
-                    frame_data.payload.take_write_payload(is_last_destination),
-                )?;
-                Ok(Some(payload_len))
-            }
-            ForwardedPacketData::Str0mRtp(rtp_data) => {
-                if ACTIVE_PACKET_MODE != PacketMode::Rtp {
-                    return Ok(None);
-                }
-                let rtp_packet = &mut rtp_data.rtp_packet;
-                let nackable = session_state
-                    .rtc
-                    .media(dest_mid)
-                    .is_some_and(|media| !media.kind().is_audio());
-                let rid = rtp_packet
-                    .header
-                    .ext_vals
-                    .rid
-                    .or(rtp_packet.header.ext_vals.rid_repair);
-                let payload_len = rtp_data.payload.len();
-                let write_result = {
-                    let mut direct_api = session_state.rtc.direct_api();
-                    if let Some(rid) = rid {
-                        if let Some(stream_tx) = direct_api.stream_tx_by_mid(dest_mid, Some(rid)) {
-                            stream_tx.write_rtp_with_csrc(
-                                rtp_packet.header.payload_type,
-                                rtp_packet.seq_no,
-                                rtp_packet.header.timestamp,
-                                rtp_packet.timestamp,
-                                rtp_packet.header.marker,
-                                rtp_packet.header.ext_vals.clone(),
-                                nackable,
-                                rtp_data.payload.take_write_payload(is_last_destination),
-                                rtp_packet.header.csrc_count,
-                                rtp_packet.header.csrc,
-                            )
-                        } else if let Some(stream_tx) = direct_api.stream_tx_by_mid(dest_mid, None)
-                        {
-                            stream_tx.write_rtp_with_csrc(
-                                rtp_packet.header.payload_type,
-                                rtp_packet.seq_no,
-                                rtp_packet.header.timestamp,
-                                rtp_packet.timestamp,
-                                rtp_packet.header.marker,
-                                rtp_packet.header.ext_vals.clone(),
-                                nackable,
-                                rtp_data.payload.take_write_payload(is_last_destination),
-                                rtp_packet.header.csrc_count,
-                                rtp_packet.header.csrc,
-                            )
-                        } else {
-                            return Ok(None);
-                        }
-                    } else if let Some(stream_tx) = direct_api.stream_tx_by_mid(dest_mid, None) {
-                        stream_tx.write_rtp_with_csrc(
-                            rtp_packet.header.payload_type,
-                            rtp_packet.seq_no,
-                            rtp_packet.header.timestamp,
-                            rtp_packet.timestamp,
-                            rtp_packet.header.marker,
-                            rtp_packet.header.ext_vals.clone(),
-                            nackable,
-                            rtp_data.payload.take_write_payload(is_last_destination),
-                            rtp_packet.header.csrc_count,
-                            rtp_packet.header.csrc,
-                        )
-                    } else {
-                        return Ok(None);
-                    }
-                };
-                write_result.map_err(|error| {
-                    RtcError::Packet(dest_mid, rtp_packet.header.payload_type, error)
-                })?;
-                Ok(Some(payload_len))
-            }
+            ForwardedPacketData::Str0mFrame(frame_data) => LocalForwardedPacket::Str0mFrame(
+                LocalForwardedFrame::new(&mut frame_data.media_data, &mut frame_data.payload),
+            ),
+            ForwardedPacketData::Str0mRtp(rtp_data) => LocalForwardedPacket::Str0mRtp(
+                LocalForwardedRtp::new(&mut rtp_data.rtp_packet, &mut rtp_data.payload),
+            ),
         }
     }
 }

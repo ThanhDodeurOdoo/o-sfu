@@ -18,6 +18,7 @@ use tracing::{debug, trace, warn};
 use super::{
     commands::RtcWorkerCommand,
     forwarded_packet::ForwardedPacket,
+    local_forwarding::LocalPacketDestination,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
     worker::handle_worker_command,
 };
@@ -528,7 +529,12 @@ fn flush_forward_routes(
         let Some(dest_session_state) = state.sessions.get_mut(&dest_session) else {
             continue;
         };
-        match packet.forward_to_session(dest_session_state, dest_mid, is_last_destination) {
+        let destination = LocalPacketDestination::new(dest_mid);
+        match destination.send(
+            dest_session_state,
+            packet.local_send_packet(),
+            is_last_destination,
+        ) {
             Ok(Some(payload_len)) => metrics.record_rtp_egress(payload_len),
             Ok(None) => {}
             Err(error) => {
