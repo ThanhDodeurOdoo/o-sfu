@@ -8,6 +8,7 @@
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
 //! - `forwarded_packet`: adapter-local forwarded packet model and packet-mode-specific send edges
+//! - `forwarding_destination`: named packet-forwarding destinations that currently wrap the local RTC sender
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
@@ -27,6 +28,7 @@ mod demux;
 #[cfg(test)]
 mod dtls;
 mod forwarded_packet;
+mod forwarding_destination;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod ice;
 mod local_forwarding;

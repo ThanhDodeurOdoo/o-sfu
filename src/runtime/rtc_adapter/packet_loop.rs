@@ -8,7 +8,6 @@ use std::{
 };
 
 use str0m::IceConnectionState;
-use str0m::media::Mid;
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
@@ -18,7 +17,7 @@ use tracing::{debug, trace, warn};
 use super::{
     commands::RtcWorkerCommand,
     forwarded_packet::ForwardedPacket,
-    local_forwarding::LocalPacketDestination,
+    forwarding_destination::PacketForward,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
     worker::handle_worker_command,
 };
@@ -59,7 +58,7 @@ struct PacketLoopBuffers {
     pending_transmits: Vec<PendingTransmit>,
     pending_transmit_count: usize,
     pending_packets: Vec<ForwardedPacket>,
-    forwards: Vec<(usize, TransportSessionKey, Mid)>,
+    forwards: Vec<PacketForward>,
 }
 
 impl PacketLoopBuffers {
@@ -498,7 +497,9 @@ fn populate_forward_routes(state: &RtcBootstrapState, buffers: &mut PacketLoopBu
             }
             buffers
                 .forwards
-                .push((packet_idx, dest.dest_session.clone(), dest.dest_mid));
+                .push(PacketForward::from_local_route_destination(
+                    packet_idx, dest,
+                ));
         }
     }
 }
@@ -508,38 +509,24 @@ fn flush_forward_routes(
     metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
-    for forward_idx in 0..buffers.forwards.len() {
-        let Some((packet_idx, dest_session, dest_mid)) =
-            buffers
-                .forwards
-                .get(forward_idx)
-                .map(|(packet_idx, dest_session, dest_mid)| {
-                    (*packet_idx, dest_session.clone(), *dest_mid)
-                })
-        else {
-            continue;
-        };
-        let is_last_destination = buffers
-            .forwards
+    let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
+    for (forward_idx, forward) in forwards.iter().enumerate() {
+        let is_last_destination = forwards
             .get(forward_idx + 1)
-            .is_none_or(|(next_packet_idx, _, _)| *next_packet_idx != packet_idx);
-        let Some(packet) = buffers.pending_packets.get_mut(packet_idx) else {
+            .is_none_or(|next_forward| next_forward.packet_idx() != forward.packet_idx());
+        let Some(packet) = pending_packets.get_mut(forward.packet_idx()) else {
             continue;
         };
-        let Some(dest_session_state) = state.sessions.get_mut(&dest_session) else {
+        let destination = forward.destination();
+        let Some(dest_session_state) = state.sessions.get_mut(destination.session_key()) else {
             continue;
         };
-        let destination = LocalPacketDestination::new(dest_mid);
-        match destination.send(
-            dest_session_state,
-            packet.local_send_packet(),
-            is_last_destination,
-        ) {
+        match destination.send(dest_session_state, packet, is_last_destination) {
             Ok(Some(payload_len)) => metrics.record_rtp_egress(payload_len),
             Ok(None) => {}
             Err(error) => {
                 warn!(
-                    ?dest_session,
+                    session_key = ?destination.session_key(),
                     ?error,
                     "failed to write media to destination session"
                 );
@@ -937,7 +924,15 @@ fn route_packet_by_scan(
 
 #[cfg(test)]
 mod tests {
+    use str0m::media::Mid;
+
     use super::*;
+    use crate::runtime::rtc_adapter::{
+        demux::{MediaRouteDestination, MediaRouteEntry},
+        media_registry::RegisteredMediaHandle,
+        sample_forwarded_packet,
+    };
+    use crate::signaling::shared::SessionId;
 
     fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
         let sequence_number = sequence_number.to_be_bytes();
@@ -1092,5 +1087,53 @@ mod tests {
         assert_eq!(snapshot.rtc_datagram_scan_sessions, 0);
         assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
         assert_eq!(snapshot.rtc_datagram_drops_no_session, 0);
+    }
+
+    #[test]
+    fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
+        let producer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(14));
+        let consumer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(15));
+        let mut state = RtcBootstrapState::default();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("aud-up"),
+            });
+        let consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: Mid::from("aud-down"),
+                source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: consumer_session.clone(),
+                    dest_transport_media_id: consumer_transport_media_id,
+                    dest_mid: Mid::from("aud-down"),
+                    active: true,
+                }],
+            },
+        );
+        let mut buffers = PacketLoopBuffers::new();
+        buffers.pending_packets.push(sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        ));
+
+        populate_forward_routes(&state, &mut buffers);
+
+        assert_eq!(buffers.forwards.len(), 1);
+        assert_eq!(buffers.forwards.first().map(PacketForward::packet_idx), Some(0));
+        assert_eq!(
+            buffers
+                .forwards
+                .first()
+                .map(|forward| forward.destination().session_key()),
+            Some(&consumer_session)
+        );
     }
 }

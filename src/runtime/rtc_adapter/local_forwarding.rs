@@ -8,6 +8,7 @@ use super::packet_mode::{ACTIVE_PACKET_MODE, PacketMode};
 use super::shared_payload::SharedPayload;
 use super::state::RtcSessionState;
 
+#[derive(Debug, Clone)]
 pub(super) struct LocalPacketDestination {
     dest_mid: Mid,
 }
