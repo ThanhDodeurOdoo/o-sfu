@@ -51,7 +51,7 @@ use super::{
         RtcWorkerCommand,
     },
     packet_loop::{self, PacketLoopConfig},
-    relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
+    relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId, RelayTargetTransport},
     state::{RtcSnapshotState, TransportSessionHealth},
 };
 
@@ -604,7 +604,7 @@ impl RtcTransportAdapter {
             channel_runtime_id,
             source_transport_media_id,
             target.relay_target_id,
-            mailbox,
+            RelayTargetTransport::from(mailbox),
         );
         Ok(())
     }

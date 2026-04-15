@@ -2,8 +2,11 @@ use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::recording::MediaTap;
 
 use super::{
-    forwarded_packet::ForwardedPacket, forwarding_destination::PacketForward,
-    relay_registry::RelayRegistry, route_control::PacketRouteDecision, state::RtcBootstrapState,
+    forwarded_packet::ForwardedPacket,
+    forwarding_destination::PacketForward,
+    relay_registry::{RelayRegistry, RelayTargetTransport},
+    route_control::PacketRouteDecision,
+    state::RtcBootstrapState,
 };
 
 pub(super) fn populate_forward_routes(
@@ -29,13 +32,13 @@ pub(super) fn populate_forward_routes(
                 sink,
             ));
         }
-        let relay_mailboxes = if packet.uses_channel_side_sinks() {
-            relay_registry.mailboxes_for_source(source_transport_media_id)
+        let relay_targets = if packet.uses_channel_side_sinks() {
+            relay_registry.targets_for_source(source_transport_media_id)
         } else {
             None
         };
         let route_entry = state.media_route_index.get(&source_transport_media_id);
-        if has_routed_forward(relay_mailboxes.as_deref(), route_entry) {
+        if has_routed_forward(relay_targets.as_deref(), route_entry) {
             match state
                 .route_control
                 .decide_packet_route(source_transport_media_id, packet.route_control_rid())
@@ -49,13 +52,24 @@ pub(super) fn populate_forward_routes(
                 }
             }
         }
-        if let Some(relay_mailboxes) = relay_mailboxes {
-            for relay_mailbox in relay_mailboxes.iter().cloned() {
-                forwards.push(PacketForward::from_relay_sink(
-                    packet_idx,
-                    source_transport_media_id,
-                    relay_mailbox,
-                ));
+        if let Some(relay_targets) = relay_targets {
+            for relay_target in relay_targets.iter().cloned() {
+                match relay_target {
+                    RelayTargetTransport::IntraNodeMailbox(mailbox) => {
+                        forwards.push(PacketForward::from_intra_node_relay_sink(
+                            packet_idx,
+                            source_transport_media_id,
+                            mailbox,
+                        ));
+                    }
+                    RelayTargetTransport::InterNodeSender(sender) => {
+                        forwards.push(PacketForward::from_inter_node_relay_sink(
+                            packet_idx,
+                            source_transport_media_id,
+                            sender,
+                        ));
+                    }
+                }
             }
         }
         let Some(route_entry) = route_entry else {
@@ -77,10 +91,10 @@ pub(super) fn populate_forward_routes(
 }
 
 fn has_routed_forward(
-    relay_mailboxes: Option<&[super::relay_registry::RelayPacketMailbox]>,
+    relay_targets: Option<&[RelayTargetTransport]>,
     route_entry: Option<&super::demux::MediaRouteEntry>,
 ) -> bool {
-    relay_mailboxes.is_some_and(|mailboxes| !mailboxes.is_empty())
+    relay_targets.is_some_and(|targets| !targets.is_empty())
         || route_entry.is_some_and(|entry| {
             entry.source_active
                 && entry
@@ -107,7 +121,7 @@ mod tests {
         demux::{MediaRouteDestination, MediaRouteEntry},
         forwarding_destination::ForwardingDestination,
         media_registry::RegisteredMediaHandle,
-        relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
+        relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId},
         route_control::PacketLayerGate,
         sample_forwarded_packet, sample_forwarded_packet_with_rid,
     };
@@ -302,7 +316,7 @@ mod tests {
             producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(1),
-            first_relay_mailbox,
+            first_relay_mailbox.into(),
         );
         relay_registry.set_source_target_active(
             source_transport_media_id,
@@ -313,7 +327,7 @@ mod tests {
             producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(2),
-            second_relay_mailbox,
+            second_relay_mailbox.into(),
         );
         relay_registry.set_source_target_active(
             source_transport_media_id,
@@ -343,11 +357,11 @@ mod tests {
         ));
         assert!(matches!(
             forwards.get(1).map(PacketForward::destination),
-            Some(ForwardingDestination::Relay(_))
+            Some(ForwardingDestination::IntraNodeRelay(_))
         ));
         assert!(matches!(
             forwards.get(2).map(PacketForward::destination),
-            Some(ForwardingDestination::Relay(_))
+            Some(ForwardingDestination::IntraNodeRelay(_))
         ));
         assert!(matches!(
             forwards.get(3).map(PacketForward::destination),
@@ -393,7 +407,7 @@ mod tests {
             producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(1),
-            relay_mailbox,
+            relay_mailbox.into(),
         );
         relay_registry.set_source_target_active(
             source_transport_media_id,
@@ -465,7 +479,7 @@ mod tests {
             first_producer_session.channel_runtime_id(),
             first_source_transport_media_id,
             RelayTargetId::new(1),
-            relay_mailbox,
+            relay_mailbox.into(),
         );
         relay_registry.set_source_target_active(
             first_source_transport_media_id,
@@ -490,7 +504,7 @@ mod tests {
         assert_eq!(forwards.len(), 2);
         assert!(matches!(
             forwards.first().map(PacketForward::destination),
-            Some(ForwardingDestination::Relay(_))
+            Some(ForwardingDestination::IntraNodeRelay(_))
         ));
         assert!(matches!(
             forwards.get(1).map(PacketForward::destination),
@@ -502,6 +516,55 @@ mod tests {
                 .and_then(|packet| packet.resolve_source_transport_media_id(&state)),
             Some(second_source_transport_media_id)
         );
+    }
+
+    #[test]
+    fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_shape() {
+        let producer_session = TransportSessionKey::new(58, 0, 59, SessionId::Integer(60));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("aud-up"),
+            });
+
+        relay_registry.activate_source_target(
+            producer_session.channel_runtime_id(),
+            source_transport_media_id,
+            RelayTargetId::new(9),
+            inter_node_sender.into(),
+        );
+        relay_registry.set_source_target_active(
+            source_transport_media_id,
+            RelayTargetId::new(9),
+            true,
+        );
+
+        let pending_packets = vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 1);
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(ForwardingDestination::InterNodeRelay(_))
+        ));
     }
 
     #[allow(
@@ -580,7 +643,7 @@ mod tests {
             gated_producer_session.channel_runtime_id(),
             gated_source_transport_media_id,
             RelayTargetId::new(1),
-            relay_mailbox,
+            relay_mailbox.into(),
         );
         relay_registry.set_source_target_active(
             gated_source_transport_media_id,

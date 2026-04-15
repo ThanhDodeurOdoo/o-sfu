@@ -959,7 +959,7 @@ mod tests {
             source_session.channel_runtime_id(),
             source_transport_media_id,
             relay_target_id,
-            mailbox,
+            mailbox.into(),
         );
         relay_registry.set_source_target_active(source_transport_media_id, relay_target_id, true);
 

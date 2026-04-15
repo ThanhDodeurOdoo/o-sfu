@@ -8,8 +8,10 @@ use crate::runtime::{
 };
 
 use super::{
-    demux::MediaRouteDestination, forwarded_packet::ForwardedPacket,
-    local_forwarding::LocalPacketDestination, relay_registry::RelayPacketMailbox,
+    demux::MediaRouteDestination,
+    forwarded_packet::ForwardedPacket,
+    local_forwarding::LocalPacketDestination,
+    relay_registry::{InterNodeRelaySender, RelayPacketMailbox},
     state::RtcBootstrapState,
 };
 
@@ -23,7 +25,8 @@ pub(super) struct PacketForward {
 pub(super) enum ForwardingDestination {
     LocalRtc(LocalRtcPacketDestination),
     Recording(RecordingPacketDestination),
-    Relay(RelayPacketDestination),
+    IntraNodeRelay(IntraNodeRelayPacketDestination),
+    InterNodeRelay(InterNodeRelayPacketDestination),
 }
 
 #[derive(Debug, Clone)]
@@ -39,9 +42,15 @@ pub(super) struct RecordingPacketDestination {
 }
 
 #[derive(Clone)]
-pub(super) struct RelayPacketDestination {
+pub(super) struct IntraNodeRelayPacketDestination {
     transport_media_id: TransportMediaId,
     mailbox: RelayPacketMailbox,
+}
+
+#[derive(Clone)]
+pub(super) struct InterNodeRelayPacketDestination {
+    transport_media_id: TransportMediaId,
+    sender: InterNodeRelaySender,
 }
 
 impl PacketForward {
@@ -72,16 +81,30 @@ impl PacketForward {
         }
     }
 
-    pub(super) fn from_relay_sink(
+    pub(super) fn from_intra_node_relay_sink(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
         mailbox: RelayPacketMailbox,
     ) -> Self {
         Self {
             packet_idx,
-            destination: ForwardingDestination::Relay(RelayPacketDestination {
+            destination: ForwardingDestination::IntraNodeRelay(IntraNodeRelayPacketDestination {
                 transport_media_id,
                 mailbox,
+            }),
+        }
+    }
+
+    pub(super) fn from_inter_node_relay_sink(
+        packet_idx: usize,
+        transport_media_id: TransportMediaId,
+        sender: InterNodeRelaySender,
+    ) -> Self {
+        Self {
+            packet_idx,
+            destination: ForwardingDestination::InterNodeRelay(InterNodeRelayPacketDestination {
+                transport_media_id,
+                sender,
             }),
         }
     }
@@ -100,7 +123,7 @@ impl ForwardingDestination {
     pub(super) fn session_key(&self) -> Option<&TransportSessionKey> {
         match self {
             Self::LocalRtc(destination) => Some(destination.session_key()),
-            Self::Recording(_) | Self::Relay(_) => None,
+            Self::Recording(_) | Self::IntraNodeRelay(_) | Self::InterNodeRelay(_) => None,
         }
     }
 
@@ -113,7 +136,8 @@ impl ForwardingDestination {
         match self {
             Self::LocalRtc(destination) => destination.send(state, packet, is_last_destination),
             Self::Recording(destination) => Ok(destination.send(packet)),
-            Self::Relay(destination) => Ok(destination.send(packet)),
+            Self::IntraNodeRelay(destination) => Ok(destination.send(packet)),
+            Self::InterNodeRelay(destination) => Ok(destination.send(packet)),
         }
     }
 }
@@ -160,9 +184,16 @@ impl RecordingPacketDestination {
     }
 }
 
-impl RelayPacketDestination {
+impl IntraNodeRelayPacketDestination {
     fn send(&self, packet: &ForwardedPacket) -> Option<usize> {
         self.mailbox.forward_packet(packet, self.transport_media_id);
+        None
+    }
+}
+
+impl InterNodeRelayPacketDestination {
+    fn send(&self, packet: &ForwardedPacket) -> Option<usize> {
+        self.sender.forward_packet(packet, self.transport_media_id);
         None
     }
 }
@@ -176,10 +207,19 @@ impl fmt::Debug for RecordingPacketDestination {
     }
 }
 
-impl fmt::Debug for RelayPacketDestination {
+impl fmt::Debug for IntraNodeRelayPacketDestination {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RelayPacketDestination")
+            .debug_struct("IntraNodeRelayPacketDestination")
+            .field("transport_media_id", &self.transport_media_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for InterNodeRelayPacketDestination {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InterNodeRelayPacketDestination")
             .field("transport_media_id", &self.transport_media_id)
             .finish_non_exhaustive()
     }
@@ -196,8 +236,10 @@ mod tests {
     use str0m::media::Mid;
 
     use super::*;
-    use crate::runtime::rtc_adapter::route_control::PacketLayerGate;
-    use crate::runtime::rtc_adapter::sample_forwarded_packet;
+    use crate::runtime::rtc_adapter::{
+        relay_registry::InterNodeRelaySender, route_control::PacketLayerGate,
+        sample_forwarded_packet,
+    };
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
 
@@ -260,21 +302,47 @@ mod tests {
     }
 
     #[test]
-    fn packet_forward_wraps_relay_sinks_in_the_named_contract() {
+    fn packet_forward_wraps_intra_node_relay_sinks_in_the_named_contract() {
         let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
         let packet = sample_forwarded_packet(
             TransportSessionKey::new(11, 0, 12, SessionId::Integer(13)),
             "aud-up",
             b"payload",
         );
-        let forward = PacketForward::from_relay_sink(6, TransportMediaId::new(9), mailbox);
+        let forward =
+            PacketForward::from_intra_node_relay_sink(6, TransportMediaId::new(9), mailbox);
         let mut relay_packet = packet.share_for_relay(TransportMediaId::new(8));
 
         assert_eq!(forward.packet_idx(), 6);
         assert!(matches!(
             forward.destination(),
-            ForwardingDestination::Relay(destination)
+            ForwardingDestination::IntraNodeRelay(destination)
                 if destination.transport_media_id == TransportMediaId::new(9)
+        ));
+        let _ =
+            forward
+                .destination()
+                .send(&mut RtcBootstrapState::default(), &mut relay_packet, true);
+        assert!(relay_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn packet_forward_wraps_inter_node_relay_sinks_in_the_named_contract() {
+        let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
+        let packet = sample_forwarded_packet(
+            TransportSessionKey::new(21, 0, 22, SessionId::Integer(23)),
+            "aud-up",
+            b"payload",
+        );
+        let forward =
+            PacketForward::from_inter_node_relay_sink(7, TransportMediaId::new(10), sender);
+        let mut relay_packet = packet.share_for_relay(TransportMediaId::new(8));
+
+        assert_eq!(forward.packet_idx(), 7);
+        assert!(matches!(
+            forward.destination(),
+            ForwardingDestination::InterNodeRelay(destination)
+                if destination.transport_media_id == TransportMediaId::new(10)
         ));
         let _ =
             forward
