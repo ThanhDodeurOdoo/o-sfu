@@ -99,6 +99,18 @@ fn media_tap_routes_packets_only_for_active_channels() {
 }
 
 #[test]
+fn media_tap_exposes_the_active_channel_sink_for_forwarding_destinations() {
+    let tap = MediaTap::default();
+    let sink = Arc::new(CountingSink::new());
+
+    assert!(tap.sink_for_channel(10).is_none());
+    tap.activate_channel(10, into_packet_sink(Arc::<CountingSink>::clone(&sink)));
+
+    assert!(tap.sink_for_channel(10).is_some());
+    assert!(tap.sink_for_channel(11).is_none());
+}
+
+#[test]
 fn media_tap_keeps_multiple_channels_active_at_once() {
     let tap = MediaTap::default();
     let first_sink = Arc::new(CountingSink::new());

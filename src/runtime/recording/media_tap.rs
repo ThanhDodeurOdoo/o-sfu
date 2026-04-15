@@ -26,26 +26,35 @@ impl Default for MediaTap {
 }
 
 impl MediaTap {
+    pub(crate) fn sink_for_channel(
+        &self,
+        channel_runtime_id: u64,
+    ) -> Option<Arc<dyn MediaPacketSink>> {
+        if !self.any_active.load(Ordering::Acquire) {
+            return None;
+        }
+        self.active_channels
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&channel_runtime_id)
+            .cloned()
+    }
+
     pub(crate) fn write_packet(
         &self,
         packet: &ForwardedPacket,
         transport_media_id: TransportMediaId,
     ) {
-        if !self.any_active.load(Ordering::Acquire) {
+        let Some(sink) = self.sink_for_channel(packet.source_session_key().channel_runtime_id())
+        else {
             return;
-        }
-        let active_channels = self
-            .active_channels
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(sink) = active_channels.get(&packet.source_session_key().channel_runtime_id()) {
-            sink.record_packet(
-                packet.source_session_key(),
-                transport_media_id,
-                packet.received_at(),
-                packet.payload().as_slice(),
-            );
-        }
+        };
+        sink.record_packet(
+            packet.source_session_key(),
+            transport_media_id,
+            packet.received_at(),
+            packet.payload().as_slice(),
+        );
     }
 
     #[cfg(test)]

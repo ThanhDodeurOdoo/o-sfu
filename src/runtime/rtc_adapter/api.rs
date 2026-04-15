@@ -48,6 +48,7 @@ use super::validation;
 use super::{
     commands::{CloseSessionOutcome, RtcWorkerCommand},
     packet_loop::{self, PacketLoopConfig},
+    relay_registry::RelayRegistry,
     state::{RtcSnapshotState, TransportSessionHealth},
 };
 
@@ -63,6 +64,7 @@ pub(crate) struct RtcTransportAdapter {
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
     media_tap: Arc<MediaTap>,
+    relay_registry: Arc<RelayRegistry>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
     worker_handle: Mutex<Option<RtcWorkerHandle>>,
     #[cfg(test)]
@@ -77,6 +79,7 @@ impl RtcTransportAdapter {
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
             media_tap: config.media_tap(),
+            relay_registry: Arc::new(RelayRegistry::default()),
             metrics: config.metrics(),
             worker_handle: Mutex::new(None),
             #[cfg(test)]
@@ -354,6 +357,7 @@ impl RtcTransportAdapter {
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
                 media_tap: Arc::clone(&self.media_tap),
+                relay_registry: Arc::clone(&self.relay_registry),
                 metrics: Arc::clone(&self.metrics),
             },
             snapshot_state,

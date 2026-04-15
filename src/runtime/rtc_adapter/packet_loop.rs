@@ -18,6 +18,8 @@ use super::{
     commands::RtcWorkerCommand,
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
+    forwarding_planner::populate_forward_routes,
+    relay_registry::RelayRegistry,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
     worker::handle_worker_command,
 };
@@ -229,6 +231,7 @@ pub(super) struct PacketLoopConfig {
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) media_tap: Arc<MediaTap>,
+    pub(super) relay_registry: Arc<RelayRegistry>,
     pub(super) metrics: Arc<RuntimeMetrics>,
 }
 
@@ -389,7 +392,6 @@ fn handle_socket_receive_result(
 fn record_incoming_stats(
     state: &RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    media_tap: &MediaTap,
     metrics: &RuntimeMetrics,
     buffers: &PacketLoopBuffers,
 ) {
@@ -405,7 +407,6 @@ fn record_incoming_stats(
                 packet.payload_len(),
             );
             metrics.record_rtp_ingress(packet.payload_len());
-            media_tap.write_packet(packet, transport_media_id);
         }
     }
 }
@@ -462,14 +463,14 @@ fn snapshot_and_pump(
     }
 
     // Two-pass: collect matching routes, then write to destination sessions
-    record_incoming_stats(
+    record_incoming_stats(state, snapshot_state, &config.metrics, buffers);
+    populate_forward_routes(
         state,
-        snapshot_state,
         &config.media_tap,
-        &config.metrics,
-        buffers,
+        &config.relay_registry,
+        &buffers.pending_packets,
+        &mut buffers.forwards,
     );
-    populate_forward_routes(state, buffers);
     flush_forward_routes(state, &config.metrics, buffers);
 
     Some(SnapshotInfo {
@@ -477,31 +478,6 @@ fn snapshot_and_pump(
         candidate_addr,
         next_timeout: state.next_timeout_deadline(),
     })
-}
-
-fn populate_forward_routes(state: &RtcBootstrapState, buffers: &mut PacketLoopBuffers) {
-    for (packet_idx, packet) in buffers.pending_packets.iter().enumerate() {
-        let Some(source_transport_media_id) = packet.resolve_source_transport_media_id(state)
-        else {
-            continue;
-        };
-        let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
-            continue;
-        };
-        if !route_entry.source_active {
-            continue;
-        }
-        for dest in &route_entry.destinations {
-            if !dest.active {
-                continue;
-            }
-            buffers
-                .forwards
-                .push(PacketForward::from_local_route_destination(
-                    packet_idx, dest,
-                ));
-        }
-    }
 }
 
 fn flush_forward_routes(
@@ -518,15 +494,12 @@ fn flush_forward_routes(
             continue;
         };
         let destination = forward.destination();
-        let Some(dest_session_state) = state.sessions.get_mut(destination.session_key()) else {
-            continue;
-        };
-        match destination.send(dest_session_state, packet, is_last_destination) {
+        match destination.send(state, packet, is_last_destination) {
             Ok(Some(payload_len)) => metrics.record_rtp_egress(payload_len),
             Ok(None) => {}
             Err(error) => {
                 warn!(
-                    session_key = ?destination.session_key(),
+                    ?destination,
                     ?error,
                     "failed to write media to destination session"
                 );
@@ -924,15 +897,44 @@ fn route_packet_by_scan(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use str0m::media::Mid;
 
     use super::*;
+    use crate::runtime::recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink};
     use crate::runtime::rtc_adapter::{
-        demux::{MediaRouteDestination, MediaRouteEntry},
-        media_registry::RegisteredMediaHandle,
-        sample_forwarded_packet,
+        media_registry::RegisteredMediaHandle, sample_forwarded_packet,
     };
+    use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
+
+    struct CountingSink {
+        packets: AtomicUsize,
+    }
+
+    impl CountingSink {
+        fn new() -> Self {
+            Self {
+                packets: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl MediaPacketSink for CountingSink {
+        fn record_packet(
+            &self,
+            _session_key: &TransportSessionKey,
+            _transport_media_id: TransportMediaId,
+            _received_at: Instant,
+            _payload: &[u8],
+        ) {
+            self.packets.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
         let sequence_number = sequence_number.to_be_bytes();
@@ -1090,50 +1092,41 @@ mod tests {
     }
 
     #[test]
-    fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
-        let producer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(14));
-        let consumer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(15));
+    fn recording_forward_destination_captures_packets_without_bypassing_the_contract() {
+        let producer_session = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
         let mut state = RtcBootstrapState::default();
-        let source_transport_media_id =
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let sink = Arc::new(CountingSink::new());
+        let _source_transport_media_id =
             state.register_media_handle(RegisteredMediaHandle::Producer {
                 session_key: producer_session.clone(),
                 mid: Mid::from("aud-up"),
             });
-        let consumer_transport_media_id =
-            state.register_media_handle(RegisteredMediaHandle::Consumer {
-                session_key: consumer_session.clone(),
-                mid: Mid::from("aud-down"),
-                source_transport_media_id,
-            });
-        state.media_route_index.insert(
-            source_transport_media_id,
-            MediaRouteEntry {
-                source_active: true,
-                destinations: vec![MediaRouteDestination {
-                    dest_session: consumer_session.clone(),
-                    dest_transport_media_id: consumer_transport_media_id,
-                    dest_mid: Mid::from("aud-down"),
-                    active: true,
-                }],
-            },
-        );
         let mut buffers = PacketLoopBuffers::new();
+        let metrics = RuntimeMetrics::default();
+
+        media_tap.activate_channel(
+            producer_session.channel_runtime_id(),
+            into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        );
         buffers.pending_packets.push(sample_forwarded_packet(
             producer_session,
             "aud-up",
             b"payload",
         ));
 
-        populate_forward_routes(&state, &mut buffers);
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &buffers.pending_packets,
+            &mut buffers.forwards,
+        );
+        flush_forward_routes(&mut state, &metrics, &mut buffers);
 
         assert_eq!(buffers.forwards.len(), 1);
-        assert_eq!(buffers.forwards.first().map(PacketForward::packet_idx), Some(0));
-        assert_eq!(
-            buffers
-                .forwards
-                .first()
-                .map(|forward| forward.destination().session_key()),
-            Some(&consumer_session)
-        );
+        assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.snapshot().rtp_payload_bytes_egress, 0);
     }
 }

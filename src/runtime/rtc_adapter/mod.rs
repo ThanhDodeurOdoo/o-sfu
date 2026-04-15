@@ -8,8 +8,10 @@
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
 //! - `forwarded_packet`: adapter-local forwarded packet model and packet-mode-specific send edges
-//! - `forwarding_destination`: named packet-forwarding destinations that currently wrap the local RTC sender
+//! - `forwarding_destination`: named packet-forwarding destinations for local RTC, recording, and relay sends
+//! - `forwarding_planner`: adapter-local destination planning over forwarded packets
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
+//! - `relay_registry`: channel-scoped relay sinks for future inter-worker and inter-node forwarding
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
@@ -29,6 +31,7 @@ mod demux;
 mod dtls;
 mod forwarded_packet;
 mod forwarding_destination;
+mod forwarding_planner;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod ice;
 mod local_forwarding;
@@ -38,6 +41,7 @@ mod packet_loop;
 mod packet_mode;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod parse_diagnostic;
+mod relay_registry;
 #[cfg(test)]
 mod sdp;
 mod shared_payload;
