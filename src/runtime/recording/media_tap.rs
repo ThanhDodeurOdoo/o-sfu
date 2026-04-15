@@ -43,7 +43,7 @@ impl MediaTap {
                 packet.source_session_key(),
                 transport_media_id,
                 packet.received_at(),
-                packet.payload(),
+                packet.payload().as_slice(),
             );
         }
     }

@@ -8,6 +8,7 @@
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
 //! - `forwarded_packet`: adapter-local forwarded packet model and packet-mode-specific send edges
+//! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
 //! - `packet_mode`: adapter-local str0m frame-versus-RTP mode switch for the forwarding path
@@ -35,6 +36,7 @@ mod packet_mode;
 mod parse_diagnostic;
 #[cfg(test)]
 mod sdp;
+mod shared_payload;
 mod state;
 #[cfg(test)]
 mod tests;

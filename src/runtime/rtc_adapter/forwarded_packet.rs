@@ -16,6 +16,7 @@ use str0m::{
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::packet_mode::{ACTIVE_PACKET_MODE, PacketMode};
+use super::shared_payload::SharedPayload;
 use super::state::{RtcBootstrapState, RtcSessionState};
 
 #[derive(Debug)]
@@ -27,30 +28,48 @@ pub(crate) struct ForwardedPacket {
 
 #[derive(Debug)]
 enum ForwardedPacketData {
-    Str0mFrame(MediaData),
-    Str0mRtp(RtpPacket),
+    Str0mFrame(ForwardedFrameData),
+    Str0mRtp(ForwardedRtpData),
+}
+
+#[derive(Debug)]
+struct ForwardedFrameData {
+    media_data: MediaData,
+    payload: SharedPayload,
+}
+
+#[derive(Debug)]
+struct ForwardedRtpData {
+    rtp_packet: RtpPacket,
+    payload: SharedPayload,
 }
 
 impl ForwardedPacket {
     pub(super) fn from_media_data(
         source_session_key: TransportSessionKey,
-        media_data: MediaData,
+        mut media_data: MediaData,
     ) -> Self {
         Self {
             source_session_key,
             received_at: media_data.network_time,
-            data: ForwardedPacketData::Str0mFrame(media_data),
+            data: ForwardedPacketData::Str0mFrame(ForwardedFrameData {
+                payload: SharedPayload::from_vec(take(&mut media_data.data)),
+                media_data,
+            }),
         }
     }
 
     pub(super) fn from_rtp_packet(
         source_session_key: TransportSessionKey,
-        rtp_packet: RtpPacket,
+        mut rtp_packet: RtpPacket,
     ) -> Self {
         Self {
             source_session_key,
             received_at: rtp_packet.timestamp,
-            data: ForwardedPacketData::Str0mRtp(rtp_packet),
+            data: ForwardedPacketData::Str0mRtp(ForwardedRtpData {
+                payload: SharedPayload::from_vec(take(&mut rtp_packet.payload)),
+                rtp_packet,
+            }),
         }
     }
 
@@ -62,10 +81,10 @@ impl ForwardedPacket {
         self.received_at
     }
 
-    pub(crate) fn payload(&self) -> &[u8] {
+    pub(crate) fn payload(&self) -> &SharedPayload {
         match &self.data {
-            ForwardedPacketData::Str0mFrame(media_data) => media_data.data.as_slice(),
-            ForwardedPacketData::Str0mRtp(rtp_packet) => rtp_packet.payload.as_ref(),
+            ForwardedPacketData::Str0mFrame(frame_data) => &frame_data.payload,
+            ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.payload,
         }
     }
 
@@ -78,11 +97,12 @@ impl ForwardedPacket {
         state: &RtcBootstrapState,
     ) -> Option<TransportMediaId> {
         match &self.data {
-            ForwardedPacketData::Str0mFrame(media_data) => {
-                state.source_transport_media_id_for_mid(&self.source_session_key, media_data.mid)
-            }
-            ForwardedPacketData::Str0mRtp(rtp_packet) => {
-                let source_mid = rtp_packet.header.ext_vals.mid?;
+            ForwardedPacketData::Str0mFrame(frame_data) => state.source_transport_media_id_for_mid(
+                &self.source_session_key,
+                frame_data.media_data.mid,
+            ),
+            ForwardedPacketData::Str0mRtp(rtp_data) => {
+                let source_mid = rtp_data.rtp_packet.header.ext_vals.mid?;
                 state.source_transport_media_id_for_mid(&self.source_session_key, source_mid)
             }
         }
@@ -95,10 +115,11 @@ impl ForwardedPacket {
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
         match &mut self.data {
-            ForwardedPacketData::Str0mFrame(media_data) => {
+            ForwardedPacketData::Str0mFrame(frame_data) => {
                 if ACTIVE_PACKET_MODE != PacketMode::Frame {
                     return Ok(None);
                 }
+                let media_data = &mut frame_data.media_data;
                 let Some(writer) = session_state.rtc.writer(dest_mid) else {
                     return Ok(None);
                 };
@@ -117,14 +138,15 @@ impl ForwardedPacket {
                     pt,
                     media_data.network_time,
                     media_data.time,
-                    take_write_payload(&mut media_data.data, is_last_destination),
+                    frame_data.payload.take_write_payload(is_last_destination),
                 )?;
                 Ok(Some(payload_len))
             }
-            ForwardedPacketData::Str0mRtp(rtp_packet) => {
+            ForwardedPacketData::Str0mRtp(rtp_data) => {
                 if ACTIVE_PACKET_MODE != PacketMode::Rtp {
                     return Ok(None);
                 }
+                let rtp_packet = &mut rtp_data.rtp_packet;
                 let nackable = session_state
                     .rtc
                     .media(dest_mid)
@@ -134,7 +156,7 @@ impl ForwardedPacket {
                     .ext_vals
                     .rid
                     .or(rtp_packet.header.ext_vals.rid_repair);
-                let payload_len = rtp_packet.payload.len();
+                let payload_len = rtp_data.payload.len();
                 let write_result = {
                     let mut direct_api = session_state.rtc.direct_api();
                     if let Some(rid) = rid {
@@ -147,7 +169,7 @@ impl ForwardedPacket {
                                 rtp_packet.header.marker,
                                 rtp_packet.header.ext_vals.clone(),
                                 nackable,
-                                rtp_packet.payload.clone(),
+                                rtp_data.payload.take_write_payload(is_last_destination),
                                 rtp_packet.header.csrc_count,
                                 rtp_packet.header.csrc,
                             )
@@ -161,7 +183,7 @@ impl ForwardedPacket {
                                 rtp_packet.header.marker,
                                 rtp_packet.header.ext_vals.clone(),
                                 nackable,
-                                rtp_packet.payload.clone(),
+                                rtp_data.payload.take_write_payload(is_last_destination),
                                 rtp_packet.header.csrc_count,
                                 rtp_packet.header.csrc,
                             )
@@ -177,7 +199,7 @@ impl ForwardedPacket {
                             rtp_packet.header.marker,
                             rtp_packet.header.ext_vals.clone(),
                             nackable,
-                            rtp_packet.payload.clone(),
+                            rtp_data.payload.take_write_payload(is_last_destination),
                             rtp_packet.header.csrc_count,
                             rtp_packet.header.csrc,
                         )
@@ -191,14 +213,6 @@ impl ForwardedPacket {
                 Ok(Some(payload_len))
             }
         }
-    }
-}
-
-pub(super) fn take_write_payload(data: &mut Vec<u8>, is_last_destination: bool) -> Vec<u8> {
-    if is_last_destination {
-        take(data)
-    } else {
-        data.clone()
     }
 }
 
@@ -270,7 +284,7 @@ mod tests {
         let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
 
         assert_eq!(packet.source_session_key(), &session_key);
-        assert_eq!(packet.payload(), b"payload");
+        assert_eq!(packet.payload().as_slice(), b"payload");
         assert_eq!(packet.payload_len(), 7);
         assert!(packet.received_at() <= Instant::now());
     }

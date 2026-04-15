@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex, PoisonError,
     atomic::{AtomicUsize, Ordering},
 };
 use std::time::Instant;
@@ -25,6 +25,18 @@ impl CountingSink {
     }
 }
 
+struct PayloadCapturingSink {
+    payloads: Mutex<Vec<Vec<u8>>>,
+}
+
+impl PayloadCapturingSink {
+    fn new() -> Self {
+        Self {
+            payloads: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 impl MediaPacketSink for CountingSink {
     fn record_packet(
         &self,
@@ -34,6 +46,21 @@ impl MediaPacketSink for CountingSink {
         _payload: &[u8],
     ) {
         self.frames.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl MediaPacketSink for PayloadCapturingSink {
+    fn record_packet(
+        &self,
+        _session_key: &TransportSessionKey,
+        _transport_media_id: TransportMediaId,
+        _received_at: Instant,
+        payload: &[u8],
+    ) {
+        self.payloads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(payload.to_vec());
     }
 }
 
@@ -100,4 +127,28 @@ fn media_tap_keeps_multiple_channels_active_at_once() {
 
     assert_eq!(first_sink.frames.load(Ordering::Relaxed), 1);
     assert_eq!(second_sink.frames.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn media_tap_records_forwarded_payload_bytes_through_the_shared_boundary() {
+    let tap = MediaTap::default();
+    let sink = Arc::new(PayloadCapturingSink::new());
+    let packet = sample_forwarded_packet(
+        TransportSessionKey::new(12, 0, 1, SessionId::Integer(3)),
+        "aud-up",
+        b"captured",
+    );
+
+    tap.activate_channel(
+        12,
+        into_packet_sink(Arc::<PayloadCapturingSink>::clone(&sink)),
+    );
+    tap.write_packet(&packet, TransportMediaId::new(5));
+
+    let payloads = sink
+        .payloads
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(payloads.as_slice(), [b"captured".to_vec()]);
 }
