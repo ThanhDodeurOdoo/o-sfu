@@ -3,10 +3,9 @@ use std::{mem::take, time::Instant};
 use str0m::{
     RtcError,
     media::{MediaData, Mid},
+    rtp::RtpPacket,
 };
 
-#[cfg(test)]
-use std::ops::RangeInclusive;
 #[cfg(test)]
 use str0m::{
     format::{Codec, CodecExtra, CodecSpec, FormatParams, PayloadParams},
@@ -16,6 +15,7 @@ use str0m::{
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
+use super::packet_mode::{ACTIVE_PACKET_MODE, PacketMode};
 use super::state::{RtcBootstrapState, RtcSessionState};
 
 #[derive(Debug)]
@@ -28,6 +28,7 @@ pub(crate) struct ForwardedPacket {
 #[derive(Debug)]
 enum ForwardedPacketData {
     Str0mFrame(MediaData),
+    Str0mRtp(RtpPacket),
 }
 
 impl ForwardedPacket {
@@ -42,6 +43,17 @@ impl ForwardedPacket {
         }
     }
 
+    pub(super) fn from_rtp_packet(
+        source_session_key: TransportSessionKey,
+        rtp_packet: RtpPacket,
+    ) -> Self {
+        Self {
+            source_session_key,
+            received_at: rtp_packet.timestamp,
+            data: ForwardedPacketData::Str0mRtp(rtp_packet),
+        }
+    }
+
     pub(crate) fn source_session_key(&self) -> &TransportSessionKey {
         &self.source_session_key
     }
@@ -53,6 +65,7 @@ impl ForwardedPacket {
     pub(crate) fn payload(&self) -> &[u8] {
         match &self.data {
             ForwardedPacketData::Str0mFrame(media_data) => media_data.data.as_slice(),
+            ForwardedPacketData::Str0mRtp(rtp_packet) => rtp_packet.payload.as_ref(),
         }
     }
 
@@ -68,6 +81,10 @@ impl ForwardedPacket {
             ForwardedPacketData::Str0mFrame(media_data) => {
                 state.source_transport_media_id_for_mid(&self.source_session_key, media_data.mid)
             }
+            ForwardedPacketData::Str0mRtp(rtp_packet) => {
+                let source_mid = rtp_packet.header.ext_vals.mid?;
+                state.source_transport_media_id_for_mid(&self.source_session_key, source_mid)
+            }
         }
     }
 
@@ -79,6 +96,9 @@ impl ForwardedPacket {
     ) -> Result<Option<usize>, RtcError> {
         match &mut self.data {
             ForwardedPacketData::Str0mFrame(media_data) => {
+                if ACTIVE_PACKET_MODE != PacketMode::Frame {
+                    return Ok(None);
+                }
                 let Some(writer) = session_state.rtc.writer(dest_mid) else {
                     return Ok(None);
                 };
@@ -99,6 +119,75 @@ impl ForwardedPacket {
                     media_data.time,
                     take_write_payload(&mut media_data.data, is_last_destination),
                 )?;
+                Ok(Some(payload_len))
+            }
+            ForwardedPacketData::Str0mRtp(rtp_packet) => {
+                if ACTIVE_PACKET_MODE != PacketMode::Rtp {
+                    return Ok(None);
+                }
+                let nackable = session_state
+                    .rtc
+                    .media(dest_mid)
+                    .is_some_and(|media| !media.kind().is_audio());
+                let rid = rtp_packet
+                    .header
+                    .ext_vals
+                    .rid
+                    .or(rtp_packet.header.ext_vals.rid_repair);
+                let payload_len = rtp_packet.payload.len();
+                let write_result = {
+                    let mut direct_api = session_state.rtc.direct_api();
+                    if let Some(rid) = rid {
+                        if let Some(stream_tx) = direct_api.stream_tx_by_mid(dest_mid, Some(rid)) {
+                            stream_tx.write_rtp_with_csrc(
+                                rtp_packet.header.payload_type,
+                                rtp_packet.seq_no,
+                                rtp_packet.header.timestamp,
+                                rtp_packet.timestamp,
+                                rtp_packet.header.marker,
+                                rtp_packet.header.ext_vals.clone(),
+                                nackable,
+                                rtp_packet.payload.clone(),
+                                rtp_packet.header.csrc_count,
+                                rtp_packet.header.csrc,
+                            )
+                        } else if let Some(stream_tx) = direct_api.stream_tx_by_mid(dest_mid, None)
+                        {
+                            stream_tx.write_rtp_with_csrc(
+                                rtp_packet.header.payload_type,
+                                rtp_packet.seq_no,
+                                rtp_packet.header.timestamp,
+                                rtp_packet.timestamp,
+                                rtp_packet.header.marker,
+                                rtp_packet.header.ext_vals.clone(),
+                                nackable,
+                                rtp_packet.payload.clone(),
+                                rtp_packet.header.csrc_count,
+                                rtp_packet.header.csrc,
+                            )
+                        } else {
+                            return Ok(None);
+                        }
+                    } else if let Some(stream_tx) = direct_api.stream_tx_by_mid(dest_mid, None) {
+                        stream_tx.write_rtp_with_csrc(
+                            rtp_packet.header.payload_type,
+                            rtp_packet.seq_no,
+                            rtp_packet.header.timestamp,
+                            rtp_packet.timestamp,
+                            rtp_packet.header.marker,
+                            rtp_packet.header.ext_vals.clone(),
+                            nackable,
+                            rtp_packet.payload.clone(),
+                            rtp_packet.header.csrc_count,
+                            rtp_packet.header.csrc,
+                        )
+                    } else {
+                        return Ok(None);
+                    }
+                };
+                write_result.map_err(|error| {
+                    RtcError::Packet(dest_mid, rtp_packet.header.payload_type, error)
+                })?;
                 Ok(Some(payload_len))
             }
         }
@@ -128,7 +217,7 @@ pub(crate) fn sample_forwarded_packet(
             params: sample_payload_params(),
             time: MediaTime::from_millis(5),
             network_time: Instant::now(),
-            seq_range: RangeInclusive::new(SeqNo::from(1), SeqNo::from(1)),
+            seq_range: SeqNo::from(1)..=SeqNo::from(1),
             contiguous: true,
             data: payload.to_vec(),
             ext_vals: ExtensionValues::default(),

@@ -563,6 +563,14 @@ fn drain_single_session(
                     .pending_packets
                     .push(ForwardedPacket::from_media_data(session_key.clone(), data));
             }
+            Ok(Output::Event(Event::RtpPacket(packet))) => {
+                buffers
+                    .pending_packets
+                    .push(ForwardedPacket::from_rtp_packet(
+                        session_key.clone(),
+                        packet,
+                    ));
+            }
             Ok(Output::Event(event)) => {
                 observe_rtc_event(snapshot_state, metrics, session_key, &event);
                 log_rtc_event(session_key, &event);

@@ -7,9 +7,10 @@
 //! - `state`: pure state types and session scheduling
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
-//! - `forwarded_packet`: adapter-local forwarded packet model and temporary frame-mode translation edges
+//! - `forwarded_packet`: adapter-local forwarded packet model and packet-mode-specific send edges
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
+//! - `packet_mode`: adapter-local str0m frame-versus-RTP mode switch for the forwarding path
 //! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
 //! - `dtls`: DTLS parameter parsing (RFC 8122, RFC 4572)
 //! - `ice`: ICE candidate parsing (RFC 8839, RFC 8445)
@@ -29,6 +30,7 @@ mod ice;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;
+mod packet_mode;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod parse_diagnostic;
 #[cfg(test)]
