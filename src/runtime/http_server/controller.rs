@@ -17,13 +17,14 @@ use crate::{
     runtime::{
         RuntimeState,
         channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
+        metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
         websocket_server,
     },
     signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims},
         http::{
             CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery, DISCONNECT_PATH,
-            IncomingBitRateStats, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
+            IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
     },
 };
@@ -45,6 +46,7 @@ pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
 pub(crate) fn app(state: RuntimeState) -> Router {
     Router::new()
         .route("/", get(websocket_server::upgrade))
+        .route(METRICS_PATH, get(metrics))
         .route(NOOP_PATH, get(noop))
         .route(STATS_PATH, get(stats))
         .route(CHANNEL_PATH, get(channel))
@@ -67,6 +69,14 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
             .into_iter()
             .map(http_channel_stats)
             .collect::<Vec<_>>(),
+    )
+}
+
+async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
+    state.metrics.record_http_metrics_request();
+    (
+        [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
+        render_prometheus(&state.metrics),
     )
 }
 

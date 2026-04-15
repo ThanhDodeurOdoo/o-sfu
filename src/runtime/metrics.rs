@@ -18,6 +18,7 @@ pub(super) enum WsSessionLoopExitReason {
 pub(super) struct RuntimeMetrics {
     http_noop_requests: AtomicU64,
     http_stats_requests: AtomicU64,
+    http_metrics_requests: AtomicU64,
     http_channel_requests: AtomicU64,
     http_channel_success: AtomicU64,
     http_channel_unauthorized: AtomicU64,
@@ -66,6 +67,7 @@ pub(super) struct RuntimeMetrics {
 pub(super) struct RuntimeMetricsSnapshot {
     pub http_noop_requests: u64,
     pub http_stats_requests: u64,
+    pub http_metrics_requests: u64,
     pub http_channel_requests: u64,
     pub http_channel_success: u64,
     pub http_channel_unauthorized: u64,
@@ -115,6 +117,7 @@ impl RuntimeMetrics {
         RuntimeMetricsSnapshot {
             http_noop_requests: load(&self.http_noop_requests),
             http_stats_requests: load(&self.http_stats_requests),
+            http_metrics_requests: load(&self.http_metrics_requests),
             http_channel_requests: load(&self.http_channel_requests),
             http_channel_success: load(&self.http_channel_success),
             http_channel_unauthorized: load(&self.http_channel_unauthorized),
@@ -172,6 +175,10 @@ impl RuntimeMetrics {
 
     pub(super) fn record_http_stats_request(&self) {
         increment(&self.http_stats_requests);
+    }
+
+    pub(super) fn record_http_metrics_request(&self) {
+        increment(&self.http_metrics_requests);
     }
 
     pub(super) fn record_http_channel_request(&self) {
@@ -350,6 +357,7 @@ mod tests {
         metrics.record_http_channel_unauthorized();
         metrics.record_http_disconnect_request();
         metrics.record_http_disconnect_unprocessable_entity();
+        metrics.record_http_metrics_request();
         metrics.record_ws_connection_accepted();
         metrics.record_ws_handshake_credentials_received();
         metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::AuthTimeout));
@@ -369,6 +377,7 @@ mod tests {
         assert_eq!(snapshot.http_channel_unauthorized, 1);
         assert_eq!(snapshot.http_disconnect_requests, 1);
         assert_eq!(snapshot.http_disconnect_unprocessable_entity, 1);
+        assert_eq!(snapshot.http_metrics_requests, 1);
         assert_eq!(snapshot.ws_connections_accepted, 1);
         assert_eq!(snapshot.ws_handshake_credentials_received, 1);
         assert_eq!(snapshot.ws_handshake_rejected_timeout, 1);

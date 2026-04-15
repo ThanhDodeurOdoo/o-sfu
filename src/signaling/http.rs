@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: u16 = 1;
+pub const METRICS_PATH: &str = "/metrics";
 pub const NOOP_PATH: &str = "/v1/noop";
 pub const STATS_PATH: &str = "/v1/stats";
 pub const CHANNEL_PATH: &str = "/v1/channel";

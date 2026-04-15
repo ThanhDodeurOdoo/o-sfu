@@ -17,6 +17,7 @@ pub mod benchmark_support;
 pub(crate) mod channel;
 mod http_server;
 mod metrics;
+mod metrics_export;
 mod recording;
 mod rtc_adapter;
 mod stub_bus;

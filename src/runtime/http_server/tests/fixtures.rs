@@ -25,8 +25,8 @@ pub(super) use crate::{
     signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
         http::{
-            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, NOOP_PATH,
-            NoopResponse, STATS_PATH, StatsResponse,
+            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH,
+            NOOP_PATH, NoopResponse, STATS_PATH, StatsResponse,
         },
         shared::{SessionId, SessionPermissions},
     },
@@ -101,4 +101,9 @@ where
 {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.ok()?;
     serde_json::from_slice::<T>(&bytes).ok()
+}
+
+pub(super) async fn parse_text(response: AxumResponse) -> Option<String> {
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.ok()?;
+    String::from_utf8(bytes.to_vec()).ok()
 }
