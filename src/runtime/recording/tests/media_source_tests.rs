@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::runtime::recording::{MediaFrameSink, MediaTap, into_media_source};
+use crate::runtime::recording::{MediaPacketSink, MediaTap, into_media_source};
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 struct NoopSink;
 
-impl MediaFrameSink for NoopSink {
+impl MediaPacketSink for NoopSink {
     fn record_packet(
         &self,
         _session_key: &TransportSessionKey,
@@ -21,7 +21,7 @@ impl MediaFrameSink for NoopSink {
 fn media_source_trait_object_can_activate_and_deactivate_channels() {
     let tap = Arc::new(MediaTap::default());
     let media_source = into_media_source(Arc::<MediaTap>::clone(&tap));
-    let sink: Arc<dyn MediaFrameSink> = Arc::new(NoopSink);
+    let sink: Arc<dyn MediaPacketSink> = Arc::new(NoopSink);
 
     media_source.activate_channel(7, sink);
     assert!(tap.is_channel_active(7));

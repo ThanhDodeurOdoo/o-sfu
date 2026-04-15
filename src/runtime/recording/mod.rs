@@ -15,7 +15,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use media_source::into_media_source;
-pub(crate) use media_source::{MediaFrameSink, MediaSource, into_frame_sink};
+pub(crate) use media_source::{MediaPacketSink, MediaSource, into_packet_sink};
 pub(crate) use media_tap::MediaTap;
 #[cfg(test)]
 pub(crate) use metadata::{RecordingFileMetadata, RecordingMetadata, RecordingSegment};

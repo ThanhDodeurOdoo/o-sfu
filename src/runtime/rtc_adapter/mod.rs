@@ -7,6 +7,7 @@
 //! - `state`: pure state types and session scheduling
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
+//! - `forwarded_packet`: adapter-local forwarded packet model and temporary frame-mode translation edges
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
 //! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
@@ -22,6 +23,7 @@ mod commands;
 mod demux;
 #[cfg(test)]
 mod dtls;
+mod forwarded_packet;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod ice;
 mod media_registry;
@@ -41,5 +43,8 @@ mod worker;
 pub(crate) use api::RtcTransportAdapter;
 #[cfg(test)]
 pub(crate) use commands::DebugRouteEntry;
+pub(crate) use forwarded_packet::ForwardedPacket;
+#[cfg(test)]
+pub(crate) use forwarded_packet::sample_forwarded_packet;
 pub(crate) use negotiated_capabilities::client_rtp_capabilities_from_answer;
 pub(crate) use state::TransportSessionHealth;

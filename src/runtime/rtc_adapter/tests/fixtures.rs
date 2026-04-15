@@ -19,7 +19,9 @@ pub(super) use o_sfu_router::{
 pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
-pub(super) use super::super::{RtcTransportAdapter, packet_loop::take_write_payload, validation};
+pub(super) use super::super::{
+    RtcTransportAdapter, forwarded_packet::take_write_payload, validation,
+};
 pub(super) use crate::{
     runtime::transport_adapter::{
         TransportAdapterError, TransportConnectDirection, TransportConnectRequest,

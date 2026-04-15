@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use o_sfu_router::{
     MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, StreamType, TransportId,
@@ -10,6 +10,7 @@ use crate::runtime::{
     recording::{
         MediaSource, MediaTap, RecordingLifecycleState, RecordingService, into_media_source,
     },
+    rtc_adapter::sample_forwarded_packet,
 };
 use crate::signaling::shared::SessionId as SignalingSessionId;
 
@@ -20,26 +21,15 @@ fn recording_service_counts_packets_without_recounting_streams() {
     let metrics = Arc::new(RuntimeMetrics::default());
     let service = RecordingService::new(30, media_source, Arc::clone(&metrics));
     let session_key = TransportSessionKey::new(30, 0, 1, SignalingSessionId::Integer(9));
+    let first_packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"first");
+    let second_packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"second");
+    let third_packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"third");
+    let ignored_packet = sample_forwarded_packet(session_key, "aud-up", b"ignored");
 
     assert!(service.start().is_ok());
-    media_tap.write_frame(
-        &session_key,
-        TransportMediaId::new(1),
-        Instant::now(),
-        b"first",
-    );
-    media_tap.write_frame(
-        &session_key,
-        TransportMediaId::new(1),
-        Instant::now(),
-        b"second",
-    );
-    media_tap.write_frame(
-        &session_key,
-        TransportMediaId::new(2),
-        Instant::now(),
-        b"third",
-    );
+    media_tap.write_packet(&first_packet, TransportMediaId::new(1));
+    media_tap.write_packet(&second_packet, TransportMediaId::new(1));
+    media_tap.write_packet(&third_packet, TransportMediaId::new(2));
 
     let snapshot = service.snapshot();
     assert_eq!(snapshot.captured_packet_count, 3);
@@ -49,12 +39,7 @@ fn recording_service_counts_packets_without_recounting_streams() {
     assert_eq!(metrics_snapshot.recording_captured_streams, 2);
 
     assert!(service.stop().is_ok());
-    media_tap.write_frame(
-        &session_key,
-        TransportMediaId::new(3),
-        Instant::now(),
-        b"ignored",
-    );
+    media_tap.write_packet(&ignored_packet, TransportMediaId::new(3));
     let snapshot = service.snapshot();
     assert_eq!(snapshot.captured_packet_count, 3);
     assert_eq!(snapshot.captured_stream_count, 2);

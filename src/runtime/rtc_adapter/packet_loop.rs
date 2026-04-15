@@ -2,14 +2,13 @@ use std::{
     collections::{HashSet, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
     io::Error as IoError,
-    mem::take,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use str0m::IceConnectionState;
-use str0m::media::{MediaData, Mid};
+use str0m::media::Mid;
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
@@ -18,6 +17,7 @@ use tracing::{debug, trace, warn};
 
 use super::{
     commands::RtcWorkerCommand,
+    forwarded_packet::ForwardedPacket,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
     worker::handle_worker_command,
 };
@@ -57,7 +57,7 @@ impl PendingTransmit {
 struct PacketLoopBuffers {
     pending_transmits: Vec<PendingTransmit>,
     pending_transmit_count: usize,
-    pending_media: Vec<(TransportSessionKey, MediaData)>,
+    pending_packets: Vec<ForwardedPacket>,
     forwards: Vec<(usize, TransportSessionKey, Mid)>,
 }
 
@@ -66,14 +66,14 @@ impl PacketLoopBuffers {
         Self {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
-            pending_media: Vec::with_capacity(32),
+            pending_packets: Vec::with_capacity(32),
             forwards: Vec::with_capacity(64),
         }
     }
 
     fn clear(&mut self) {
         self.pending_transmit_count = 0;
-        self.pending_media.clear();
+        self.pending_packets.clear();
         self.forwards.clear();
     }
 
@@ -392,23 +392,20 @@ fn record_incoming_stats(
     media_tap: &MediaTap,
     metrics: &RuntimeMetrics,
     buffers: &PacketLoopBuffers,
-    now: Instant,
 ) {
     let Ok(mut snapshot) = snapshot_state.lock() else {
         return;
     };
-    for (source_session, media) in &buffers.pending_media {
-        if let Some(transport_media_id) =
-            state.source_transport_media_id_for_mid(source_session, media.mid)
-        {
+    for packet in &buffers.pending_packets {
+        if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
             snapshot.record_incoming_media(
-                source_session,
+                packet.source_session_key(),
                 transport_media_id,
-                now,
-                media.data.len(),
+                packet.received_at(),
+                packet.payload_len(),
             );
-            metrics.record_rtp_ingress(media.data.len());
-            media_tap.write_frame(source_session, transport_media_id, now, &media.data);
+            metrics.record_rtp_ingress(packet.payload_len());
+            media_tap.write_packet(packet, transport_media_id);
         }
     }
 }
@@ -465,14 +462,12 @@ fn snapshot_and_pump(
     }
 
     // Two-pass: collect matching routes, then write to destination sessions
-    let media_stats_now = Instant::now();
     record_incoming_stats(
         state,
         snapshot_state,
         &config.media_tap,
         &config.metrics,
         buffers,
-        media_stats_now,
     );
     populate_forward_routes(state, buffers);
     flush_forward_routes(state, &config.metrics, buffers);
@@ -485,9 +480,8 @@ fn snapshot_and_pump(
 }
 
 fn populate_forward_routes(state: &RtcBootstrapState, buffers: &mut PacketLoopBuffers) {
-    for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
-        let Some(source_transport_media_id) =
-            state.source_transport_media_id_for_mid(source_session, media.mid)
+    for (packet_idx, packet) in buffers.pending_packets.iter().enumerate() {
+        let Some(source_transport_media_id) = packet.resolve_source_transport_media_id(state)
         else {
             continue;
         };
@@ -503,7 +497,7 @@ fn populate_forward_routes(state: &RtcBootstrapState, buffers: &mut PacketLoopBu
             }
             buffers
                 .forwards
-                .push((media_idx, dest.dest_session.clone(), dest.dest_mid));
+                .push((packet_idx, dest.dest_session.clone(), dest.dest_mid));
         }
     }
 }
@@ -514,12 +508,12 @@ fn flush_forward_routes(
     buffers: &mut PacketLoopBuffers,
 ) {
     for forward_idx in 0..buffers.forwards.len() {
-        let Some((media_idx, dest_session, dest_mid)) =
+        let Some((packet_idx, dest_session, dest_mid)) =
             buffers
                 .forwards
                 .get(forward_idx)
-                .map(|(media_idx, dest_session, dest_mid)| {
-                    (*media_idx, dest_session.clone(), *dest_mid)
+                .map(|(packet_idx, dest_session, dest_mid)| {
+                    (*packet_idx, dest_session.clone(), *dest_mid)
                 })
         else {
             continue;
@@ -527,40 +521,23 @@ fn flush_forward_routes(
         let is_last_destination = buffers
             .forwards
             .get(forward_idx + 1)
-            .is_none_or(|(next_media_idx, _, _)| *next_media_idx != media_idx);
-        let Some((_source_session, media)) = buffers.pending_media.get_mut(media_idx) else {
+            .is_none_or(|(next_packet_idx, _, _)| *next_packet_idx != packet_idx);
+        let Some(packet) = buffers.pending_packets.get_mut(packet_idx) else {
             continue;
         };
         let Some(dest_session_state) = state.sessions.get_mut(&dest_session) else {
             continue;
         };
-        let Some(writer) = dest_session_state.rtc.writer(dest_mid) else {
-            continue;
-        };
-        let Some(pt) = writer.match_params(media.params) else {
-            continue;
-        };
-        let mut data_writer = writer;
-        if let Some(rid) = media.rid {
-            data_writer = data_writer.rid(rid);
-        }
-        if media.audio_start_of_talk_spurt {
-            data_writer = data_writer.start_of_talkspurt(true);
-        }
-        let payload_len = media.data.len();
-        if let Err(error) = data_writer.write(
-            pt,
-            media.network_time,
-            media.time,
-            take_write_payload(&mut media.data, is_last_destination),
-        ) {
-            warn!(
-                ?dest_session,
-                ?error,
-                "failed to write media to destination session"
-            );
-        } else {
-            metrics.record_rtp_egress(payload_len);
+        match packet.forward_to_session(dest_session_state, dest_mid, is_last_destination) {
+            Ok(Some(payload_len)) => metrics.record_rtp_egress(payload_len),
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    ?dest_session,
+                    ?error,
+                    "failed to write media to destination session"
+                );
+            }
         }
     }
 }
@@ -582,7 +559,9 @@ fn drain_single_session(
                 buffers.push_pending_transmit(transmit.destination, &transmit.contents);
             }
             Ok(Output::Event(Event::MediaData(data))) => {
-                buffers.pending_media.push((session_key.clone(), data));
+                buffers
+                    .pending_packets
+                    .push(ForwardedPacket::from_media_data(session_key.clone(), data));
             }
             Ok(Output::Event(event)) => {
                 observe_rtc_event(snapshot_state, metrics, session_key, &event);
@@ -612,14 +591,6 @@ fn drain_single_session(
                 return None;
             }
         }
-    }
-}
-
-pub(super) fn take_write_payload(data: &mut Vec<u8>, is_last_destination: bool) -> Vec<u8> {
-    if is_last_destination {
-        take(data)
-    } else {
-        data.clone()
     }
 }
 

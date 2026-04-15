@@ -13,7 +13,7 @@ use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId, Transport
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
-use super::{MediaFrameSink, MediaSource, into_frame_sink, session::RecordingSession};
+use super::{MediaPacketSink, MediaSource, into_packet_sink, session::RecordingSession};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,14 +75,14 @@ pub(crate) struct RecordingServiceSnapshot {
     pub(crate) captured_stream_count: usize,
 }
 
-struct RecordingFrameCollector {
+struct RecordingPacketCollector {
     lifecycle: Arc<AtomicU8>,
     captured_packet_count: Arc<AtomicU64>,
     captured_streams: Arc<RwLock<BTreeSet<(TransportSessionKey, TransportMediaId)>>>,
     metrics: Arc<RuntimeMetrics>,
 }
 
-impl MediaFrameSink for RecordingFrameCollector {
+impl MediaPacketSink for RecordingPacketCollector {
     fn record_packet(
         &self,
         session_key: &TransportSessionKey,
@@ -131,7 +131,7 @@ pub(crate) struct RecordingService {
     sessions: Arc<Mutex<RecordingServiceState>>,
     captured_packet_count: Arc<AtomicU64>,
     captured_streams: Arc<RwLock<BTreeSet<(TransportSessionKey, TransportMediaId)>>>,
-    frame_collector: Arc<RecordingFrameCollector>,
+    packet_collector: Arc<RecordingPacketCollector>,
 }
 
 impl RecordingService {
@@ -153,7 +153,7 @@ impl RecordingService {
             sessions: Arc::clone(&sessions),
             captured_packet_count: Arc::clone(&captured_packet_count),
             captured_streams: Arc::clone(&captured_streams),
-            frame_collector: Arc::new(RecordingFrameCollector {
+            packet_collector: Arc::new(RecordingPacketCollector {
                 lifecycle,
                 captured_packet_count,
                 captured_streams,
@@ -168,7 +168,9 @@ impl RecordingService {
             RecordingLifecycleState::Starting,
             RecordingAction::Start,
         )?;
-        let sink = into_frame_sink(Arc::<RecordingFrameCollector>::clone(&self.frame_collector));
+        let sink = into_packet_sink(Arc::<RecordingPacketCollector>::clone(
+            &self.packet_collector,
+        ));
         self.media_source
             .activate_channel(self.channel_runtime_id, sink);
         self.lifecycle.store(

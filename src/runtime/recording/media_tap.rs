@@ -5,16 +5,15 @@ use std::{
         Arc, PoisonError, RwLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
 };
 
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::{rtc_adapter::ForwardedPacket, transport_adapter::TransportMediaId};
 
-use super::{MediaFrameSink, MediaSource};
+use super::{MediaPacketSink, MediaSource};
 
 pub(crate) struct MediaTap {
     any_active: AtomicBool,
-    active_channels: RwLock<HashMap<u64, Arc<dyn MediaFrameSink>>>,
+    active_channels: RwLock<HashMap<u64, Arc<dyn MediaPacketSink>>>,
 }
 
 impl Default for MediaTap {
@@ -27,12 +26,10 @@ impl Default for MediaTap {
 }
 
 impl MediaTap {
-    pub(crate) fn write_frame(
+    pub(crate) fn write_packet(
         &self,
-        session_key: &TransportSessionKey,
+        packet: &ForwardedPacket,
         transport_media_id: TransportMediaId,
-        received_at: Instant,
-        payload: &[u8],
     ) {
         if !self.any_active.load(Ordering::Acquire) {
             return;
@@ -41,8 +38,13 @@ impl MediaTap {
             .active_channels
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(sink) = active_channels.get(&session_key.channel_runtime_id()) {
-            sink.record_packet(session_key, transport_media_id, received_at, payload);
+        if let Some(sink) = active_channels.get(&packet.source_session_key().channel_runtime_id()) {
+            sink.record_packet(
+                packet.source_session_key(),
+                transport_media_id,
+                packet.received_at(),
+                packet.payload(),
+            );
         }
     }
 
@@ -63,7 +65,7 @@ impl MediaTap {
 }
 
 impl MediaSource for MediaTap {
-    fn activate_channel(&self, channel_runtime_id: u64, sink: Arc<dyn MediaFrameSink>) {
+    fn activate_channel(&self, channel_runtime_id: u64, sink: Arc<dyn MediaPacketSink>) {
         self.active_channels
             .write()
             .unwrap_or_else(PoisonError::into_inner)
