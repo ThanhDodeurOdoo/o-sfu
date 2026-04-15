@@ -369,8 +369,7 @@ async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run
 }
 
 #[tokio::test]
-async fn fake_rtc_peers_keep_transport_health_and_indexed_datagram_metrics_stable_during_live_media()
- {
+async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
@@ -413,20 +412,29 @@ async fn fake_rtc_peers_keep_transport_health_and_indexed_datagram_metrics_stabl
     assert!(subscriber.complete_next_negotiation().await.is_some());
 
     let mut clock = FakeClock::default();
-    assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
-    assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+    let initial_forwarded_bytes =
+        assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
+            .await
+            + assert_audio_frame_forwarded(
+                &mut publisher,
+                &mut subscriber,
+                &mut source,
+                &mut clock,
+            )
+            .await;
 
     let before_live_metrics = wait_for_live_rtc_metrics(&network, 2).await;
     assert!(before_live_metrics.is_some());
     let Some(before_live_metrics) = before_live_metrics else {
         return;
     };
-    assert_eq!(before_live_metrics.connected_transport_sessions, 2);
-    assert_eq!(before_live_metrics.disconnected_transport_sessions, 0);
+    assert_initial_live_rtc_metrics(&before_live_metrics, initial_forwarded_bytes);
 
+    let mut additional_forwarded_bytes = 0;
     for _ in 0..4 {
-        assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
-            .await;
+        additional_forwarded_bytes +=
+            assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
+                .await;
     }
 
     let during_live_metrics = wait_for_live_rtc_metrics(&network, 2).await;
@@ -435,23 +443,10 @@ async fn fake_rtc_peers_keep_transport_health_and_indexed_datagram_metrics_stabl
         return;
     };
 
-    assert_eq!(during_live_metrics.connected_transport_sessions, 2);
-    assert_eq!(during_live_metrics.disconnected_transport_sessions, 0);
-    assert!(
-        during_live_metrics.indexed_routes > before_live_metrics.indexed_routes,
-        "expected steady-state media to increase indexed datagram routing"
-    );
-    assert_eq!(
-        during_live_metrics.scan_routes,
-        before_live_metrics.scan_routes
-    );
-    assert_eq!(
-        during_live_metrics.fallback_scans,
-        before_live_metrics.fallback_scans
-    );
-    assert_eq!(
-        during_live_metrics.scan_sessions,
-        before_live_metrics.scan_sessions
+    assert_steady_state_live_rtc_metrics(
+        &before_live_metrics,
+        &during_live_metrics,
+        additional_forwarded_bytes,
     );
 
     assert!(publisher.close().await.is_some());
@@ -666,19 +661,20 @@ async fn assert_audio_frame_forwarded(
     subscriber: &mut NativeFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
-) {
+) -> u64 {
     let expected_payload = publisher.send_frame(source, clock).await;
     assert!(expected_payload.is_some());
     let Some(expected_payload) = expected_payload else {
-        return;
+        return 0;
     };
 
     let received_frame = subscriber.read_media_frame(Duration::from_secs(2)).await;
     assert!(received_frame.is_some());
     let Some(received_frame) = received_frame else {
-        return;
+        return 0;
     };
     assert_eq!(received_frame.payload, expected_payload);
+    u64::try_from(expected_payload.len()).unwrap_or(u64::MAX)
 }
 
 async fn assert_audio_frame_dropped(
@@ -1035,6 +1031,16 @@ struct TransportSessionLifetimeMetrics {
 struct LiveRtcMetrics {
     connected_transport_sessions: i64,
     disconnected_transport_sessions: i64,
+    transport_ice_state_changes_new: u64,
+    transport_ice_state_changes_checking: u64,
+    transport_ice_state_changes_connected: u64,
+    transport_ice_state_changes_completed: u64,
+    transport_ice_state_changes_disconnected: u64,
+    transport_dtls_connected: u64,
+    rtp_packets_ingress: u64,
+    rtp_packets_egress: u64,
+    rtp_payload_bytes_ingress: u64,
+    rtp_payload_bytes_egress: u64,
     indexed_routes: u64,
     scan_routes: u64,
     fallback_scans: u64,
@@ -1116,6 +1122,46 @@ fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
             metrics_text,
             "osfu_transport_health_sessions{state=\"disconnected\"}",
         )?,
+        transport_ice_state_changes_new: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_ice_state_changes_total{state=\"new\"}",
+        )?,
+        transport_ice_state_changes_checking: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_ice_state_changes_total{state=\"checking\"}",
+        )?,
+        transport_ice_state_changes_connected: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_ice_state_changes_total{state=\"connected\"}",
+        )?,
+        transport_ice_state_changes_completed: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_ice_state_changes_total{state=\"completed\"}",
+        )?,
+        transport_ice_state_changes_disconnected: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_ice_state_changes_total{state=\"disconnected\"}",
+        )?,
+        transport_dtls_connected: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_dtls_connected_total",
+        )?,
+        rtp_packets_ingress: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtp_packets_total{direction=\"ingress\"}",
+        )?,
+        rtp_packets_egress: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtp_packets_total{direction=\"egress\"}",
+        )?,
+        rtp_payload_bytes_ingress: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtp_payload_bytes_total{direction=\"ingress\"}",
+        )?,
+        rtp_payload_bytes_egress: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtp_payload_bytes_total{direction=\"egress\"}",
+        )?,
         indexed_routes: parse_prometheus_u64(
             metrics_text,
             "osfu_rtc_datagram_routes_total{path=\"indexed\"}",
@@ -1130,6 +1176,77 @@ fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
         )?,
         scan_sessions: parse_prometheus_u64(metrics_text, "osfu_rtc_datagram_scan_sessions_total")?,
     })
+}
+
+fn assert_initial_live_rtc_metrics(metrics: &LiveRtcMetrics, initial_forwarded_bytes: u64) {
+    assert_eq!(metrics.connected_transport_sessions, 2);
+    assert_eq!(metrics.disconnected_transport_sessions, 0);
+    assert!(
+        metrics.transport_ice_state_changes_new + metrics.transport_ice_state_changes_checking >= 2,
+        "expected both RTC sessions to emit early ICE lifecycle counters"
+    );
+    assert!(
+        metrics.transport_ice_state_changes_connected
+            + metrics.transport_ice_state_changes_completed
+            >= 2,
+        "expected both RTC sessions to reach a connected ICE lifecycle state"
+    );
+    assert_eq!(metrics.transport_ice_state_changes_disconnected, 0);
+    assert_eq!(metrics.transport_dtls_connected, 2);
+    assert_eq!(metrics.rtp_packets_ingress, 2);
+    assert_eq!(metrics.rtp_packets_egress, 2);
+    assert_eq!(metrics.rtp_payload_bytes_ingress, initial_forwarded_bytes);
+    assert_eq!(metrics.rtp_payload_bytes_egress, initial_forwarded_bytes);
+}
+
+fn assert_steady_state_live_rtc_metrics(
+    before: &LiveRtcMetrics,
+    during: &LiveRtcMetrics,
+    additional_forwarded_bytes: u64,
+) {
+    assert_eq!(during.connected_transport_sessions, 2);
+    assert_eq!(during.disconnected_transport_sessions, 0);
+    assert_eq!(
+        during.transport_ice_state_changes_new,
+        before.transport_ice_state_changes_new
+    );
+    assert_eq!(
+        during.transport_ice_state_changes_checking,
+        before.transport_ice_state_changes_checking
+    );
+    assert_eq!(
+        during.transport_ice_state_changes_connected,
+        before.transport_ice_state_changes_connected
+    );
+    assert_eq!(
+        during.transport_ice_state_changes_completed,
+        before.transport_ice_state_changes_completed
+    );
+    assert_eq!(
+        during.transport_ice_state_changes_disconnected,
+        before.transport_ice_state_changes_disconnected
+    );
+    assert_eq!(
+        during.transport_dtls_connected,
+        before.transport_dtls_connected
+    );
+    assert!(
+        during.indexed_routes > before.indexed_routes,
+        "expected steady-state media to increase indexed datagram routing"
+    );
+    assert_eq!(during.scan_routes, before.scan_routes);
+    assert_eq!(during.fallback_scans, before.fallback_scans);
+    assert_eq!(during.scan_sessions, before.scan_sessions);
+    assert_eq!(during.rtp_packets_ingress - before.rtp_packets_ingress, 4);
+    assert_eq!(during.rtp_packets_egress - before.rtp_packets_egress, 4);
+    assert_eq!(
+        during.rtp_payload_bytes_ingress - before.rtp_payload_bytes_ingress,
+        additional_forwarded_bytes
+    );
+    assert_eq!(
+        during.rtp_payload_bytes_egress - before.rtp_payload_bytes_egress,
+        additional_forwarded_bytes
+    );
 }
 
 fn parse_prometheus_i64(metrics_text: &str, metric_name: &str) -> Option<i64> {
