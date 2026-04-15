@@ -68,10 +68,6 @@ impl RelayRegistry {
             .cloned()
     }
 
-    #[allow(
-        dead_code,
-        reason = "the first real relay mailbox boundary lands before cross-worker route registration starts using it in production"
-    )]
     pub(super) fn activate_channel(&self, channel_runtime_id: u64, mailbox: RelayPacketMailbox) {
         self.active_channels
             .write()
@@ -82,7 +78,7 @@ impl RelayRegistry {
 
     #[allow(
         dead_code,
-        reason = "the first real relay mailbox boundary lands before cross-worker route registration starts using it in production"
+        reason = "the first production relay registration slice activates cross-worker fan-out, but mailbox teardown still remains on the follow-up cleanup path"
     )]
     pub(super) fn deactivate_channel(&self, channel_runtime_id: u64) {
         let mut active_channels = self

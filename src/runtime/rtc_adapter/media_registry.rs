@@ -1,11 +1,14 @@
 //! Media handle tracking for the RTC transport adapter.
 //!
 //! Owns the transport-media registry and the negotiation-facing producer
-//! `(session_key, mid)` reverse lookup within `RtcBootstrapState`.
+//! `(session_key, mid)` reverse lookup within `RtcBootstrapState`, plus the
+//! worker-local remote-source placeholders used by cross-worker relay routes.
 
 use str0m::media::Mid;
 
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
+};
 
 use super::state::RtcBootstrapState;
 
@@ -37,6 +40,21 @@ impl RegisteredMediaHandle {
         match self {
             Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RemoteSourceRegistration {
+    source_session_key: TransportSessionKey,
+}
+
+impl RemoteSourceRegistration {
+    fn new(source_session_key: TransportSessionKey) -> Self {
+        Self { source_session_key }
+    }
+
+    pub(super) fn source_session_key(&self) -> &TransportSessionKey {
+        &self.source_session_key
     }
 }
 
@@ -102,6 +120,48 @@ impl RtcBootstrapState {
         self.mid_registry
             .values()
             .any(|handle| handle.session_key() == session_key)
+    }
+
+    pub(super) fn register_remote_source(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+    ) -> Result<(), TransportAdapterError> {
+        match self.remote_source_registry.get(&source_transport_media_id) {
+            Some(existing) if existing.source_session_key() == source_session_key => Ok(()),
+            Some(_existing) => Err(TransportAdapterError::InvalidInput),
+            None => {
+                self.remote_source_registry.insert(
+                    source_transport_media_id,
+                    RemoteSourceRegistration::new(source_session_key.clone()),
+                );
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn remote_source_registration(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<&RemoteSourceRegistration> {
+        self.remote_source_registry.get(&source_transport_media_id)
+    }
+
+    pub(super) fn prune_remote_source_if_unrouted(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+    ) {
+        if self.media_route_index.contains_key(&source_transport_media_id) {
+            return;
+        }
+        self.remote_source_registry.remove(&source_transport_media_id);
+    }
+
+    pub(super) fn prune_unrouted_remote_sources(&mut self) {
+        self.remote_source_registry
+            .retain(|source_transport_media_id, _registration| {
+                self.media_route_index.contains_key(source_transport_media_id)
+            });
     }
 
     pub(super) fn source_transport_media_id_for_mid(

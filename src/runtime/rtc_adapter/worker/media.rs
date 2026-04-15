@@ -14,6 +14,11 @@ use super::super::{
     state::RtcBootstrapState,
 };
 
+enum RouteSourceKind {
+    Local { source_mid: Mid },
+    Remote,
+}
+
 pub(super) fn respond_remove_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -149,6 +154,7 @@ fn worker_remove_media(
                     state.media_route_index.remove(&source_transport_media_id);
                 }
             }
+            state.prune_remote_source_if_unrouted(source_transport_media_id);
             state.mark_session_dirty(&session_key);
         }
     }
@@ -274,16 +280,12 @@ fn worker_add_send_media(
     source_transport_media_id: TransportMediaId,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Result<TransportMediaId, TransportAdapterError> {
-    let source_mid = match state.mid_registry.get(&source_transport_media_id.as_u64()) {
-        Some(RegisteredMediaHandle::Producer {
-            session_key: owner_session_key,
-            mid,
-        }) if owner_session_key == source_session_key => *mid,
-        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
-            return Err(TransportAdapterError::InvalidInput);
-        }
-        None => return Err(TransportAdapterError::TransportUnavailable),
-    };
+    let route_source = ensure_route_source_registered(
+        state,
+        consumer_session_key,
+        source_session_key,
+        source_transport_media_id,
+    )?;
     let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -320,7 +322,8 @@ fn worker_add_send_media(
         source_session_id = ?source_session_key.session_id(),
         source_channel_runtime_id = source_session_key.channel_runtime_id(),
         ?source_transport_media_id,
-        ?source_mid,
+        source_mid = ?route_source.source_mid(),
+        source_route_kind = route_source.label(),
         ?transport_media_id,
         ?media_kind,
         "declared send-only media and registered media route for consumer"
@@ -400,16 +403,12 @@ fn worker_set_consumer_active(
     source_transport_media_id: TransportMediaId,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    match state.mid_registry.get(&source_transport_media_id.as_u64()) {
-        Some(RegisteredMediaHandle::Producer {
-            session_key: owner_session_key,
-            ..
-        }) if owner_session_key == source_session_key => {}
-        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
-            return Err(TransportAdapterError::InvalidInput);
-        }
-        None => return Err(TransportAdapterError::TransportUnavailable),
-    }
+    ensure_route_source_exists(
+        state,
+        consumer_session_key,
+        source_session_key,
+        source_transport_media_id,
+    )?;
     match state
         .mid_registry
         .get(&consumer_transport_media_id.as_u64())
@@ -452,4 +451,73 @@ fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ss
     let ssrc = encoding.ssrc().map(Ssrc::from)?;
     let rid = encoding.rid().map(Into::into);
     Some((ssrc, rid))
+}
+
+impl RouteSourceKind {
+    fn source_mid(&self) -> Option<Mid> {
+        match self {
+            Self::Local { source_mid } => Some(*source_mid),
+            Self::Remote => None,
+        }
+    }
+
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::Remote => "remote",
+        }
+    }
+}
+
+fn ensure_route_source_registered(
+    state: &mut RtcBootstrapState,
+    route_owner_session_key: &TransportSessionKey,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> Result<RouteSourceKind, TransportAdapterError> {
+    if let Some(handle) = state.mid_registry.get(&source_transport_media_id.as_u64()) {
+        return match handle {
+            RegisteredMediaHandle::Producer {
+                session_key: owner_session_key,
+                mid,
+            } if owner_session_key == source_session_key => Ok(RouteSourceKind::Local {
+                source_mid: *mid,
+            }),
+            RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => {
+                Err(TransportAdapterError::InvalidInput)
+            }
+        };
+    }
+    if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
+        return Err(TransportAdapterError::TransportUnavailable);
+    }
+    state.register_remote_source(source_transport_media_id, source_session_key)?;
+    Ok(RouteSourceKind::Remote)
+}
+
+fn ensure_route_source_exists(
+    state: &RtcBootstrapState,
+    route_owner_session_key: &TransportSessionKey,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> Result<(), TransportAdapterError> {
+    if let Some(handle) = state.mid_registry.get(&source_transport_media_id.as_u64()) {
+        return match handle {
+            RegisteredMediaHandle::Producer {
+                session_key: owner_session_key,
+                ..
+            } if owner_session_key == source_session_key => Ok(()),
+            RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => {
+                Err(TransportAdapterError::InvalidInput)
+            }
+        };
+    }
+    if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
+        return Err(TransportAdapterError::TransportUnavailable);
+    }
+    match state.remote_source_registration(source_transport_media_id) {
+        Some(registration) if registration.source_session_key() == source_session_key => Ok(()),
+        Some(_registration) => Err(TransportAdapterError::InvalidInput),
+        None => Err(TransportAdapterError::TransportUnavailable),
+    }
 }

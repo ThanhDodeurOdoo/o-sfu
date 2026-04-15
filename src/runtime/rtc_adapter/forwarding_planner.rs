@@ -17,23 +17,25 @@ pub(super) fn populate_forward_routes(
         else {
             continue;
         };
-        if let Some(sink) =
-            media_tap.sink_for_channel(packet.source_session_key().channel_runtime_id())
-        {
-            forwards.push(PacketForward::from_recording_sink(
-                packet_idx,
-                source_transport_media_id,
-                sink,
-            ));
-        }
-        if let Some(sink) =
-            relay_registry.mailbox_for_channel(packet.source_session_key().channel_runtime_id())
-        {
-            forwards.push(PacketForward::from_relay_sink(
-                packet_idx,
-                source_transport_media_id,
-                sink,
-            ));
+        if packet.uses_channel_side_sinks() {
+            if let Some(sink) =
+                media_tap.sink_for_channel(packet.source_session_key().channel_runtime_id())
+            {
+                forwards.push(PacketForward::from_recording_sink(
+                    packet_idx,
+                    source_transport_media_id,
+                    sink,
+                ));
+            }
+            if let Some(sink) =
+                relay_registry.mailbox_for_channel(packet.source_session_key().channel_runtime_id())
+            {
+                forwards.push(PacketForward::from_relay_sink(
+                    packet_idx,
+                    source_transport_media_id,
+                    sink,
+                ));
+            }
         }
         let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
             continue;
@@ -277,6 +279,62 @@ mod tests {
         ));
         assert!(matches!(
             forwards.get(2).map(PacketForward::destination),
+            Some(ForwardingDestination::LocalRtc(_))
+        ));
+    }
+
+    #[test]
+    fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_relay_sinks() {
+        let producer_session = TransportSessionKey::new(41, 0, 42, SessionId::Integer(43));
+        let consumer_session = TransportSessionKey::new(41, 1, 44, SessionId::Integer(45));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let recording_sink = Arc::new(CountingSink::new());
+        let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+        let source_transport_media_id = TransportMediaId::new(51);
+        let consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: Mid::from("aud-down"),
+                source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: consumer_session,
+                    dest_transport_media_id: consumer_transport_media_id,
+                    dest_mid: Mid::from("aud-down"),
+                    active: true,
+                }],
+            },
+        );
+        media_tap.activate_channel(
+            producer_session.channel_runtime_id(),
+            into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        );
+        relay_registry.activate_channel(producer_session.channel_runtime_id(), relay_mailbox);
+        let pending_packets = vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )
+        .share_for_relay(source_transport_media_id)];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 1);
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
             Some(ForwardingDestination::LocalRtc(_))
         ));
     }

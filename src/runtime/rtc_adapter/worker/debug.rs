@@ -52,6 +52,10 @@ pub(super) fn handle_debug_command(
             mid,
             response,
         } => respond_debug_session_stream_tx_ssrc(state, &session_key, mid, response),
+        DebugRtcCommand::RemoteSourceOwner {
+            source_transport_media_id,
+            response,
+        } => respond_debug_remote_source_owner(state, source_transport_media_id, response),
         DebugRtcCommand::RouteEntry {
             source_session_key,
             source_mid,
@@ -163,6 +167,17 @@ fn respond_debug_session_stream_tx_ssrc(
                 .stream_tx_by_mid(mid, None)
                 .map(|stream_tx| *stream_tx.ssrc())
         });
+    let _ = response.send(value);
+}
+
+fn respond_debug_remote_source_owner(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    response: oneshot::Sender<Option<TransportSessionKey>>,
+) {
+    let value = state
+        .remote_source_registration(source_transport_media_id)
+        .map(|registration| registration.source_session_key().clone());
     let _ = response.send(value);
 }
 

@@ -136,6 +136,10 @@ pub(super) enum DebugRtcCommand {
         mid: Mid,
         response: oneshot::Sender<Option<u32>>,
     },
+    RemoteSourceOwner {
+        source_transport_media_id: TransportMediaId,
+        response: oneshot::Sender<Option<TransportSessionKey>>,
+    },
     RouteEntry {
         source_session_key: TransportSessionKey,
         source_mid: Mid,

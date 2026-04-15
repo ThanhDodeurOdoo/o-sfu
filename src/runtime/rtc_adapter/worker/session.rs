@@ -73,6 +73,7 @@ fn worker_close_session(
             .retain(|destination| destination.dest_session != *session_key);
         !entry.destinations.is_empty()
     });
+    state.prune_unrouted_remote_sources();
     if state.sessions.is_empty() {
         state.shared_socket = None;
     }

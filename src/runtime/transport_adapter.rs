@@ -409,6 +409,20 @@ impl RtcTransportAdapterShardSet {
         self.shard_for_index(self.shard_index_for_media_worker_id(media_worker_id))
     }
 
+    fn prepare_consume_route(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        source_session_key: &TransportSessionKey,
+    ) -> Result<(), TransportAdapterError> {
+        let consumer_shard = self.shard_for_session(consumer_session_key);
+        let source_shard = self.shard_for_session(source_session_key);
+        if Arc::ptr_eq(&consumer_shard, &source_shard) {
+            return Ok(());
+        }
+        source_shard
+            .activate_relay_channel(source_session_key.channel_runtime_id(), &consumer_shard)
+    }
+
     #[cfg(test)]
     async fn debug_route_entry(
         &self,
@@ -667,6 +681,7 @@ impl RuntimeTransportAdapter {
                 {
                     return Err(TransportAdapterError::InvalidInput);
                 }
+                adapter.prepare_consume_route(consumer_session_key, source_session_key)?;
                 adapter
                     .shard_for_session(consumer_session_key)
                     .add_send_media(
@@ -808,7 +823,9 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
 
-    use o_sfu_router::{MediaCodecCapability, MediaKind as RouterMediaKind};
+    use o_sfu_router::{
+        MediaCodecCapability, MediaKind as RouterMediaKind, RtpEncoding, RtpParameters,
+    };
 
     use super::RuntimeTransportAdapter;
     use crate::{
@@ -821,7 +838,7 @@ mod tests {
                 RtcTransportAdapterShardSetConfig, TransportAdapterError, TransportSessionKey,
             },
         },
-        signaling::shared::SessionId,
+        signaling::{shared::SessionId, webrtc::MediaKind as SignalingMediaKind},
     };
     use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
 
@@ -941,5 +958,109 @@ mod tests {
         assert!((46_000..=46_001).contains(&first_port));
         assert!((46_002..=46_003).contains(&second_port));
         assert_eq!(same_shard_port, first_port);
+    }
+
+    #[tokio::test]
+    async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
+        let adapter = RuntimeTransportAdapter::builder()
+            .rtc(RtcTransportAdapterShardSetConfig::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                RtcPortRange::new(46_200, 46_299),
+                2,
+                MediaCodecFlags::default(),
+                Arc::new(MediaTap::default()),
+                Arc::new(RuntimeMetrics::default()),
+            ))
+            .build();
+        let source_session = TransportSessionKey::new(20, 0, 1, SessionId::Integer(1));
+        let consumer_session = TransportSessionKey::new(20, 1, 2, SessionId::Integer(2));
+        let producer_rtp_parameters =
+            RtpParameters::new(vec![], vec![], vec![RtpEncoding::new().with_ssrc(41_000)])
+                .with_mid(String::from("aud-up"));
+        let consumer_rtp_parameters =
+            RtpParameters::new(vec![], vec![], vec![RtpEncoding::new().with_ssrc(42_000)])
+                .with_mid(String::from("aud-down"));
+
+        assert!(
+            adapter
+                .transport_bootstrap_payload(&source_session, &empty_router_capabilities())
+                .await
+                .is_ok()
+        );
+        assert!(
+            adapter
+                .transport_bootstrap_payload(&consumer_session, &empty_router_capabilities())
+                .await
+                .is_ok()
+        );
+
+        let source_media_id = adapter
+            .publish_media(
+                &source_session,
+                SignalingMediaKind::Audio,
+                &producer_rtp_parameters,
+            )
+            .await;
+        assert!(source_media_id.is_ok());
+        let Some(source_media_id) = source_media_id.ok() else {
+            return;
+        };
+        let consumer_media_id = adapter
+            .consume_media(
+                &consumer_session,
+                SignalingMediaKind::Audio,
+                &source_session,
+                source_media_id,
+                &consumer_rtp_parameters,
+            )
+            .await;
+        assert!(consumer_media_id.is_ok());
+        let Some(consumer_media_id) = consumer_media_id.ok() else {
+            return;
+        };
+        let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
+            return;
+        };
+        let source_shard = shards.shard_for_session(&source_session);
+        let consumer_shard = shards.shard_for_session(&consumer_session);
+
+        assert!(source_shard.debug_has_relay_channel(source_session.channel_runtime_id()));
+        assert_eq!(
+            consumer_shard
+                .debug_remote_source_owner(source_media_id)
+                .await,
+            Some(source_session.clone())
+        );
+        let route_entry = consumer_shard
+            .debug_route_entry_by_media_id(source_media_id)
+            .await;
+        assert!(route_entry.is_some());
+        let Some(route_entry) = route_entry else {
+            return;
+        };
+        assert!(route_entry.source_active);
+        assert!(route_entry.destinations.iter().any(|destination| {
+            destination.dest_session == consumer_session
+                && destination.dest_transport_media_id == consumer_media_id
+        }));
+
+        assert!(
+            adapter
+                .remove_media(&consumer_session, consumer_media_id)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            consumer_shard
+                .debug_remote_source_owner(source_media_id)
+                .await,
+            None
+        );
+        assert!(
+            consumer_shard
+                .debug_route_entry_by_media_id(source_media_id)
+                .await
+                .is_none()
+        );
     }
 }

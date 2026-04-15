@@ -495,6 +495,16 @@ impl RtcTransportAdapter {
         };
         snapshot_state.transport_health(session_key)
     }
+
+    pub(crate) fn activate_relay_channel(
+        &self,
+        channel_runtime_id: u64,
+        target: &Self,
+    ) -> Result<(), TransportAdapterError> {
+        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
+        self.relay_registry.activate_channel(channel_runtime_id, mailbox);
+        Ok(())
+    }
 }
 
 #[cfg(feature = "internal-benchmarks")]
@@ -660,6 +670,18 @@ impl RtcTransportAdapter {
         .flatten()
     }
 
+    pub(crate) async fn debug_remote_source_owner(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<TransportSessionKey> {
+        self.request_debug_worker(|response| DebugRtcCommand::RemoteSourceOwner {
+            source_transport_media_id,
+            response,
+        })
+        .await
+        .flatten()
+    }
+
     pub(crate) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -709,10 +731,7 @@ impl RtcTransportAdapter {
         channel_runtime_id: u64,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.relay_registry
-            .activate_channel(channel_runtime_id, mailbox);
-        Ok(())
+        self.activate_relay_channel(channel_runtime_id, target)
     }
 
     pub(crate) fn debug_deactivate_relay_channel(&self, channel_runtime_id: u64) {
