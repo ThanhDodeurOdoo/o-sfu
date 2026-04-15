@@ -140,6 +140,80 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
             .await,
         Some(61_000)
     );
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+}
+
+#[tokio::test]
+async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
+    let adapter = RtcTransportAdapter::default();
+    let producer_session_key = transport_key(1, 21, SessionId::Integer(21));
+    let first_consumer_session_key = transport_key(1, 22, SessionId::Integer(22));
+    let second_consumer_session_key = transport_key(1, 23, SessionId::Integer(23));
+    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 71_000);
+    let selected_consumer_rtp_parameters =
+        sample_router_rtp_parameters_with_rid("vid-down-1", 72_000, "hi");
+    let open_consumer_rtp_parameters = sample_router_rtp_parameters("vid-down-2", 73_000);
+
+    for session_key in [
+        &producer_session_key,
+        &first_consumer_session_key,
+        &second_consumer_session_key,
+    ] {
+        assert!(
+            adapter
+                .transport_bootstrap_payload(session_key, &empty_router_capabilities())
+                .await
+                .is_ok()
+        );
+    }
+
+    let source_media_id = adapter
+        .add_recv_media(
+            &producer_session_key,
+            Str0mMediaKind::Video,
+            &producer_rtp_parameters,
+        )
+        .await
+        .expect("producer media should register");
+
+    let _first_consumer_media_id = adapter
+        .add_send_media(
+            &first_consumer_session_key,
+            Str0mMediaKind::Video,
+            &producer_session_key,
+            source_media_id,
+            None,
+            &selected_consumer_rtp_parameters,
+        )
+        .await
+        .expect("selected-rid consumer should register");
+
+    let route_entry = adapter
+        .debug_route_entry_by_media_id(source_media_id)
+        .await
+        .expect("route entry should exist after first consumer registration");
+    assert_eq!(
+        route_entry.effective_packet_gate,
+        DebugPacketGate::Rid(String::from("hi"))
+    );
+
+    let _second_consumer_media_id = adapter
+        .add_send_media(
+            &second_consumer_session_key,
+            Str0mMediaKind::Video,
+            &producer_session_key,
+            source_media_id,
+            None,
+            &open_consumer_rtp_parameters,
+        )
+        .await
+        .expect("open consumer should register");
+
+    let route_entry = adapter
+        .debug_route_entry_by_media_id(source_media_id)
+        .await
+        .expect("route entry should still exist after mixed policy registration");
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
 }
 
 #[tokio::test]

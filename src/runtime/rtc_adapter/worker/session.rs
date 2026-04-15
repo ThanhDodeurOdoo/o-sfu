@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::collections::BTreeSet;
 
 #[cfg(feature = "internal-benchmarks")]
 use std::net::SocketAddr;
@@ -16,6 +17,7 @@ use super::super::{
     media_registry::RegisteredMediaHandle,
     state::{RtcBootstrapState, RtcSnapshotState},
 };
+use super::media::refresh_source_packet_gate;
 
 pub(super) fn respond_close_session(
     state: &mut RtcBootstrapState,
@@ -70,17 +72,25 @@ fn worker_close_session(
         .iter()
         .map(|(transport_media_id, _handle)| *transport_media_id)
         .collect::<Vec<_>>();
+    let mut affected_route_sources = BTreeSet::new();
     state
         .media_route_index
         .retain(|source_transport_media_id, _| {
             !removed_media_ids.contains(source_transport_media_id)
         });
-    state.media_route_index.retain(|_source, entry| {
+    state.media_route_index.retain(|source_transport_media_id, entry| {
+        let destination_count = entry.destinations.len();
         entry
             .destinations
             .retain(|destination| destination.dest_session != *session_key);
+        if entry.destinations.len() != destination_count {
+            affected_route_sources.insert(*source_transport_media_id);
+        }
         !entry.destinations.is_empty()
     });
+    for source_transport_media_id in affected_route_sources {
+        refresh_source_packet_gate(state, source_transport_media_id);
+    }
     state.prune_unrouted_remote_sources();
     if state.sessions.is_empty() {
         state.shared_socket = None;

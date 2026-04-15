@@ -166,6 +166,7 @@ mod tests {
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );
@@ -223,6 +224,7 @@ mod tests {
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );
@@ -288,6 +290,7 @@ mod tests {
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );
@@ -378,6 +381,7 @@ mod tests {
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );
@@ -453,6 +457,7 @@ mod tests {
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );
@@ -546,6 +551,7 @@ mod tests {
                     dest_transport_media_id: gated_consumer_transport_media_id,
                     dest_mid: Mid::from("cam-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );
@@ -558,6 +564,7 @@ mod tests {
                     dest_transport_media_id: open_consumer_transport_media_id,
                     dest_mid: Mid::from("screen-down"),
                     active: true,
+                    packet_gate: PacketLayerGate::Open,
                 }],
             },
         );

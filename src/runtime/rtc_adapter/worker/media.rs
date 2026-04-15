@@ -15,6 +15,7 @@ use super::super::{
     demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     relay_registry::RelayRegistry,
+    route_control::{PacketLayerGate, aggregate_packet_gates},
     state::RtcBootstrapState,
 };
 
@@ -109,6 +110,22 @@ pub(super) fn respond_set_remote_source_route_active(
         source_transport_media_id,
         target_id,
         active,
+    );
+}
+
+pub(super) fn respond_set_remote_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: super::super::relay_registry::RelayTargetId,
+    packet_gate: PacketLayerGate,
+) {
+    set_remote_source_packet_gate(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        target_id,
+        packet_gate,
     );
 }
 
@@ -233,6 +250,7 @@ fn worker_remove_media(
                     state.media_route_index.remove(&source_transport_media_id);
                 }
             }
+            refresh_source_packet_gate(state, source_transport_media_id);
             state.prune_remote_source_if_unrouted(source_transport_media_id);
             state.mark_session_dirty(&session_key);
             relay_cleanup.map_or_else(
@@ -418,7 +436,9 @@ fn worker_add_send_media(
             dest_transport_media_id: transport_media_id,
             dest_mid: mid,
             active: true,
+            packet_gate: consumer_packet_gate(consumer_rtp_parameters),
         });
+    refresh_source_packet_gate(state, source_transport_media_id);
     debug!(
         consumer_session_id = ?consumer_session_key.session_id(),
         consumer_channel_runtime_id = consumer_session_key.channel_runtime_id(),
@@ -555,6 +575,7 @@ fn worker_set_consumer_active(
         return Ok(());
     }
     destination.active = active;
+    refresh_source_packet_gate(state, source_transport_media_id);
     if let Some(remote_source_registration) =
         state.remote_source_registration(source_transport_media_id)
     {
@@ -567,6 +588,55 @@ fn worker_set_consumer_active(
             );
     }
     Ok(())
+}
+
+pub(super) fn refresh_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) {
+    let local_packet_gate = state
+        .media_route_index
+        .get(&source_transport_media_id)
+        .and_then(local_source_packet_gate);
+    state
+        .route_control
+        .set_local_packet_gate(source_transport_media_id, local_packet_gate.clone());
+    if let Some(remote_source_registration) =
+        state.remote_source_registration(source_transport_media_id)
+    {
+        remote_source_registration.source_control().set_packet_gate(
+            remote_source_registration.source_session_key().clone(),
+            source_transport_media_id,
+            local_packet_gate.unwrap_or(PacketLayerGate::Block),
+        );
+    }
+}
+
+pub(super) fn local_source_packet_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> {
+    aggregate_packet_gates(
+        route_entry
+            .destinations
+            .iter()
+            .filter(|destination| destination.active)
+            .map(|destination| &destination.packet_gate),
+    )
+}
+
+fn consumer_packet_gate(consumer_rtp_parameters: &RouterRtpParameters) -> PacketLayerGate {
+    let mut selected_rid: Option<Rid> = None;
+    for encoding in consumer_rtp_parameters.encodings() {
+        let Some(rid) = encoding.rid().map(Rid::from) else {
+            return PacketLayerGate::Open;
+        };
+        if let Some(current_rid) = selected_rid.as_ref() {
+            if current_rid != &rid {
+                return PacketLayerGate::Open;
+            }
+        } else {
+            selected_rid = Some(rid);
+        }
+    }
+    selected_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
 }
 
 fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
@@ -735,6 +805,31 @@ fn set_remote_source_route_active(
         return;
     }
     relay_registry.set_source_target_active(source_transport_media_id, target_id, active);
+}
+
+fn set_remote_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: super::super::relay_registry::RelayTargetId,
+    packet_gate: PacketLayerGate,
+) {
+    let Some(handle) = state
+        .mid_registry
+        .get(&source_transport_media_id.as_u64())
+        .cloned()
+    else {
+        return;
+    };
+    let RegisteredMediaHandle::Producer { session_key, .. } = handle else {
+        return;
+    };
+    if &session_key != source_session_key {
+        return;
+    }
+    state
+        .route_control
+        .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
 }
 
 #[cfg(test)]

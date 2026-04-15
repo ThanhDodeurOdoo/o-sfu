@@ -9,6 +9,8 @@ use str0m::media::Mid;
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
+use super::route_control::PacketLayerGate;
+
 /// A single forwarding destination within the media route index.
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteDestination {
@@ -16,6 +18,7 @@ pub(super) struct MediaRouteDestination {
     pub(super) dest_transport_media_id: TransportMediaId,
     pub(super) dest_mid: Mid,
     pub(super) active: bool,
+    pub(super) packet_gate: PacketLayerGate,
 }
 
 #[derive(Debug, Clone)]

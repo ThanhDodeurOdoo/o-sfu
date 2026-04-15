@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::super::{
-    commands::{DebugRouteDestination, DebugRouteEntry, DebugRtcCommand},
+    commands::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcCommand},
     state::{RtcBootstrapState, RtcSnapshotState},
 };
 
@@ -213,6 +213,11 @@ fn build_debug_route_entry(
         .map(|entry| DebugRouteEntry {
             source_transport_media_id,
             source_active: entry.source_active,
+            effective_packet_gate: state
+                .route_control
+                .effective_packet_gate(source_transport_media_id)
+                .as_ref()
+                .map_or(DebugPacketGate::Open, into_debug_packet_gate),
             destinations: entry
                 .destinations
                 .iter()
@@ -224,6 +229,18 @@ fn build_debug_route_entry(
                 })
                 .collect(),
         })
+}
+
+fn into_debug_packet_gate(
+    packet_gate: &super::super::route_control::PacketLayerGate,
+) -> DebugPacketGate {
+    match packet_gate {
+        super::super::route_control::PacketLayerGate::Open => DebugPacketGate::Open,
+        super::super::route_control::PacketLayerGate::Block => DebugPacketGate::Block,
+        super::super::route_control::PacketLayerGate::Rid(rid) => {
+            DebugPacketGate::Rid(rid.to_string())
+        }
+    }
 }
 
 fn respond_debug_record_incoming_media(

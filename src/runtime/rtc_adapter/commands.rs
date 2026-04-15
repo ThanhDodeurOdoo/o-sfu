@@ -20,6 +20,7 @@ use crate::runtime::transport_adapter::{
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 
 use super::relay_registry::RelayTargetId;
+use super::route_control::PacketLayerGate;
 #[cfg(test)]
 use super::{dtls, state::ParsedRemoteIceCredentials};
 
@@ -149,6 +150,20 @@ impl RemoteSourceControl {
                 active,
             });
     }
+
+    pub(super) fn set_packet_gate(
+        &self,
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: PacketLayerGate,
+    ) {
+        let _ = self.tx.try_send(RtcWorkerCommand::SetRemoteSourcePacketGate {
+            source_session_key,
+            source_transport_media_id,
+            target_id: self.target_id,
+            packet_gate,
+        });
+    }
 }
 
 pub(super) enum RtcWorkerCommand {
@@ -220,6 +235,12 @@ pub(super) enum RtcWorkerCommand {
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
         active: bool,
+    },
+    SetRemoteSourcePacketGate {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        packet_gate: PacketLayerGate,
     },
     SetProducerActive {
         session_key: TransportSessionKey,
@@ -309,5 +330,14 @@ pub(crate) struct DebugRouteDestination {
 pub(crate) struct DebugRouteEntry {
     pub(crate) source_transport_media_id: TransportMediaId,
     pub(crate) source_active: bool,
+    pub(crate) effective_packet_gate: DebugPacketGate,
     pub(crate) destinations: Vec<DebugRouteDestination>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DebugPacketGate {
+    Open,
+    Block,
+    Rid(String),
 }

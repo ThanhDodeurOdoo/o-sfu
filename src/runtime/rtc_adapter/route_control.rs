@@ -7,6 +7,8 @@ use str0m::media::{KeyframeRequestKind, Rid};
 
 use crate::runtime::transport_adapter::TransportMediaId;
 
+use super::relay_registry::RelayTargetId;
+
 const KEYFRAME_REQUEST_COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,16 +66,44 @@ impl RouteControlState {
         let Some(source_control) = self.sources.get(&source_transport_media_id) else {
             return PacketRouteDecision::Forward;
         };
-        match &source_control.packet_gate {
+        match source_control
+            .effective_packet_gate()
+            .unwrap_or(PacketLayerGate::Open)
+        {
             PacketLayerGate::Open => PacketRouteDecision::Forward,
             PacketLayerGate::Block => PacketRouteDecision::Drop,
             PacketLayerGate::Rid(selected_rid) => rid
                 .as_ref()
-                .filter(|packet_rid| *packet_rid == selected_rid)
+                .filter(|packet_rid| *packet_rid == &selected_rid)
                 .map_or(PacketRouteDecision::Drop, |_rid| {
                     PacketRouteDecision::Forward
                 }),
         }
+    }
+
+    pub(super) fn set_local_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: Option<PacketLayerGate>,
+    ) {
+        let source_control = self.sources.entry(source_transport_media_id).or_default();
+        source_control.local_packet_gate = packet_gate;
+        if source_control.is_empty() {
+            self.sources.remove(&source_transport_media_id);
+        }
+    }
+
+    pub(super) fn set_relay_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        packet_gate: PacketLayerGate,
+    ) {
+        self.sources
+            .entry(source_transport_media_id)
+            .or_default()
+            .relay_packet_gates
+            .insert(target_id, packet_gate);
     }
 
     pub(super) fn forget_source(&mut self, source_transport_media_id: TransportMediaId) {
@@ -94,11 +124,46 @@ impl RouteControlState {
         source_transport_media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
     ) {
-        self.sources
-            .entry(source_transport_media_id)
-            .or_default()
-            .packet_gate = packet_gate;
+        self.set_local_packet_gate(source_transport_media_id, Some(packet_gate));
     }
+
+    #[cfg(test)]
+    pub(super) fn effective_packet_gate(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<PacketLayerGate> {
+        self.sources
+            .get(&source_transport_media_id)
+            .and_then(SourceRouteControl::effective_packet_gate)
+    }
+}
+
+pub(super) fn aggregate_packet_gates<'a>(
+    packet_gates: impl IntoIterator<Item = &'a PacketLayerGate>,
+) -> Option<PacketLayerGate> {
+    let mut saw_block = false;
+    let mut selected_rid: Option<&Rid> = None;
+    for packet_gate in packet_gates {
+        match packet_gate {
+            PacketLayerGate::Open => return Some(PacketLayerGate::Open),
+            PacketLayerGate::Block => {
+                saw_block = true;
+            }
+            PacketLayerGate::Rid(rid) => {
+                if let Some(current_rid) = selected_rid {
+                    if current_rid != rid {
+                        return Some(PacketLayerGate::Open);
+                    }
+                } else {
+                    selected_rid = Some(rid);
+                }
+            }
+        }
+    }
+    selected_rid
+        .copied()
+        .map(PacketLayerGate::Rid)
+        .or_else(|| saw_block.then_some(PacketLayerGate::Block))
 }
 
 pub(super) fn coalesce_keyframe_kind(
@@ -119,7 +184,24 @@ struct KeyframeRequestWindow {
 #[derive(Debug, Default)]
 struct SourceRouteControl {
     keyframe_request: Option<KeyframeRequestWindow>,
-    packet_gate: PacketLayerGate,
+    local_packet_gate: Option<PacketLayerGate>,
+    relay_packet_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
+}
+
+impl SourceRouteControl {
+    fn effective_packet_gate(&self) -> Option<PacketLayerGate> {
+        aggregate_packet_gates(
+            self.local_packet_gate
+                .iter()
+                .chain(self.relay_packet_gates.values()),
+        )
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keyframe_request.is_none()
+            && self.local_packet_gate.is_none()
+            && self.relay_packet_gates.is_empty()
+    }
 }
 
 impl KeyframeRequestWindow {
@@ -142,8 +224,9 @@ mod tests {
 
     use super::{
         KeyframeRequestDecision, PacketLayerGate, PacketRouteDecision, RouteControlState,
-        coalesce_keyframe_kind,
+        aggregate_packet_gates, coalesce_keyframe_kind,
     };
+    use crate::runtime::rtc_adapter::relay_registry::RelayTargetId;
     use crate::runtime::transport_adapter::TransportMediaId;
 
     #[test]
@@ -219,6 +302,65 @@ mod tests {
         assert_eq!(
             state.decide_packet_route(source_transport_media_id, None),
             PacketRouteDecision::Drop
+        );
+    }
+
+    #[test]
+    fn aggregate_packet_gates_prefers_a_shared_selected_rid() {
+        assert_eq!(
+            aggregate_packet_gates([
+                &PacketLayerGate::Rid("hi".into()),
+                &PacketLayerGate::Rid("hi".into()),
+                &PacketLayerGate::Block,
+            ]),
+            Some(PacketLayerGate::Rid("hi".into()))
+        );
+    }
+
+    #[test]
+    fn aggregate_packet_gates_reopens_when_routes_disagree() {
+        assert_eq!(
+            aggregate_packet_gates([
+                &PacketLayerGate::Rid("hi".into()),
+                &PacketLayerGate::Rid("lo".into()),
+            ]),
+            Some(PacketLayerGate::Open)
+        );
+        assert_eq!(
+            aggregate_packet_gates([&PacketLayerGate::Rid("hi".into()), &PacketLayerGate::Open]),
+            Some(PacketLayerGate::Open)
+        );
+    }
+
+    #[test]
+    fn route_control_combines_local_and_remote_target_gates() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(21);
+
+        state.set_local_packet_gate(
+            source_transport_media_id,
+            Some(PacketLayerGate::Rid("hi".into())),
+        );
+        state.set_relay_packet_gate(
+            source_transport_media_id,
+            RelayTargetId::new(1),
+            PacketLayerGate::Rid("hi".into()),
+        );
+
+        assert_eq!(
+            state.effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::Rid("hi".into()))
+        );
+
+        state.set_relay_packet_gate(
+            source_transport_media_id,
+            RelayTargetId::new(2),
+            PacketLayerGate::Rid("lo".into()),
+        );
+
+        assert_eq!(
+            state.effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::Open)
         );
     }
 }

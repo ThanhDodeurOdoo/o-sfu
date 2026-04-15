@@ -129,6 +129,7 @@ fn handle_core_worker_command(
         | RtcWorkerCommand::AddSendMedia { .. }
         | RtcWorkerCommand::RequestRemoteKeyframe { .. }
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
+        | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. } => {
             handle_media_command(state, context.metrics, context.relay_registry, command);
@@ -218,6 +219,24 @@ fn handle_media_command(
             },
             response,
         ),
+        RtcWorkerCommand::RequestRemoteKeyframe { .. }
+        | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
+        | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
+        | RtcWorkerCommand::SetProducerActive { .. }
+        | RtcWorkerCommand::SetConsumerActive { .. } => {
+            handle_media_route_control_command(state, metrics, relay_registry, command);
+        }
+        _ => {}
+    }
+}
+
+fn handle_media_route_control_command(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    relay_registry: &RelayRegistry,
+    command: RtcWorkerCommand,
+) {
+    match command {
         RtcWorkerCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id,
@@ -248,6 +267,18 @@ fn handle_media_command(
             source_transport_media_id,
             target_id,
             active,
+        ),
+        RtcWorkerCommand::SetRemoteSourcePacketGate {
+            source_session_key,
+            source_transport_media_id,
+            target_id,
+            packet_gate,
+        } => media::respond_set_remote_source_packet_gate(
+            state,
+            &source_session_key,
+            source_transport_media_id,
+            target_id,
+            packet_gate,
         ),
         RtcWorkerCommand::SetProducerActive {
             session_key,

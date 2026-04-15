@@ -19,7 +19,9 @@ pub(super) use o_sfu_router::{
 pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
-pub(super) use super::super::{RtcTransportAdapter, shared_payload::SharedPayload, validation};
+pub(super) use super::super::{
+    RtcTransportAdapter, commands::DebugPacketGate, shared_payload::SharedPayload, validation,
+};
 pub(super) use crate::{
     runtime::transport_adapter::{
         TransportAdapterError, TransportConnectDirection, TransportConnectRequest,
@@ -170,6 +172,19 @@ pub(super) fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpPar
         vec![],
         vec![],
         vec![RouterRtpEncoding::new().with_ssrc(ssrc)],
+    )
+    .with_mid(mid.to_owned())
+}
+
+pub(super) fn sample_router_rtp_parameters_with_rid(
+    mid: &str,
+    ssrc: u32,
+    rid: &str,
+) -> RouterRtpParameters {
+    RouterRtpParameters::new(
+        vec![],
+        vec![],
+        vec![RouterRtpEncoding::new().with_ssrc(ssrc).with_rid(rid)],
     )
     .with_mid(mid.to_owned())
 }

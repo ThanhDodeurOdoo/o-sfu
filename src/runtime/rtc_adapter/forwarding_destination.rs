@@ -197,6 +197,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::rtc_adapter::sample_forwarded_packet;
+    use crate::runtime::rtc_adapter::route_control::PacketLayerGate;
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
 
@@ -232,6 +233,7 @@ mod tests {
             dest_transport_media_id: TransportMediaId::default(),
             dest_mid: Mid::from("aud-down"),
             active: true,
+            packet_gate: PacketLayerGate::Open,
         };
 
         let forward = PacketForward::from_local_route_destination(4, &route_destination);
