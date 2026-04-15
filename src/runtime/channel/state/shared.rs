@@ -4,7 +4,7 @@ use std::sync::Arc;
 use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, RouterId};
 
 use crate::runtime::recording::RecordingService;
-use crate::runtime::transport_adapter::TransportMediaId;
+use crate::runtime::transport_adapter::{SourcePacketSelection, TransportMediaId};
 use crate::signaling::{
     shared::{RecordingState, SessionId, SessionPermissions, StreamType},
     webrtc::MediaKind as SignalingMediaKind,
@@ -93,6 +93,7 @@ pub(in crate::runtime::channel) struct PublishedProducer {
     pub(super) consumable_rtp_parameters: o_sfu_router::RtpParameters,
     pub(super) routed_producer_id: RoutedProducerId,
     pub(super) transport_media_id: Option<TransportMediaId>,
+    pub(super) source_packet_selection: Option<SourcePacketSelection>,
     pub(super) active: bool,
 }
 

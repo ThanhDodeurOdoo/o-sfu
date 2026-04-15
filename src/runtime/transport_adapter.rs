@@ -842,7 +842,7 @@ impl RuntimeTransportAdapter {
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        selection: SourcePacketSelection,
+        selection: Option<SourcePacketSelection>,
     ) -> Result<(), TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {

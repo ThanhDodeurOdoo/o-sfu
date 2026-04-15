@@ -7,6 +7,7 @@
 //! - `media`: producer/consumer bootstrap plus publication/subscription activity transitions
 //! - `outbound`: shared outbound fan-out helpers for session handlers
 //! - `session_negotiation`: explicit transport/bootstrap readiness state for one session
+//! - `source_packet_policy`: room-owned source-layer policy orchestration for transport media
 //! - `state`: channel-local mutable state and internal bootstrap bookkeeping
 //! - `router_state`: compatibility bridge from signaling session ids into the pure router
 //! - `topology`: channel-local routing placement boundary
@@ -24,6 +25,7 @@ mod recording;
 mod router_state;
 pub(crate) mod rtp_capabilities;
 mod session_negotiation;
+mod source_packet_policy;
 mod state;
 #[cfg(test)]
 mod tests;

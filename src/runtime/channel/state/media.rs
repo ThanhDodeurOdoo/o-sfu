@@ -286,6 +286,7 @@ impl ChannelState {
                 consumable_rtp_parameters: pending.consumable_rtp_parameters,
                 routed_producer_id,
                 transport_media_id: Some(transport_media_id),
+                source_packet_selection: None,
                 active: true,
             },
         );
@@ -889,6 +890,7 @@ mod tests {
                 consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
                 routed_producer_id,
                 transport_media_id: Some(transport_media_id),
+                source_packet_selection: None,
                 active: true,
             },
         );

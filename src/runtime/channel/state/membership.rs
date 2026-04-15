@@ -479,6 +479,7 @@ mod tests {
                 consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
                 routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(999)),
                 transport_media_id: None,
+                source_packet_selection: None,
                 active: true,
             },
         );

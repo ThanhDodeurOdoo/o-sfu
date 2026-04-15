@@ -54,7 +54,7 @@ pub(crate) enum StubWebRtcEvent {
     SourcePacketSelectionUpdated {
         session_id: SessionId,
         transport_media_id: TransportMediaId,
-        selection: SourcePacketSelection,
+        selection: Option<SourcePacketSelection>,
     },
 }
 
@@ -361,7 +361,7 @@ impl StubWebRtcAdapter {
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-        selection: SourcePacketSelection,
+        selection: Option<SourcePacketSelection>,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(StubWebRtcEvent::SourcePacketSelectionUpdated {
             session_id: session_key.session_id().clone(),

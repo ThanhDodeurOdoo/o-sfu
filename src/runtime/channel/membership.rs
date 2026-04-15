@@ -92,6 +92,8 @@ impl Channel {
             cleanup_policy,
         )
         .await;
+        self.sync_source_packet_selection_policy(transport_adapter)
+            .await;
         let connection_id = outcome.connection_id;
         outcome.emit();
         Ok(connection_id)
@@ -144,6 +146,8 @@ impl Channel {
             cleanup_policy,
         )
         .await;
+        self.sync_source_packet_selection_policy(transport_adapter)
+            .await;
         outcome.emit();
         true
     }
@@ -236,6 +240,8 @@ impl Channel {
             cleanup_policy,
         )
         .await;
+        self.sync_source_packet_selection_policy(transport_adapter)
+            .await;
         outcome.emit();
     }
 

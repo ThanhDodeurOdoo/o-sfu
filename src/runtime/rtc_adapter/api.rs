@@ -385,19 +385,15 @@ impl RtcTransportAdapter {
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        selection: SourcePacketSelection,
+        selection: Option<SourcePacketSelection>,
     ) -> Result<(), TransportAdapterError> {
-        let packet_gate = match selection {
+        let packet_gate = selection.map(|selection| match selection {
             SourcePacketSelection::Rid(rid) => {
                 super::route_control::PacketLayerGate::Rid(rid.as_str().into())
             }
-        };
-        self.set_source_packet_gate(
-            source_session_key,
-            source_transport_media_id,
-            Some(packet_gate),
-        )
-        .await
+        });
+        self.set_source_packet_gate(source_session_key, source_transport_media_id, packet_gate)
+            .await
     }
 
     pub(crate) fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
