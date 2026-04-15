@@ -8,7 +8,7 @@ pub(super) fn render_prometheus(metrics: &RuntimeMetrics) -> String {
 }
 
 fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
-    let mut output = String::with_capacity(4096);
+    let mut output = String::with_capacity(5120);
     append_http_metrics(&mut output, snapshot);
     append_ws_connection_metrics(&mut output, snapshot);
     append_ws_loop_metrics(&mut output, snapshot);
@@ -17,6 +17,7 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     append_recording_metrics(&mut output, snapshot);
     append_transport_health_gauges(&mut output, snapshot);
     append_rtp_metrics(&mut output, snapshot);
+    append_transport_lifecycle_metrics(&mut output, snapshot);
     append_rtc_datagram_metrics(&mut output, snapshot);
     output
 }
@@ -315,6 +316,31 @@ fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     );
 }
 
+fn append_transport_lifecycle_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_labeled_counter_family(
+        output,
+        "osfu_transport_ice_state_changes_total",
+        "Total RTC ICE state-change events observed from the transport adapter.",
+        "state",
+        &[
+            LabeledValue::new("new", snapshot.transport_ice_state_changes_new),
+            LabeledValue::new("checking", snapshot.transport_ice_state_changes_checking),
+            LabeledValue::new("connected", snapshot.transport_ice_state_changes_connected),
+            LabeledValue::new("completed", snapshot.transport_ice_state_changes_completed),
+            LabeledValue::new(
+                "disconnected",
+                snapshot.transport_ice_state_changes_disconnected,
+            ),
+        ],
+    );
+    append_counter(
+        output,
+        "osfu_transport_dtls_connected_total",
+        "Total RTC DTLS-connected events observed from the transport adapter.",
+        snapshot.transport_dtls_connected,
+    );
+}
+
 fn append_rtc_datagram_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_labeled_counter_family(
         output,
@@ -536,7 +562,8 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
         runtime::metrics::{
-            RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, WsSessionLoopExitReason,
+            RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, TransportIceState,
+            WsSessionLoopExitReason,
         },
         runtime::rtc_adapter::TransportSessionHealth,
         signaling::protocol::WebSocketCloseCode,
@@ -562,6 +589,9 @@ mod tests {
         metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
+        metrics.record_transport_ice_state_change(TransportIceState::Checking);
+        metrics.record_transport_ice_state_change(TransportIceState::Connected);
+        metrics.record_transport_dtls_connected();
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
@@ -608,6 +638,9 @@ mod tests {
         assert!(rendered.contains("osfu_recording_captured_streams_total 1"));
         assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
         assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
+        assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
+        assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
+        assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
     }
 
     #[test]

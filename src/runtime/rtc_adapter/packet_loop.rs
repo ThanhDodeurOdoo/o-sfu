@@ -22,7 +22,9 @@ use super::{
     worker::handle_worker_command,
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics};
+use crate::runtime::metrics::{
+    RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, TransportIceState,
+};
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
@@ -653,6 +655,15 @@ fn observe_rtc_event(
     session_key: &TransportSessionKey,
     event: &Event,
 ) {
+    match event {
+        Event::IceConnectionStateChange(state) => {
+            metrics.record_transport_ice_state_change(transport_ice_state(*state));
+        }
+        Event::Connected => {
+            metrics.record_transport_dtls_connected();
+        }
+        _ => {}
+    }
     let Some(health) = transport_health_from_event(event) else {
         return;
     };
@@ -661,6 +672,16 @@ fn observe_rtc_event(
     };
     let previous = snapshot_state.set_transport_health(session_key, health);
     metrics.record_transport_health_transition(previous, Some(health));
+}
+
+pub(super) fn transport_ice_state(state: IceConnectionState) -> TransportIceState {
+    match state {
+        IceConnectionState::New => TransportIceState::New,
+        IceConnectionState::Checking => TransportIceState::Checking,
+        IceConnectionState::Connected => TransportIceState::Connected,
+        IceConnectionState::Completed => TransportIceState::Completed,
+        IceConnectionState::Disconnected => TransportIceState::Disconnected,
+    }
 }
 
 pub(super) fn transport_health_from_event(event: &Event) -> Option<TransportSessionHealth> {

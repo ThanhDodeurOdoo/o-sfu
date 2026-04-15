@@ -71,6 +71,8 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() {
         payload.contains("osfu_recording_actions_total{action=\"start\",outcome=\"accepted\"} 0")
     );
     assert!(payload.contains("osfu_rtp_packets_total{direction=\"ingress\"} 0"));
+    assert!(payload.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 0"));
+    assert!(payload.contains("osfu_transport_dtls_connected_total 0"));
 
     let snapshot = state.metrics.snapshot();
     assert_eq!(snapshot.http_noop_requests, 1);
@@ -82,5 +84,7 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() {
     assert_eq!(snapshot.active_recording_channels, 0);
     assert_eq!(snapshot.active_transport_sessions, 0);
     assert_eq!(snapshot.connected_transport_sessions, 0);
+    assert_eq!(snapshot.transport_ice_state_changes_checking, 0);
+    assert_eq!(snapshot.transport_dtls_connected, 0);
     assert_eq!(snapshot.recording_start_accepted, 0);
 }

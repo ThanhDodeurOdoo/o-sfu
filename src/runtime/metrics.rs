@@ -92,6 +92,15 @@ pub(super) enum RtcDatagramDropReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TransportIceState {
+    New,
+    Checking,
+    Connected,
+    Completed,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordingActionOutcome {
     StartAccepted,
     StartRejected,
@@ -342,6 +351,20 @@ impl MetricLabel for RtcDatagramDropReason {
     }
 }
 
+impl MetricLabel for TransportIceState {
+    const COUNT: usize = 5;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::New => 0,
+            Self::Checking => 1,
+            Self::Connected => 2,
+            Self::Completed => 3,
+            Self::Disconnected => 4,
+        }
+    }
+}
+
 impl MetricLabel for RecordingActionOutcome {
     const COUNT: usize = 4;
 
@@ -382,6 +405,8 @@ pub(crate) struct RuntimeMetrics {
     recording_captured_streams: Counter,
     rtp_packets: CounterFamily<RtpFlowDirection>,
     rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
+    transport_ice_state_changes: CounterFamily<TransportIceState>,
+    transport_dtls_connected: Counter,
     rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
     rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
     rtc_datagram_fallback_scans: Counter,
@@ -451,6 +476,12 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtp_packets_egress: u64,
     pub rtp_payload_bytes_ingress: u64,
     pub rtp_payload_bytes_egress: u64,
+    pub transport_ice_state_changes_new: u64,
+    pub transport_ice_state_changes_checking: u64,
+    pub transport_ice_state_changes_connected: u64,
+    pub transport_ice_state_changes_completed: u64,
+    pub transport_ice_state_changes_disconnected: u64,
+    pub transport_dtls_connected: u64,
     pub rtc_datagram_routes_indexed: u64,
     pub rtc_datagram_routes_scan: u64,
     pub rtc_datagram_drops_recent_miss_cache: u64,
@@ -532,6 +563,15 @@ struct RtpSnapshot {
     payload_bytes_egress: u64,
 }
 
+struct TransportLifecycleSnapshot {
+    ice_state_changes_new: u64,
+    ice_state_changes_checking: u64,
+    ice_state_changes_connected: u64,
+    ice_state_changes_completed: u64,
+    ice_state_changes_disconnected: u64,
+    dtls_connected: u64,
+}
+
 struct RtcDatagramSnapshot {
     routes_indexed: u64,
     routes_scan: u64,
@@ -553,6 +593,7 @@ impl RuntimeMetrics {
         let live = self.snapshot_live();
         let recording = self.snapshot_recording();
         let rtp = self.snapshot_rtp();
+        let transport_lifecycle = self.snapshot_transport_lifecycle();
         let rtc_datagram = self.snapshot_rtc_datagram();
         RuntimeMetricsSnapshot {
             http_noop_requests: http.noop_requests,
@@ -617,6 +658,13 @@ impl RuntimeMetrics {
             rtp_packets_egress: rtp.packets_egress,
             rtp_payload_bytes_ingress: rtp.payload_bytes_ingress,
             rtp_payload_bytes_egress: rtp.payload_bytes_egress,
+            transport_ice_state_changes_new: transport_lifecycle.ice_state_changes_new,
+            transport_ice_state_changes_checking: transport_lifecycle.ice_state_changes_checking,
+            transport_ice_state_changes_connected: transport_lifecycle.ice_state_changes_connected,
+            transport_ice_state_changes_completed: transport_lifecycle.ice_state_changes_completed,
+            transport_ice_state_changes_disconnected: transport_lifecycle
+                .ice_state_changes_disconnected,
+            transport_dtls_connected: transport_lifecycle.dtls_connected,
             rtc_datagram_routes_indexed: rtc_datagram.routes_indexed,
             rtc_datagram_routes_scan: rtc_datagram.routes_scan,
             rtc_datagram_drops_recent_miss_cache: rtc_datagram.drops_recent_miss_cache,
@@ -764,6 +812,27 @@ impl RuntimeMetrics {
             packets_egress: self.rtp_packets.load(RtpFlowDirection::Egress),
             payload_bytes_ingress: self.rtp_payload_bytes.load(RtpFlowDirection::Ingress),
             payload_bytes_egress: self.rtp_payload_bytes.load(RtpFlowDirection::Egress),
+        }
+    }
+
+    fn snapshot_transport_lifecycle(&self) -> TransportLifecycleSnapshot {
+        TransportLifecycleSnapshot {
+            ice_state_changes_new: self
+                .transport_ice_state_changes
+                .load(TransportIceState::New),
+            ice_state_changes_checking: self
+                .transport_ice_state_changes
+                .load(TransportIceState::Checking),
+            ice_state_changes_connected: self
+                .transport_ice_state_changes
+                .load(TransportIceState::Connected),
+            ice_state_changes_completed: self
+                .transport_ice_state_changes
+                .load(TransportIceState::Completed),
+            ice_state_changes_disconnected: self
+                .transport_ice_state_changes
+                .load(TransportIceState::Disconnected),
+            dtls_connected: self.transport_dtls_connected.load(),
         }
     }
 
@@ -1007,6 +1076,14 @@ impl RuntimeMetrics {
             .add(RtpFlowDirection::Egress, payload_bytes);
     }
 
+    pub(super) fn record_transport_ice_state_change(&self, state: TransportIceState) {
+        self.transport_ice_state_changes.increment(state);
+    }
+
+    pub(super) fn record_transport_dtls_connected(&self) {
+        self.transport_dtls_connected.increment();
+    }
+
     pub(super) fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
         self.rtc_datagram_routes.increment(path);
     }
@@ -1024,11 +1101,50 @@ impl RuntimeMetrics {
 #[cfg(test)]
 mod tests {
     use super::{
-        RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, WsSessionLoopExitReason,
+        RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, TransportIceState,
+        WsSessionLoopExitReason,
     };
     use crate::{
         runtime::rtc_adapter::TransportSessionHealth, signaling::protocol::WebSocketCloseCode,
     };
+
+    fn assert_live_gauges(snapshot: &super::RuntimeMetricsSnapshot) {
+        assert_eq!(snapshot.active_channels, 1);
+        assert_eq!(snapshot.active_sessions, 2);
+        assert_eq!(snapshot.active_recording_channels, 1);
+        assert_eq!(snapshot.active_transport_sessions, 1);
+        assert_eq!(snapshot.connected_transport_sessions, 1);
+        assert_eq!(snapshot.disconnected_transport_sessions, 0);
+    }
+
+    fn assert_recording_metrics(snapshot: &super::RuntimeMetricsSnapshot) {
+        assert_eq!(snapshot.recording_start_accepted, 1);
+        assert_eq!(snapshot.recording_captured_packets, 1);
+        assert_eq!(snapshot.recording_captured_streams, 1);
+    }
+
+    fn assert_transport_lifecycle_metrics(snapshot: &super::RuntimeMetricsSnapshot) {
+        assert_eq!(snapshot.transport_ice_state_changes_new, 0);
+        assert_eq!(snapshot.transport_ice_state_changes_checking, 1);
+        assert_eq!(snapshot.transport_ice_state_changes_connected, 1);
+        assert_eq!(snapshot.transport_ice_state_changes_completed, 0);
+        assert_eq!(snapshot.transport_ice_state_changes_disconnected, 0);
+        assert_eq!(snapshot.transport_dtls_connected, 1);
+    }
+
+    fn assert_rtp_and_datagram_metrics(snapshot: &super::RuntimeMetricsSnapshot) {
+        assert_eq!(snapshot.rtp_packets_ingress, 1);
+        assert_eq!(snapshot.rtp_packets_egress, 1);
+        assert_eq!(snapshot.rtp_payload_bytes_ingress, 1200);
+        assert_eq!(snapshot.rtp_payload_bytes_egress, 900);
+        assert_eq!(snapshot.rtc_datagram_routes_indexed, 1);
+        assert_eq!(snapshot.rtc_datagram_routes_scan, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_no_session, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
+        assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
+        assert_eq!(snapshot.rtc_datagram_scan_sessions, 3);
+    }
 
     #[test]
     fn metrics_snapshot_tracks_http_and_websocket_counters() {
@@ -1093,6 +1209,9 @@ mod tests {
         metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
+        metrics.record_transport_ice_state_change(TransportIceState::Checking);
+        metrics.record_transport_ice_state_change(TransportIceState::Connected);
+        metrics.record_transport_dtls_connected();
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
@@ -1102,26 +1221,10 @@ mod tests {
 
         let snapshot = metrics.snapshot();
 
-        assert_eq!(snapshot.active_channels, 1);
-        assert_eq!(snapshot.active_sessions, 2);
-        assert_eq!(snapshot.active_recording_channels, 1);
-        assert_eq!(snapshot.active_transport_sessions, 1);
-        assert_eq!(snapshot.connected_transport_sessions, 1);
-        assert_eq!(snapshot.disconnected_transport_sessions, 0);
-        assert_eq!(snapshot.recording_start_accepted, 1);
-        assert_eq!(snapshot.recording_captured_packets, 1);
-        assert_eq!(snapshot.recording_captured_streams, 1);
-        assert_eq!(snapshot.rtp_packets_ingress, 1);
-        assert_eq!(snapshot.rtp_packets_egress, 1);
-        assert_eq!(snapshot.rtp_payload_bytes_ingress, 1200);
-        assert_eq!(snapshot.rtp_payload_bytes_egress, 900);
-        assert_eq!(snapshot.rtc_datagram_routes_indexed, 1);
-        assert_eq!(snapshot.rtc_datagram_routes_scan, 1);
-        assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 1);
-        assert_eq!(snapshot.rtc_datagram_drops_no_session, 1);
-        assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
-        assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
-        assert_eq!(snapshot.rtc_datagram_scan_sessions, 3);
+        assert_live_gauges(&snapshot);
+        assert_recording_metrics(&snapshot);
+        assert_transport_lifecycle_metrics(&snapshot);
+        assert_rtp_and_datagram_metrics(&snapshot);
     }
 
     #[test]
@@ -1140,6 +1243,27 @@ mod tests {
 
         assert_eq!(snapshot.connected_transport_sessions, 0);
         assert_eq!(snapshot.disconnected_transport_sessions, 0);
+    }
+
+    #[test]
+    fn transport_lifecycle_metrics_track_ice_and_dtls_events() {
+        let metrics = RuntimeMetrics::default();
+
+        metrics.record_transport_ice_state_change(TransportIceState::New);
+        metrics.record_transport_ice_state_change(TransportIceState::Checking);
+        metrics.record_transport_ice_state_change(TransportIceState::Connected);
+        metrics.record_transport_ice_state_change(TransportIceState::Completed);
+        metrics.record_transport_ice_state_change(TransportIceState::Disconnected);
+        metrics.record_transport_dtls_connected();
+
+        let snapshot = metrics.snapshot();
+
+        assert_eq!(snapshot.transport_ice_state_changes_new, 1);
+        assert_eq!(snapshot.transport_ice_state_changes_checking, 1);
+        assert_eq!(snapshot.transport_ice_state_changes_connected, 1);
+        assert_eq!(snapshot.transport_ice_state_changes_completed, 1);
+        assert_eq!(snapshot.transport_ice_state_changes_disconnected, 1);
+        assert_eq!(snapshot.transport_dtls_connected, 1);
     }
 
     #[test]

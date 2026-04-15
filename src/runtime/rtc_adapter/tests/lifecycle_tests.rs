@@ -179,6 +179,32 @@ fn rtc_transport_health_maps_connected_and_disconnected_events() {
     );
 }
 
+#[test]
+fn rtc_transport_ice_state_metric_maps_all_supported_states() {
+    use crate::runtime::metrics::TransportIceState;
+
+    assert_eq!(
+        super::super::packet_loop::transport_ice_state(IceConnectionState::New),
+        TransportIceState::New
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_ice_state(IceConnectionState::Checking),
+        TransportIceState::Checking
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_ice_state(IceConnectionState::Connected),
+        TransportIceState::Connected
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_ice_state(IceConnectionState::Completed),
+        TransportIceState::Completed
+    );
+    assert_eq!(
+        super::super::packet_loop::transport_ice_state(IceConnectionState::Disconnected),
+        TransportIceState::Disconnected
+    );
+}
+
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_bootstrap_state() {
     let adapter = RtcTransportAdapter::default();
