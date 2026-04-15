@@ -1,4 +1,6 @@
-use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
+use std::future::Future;
+
+use crate::runtime::transport_adapter::{TransportAdapterError, TransportMediaId};
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use crate::runtime::{channel::NegotiatedPublish, websocket_server::WsWriter};
@@ -10,47 +12,68 @@ use super::{
     state::{ClearedPublishTransition, StagedPublishTransaction},
 };
 
-impl StagedPublishTransaction {
-    async fn abort(
-        self,
-        transport_adapter: &RuntimeTransportAdapter,
-        session_key: &TransportSessionKey,
-    ) {
-        let _result = transport_adapter
-            .remove_media(session_key, self.transport_media_id)
-            .await;
+struct PublishTransactionGuard {
+    staged_publish: StagedPublishTransaction,
+}
+
+impl PublishTransactionGuard {
+    fn new(staged_publish: StagedPublishTransaction) -> Self {
+        Self { staged_publish }
     }
 
-    async fn commit(self, session: &NativeSessionProtocol, session_key: &TransportSessionKey) {
-        let consumable_rtp_parameters = match session
-            .transport_adapter
-            .negotiated_producer_parameters(session_key, self.transport_media_id)
-            .await
-        {
+    async fn commit<
+        LoadParameters,
+        LoadParametersFuture,
+        PublishTrack,
+        PublishTrackFuture,
+        PublishTrackOutput,
+        Cleanup,
+        CleanupFuture,
+    >(
+        self,
+        connection_id: u64,
+        load_consumable_parameters: LoadParameters,
+        publish_track: PublishTrack,
+        cleanup_media: Cleanup,
+    ) -> bool
+    where
+        LoadParameters: FnOnce(TransportMediaId) -> LoadParametersFuture,
+        LoadParametersFuture: Future<Output = Result<RouterRtpParameters, TransportAdapterError>>,
+        PublishTrack: FnOnce(NegotiatedPublish) -> PublishTrackFuture,
+        PublishTrackFuture: Future<Output = Option<PublishTrackOutput>>,
+        Cleanup: FnOnce(TransportMediaId) -> CleanupFuture,
+        CleanupFuture: Future<Output = ()>,
+    {
+        let transport_media_id = self.staged_publish.transport_media_id;
+        let consumable_rtp_parameters = match load_consumable_parameters(transport_media_id).await {
             Ok(rtp_parameters) => rtp_parameters,
             Err(_error) => {
-                self.abort(&session.transport_adapter, session_key).await;
-                return;
+                cleanup_media(transport_media_id).await;
+                return false;
             }
         };
-        if session
-            .channel
-            .publish_negotiated_track(
-                &session.session_id,
-                NegotiatedPublish {
-                    connection_id: session.connection_id,
-                    stream_type: self.stream_type,
-                    media_kind: self.media_kind,
-                    transport_media_id: self.transport_media_id,
-                    consumable_rtp_parameters,
-                },
-                &session.transport_adapter,
-            )
-            .await
-            .is_none()
+        if publish_track(NegotiatedPublish {
+            connection_id,
+            stream_type: self.staged_publish.stream_type,
+            media_kind: self.staged_publish.media_kind,
+            transport_media_id,
+            consumable_rtp_parameters,
+        })
+        .await
+        .is_none()
         {
-            self.abort(&session.transport_adapter, session_key).await;
+            cleanup_media(transport_media_id).await;
+            return false;
         }
+        true
+    }
+
+    async fn rollback<Cleanup, CleanupFuture>(self, cleanup_media: Cleanup)
+    where
+        Cleanup: FnOnce(TransportMediaId) -> CleanupFuture,
+        CleanupFuture: Future<Output = ()>,
+    {
+        cleanup_media(self.staged_publish.transport_media_id).await;
     }
 }
 
@@ -103,8 +126,13 @@ impl NativeSessionProtocol {
                 let session_key = self
                     .channel
                     .transport_session_key(&self.session_id, self.connection_id);
-                staged_publish
-                    .abort(&self.transport_adapter, &session_key)
+                let transport_adapter = &self.transport_adapter;
+                PublishTransactionGuard::new(staged_publish)
+                    .rollback(|transport_media_id| async move {
+                        let _result = transport_adapter
+                            .remove_media(&session_key, transport_media_id)
+                            .await;
+                    })
                     .await;
                 let _disposition = self.negotiation.request_renegotiation();
                 return;
@@ -167,8 +195,31 @@ impl NativeSessionProtocol {
         let session_key = self
             .channel
             .transport_session_key(&self.session_id, self.connection_id);
+        let transport_adapter = &self.transport_adapter;
+        let channel = &self.channel;
+        let session_id = &self.session_id;
+        let session_key = &session_key;
         for staged_publish in staged_publishes {
-            staged_publish.commit(self, &session_key).await;
+            PublishTransactionGuard::new(staged_publish)
+                .commit(
+                    self.connection_id,
+                    |transport_media_id| async move {
+                        transport_adapter
+                            .negotiated_producer_parameters(session_key, transport_media_id)
+                            .await
+                    },
+                    |publish| async move {
+                        channel
+                            .publish_negotiated_track(session_id, publish, transport_adapter)
+                            .await
+                    },
+                    |transport_media_id| async move {
+                        let _result = transport_adapter
+                            .remove_media(session_key, transport_media_id)
+                            .await;
+                    },
+                )
+                .await;
         }
     }
 }
@@ -182,4 +233,198 @@ fn media_kind_for_stream_type(stream_type: StreamType) -> SignalingMediaKind {
 
 fn pending_publish_parameters() -> RouterRtpParameters {
     RouterRtpParameters::new(vec![], vec![], vec![])
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "these unit tests use poisoned-mutex failures as explicit test invariants"
+    )]
+
+    use std::sync::{Arc, Mutex};
+
+    use super::{PublishTransactionGuard, StagedPublishTransaction};
+    use crate::{
+        runtime::transport_adapter::{TransportAdapterError, TransportMediaId},
+        signaling::{shared::StreamType, webrtc::MediaKind},
+    };
+    use o_sfu_router::RtpParameters as RouterRtpParameters;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Step {
+        Load(u64),
+        Publish(u64),
+        Cleanup(u64),
+    }
+
+    #[tokio::test]
+    async fn publish_transaction_guard_aborts_when_parameter_lookup_fails() {
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let committed = PublishTransactionGuard::new(staged_publish_transaction())
+            .commit(
+                9,
+                {
+                    let steps = Arc::clone(&steps);
+                    move |transport_media_id| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Load(transport_media_id.as_u64()));
+                            Err(TransportAdapterError::InvalidInput)
+                        }
+                    }
+                },
+                {
+                    let steps = Arc::clone(&steps);
+                    move |publish| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Publish(publish.transport_media_id.as_u64()));
+                            Some(())
+                        }
+                    }
+                },
+                {
+                    let steps = Arc::clone(&steps);
+                    move |transport_media_id| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Cleanup(transport_media_id.as_u64()));
+                        }
+                    }
+                },
+            )
+            .await;
+
+        assert!(!committed);
+        assert_eq!(
+            steps.lock().expect("steps lock").as_slice(),
+            &[Step::Load(17), Step::Cleanup(17)]
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_transaction_guard_aborts_after_publish_rejection() {
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let committed = PublishTransactionGuard::new(staged_publish_transaction())
+            .commit(
+                9,
+                {
+                    let steps = Arc::clone(&steps);
+                    move |transport_media_id| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Load(transport_media_id.as_u64()));
+                            Ok(RouterRtpParameters::new(vec![], vec![], vec![]))
+                        }
+                    }
+                },
+                {
+                    let steps = Arc::clone(&steps);
+                    move |publish| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Publish(publish.transport_media_id.as_u64()));
+                            None::<()>
+                        }
+                    }
+                },
+                {
+                    let steps = Arc::clone(&steps);
+                    move |transport_media_id| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Cleanup(transport_media_id.as_u64()));
+                        }
+                    }
+                },
+            )
+            .await;
+
+        assert!(!committed);
+        assert_eq!(
+            steps.lock().expect("steps lock").as_slice(),
+            &[Step::Load(17), Step::Publish(17), Step::Cleanup(17)]
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_transaction_guard_keeps_successful_publishes() {
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let committed = PublishTransactionGuard::new(staged_publish_transaction())
+            .commit(
+                9,
+                {
+                    let steps = Arc::clone(&steps);
+                    move |transport_media_id| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Load(transport_media_id.as_u64()));
+                            Ok(RouterRtpParameters::new(vec![], vec![], vec![]))
+                        }
+                    }
+                },
+                {
+                    let steps = Arc::clone(&steps);
+                    move |publish| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Publish(publish.transport_media_id.as_u64()));
+                            Some(())
+                        }
+                    }
+                },
+                {
+                    let steps = Arc::clone(&steps);
+                    move |transport_media_id| {
+                        let steps = Arc::clone(&steps);
+                        async move {
+                            steps
+                                .lock()
+                                .expect("steps lock")
+                                .push(Step::Cleanup(transport_media_id.as_u64()));
+                        }
+                    }
+                },
+            )
+            .await;
+
+        assert!(committed);
+        assert_eq!(
+            steps.lock().expect("steps lock").as_slice(),
+            &[Step::Load(17), Step::Publish(17)]
+        );
+    }
+
+    fn staged_publish_transaction() -> StagedPublishTransaction {
+        StagedPublishTransaction {
+            stream_type: StreamType::Camera,
+            media_kind: MediaKind::Video,
+            transport_media_id: TransportMediaId::new(17),
+        }
+    }
 }

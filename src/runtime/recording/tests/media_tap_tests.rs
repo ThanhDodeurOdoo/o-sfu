@@ -75,3 +75,33 @@ fn media_tap_routes_packets_only_for_active_channels() {
 
     assert_eq!(counting_sink.frames.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn media_tap_keeps_multiple_channels_active_at_once() {
+    let tap = MediaTap::default();
+    let first_sink = Arc::new(CountingSink::new());
+    let second_sink = Arc::new(CountingSink::new());
+    let first_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));
+    let second_session = TransportSessionKey::new(11, 0, 1, SessionId::Integer(2));
+
+    tap.activate_channel(10, into_frame_sink(Arc::<CountingSink>::clone(&first_sink)));
+    tap.activate_channel(
+        11,
+        into_frame_sink(Arc::<CountingSink>::clone(&second_sink)),
+    );
+    tap.write_frame(
+        &first_session,
+        TransportMediaId::new(3),
+        Instant::now(),
+        b"first",
+    );
+    tap.write_frame(
+        &second_session,
+        TransportMediaId::new(4),
+        Instant::now(),
+        b"second",
+    );
+
+    assert_eq!(first_sink.frames.load(Ordering::Relaxed), 1);
+    assert_eq!(second_sink.frames.load(Ordering::Relaxed), 1);
+}

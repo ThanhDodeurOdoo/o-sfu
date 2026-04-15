@@ -14,8 +14,15 @@ use super::native::NativeSessionProtocol;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionProtocolMode {
-    Native,
+pub(crate) struct SessionProtocolMode;
+
+#[cfg(test)]
+impl SessionProtocolMode {
+    #[allow(
+        non_upper_case_globals,
+        reason = "test harnesses already use `SessionProtocolMode::Native`, so the marker keeps that call shape without reintroducing a fake enum mode"
+    )]
+    pub(crate) const Native: Self = Self;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

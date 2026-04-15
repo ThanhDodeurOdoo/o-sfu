@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use o_sfu_router::{
     MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, StreamType, TransportId,
@@ -7,6 +7,51 @@ use o_sfu_router::{
 use crate::runtime::recording::{
     MediaSource, MediaTap, RecordingLifecycleState, RecordingService, into_media_source,
 };
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::signaling::shared::SessionId as SignalingSessionId;
+
+#[test]
+fn recording_service_counts_packets_without_recounting_streams() {
+    let media_tap = Arc::new(MediaTap::default());
+    let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
+    let service = RecordingService::new(30, media_source);
+    let session_key = TransportSessionKey::new(30, 0, 1, SignalingSessionId::Integer(9));
+
+    assert!(service.start().is_ok());
+    media_tap.write_frame(
+        &session_key,
+        TransportMediaId::new(1),
+        Instant::now(),
+        b"first",
+    );
+    media_tap.write_frame(
+        &session_key,
+        TransportMediaId::new(1),
+        Instant::now(),
+        b"second",
+    );
+    media_tap.write_frame(
+        &session_key,
+        TransportMediaId::new(2),
+        Instant::now(),
+        b"third",
+    );
+
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.captured_packet_count, 3);
+    assert_eq!(snapshot.captured_stream_count, 2);
+
+    assert!(service.stop().is_ok());
+    media_tap.write_frame(
+        &session_key,
+        TransportMediaId::new(3),
+        Instant::now(),
+        b"ignored",
+    );
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.captured_packet_count, 3);
+    assert_eq!(snapshot.captured_stream_count, 2);
+}
 
 #[test]
 fn recording_service_allows_only_legal_state_machine_transitions() {

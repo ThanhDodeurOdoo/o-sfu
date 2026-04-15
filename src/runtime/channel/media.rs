@@ -8,8 +8,11 @@ use crate::signaling::{
 };
 
 use super::{
-    Channel, SessionCleanupPolicy,
-    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack},
+    Channel,
+    state::{
+        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
+        TransportMediaRemoval,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -335,19 +338,56 @@ impl Channel {
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
-        let Some(outcome) = ({
-            let mut state = self.state.write().await;
-            state.unpublish_track(session_id, connection_id, stream_type)
+        let Some(transport_removals) = ({
+            let state = self.state.read().await;
+            state.unpublish_transport_removals(session_id, connection_id, stream_type)
         }) else {
             return false;
         };
-        self.cleanup_transport_removals(
-            Some(transport_adapter),
-            &outcome.transport_removals,
-            SessionCleanupPolicy::StateAndTransportMedia,
-        )
-        .await;
+        if !self
+            .cleanup_transport_removals_strict(transport_adapter, &transport_removals)
+            .await
+        {
+            return false;
+        }
+        let Some(outcome) = ({
+            let mut state = self.state.write().await;
+            state.unpublish_track(session_id, connection_id, stream_type, transport_removals)
+        }) else {
+            warn!(
+                ?session_id,
+                ?stream_type,
+                "transport cleanup succeeded but channel state commit failed"
+            );
+            return false;
+        };
         outcome.emit(session_id, stream_type);
+        true
+    }
+
+    async fn cleanup_transport_removals_strict(
+        &self,
+        transport_adapter: &RuntimeTransportAdapter,
+        removals: &[TransportMediaRemoval],
+    ) -> bool {
+        for removal in removals {
+            if transport_adapter
+                .remove_media(
+                    &self.transport_session_key(removal.session(), removal.connection()),
+                    removal.transport_media(),
+                )
+                .await
+                .is_err()
+            {
+                warn!(
+                    session_id = ?removal.session(),
+                    connection_id = removal.connection(),
+                    transport_media_id = ?removal.transport_media(),
+                    "transport adapter failed to remove transport media during channel cleanup"
+                );
+                return false;
+            }
+        }
         true
     }
 

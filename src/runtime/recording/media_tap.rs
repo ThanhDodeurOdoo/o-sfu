@@ -1,8 +1,8 @@
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     fmt,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, PoisonError, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::Instant,
@@ -14,14 +14,14 @@ use super::{MediaFrameSink, MediaSource};
 
 pub(crate) struct MediaTap {
     any_active: AtomicBool,
-    active_channels: Mutex<BTreeMap<u64, Arc<dyn MediaFrameSink>>>,
+    active_channels: RwLock<HashMap<u64, Arc<dyn MediaFrameSink>>>,
 }
 
 impl Default for MediaTap {
     fn default() -> Self {
         Self {
             any_active: AtomicBool::new(false),
-            active_channels: Mutex::new(BTreeMap::new()),
+            active_channels: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -34,16 +34,14 @@ impl MediaTap {
         received_at: Instant,
         payload: &[u8],
     ) {
-        if !self.any_active.load(Ordering::Relaxed) {
+        if !self.any_active.load(Ordering::Acquire) {
             return;
         }
-        let sink = self
+        let active_channels = self
             .active_channels
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&session_key.channel_runtime_id())
-            .cloned();
-        if let Some(sink) = sink {
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(sink) = active_channels.get(&session_key.channel_runtime_id()) {
             sink.record_packet(session_key, transport_media_id, received_at, payload);
         }
     }
@@ -51,14 +49,14 @@ impl MediaTap {
     #[cfg(test)]
     pub(crate) fn is_channel_active(&self, channel_runtime_id: u64) -> bool {
         self.active_channels
-            .lock()
+            .read()
             .unwrap_or_else(PoisonError::into_inner)
             .contains_key(&channel_runtime_id)
     }
 
     fn active_channel_count(&self) -> usize {
         self.active_channels
-            .lock()
+            .read()
             .unwrap_or_else(PoisonError::into_inner)
             .len()
     }
@@ -67,7 +65,7 @@ impl MediaTap {
 impl MediaSource for MediaTap {
     fn activate_channel(&self, channel_runtime_id: u64, sink: Arc<dyn MediaFrameSink>) {
         self.active_channels
-            .lock()
+            .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(channel_runtime_id, sink);
         self.any_active.store(true, Ordering::Release);
@@ -76,13 +74,11 @@ impl MediaSource for MediaTap {
     fn deactivate_channel(&self, channel_runtime_id: u64) {
         let mut active_channels = self
             .active_channels
-            .lock()
+            .write()
             .unwrap_or_else(PoisonError::into_inner);
         active_channels.remove(&channel_runtime_id);
-        let has_active_channels = !active_channels.is_empty();
-        drop(active_channels);
         self.any_active
-            .store(has_active_channels, Ordering::Release);
+            .store(!active_channels.is_empty(), Ordering::Release);
     }
 }
 

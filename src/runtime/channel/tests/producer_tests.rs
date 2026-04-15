@@ -154,6 +154,93 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 }
 
 #[tokio::test]
+async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
+    let mut scenario = setup_real_rtc_refresh_scenario().await;
+
+    assert!(
+        scenario
+            .channel
+            .publish_track(
+                &scenario.publisher_session_id,
+                StreamType::Audio,
+                MediaKind::Audio,
+                test_audio_rtp_parameters(),
+                &scenario.transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
+    assert!(
+        drain_outbound(&mut scenario.subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, SessionOutbound::Request(_)))
+    );
+
+    let Some(connection_id) = scenario
+        .channel
+        .session_connection_id(&scenario.publisher_session_id)
+        .await
+    else {
+        panic!("publisher connection should exist");
+    };
+    let Some(transport_media_id) = scenario
+        .channel
+        .producer_transport_media_id(
+            &scenario.publisher_session_id,
+            connection_id,
+            StreamType::Audio,
+        )
+        .await
+    else {
+        panic!("published audio should expose a transport media id");
+    };
+    let transport_session_key = scenario
+        .channel
+        .transport_session_key(&scenario.publisher_session_id, connection_id);
+    scenario
+        .transport_adapter
+        .close_session(&transport_session_key)
+        .await
+        .expect("closing the publisher transport should succeed");
+
+    assert!(
+        !scenario
+            .channel
+            .unpublish_track(
+                &scenario.publisher_session_id,
+                connection_id,
+                StreamType::Audio,
+                &scenario.transport_adapter,
+            )
+            .await,
+        "unpublish should abort when transport cleanup fails"
+    );
+
+    assert_eq!(scenario.channel.producer_count().await, 1);
+    assert_eq!(scenario.channel.consumer_count().await, 1);
+    assert!(
+        scenario
+            .channel
+            .has_producer_route_target(
+                &scenario.publisher_session_id,
+                connection_id,
+                StreamType::Audio,
+            )
+            .await
+    );
+    assert!(
+        scenario
+            .channel
+            .producer_stream_type_for_transport_media_id(transport_media_id)
+            .await
+            .is_some()
+    );
+    assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
+    assert!(drain_outbound(&mut scenario.subscriber_rx).is_empty());
+}
+
+#[tokio::test]
 async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     assert!(

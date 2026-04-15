@@ -348,22 +348,20 @@ impl ChannelState {
         self.producer_route_target(session_id, connection_id, stream_type)
     }
 
-    pub(in crate::runtime::channel) fn unpublish_track(
-        &mut self,
+    pub(in crate::runtime::channel) fn unpublish_transport_removals(
+        &self,
         session_id: &SessionId,
         connection_id: u64,
         stream_type: StreamType,
-    ) -> Option<UnpublishTrackOutcome> {
+    ) -> Option<Vec<TransportMediaRemoval>> {
         let producer_target = self.producer_route_target(session_id, connection_id, stream_type)?;
-        let producer_transport_removal = TransportMediaRemoval {
+        let mut transport_removals = vec![TransportMediaRemoval {
             session: session_id.clone(),
             connection: connection_id,
             transport_media: producer_target.transport_media_id,
-        };
-        let consumer_transport_removals = self
-            .consumer_index
-            .iter()
-            .filter_map(|(key, consumer_state)| {
+        }];
+        transport_removals.extend(self.consumer_index.iter().filter_map(
+            |(key, consumer_state)| {
                 if key.producer_session_id != *session_id || key.stream_type != stream_type {
                     return None;
                 }
@@ -372,8 +370,19 @@ impl ChannelState {
                     connection: consumer_state.consumer_connection_id,
                     transport_media: consumer_state.consumer_media,
                 })
-            })
-            .collect::<Vec<_>>();
+            },
+        ));
+        Some(transport_removals)
+    }
+
+    pub(in crate::runtime::channel) fn unpublish_track(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        transport_removals: Vec<TransportMediaRemoval>,
+    ) -> Option<UnpublishTrackOutcome> {
+        let producer_target = self.producer_route_target(session_id, connection_id, stream_type)?;
         if self
             .topology
             .remove_producer(producer_target.routed_producer_id)
@@ -402,8 +411,6 @@ impl ChannelState {
             }
             StreamType::Audio => None,
         };
-        let mut transport_removals = consumer_transport_removals;
-        transport_removals.push(producer_transport_removal);
         Some(UnpublishTrackOutcome {
             recipients: self
                 .sessions
