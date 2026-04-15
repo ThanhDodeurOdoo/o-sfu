@@ -100,6 +100,12 @@ pub(crate) enum TransportAdapterError {
     UnsupportedFeature,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceMediaRoutingPolicy {
+    Default,
+    Suppress,
+}
+
 /// Named request for connecting one transport direction with client auth data.
 ///
 /// This keeps the transport boundary readable when optional ICE credentials or
@@ -826,6 +832,28 @@ impl RuntimeTransportAdapter {
         }
     }
 
+    /// Update additional transport-local routing policy for one producer source.
+    pub(crate) async fn set_source_routing_policy(
+        &self,
+        session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        policy: SourceMediaRoutingPolicy,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Stub(adapter) => {
+                adapter
+                    .set_source_routing_policy(session_key, source_transport_media_id, policy)
+                    .await
+            }
+            Self::Rtc(adapter) => {
+                adapter
+                    .shard_for_session(session_key)
+                    .set_source_routing_policy(session_key, source_transport_media_id, policy)
+                    .await
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn debug_set_session_transport_health(
         &self,
@@ -851,6 +879,34 @@ impl RuntimeTransportAdapter {
                 adapter
                     .debug_route_entry(source_session_key, source_mid)
                     .await
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn debug_route_entry_by_media_id(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<DebugRouteEntry> {
+        match self {
+            Self::Stub(_) => None,
+            Self::Rtc(adapter) => {
+                if let Some(entry) = adapter
+                    .primary_shard
+                    .debug_route_entry_by_media_id(source_transport_media_id)
+                    .await
+                {
+                    return Some(entry);
+                }
+                for shard in &adapter.extra_shards {
+                    if let Some(entry) = shard
+                        .debug_route_entry_by_media_id(source_transport_media_id)
+                        .await
+                    {
+                        return Some(entry);
+                    }
+                }
+                None
             }
         }
     }

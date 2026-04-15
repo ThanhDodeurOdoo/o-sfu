@@ -20,8 +20,8 @@ use crate::config::RtcPortRange;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
-    TransportMediaId, TransportSessionKey,
+    RtcTransportAdapterConfig, SessionOffer, SourceMediaRoutingPolicy, TransportAdapterError,
+    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::{TransportConnectDirection, TransportConnectRequest};
@@ -357,6 +357,21 @@ impl RtcTransportAdapter {
             source_session_key: source_session_key.clone(),
             source_transport_media_id,
             active,
+            response,
+        })
+        .await
+    }
+
+    pub(crate) async fn set_source_routing_policy(
+        &self,
+        session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        policy: SourceMediaRoutingPolicy,
+    ) -> Result<(), TransportAdapterError> {
+        self.request_worker(|response| RtcWorkerCommand::SetSourceRoutingPolicy {
+            session_key: session_key.clone(),
+            source_transport_media_id,
+            policy,
             response,
         })
         .await

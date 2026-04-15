@@ -55,9 +55,9 @@ mod validation;
 mod worker;
 
 pub(crate) use api::RtcTransportAdapter;
-#[cfg(test)]
-pub(crate) use commands::DebugRouteEntry;
 pub(crate) use commands::RelayCleanup;
+#[cfg(test)]
+pub(crate) use commands::{DebugPacketGate, DebugRouteEntry};
 pub(crate) use forwarded_packet::ForwardedPacket;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet;

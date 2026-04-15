@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
+    SourceMediaRoutingPolicy, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 use super::super::{
@@ -168,6 +168,21 @@ pub(super) fn respond_set_consumer_active(
         source_session_key,
         source_transport_media_id,
         active,
+    ));
+}
+
+pub(super) fn respond_set_source_routing_policy(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    policy: SourceMediaRoutingPolicy,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_source_routing_policy(
+        state,
+        session_key,
+        source_transport_media_id,
+        policy,
     ));
 }
 
@@ -587,6 +602,32 @@ fn worker_set_consumer_active(
                 active,
             );
     }
+    Ok(())
+}
+
+fn worker_set_source_routing_policy(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    policy: SourceMediaRoutingPolicy,
+) -> Result<(), TransportAdapterError> {
+    match state.mid_registry.get(&source_transport_media_id.as_u64()) {
+        Some(RegisteredMediaHandle::Producer {
+            session_key: owner_session_key,
+            ..
+        }) if owner_session_key == session_key => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    state.route_control.set_policy_packet_gate(
+        source_transport_media_id,
+        match policy {
+            SourceMediaRoutingPolicy::Default => None,
+            SourceMediaRoutingPolicy::Suppress => Some(PacketLayerGate::Block),
+        },
+    );
     Ok(())
 }
 

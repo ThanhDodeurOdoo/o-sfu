@@ -196,8 +196,8 @@ mod tests {
     use str0m::media::Mid;
 
     use super::*;
-    use crate::runtime::rtc_adapter::sample_forwarded_packet;
     use crate::runtime::rtc_adapter::route_control::PacketLayerGate;
+    use crate::runtime::rtc_adapter::sample_forwarded_packet;
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
 

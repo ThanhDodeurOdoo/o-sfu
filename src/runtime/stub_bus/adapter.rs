@@ -7,7 +7,8 @@ use std::{
 #[cfg(test)]
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    SessionOffer, SourceMediaRoutingPolicy, TransportAdapterError, TransportMediaId,
+    TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -344,6 +345,19 @@ impl StubWebRtcAdapter {
             source_session_id: source_session_key.session_id().clone(),
             active,
         });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn set_source_routing_policy(
+        &self,
+        _session_key: &TransportSessionKey,
+        _source_transport_media_id: TransportMediaId,
+        _policy: SourceMediaRoutingPolicy,
+    ) -> Result<(), TransportAdapterError> {
         Ok(())
     }
 }

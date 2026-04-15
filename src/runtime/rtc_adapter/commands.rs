@@ -14,7 +14,8 @@ use std::time::Instant;
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
-    SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    SessionOffer, SourceMediaRoutingPolicy, TransportAdapterError, TransportMediaId,
+    TransportSessionKey,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -157,12 +158,14 @@ impl RemoteSourceControl {
         source_transport_media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
     ) {
-        let _ = self.tx.try_send(RtcWorkerCommand::SetRemoteSourcePacketGate {
-            source_session_key,
-            source_transport_media_id,
-            target_id: self.target_id,
-            packet_gate,
-        });
+        let _ = self
+            .tx
+            .try_send(RtcWorkerCommand::SetRemoteSourcePacketGate {
+                source_session_key,
+                source_transport_media_id,
+                target_id: self.target_id,
+                packet_gate,
+            });
     }
 }
 
@@ -254,6 +257,12 @@ pub(super) enum RtcWorkerCommand {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
+        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+    },
+    SetSourceRoutingPolicy {
+        session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        policy: SourceMediaRoutingPolicy,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
     #[cfg(test)]

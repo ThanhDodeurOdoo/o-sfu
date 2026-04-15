@@ -131,7 +131,8 @@ fn handle_core_worker_command(
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
-        | RtcWorkerCommand::SetConsumerActive { .. } => {
+        | RtcWorkerCommand::SetConsumerActive { .. }
+        | RtcWorkerCommand::SetSourceRoutingPolicy { .. } => {
             handle_media_command(state, context.metrics, context.relay_registry, command);
         }
         #[cfg(test)]
@@ -223,7 +224,8 @@ fn handle_media_command(
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
-        | RtcWorkerCommand::SetConsumerActive { .. } => {
+        | RtcWorkerCommand::SetConsumerActive { .. }
+        | RtcWorkerCommand::SetSourceRoutingPolicy { .. } => {
             handle_media_route_control_command(state, metrics, relay_registry, command);
         }
         _ => {}
@@ -306,6 +308,18 @@ fn handle_media_route_control_command(
             &source_session_key,
             source_transport_media_id,
             active,
+            response,
+        ),
+        RtcWorkerCommand::SetSourceRoutingPolicy {
+            session_key,
+            source_transport_media_id,
+            policy,
+            response,
+        } => media::respond_set_source_routing_policy(
+            state,
+            &session_key,
+            source_transport_media_id,
+            policy,
             response,
         ),
         _ => {}

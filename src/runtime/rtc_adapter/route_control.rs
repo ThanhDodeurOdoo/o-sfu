@@ -93,6 +93,18 @@ impl RouteControlState {
         }
     }
 
+    pub(super) fn set_policy_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: Option<PacketLayerGate>,
+    ) {
+        let source_control = self.sources.entry(source_transport_media_id).or_default();
+        source_control.policy_packet_gate = packet_gate;
+        if source_control.is_empty() {
+            self.sources.remove(&source_transport_media_id);
+        }
+    }
+
     pub(super) fn set_relay_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -166,6 +178,29 @@ pub(super) fn aggregate_packet_gates<'a>(
         .or_else(|| saw_block.then_some(PacketLayerGate::Block))
 }
 
+fn intersect_packet_gates(
+    first: Option<PacketLayerGate>,
+    second: Option<PacketLayerGate>,
+) -> Option<PacketLayerGate> {
+    match (first, second) {
+        (None, None) => None,
+        (Some(gate), None) | (None, Some(gate)) => Some(gate),
+        (Some(PacketLayerGate::Block), _) | (_, Some(PacketLayerGate::Block)) => {
+            Some(PacketLayerGate::Block)
+        }
+        (Some(PacketLayerGate::Open), Some(gate)) | (Some(gate), Some(PacketLayerGate::Open)) => {
+            Some(gate)
+        }
+        (Some(PacketLayerGate::Rid(first_rid)), Some(PacketLayerGate::Rid(second_rid))) => {
+            if first_rid == second_rid {
+                Some(PacketLayerGate::Rid(first_rid))
+            } else {
+                Some(PacketLayerGate::Block)
+            }
+        }
+    }
+}
+
 pub(super) fn coalesce_keyframe_kind(
     current: KeyframeRequestKind,
     incoming: KeyframeRequestKind,
@@ -184,21 +219,26 @@ struct KeyframeRequestWindow {
 #[derive(Debug, Default)]
 struct SourceRouteControl {
     keyframe_request: Option<KeyframeRequestWindow>,
+    policy_packet_gate: Option<PacketLayerGate>,
     local_packet_gate: Option<PacketLayerGate>,
     relay_packet_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
 }
 
 impl SourceRouteControl {
     fn effective_packet_gate(&self) -> Option<PacketLayerGate> {
-        aggregate_packet_gates(
-            self.local_packet_gate
-                .iter()
-                .chain(self.relay_packet_gates.values()),
+        intersect_packet_gates(
+            aggregate_packet_gates(
+                self.local_packet_gate
+                    .iter()
+                    .chain(self.relay_packet_gates.values()),
+            ),
+            self.policy_packet_gate.clone(),
         )
     }
 
     fn is_empty(&self) -> bool {
         self.keyframe_request.is_none()
+            && self.policy_packet_gate.is_none()
             && self.local_packet_gate.is_none()
             && self.relay_packet_gates.is_empty()
     }
@@ -361,6 +401,38 @@ mod tests {
         assert_eq!(
             state.effective_packet_gate(source_transport_media_id),
             Some(PacketLayerGate::Open)
+        );
+    }
+
+    #[test]
+    fn route_control_policy_gate_can_block_otherwise_open_routes() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(22);
+
+        state.set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
+        state.set_policy_packet_gate(source_transport_media_id, Some(PacketLayerGate::Block));
+
+        assert_eq!(
+            state.effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::Block)
+        );
+    }
+
+    #[test]
+    fn route_control_policy_gate_clears_back_to_the_route_aggregate() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(23);
+
+        state.set_local_packet_gate(
+            source_transport_media_id,
+            Some(PacketLayerGate::Rid("hi".into())),
+        );
+        state.set_policy_packet_gate(source_transport_media_id, Some(PacketLayerGate::Block));
+        state.set_policy_packet_gate(source_transport_media_id, None);
+
+        assert_eq!(
+            state.effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::Rid("hi".into()))
         );
     }
 }

@@ -22,4 +22,6 @@ pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
 };
-pub(in crate::runtime::channel) use self::shared::{ChannelState, TransportMediaRemoval};
+pub(in crate::runtime::channel) use self::shared::{
+    AudioSourceRoutingTarget, ChannelState, TransportMediaRemoval,
+};

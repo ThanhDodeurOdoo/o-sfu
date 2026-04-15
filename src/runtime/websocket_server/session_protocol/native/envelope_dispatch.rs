@@ -16,7 +16,12 @@ impl NativeSessionProtocol {
         match envelope {
             ClientEnvelope::Message(ClientMessage::Info(info)) => {
                 self.channel
-                    .update_session_info(&self.session_id, info, false)
+                    .update_session_info_runtime(
+                        &self.session_id,
+                        info,
+                        false,
+                        &self.transport_adapter,
+                    )
                     .await;
                 SessionProtocolOutcome::Continue
             }
