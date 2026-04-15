@@ -16,7 +16,7 @@ use o_sfu::{
     config::Config,
     runtime::testing::{TestServer, decode_native_welcome_batch, spawn_test_server},
     signaling::{
-        http::{STATS_PATH, StatsResponse},
+        http::{METRICS_PATH, STATS_PATH, StatsResponse},
         protocol::{
             AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
             ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
@@ -58,6 +58,17 @@ impl NativeLocalNetwork {
             .await
             .ok()?
             .json::<StatsResponse>()
+            .await
+            .ok()
+    }
+
+    pub async fn metrics_text(&self) -> Option<String> {
+        reqwest::Client::new()
+            .get(format!("{}{METRICS_PATH}", self.server.http_base_url()))
+            .send()
+            .await
+            .ok()?
+            .text()
             .await
             .ok()
     }

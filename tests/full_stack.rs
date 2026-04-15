@@ -319,6 +319,56 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
 }
 
 #[tokio::test]
+async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = NativeLocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-lifetime-metrics", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let peers = Box::pin(connect_audio_media_flow_peers_for_sessions(
+        &network,
+        &channel,
+        SessionId::Integer(62),
+        SessionId::Integer(63),
+    ))
+    .await;
+    assert!(peers.is_some());
+    let Some((publisher, subscriber)) = peers else {
+        return;
+    };
+
+    sleep(Duration::from_millis(1_200)).await;
+
+    assert!(publisher.close().await.is_some());
+    assert!(subscriber.close().await.is_some());
+
+    let lifetime_metrics = wait_for_transport_lifetime_metrics(&network, 2).await;
+    assert!(lifetime_metrics.is_some());
+    let Some(lifetime_metrics) = lifetime_metrics else {
+        return;
+    };
+
+    assert_eq!(lifetime_metrics.le_1_second, 0);
+    assert_eq!(lifetime_metrics.le_10_seconds, 2);
+    assert_eq!(lifetime_metrics.le_60_seconds, 2);
+    assert_eq!(lifetime_metrics.le_300_seconds, 2);
+    assert_eq!(lifetime_metrics.count, 2);
+    assert!(lifetime_metrics.sum_seconds >= 2.0);
+}
+
+#[tokio::test]
 async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_routes() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
@@ -870,4 +920,73 @@ async fn stream_until_audio_bitrate_is_observable(
         sleep(Duration::from_millis(25)).await;
     }
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TransportSessionLifetimeMetrics {
+    le_1_second: u64,
+    le_10_seconds: u64,
+    le_60_seconds: u64,
+    le_300_seconds: u64,
+    count: u64,
+    sum_seconds: f64,
+}
+
+async fn wait_for_transport_lifetime_metrics(
+    network: &NativeLocalNetwork,
+    expected_count: u64,
+) -> Option<TransportSessionLifetimeMetrics> {
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let metrics = parse_transport_lifetime_metrics(&network.metrics_text().await?)?;
+            if metrics.count >= expected_count {
+                return Some(metrics);
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+fn parse_transport_lifetime_metrics(metrics_text: &str) -> Option<TransportSessionLifetimeMetrics> {
+    Some(TransportSessionLifetimeMetrics {
+        le_1_second: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_session_lifetime_seconds_bucket{le=\"1\"}",
+        )?,
+        le_10_seconds: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_session_lifetime_seconds_bucket{le=\"10\"}",
+        )?,
+        le_60_seconds: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_session_lifetime_seconds_bucket{le=\"60\"}",
+        )?,
+        le_300_seconds: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_session_lifetime_seconds_bucket{le=\"300\"}",
+        )?,
+        count: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_session_lifetime_seconds_count",
+        )?,
+        sum_seconds: parse_prometheus_f64(
+            metrics_text,
+            "osfu_transport_session_lifetime_seconds_sum",
+        )?,
+    })
+}
+
+fn parse_prometheus_u64(metrics_text: &str, metric_name: &str) -> Option<u64> {
+    metrics_text
+        .lines()
+        .find_map(|line| line.strip_prefix(metric_name)?.trim().parse().ok())
+}
+
+fn parse_prometheus_f64(metrics_text: &str, metric_name: &str) -> Option<f64> {
+    metrics_text
+        .lines()
+        .find_map(|line| line.strip_prefix(metric_name)?.trim().parse().ok())
 }
