@@ -48,6 +48,7 @@ impl Drop for TestServer {
 ///
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
+    let metrics = Arc::new(RuntimeMetrics::default());
     let recording_media_tap = Arc::new(MediaTap::default());
     let channels = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
@@ -59,12 +60,14 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
             ),
         ),
         Arc::clone(&recording_media_tap),
+        Arc::clone(&metrics),
     ));
-    let transport_adapter = build_transport_adapter(&config, recording_media_tap);
+    let transport_adapter =
+        build_transport_adapter(&config, recording_media_tap, Arc::clone(&metrics));
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
-        metrics: Arc::new(RuntimeMetrics::default()),
+        metrics,
         transport_adapter,
     };
     let listener = TcpListener::bind(state.config.bind_address).await?;

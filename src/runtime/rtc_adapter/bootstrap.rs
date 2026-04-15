@@ -73,9 +73,9 @@ pub(super) fn ensure_session_rtc_state(
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
     codec_flags: MediaCodecFlags,
-) -> Result<(), TransportAdapterError> {
+) -> Result<bool, TransportAdapterError> {
     if sessions.contains_key(session_key) {
-        return Ok(());
+        return Ok(false);
     }
     let mut rtc = rtc_builder(codec_flags)
         .set_ice_lite(true)
@@ -118,7 +118,7 @@ pub(super) fn ensure_session_rtc_state(
             sdp_negotiation: SessionSdpNegotiationState::default(),
         },
     );
-    Ok(())
+    Ok(true)
 }
 
 fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {

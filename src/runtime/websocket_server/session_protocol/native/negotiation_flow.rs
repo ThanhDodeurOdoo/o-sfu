@@ -204,6 +204,7 @@ mod tests {
     use crate::{
         config::{MediaCodecFlags, RtcPortRange},
         runtime::{
+            metrics::RuntimeMetrics,
             recording::MediaTap,
             transport_adapter::{
                 RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportSessionKey,
@@ -220,6 +221,7 @@ mod tests {
                 1,
                 MediaCodecFlags::default(),
                 Arc::new(MediaTap::default()),
+                Arc::new(RuntimeMetrics::default()),
             ))
             .build()
     }

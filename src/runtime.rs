@@ -66,8 +66,13 @@ impl RuntimeState {
 impl Runtime {
     #[must_use]
     pub fn new(config: Config) -> Self {
+        let metrics = Arc::new(RuntimeMetrics::default());
         let recording_media_tap = Arc::new(MediaTap::default());
-        let transport_adapter = build_transport_adapter(&config, Arc::clone(&recording_media_tap));
+        let transport_adapter = build_transport_adapter(
+            &config,
+            Arc::clone(&recording_media_tap),
+            Arc::clone(&metrics),
+        );
         let rtc_media_worker_count = config.rtc_media_worker_count;
         let channel_runtime_policy = ChannelRuntimePolicy::new(
             ChannelAdmissionPolicy::new(config.channel_size),
@@ -79,8 +84,9 @@ impl Runtime {
             channels: Arc::new(ChannelManager::new(
                 ChannelManagerConfig::new(rtc_media_worker_count, channel_runtime_policy),
                 recording_media_tap,
+                Arc::clone(&metrics),
             )),
-            metrics: Arc::new(RuntimeMetrics::default()),
+            metrics,
             transport_adapter,
         }
     }
@@ -124,6 +130,7 @@ pub fn run() -> Result<()> {
 fn build_transport_adapter(
     config: &Config,
     recording_media_tap: Arc<MediaTap>,
+    metrics: Arc<RuntimeMetrics>,
 ) -> RuntimeTransportAdapter {
     let builder = RuntimeTransportAdapter::builder();
     match config.transport_backend {
@@ -135,6 +142,7 @@ fn build_transport_adapter(
                 config.rtc_media_worker_count,
                 config.codec_flags,
                 recording_media_tap,
+                metrics,
             ))
             .build(),
     }

@@ -13,6 +13,8 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     append_ws_connection_metrics(&mut output, snapshot);
     append_ws_loop_metrics(&mut output, snapshot);
     append_ws_bus_metrics(&mut output, snapshot);
+    append_live_gauges(&mut output, snapshot);
+    append_rtp_metrics(&mut output, snapshot);
     output
 }
 
@@ -220,6 +222,50 @@ fn append_ws_bus_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot)
     );
 }
 
+fn append_live_gauges(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_gauge(
+        output,
+        "osfu_channels_active",
+        "Current number of live channels owned by this runtime.",
+        snapshot.active_channels,
+    );
+    append_gauge(
+        output,
+        "osfu_sessions_active",
+        "Current number of live channel sessions owned by this runtime.",
+        snapshot.active_sessions,
+    );
+    append_gauge(
+        output,
+        "osfu_transport_sessions_active",
+        "Current number of live RTC transport sessions on this runtime.",
+        snapshot.active_transport_sessions,
+    );
+}
+
+fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_labeled_counter_family(
+        output,
+        "osfu_rtp_packets_total",
+        "Total RTP packets processed by flow direction.",
+        "direction",
+        &[
+            LabeledValue::new("ingress", snapshot.rtp_packets_ingress),
+            LabeledValue::new("egress", snapshot.rtp_packets_egress),
+        ],
+    );
+    append_labeled_counter_family(
+        output,
+        "osfu_rtp_payload_bytes_total",
+        "Total RTP payload bytes processed by flow direction.",
+        "direction",
+        &[
+            LabeledValue::new("ingress", snapshot.rtp_payload_bytes_ingress),
+            LabeledValue::new("egress", snapshot.rtp_payload_bytes_egress),
+        ],
+    );
+}
+
 #[derive(Clone, Copy)]
 struct LabeledValue {
     label_value: &'static str,
@@ -244,6 +290,21 @@ fn append_counter(output: &mut String, name: &str, help: &str, value: u64) {
     output.push_str(name);
     output.push(' ');
     append_u64(output, value);
+    output.push('\n');
+}
+
+fn append_gauge(output: &mut String, name: &str, help: &str, value: i64) {
+    output.push_str("# HELP ");
+    output.push_str(name);
+    output.push(' ');
+    output.push_str(help);
+    output.push('\n');
+    output.push_str("# TYPE ");
+    output.push_str(name);
+    output.push_str(" gauge\n");
+    output.push_str(name);
+    output.push(' ');
+    output.push_str(&value.to_string());
     output.push('\n');
 }
 
@@ -309,6 +370,11 @@ mod tests {
         metrics.record_ws_session_loop_exit(WsSessionLoopExitReason::TransportDisconnected);
         metrics.record_ws_bus_batch_received(2);
         metrics.record_ws_bus_send_failure();
+        metrics.add_active_channels(1);
+        metrics.add_active_sessions(2);
+        metrics.add_active_transport_sessions(1);
+        metrics.record_rtp_ingress(1200);
+        metrics.record_rtp_egress(900);
 
         let rendered = render_prometheus(&metrics);
 
@@ -330,5 +396,10 @@ mod tests {
         assert!(rendered.contains("osfu_ws_bus_batches_total{direction=\"received\"} 1"));
         assert!(rendered.contains("osfu_ws_bus_envelopes_total{direction=\"received\"} 2"));
         assert!(rendered.contains("osfu_ws_bus_failures_total{kind=\"send\"} 1"));
+        assert!(rendered.contains("# TYPE osfu_channels_active gauge"));
+        assert!(rendered.contains("osfu_sessions_active 2"));
+        assert!(rendered.contains("osfu_transport_sessions_active 1"));
+        assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
+        assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
     }
 }

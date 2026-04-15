@@ -14,6 +14,32 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
 }
 
 #[tokio::test]
+async fn rtc_metrics_track_live_transport_sessions_without_double_counting() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 16, SessionId::Integer(16));
+
+    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 0);
+    assert!(
+        adapter
+            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
+            .await
+            .is_ok()
+    );
+    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
+
+    assert!(
+        adapter
+            .create_initial_session_offer(&session_key)
+            .await
+            .is_ok()
+    );
+    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
+
+    assert!(adapter.close_session(&session_key).await.is_ok());
+    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 0);
+}
+
+#[tokio::test]
 async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 18, SessionId::Integer(18));

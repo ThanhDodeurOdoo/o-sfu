@@ -1,4 +1,6 @@
 use super::fixtures::*;
+use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
+use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
 
 #[tokio::test]
 async fn channel_manager_is_idempotent_by_issuer() {
@@ -152,4 +154,74 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     assert_ne!(replacement.uuid(), channel_uuid);
+}
+
+#[tokio::test]
+async fn manager_metrics_track_live_channels_and_sessions_without_replacement_drift() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = ChannelManager::new(
+        super::super::ChannelManagerConfig::new(
+            1,
+            super::super::ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(2),
+                RuntimeFeatureFlags::default(),
+                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::clone(&metrics),
+    );
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let channel_uuid = channel.uuid().to_owned();
+    assert_eq!(metrics.snapshot().active_channels, 1);
+
+    let (first_tx, _first_rx) = test_sender();
+    let first_join = manager
+        .join_session(
+            &channel_uuid,
+            JoinSessionRequest {
+                session_id: SessionId::Integer(1),
+                label: None,
+                permissions: SessionPermissions::default(),
+                sender: first_tx,
+            },
+            &transport_adapter,
+            super::super::SessionCleanupPolicy::StateOnly,
+        )
+        .await;
+    assert!(first_join.is_ok());
+    assert_eq!(metrics.snapshot().active_sessions, 1);
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    let replacement_join = manager
+        .join_session(
+            &channel_uuid,
+            JoinSessionRequest {
+                session_id: SessionId::Integer(1),
+                label: Some(String::from("replacement")),
+                permissions: SessionPermissions::default(),
+                sender: replacement_tx,
+            },
+            &transport_adapter,
+            super::super::SessionCleanupPolicy::StateOnly,
+        )
+        .await;
+    assert!(replacement_join.is_ok());
+    assert_eq!(metrics.snapshot().active_sessions, 1);
+
+    manager
+        .disconnect_sessions(
+            &channel_uuid,
+            &[SessionId::Integer(1)],
+            &transport_adapter,
+            super::super::SessionCleanupPolicy::StateOnly,
+        )
+        .await;
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_channels, 0);
+    assert_eq!(snapshot.active_sessions, 0);
 }

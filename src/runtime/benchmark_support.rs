@@ -12,6 +12,7 @@ use std::{
 use tokio::runtime::Builder;
 
 use super::{
+    metrics::RuntimeMetrics,
     recording::MediaTap,
     rtc_adapter::RtcTransportAdapter,
     transport_adapter::{RtcTransportAdapterConfig, TransportAdapterError, TransportSessionKey},
@@ -54,6 +55,7 @@ impl RtcUdpDemuxBenchmarkFixture {
             BENCHMARK_PORT_RANGE,
             MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
         ));
         let mut session_keys = Vec::with_capacity(session_count);
         let mut probe_addrs = Vec::with_capacity(session_count);

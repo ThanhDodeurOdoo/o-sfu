@@ -15,6 +15,8 @@ use tracing::debug;
 use crate::config::MediaCodecFlags;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::config::RtcPortRange;
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use crate::runtime::metrics::RuntimeMetrics;
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportConnectDirection;
 #[cfg(any(test, feature = "internal-benchmarks"))]
@@ -61,6 +63,7 @@ pub(super) fn respond_build_bootstrap(
     config: WorkerBootstrapConfig,
     session_key: &TransportSessionKey,
     router_capabilities: &RtpCapabilities,
+    metrics: &RuntimeMetrics,
     response: oneshot::Sender<Result<SessionTransportBootstrap, TransportAdapterError>>,
 ) {
     let _ = response.send(worker_build_bootstrap_payload(
@@ -69,6 +72,7 @@ pub(super) fn respond_build_bootstrap(
         config,
         session_key,
         router_capabilities,
+        metrics,
     ));
 }
 
@@ -106,6 +110,7 @@ fn worker_build_bootstrap_payload(
     config: WorkerBootstrapConfig,
     session_key: &TransportSessionKey,
     router_capabilities: &RtpCapabilities,
+    metrics: &RuntimeMetrics,
 ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
     let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
         shared_socket.candidate_addr
@@ -116,7 +121,7 @@ fn worker_build_bootstrap_payload(
         state.shared_socket = Some(shared_socket);
         candidate_addr
     };
-    bootstrap::ensure_session_rtc_state(
+    let created_session = bootstrap::ensure_session_rtc_state(
         &mut state.sessions,
         session_key,
         candidate_addr,
@@ -125,6 +130,9 @@ fn worker_build_bootstrap_payload(
     state.mark_session_dirty(session_key);
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
+    }
+    if created_session {
+        metrics.add_active_transport_sessions(1);
     }
     let Some(session_state) = state.sessions.get(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);

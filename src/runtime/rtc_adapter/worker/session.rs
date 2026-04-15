@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 
 use tokio::sync::oneshot;
 
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
 
 use super::super::{
@@ -16,9 +17,10 @@ pub(super) fn respond_close_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
+    metrics: &RuntimeMetrics,
     response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
 ) {
-    let close_outcome = worker_close_session(state, snapshot_state, session_key);
+    let close_outcome = worker_close_session(state, snapshot_state, session_key, metrics);
     let _ = response.send(Ok(close_outcome));
 }
 
@@ -51,8 +53,9 @@ fn worker_close_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
+    metrics: &RuntimeMetrics,
 ) -> CloseSessionOutcome {
-    state.sessions.remove(session_key);
+    let removed_session = state.sessions.remove(session_key).is_some();
     state.clear_session_schedule(session_key);
     state
         .remote_addr_demux
@@ -77,6 +80,9 @@ fn worker_close_session(
     }
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.remove_session(session_key);
+    }
+    if removed_session {
+        metrics.add_active_transport_sessions(-1);
     }
     if state.sessions.is_empty() {
         CloseSessionOutcome::WorkerDrained

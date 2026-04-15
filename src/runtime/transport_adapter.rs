@@ -9,6 +9,7 @@ use super::{
     stub_bus::StubWebRtcAdapter,
 };
 use crate::config::MediaCodecFlags;
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -212,6 +213,7 @@ pub(crate) struct RtcTransportAdapterConfig {
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
     media_tap: Arc<MediaTap>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl RtcTransportAdapterConfig {
@@ -221,12 +223,14 @@ impl RtcTransportAdapterConfig {
         rtc_port_range: RtcPortRange,
         codec_flags: MediaCodecFlags,
         media_tap: Arc<MediaTap>,
+        metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
             public_ip,
             rtc_port_range,
             codec_flags,
             media_tap,
+            metrics,
         }
     }
 
@@ -237,6 +241,7 @@ impl RtcTransportAdapterConfig {
             rtc_port_range,
             codec_flags: self.codec_flags,
             media_tap: Arc::clone(&self.media_tap),
+            metrics: Arc::clone(&self.metrics),
         }
     }
 
@@ -259,6 +264,11 @@ impl RtcTransportAdapterConfig {
     pub(crate) fn media_tap(&self) -> Arc<MediaTap> {
         Arc::clone(&self.media_tap)
     }
+
+    #[must_use]
+    pub(crate) fn metrics(&self) -> Arc<RuntimeMetrics> {
+        Arc::clone(&self.metrics)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +285,7 @@ impl RtcTransportAdapterShardSetConfig {
         worker_count: usize,
         codec_flags: MediaCodecFlags,
         media_tap: Arc<MediaTap>,
+        metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
             worker_count,
@@ -283,6 +294,7 @@ impl RtcTransportAdapterShardSetConfig {
                 rtc_port_range,
                 codec_flags,
                 media_tap,
+                metrics,
             ),
         }
     }
@@ -802,6 +814,7 @@ mod tests {
     use crate::{
         config::{MediaCodecFlags, RtcPortRange},
         runtime::{
+            metrics::RuntimeMetrics,
             recording::MediaTap,
             stub_bus::StubWebRtcAdapter,
             transport_adapter::{
@@ -859,6 +872,7 @@ mod tests {
                 1,
                 MediaCodecFlags::default(),
                 Arc::new(MediaTap::default()),
+                Arc::new(RuntimeMetrics::default()),
             ))
             .build();
 
@@ -879,6 +893,7 @@ mod tests {
                 2,
                 MediaCodecFlags::default(),
                 Arc::new(MediaTap::default()),
+                Arc::new(RuntimeMetrics::default()),
             ))
             .build();
         let first_channel_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));

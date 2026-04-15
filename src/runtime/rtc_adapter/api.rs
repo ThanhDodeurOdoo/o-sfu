@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 
 use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
     RtcTransportAdapterConfig, SessionOffer, TransportAdapterError, TransportBitrateSnapshot,
@@ -46,7 +47,7 @@ use super::state::{TransportLifecycleState, TransportStateKey};
 use super::validation;
 use super::{
     commands::{CloseSessionOutcome, RtcWorkerCommand},
-    packet_loop,
+    packet_loop::{self, PacketLoopConfig},
     state::{RtcSnapshotState, TransportSessionHealth},
 };
 
@@ -62,6 +63,7 @@ pub(crate) struct RtcTransportAdapter {
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
     media_tap: Arc<MediaTap>,
+    pub(crate) metrics: Arc<RuntimeMetrics>,
     worker_handle: Mutex<Option<RtcWorkerHandle>>,
     #[cfg(test)]
     transport_states: Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>,
@@ -75,6 +77,7 @@ impl RtcTransportAdapter {
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
             media_tap: config.media_tap(),
+            metrics: config.metrics(),
             worker_handle: Mutex::new(None),
             #[cfg(test)]
             transport_states: Arc::new(Mutex::new(BTreeMap::new())),
@@ -345,11 +348,14 @@ impl RtcTransportAdapter {
             *worker_slot = Some(worker_handle.clone());
         }
         current_runtime.spawn(packet_loop::run_packet_loop(
-            self.public_ip,
-            self.rtc_port_range,
-            self.codec_flags,
+            PacketLoopConfig {
+                public_ip: self.public_ip,
+                rtc_port_range: self.rtc_port_range,
+                codec_flags: self.codec_flags,
+                media_tap: Arc::clone(&self.media_tap),
+                metrics: Arc::clone(&self.metrics),
+            },
             snapshot_state,
-            Arc::clone(&self.media_tap),
             command_rx,
             shutdown_token,
         ));
@@ -687,6 +693,7 @@ impl Default for RtcTransportAdapter {
             RtcPortRange::new(40_000, 49_999),
             MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
         ))
     }
 }

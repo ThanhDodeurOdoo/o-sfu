@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::channel::{Channel, NegotiatedPublish};
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::stub_bus::StubWebRtcEvent;
 use crate::runtime::transport_adapter::{RtcTransportAdapterShardSetConfig, TransportSessionKey};
@@ -1236,6 +1237,7 @@ fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
             1,
             MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
         ))
         .build()
 }

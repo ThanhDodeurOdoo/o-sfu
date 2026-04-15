@@ -138,13 +138,23 @@ pub(super) async fn spawn_test_server_with_timeouts_and_protocol(
         ping_interval_ms,
         channel_size,
     );
-    let channels = Arc::new(ChannelManager::for_test_with_admission_policy(
-        ChannelAdmissionPolicy::new(config.channel_size),
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let channels = Arc::new(ChannelManager::new(
+        ChannelManagerConfig::new(
+            1,
+            ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(config.channel_size),
+                RuntimeFeatureFlags::default(),
+                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::clone(&metrics),
     ));
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
-        metrics: Arc::new(RuntimeMetrics::default()),
+        metrics,
         transport_adapter,
     };
     let state_for_server = state.clone();
@@ -204,7 +214,8 @@ pub(super) async fn spawn_test_server_with_feature_flags(
 ) -> Option<TestServer> {
     assert_eq!(session_protocol_mode, SessionProtocolMode::Native);
     let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, channel_size);
-    let channels = Arc::new(ChannelManager::for_test_with_config(
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let channels = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
             1,
             ChannelRuntimePolicy::new(
@@ -213,12 +224,14 @@ pub(super) async fn spawn_test_server_with_feature_flags(
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
+        Arc::new(MediaTap::default()),
+        Arc::clone(&metrics),
     ));
     config.feature_flags = feature_flags;
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
-        metrics: Arc::new(RuntimeMetrics::default()),
+        metrics,
         transport_adapter,
     };
     let state_for_server = state.clone();
@@ -247,6 +260,7 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
             1,
             MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
         ))
         .build()
 }

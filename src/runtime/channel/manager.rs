@@ -8,6 +8,7 @@ use super::{
     Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelRuntimeContext,
     ChannelRuntimePolicy, ChannelSessionStatsSnapshot, SessionCleanupPolicy, SessionOutbound,
 };
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::shared::{SessionId, SessionPermissions};
@@ -61,6 +62,7 @@ pub struct ChannelManager {
     media_worker_count: usize,
     runtime_policy: ChannelRuntimePolicy,
     recording_media_tap: Arc<MediaTap>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 #[derive(Debug, Default)]
@@ -115,16 +117,25 @@ impl ChannelManager {
     #[cfg(test)]
     #[must_use]
     pub fn for_test_with_config(config: ChannelManagerConfig) -> Self {
-        Self::new(config, Arc::new(MediaTap::default()))
+        Self::new(
+            config,
+            Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
+        )
     }
 
     #[must_use]
-    pub fn new(config: ChannelManagerConfig, recording_media_tap: Arc<MediaTap>) -> Self {
+    pub fn new(
+        config: ChannelManagerConfig,
+        recording_media_tap: Arc<MediaTap>,
+        metrics: Arc<RuntimeMetrics>,
+    ) -> Self {
         Self {
             state: RwLock::new(ChannelManagerState::default()),
             media_worker_count: config.media_worker_count.max(1),
             runtime_policy: config.runtime_policy,
             recording_media_tap,
+            metrics,
         }
     }
 
@@ -185,6 +196,8 @@ impl ChannelManager {
                 remote_address: remote_address.unwrap_or(UNKNOWN_REMOTE_ADDRESS).to_owned(),
             },
         );
+        drop(state);
+        self.metrics.add_active_channels(1);
         channel
     }
 
@@ -233,6 +246,7 @@ impl ChannelManager {
         if !self.is_current_entry(channel_uuid, &entry.channel).await {
             return Err(ChannelManagerJoinError::MissingChannel);
         }
+        let session_count_before = entry.channel.session_count().await;
         let connection_id = entry
             .channel
             .join_session_runtime(
@@ -248,6 +262,7 @@ impl ChannelManager {
                 ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
                 ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
             })?;
+        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
         Ok((Arc::clone(&entry.channel), connection_id))
     }
 
@@ -266,10 +281,12 @@ impl ChannelManager {
         if !self.is_current_entry(channel_uuid, &entry.channel).await {
             return false;
         }
+        let session_count_before = entry.channel.session_count().await;
         let did_remove_active_session = entry
             .channel
             .leave_session_runtime(session_id, connection_id, transport_adapter, cleanup_policy)
             .await;
+        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
         if did_remove_active_session && entry.channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, &entry.channel)
                 .await;
@@ -291,10 +308,12 @@ impl ChannelManager {
         if !self.is_current_entry(channel_uuid, &entry.channel).await {
             return;
         }
+        let session_count_before = entry.channel.session_count().await;
         entry
             .channel
             .disconnect_sessions_runtime(session_ids, transport_adapter, cleanup_policy)
             .await;
+        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
         if entry.channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, &entry.channel)
                 .await;
@@ -342,6 +361,15 @@ impl ChannelManager {
         }
         state.channels_by_uuid.remove(channel_uuid);
         state.uuids_by_issuer.remove(channel.issuer());
+        drop(state);
+        self.metrics.add_active_channels(-1);
+    }
+
+    fn record_active_session_delta(&self, before: usize, after: usize) {
+        let before = i64::try_from(before).unwrap_or(i64::MAX);
+        let after = i64::try_from(after).unwrap_or(i64::MAX);
+        self.metrics
+            .add_active_sessions(after.saturating_sub(before));
     }
 
     fn media_worker_id_for_channel_runtime(&self, channel_runtime_id: u64) -> usize {

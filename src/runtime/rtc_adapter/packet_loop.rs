@@ -22,6 +22,7 @@ use super::{
     worker::handle_worker_command,
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
@@ -204,12 +205,17 @@ enum NextLoopInput {
     },
 }
 
+pub(super) struct PacketLoopConfig {
+    pub(super) public_ip: IpAddr,
+    pub(super) rtc_port_range: RtcPortRange,
+    pub(super) codec_flags: MediaCodecFlags,
+    pub(super) media_tap: Arc<MediaTap>,
+    pub(super) metrics: Arc<RuntimeMetrics>,
+}
+
 pub(super) async fn run_packet_loop(
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
+    config: PacketLoopConfig,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    media_tap: Arc<MediaTap>,
     mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
     shutdown_token: CancellationToken,
 ) {
@@ -222,19 +228,13 @@ pub(super) async fn run_packet_loop(
             handle_worker_command_and_clear_routing_cache(
                 &mut bootstrap_state,
                 &snapshot_state,
-                public_ip,
-                rtc_port_range,
-                codec_flags,
+                &config,
                 command,
                 &mut routing_state,
             );
         }
-        let snapshot = snapshot_and_pump(
-            &mut bootstrap_state,
-            &snapshot_state,
-            &media_tap,
-            &mut buffers,
-        );
+        let snapshot =
+            snapshot_and_pump(&mut bootstrap_state, &snapshot_state, &config, &mut buffers);
         if let Some(info) = snapshot.as_ref() {
             for pending_transmit in buffers.pending_transmits() {
                 if info
@@ -268,9 +268,7 @@ pub(super) async fn run_packet_loop(
                 handle_worker_command_and_clear_routing_cache(
                     &mut bootstrap_state,
                     &snapshot_state,
-                    public_ip,
-                    rtc_port_range,
-                    codec_flags,
+                    &config,
                     command,
                     &mut routing_state,
                 );
@@ -372,6 +370,7 @@ fn record_incoming_stats(
     state: &RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     media_tap: &MediaTap,
+    metrics: &RuntimeMetrics,
     buffers: &PacketLoopBuffers,
     now: Instant,
 ) {
@@ -388,6 +387,7 @@ fn record_incoming_stats(
                 now,
                 media.data.len(),
             );
+            metrics.record_rtp_ingress(media.data.len());
             media_tap.write_frame(source_session, transport_media_id, now, &media.data);
         }
     }
@@ -396,18 +396,17 @@ fn record_incoming_stats(
 fn handle_worker_command_and_clear_routing_cache(
     bootstrap_state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
+    config: &PacketLoopConfig,
     command: RtcWorkerCommand,
     routing_state: &mut PacketLoopRoutingState,
 ) {
     handle_worker_command(
         bootstrap_state,
         snapshot_state,
-        public_ip,
-        rtc_port_range,
-        codec_flags,
+        config.public_ip,
+        config.rtc_port_range,
+        config.codec_flags,
+        &config.metrics,
         command,
     );
     routing_state.clear_on_topology_change();
@@ -416,7 +415,7 @@ fn handle_worker_command_and_clear_routing_cache(
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    media_tap: &MediaTap,
+    config: &PacketLoopConfig,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<SnapshotInfo> {
     buffers.clear();
@@ -441,25 +440,51 @@ fn snapshot_and_pump(
 
     // Two-pass: collect matching routes, then write to destination sessions
     let media_stats_now = Instant::now();
-    record_incoming_stats(state, snapshot_state, media_tap, buffers, media_stats_now);
+    record_incoming_stats(
+        state,
+        snapshot_state,
+        &config.media_tap,
+        &config.metrics,
+        buffers,
+        media_stats_now,
+    );
+    populate_forward_routes(state, buffers);
+    flush_forward_routes(state, &config.metrics, buffers);
+
+    Some(SnapshotInfo {
+        socket,
+        candidate_addr,
+        next_timeout: state.next_timeout_deadline(),
+    })
+}
+
+fn populate_forward_routes(state: &RtcBootstrapState, buffers: &mut PacketLoopBuffers) {
     for (media_idx, (source_session, media)) in buffers.pending_media.iter().enumerate() {
-        if let Some(route_entry) = state
+        let Some(route_entry) = state
             .media_route_index
             .get(&(source_session.clone(), media.mid))
-        {
-            if !route_entry.source_active {
+        else {
+            continue;
+        };
+        if !route_entry.source_active {
+            continue;
+        }
+        for dest in &route_entry.destinations {
+            if !dest.active {
                 continue;
             }
-            for dest in &route_entry.destinations {
-                if !dest.active {
-                    continue;
-                }
-                buffers
-                    .forwards
-                    .push((media_idx, dest.dest_session.clone(), dest.dest_mid));
-            }
+            buffers
+                .forwards
+                .push((media_idx, dest.dest_session.clone(), dest.dest_mid));
         }
     }
+}
+
+fn flush_forward_routes(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    buffers: &mut PacketLoopBuffers,
+) {
     for forward_idx in 0..buffers.forwards.len() {
         let Some((media_idx, dest_session, dest_mid)) =
             buffers
@@ -494,6 +519,7 @@ fn snapshot_and_pump(
         if media.audio_start_of_talk_spurt {
             data_writer = data_writer.start_of_talkspurt(true);
         }
+        let payload_len = media.data.len();
         if let Err(error) = data_writer.write(
             pt,
             media.network_time,
@@ -505,14 +531,10 @@ fn snapshot_and_pump(
                 ?error,
                 "failed to write media to destination session"
             );
+        } else {
+            metrics.record_rtp_egress(payload_len);
         }
     }
-
-    Some(SnapshotInfo {
-        socket,
-        candidate_addr,
-        next_timeout: state.next_timeout_deadline(),
-    })
 }
 
 /// Drain all ready outputs from a single session's `Rtc` instance.

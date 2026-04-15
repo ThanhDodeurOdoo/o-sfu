@@ -18,8 +18,12 @@ pub(super) use crate::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TransportBackend},
     runtime::{
         RuntimeState,
-        channel::{ChannelAdmissionPolicy, ChannelConfig, ChannelManager},
+        channel::{
+            ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
+            ChannelRuntimePolicy, rtp_capabilities,
+        },
         metrics::RuntimeMetrics,
+        recording::MediaTap,
         transport_adapter::RuntimeTransportAdapter,
     },
     signaling::{
@@ -54,12 +58,22 @@ pub(super) fn test_config() -> Config {
 
 pub(super) fn test_state() -> RuntimeState {
     let config = test_config();
+    let metrics = Arc::new(RuntimeMetrics::default());
     RuntimeState {
-        channels: Arc::new(ChannelManager::for_test_with_admission_policy(
-            ChannelAdmissionPolicy::new(config.channel_size),
+        channels: Arc::new(ChannelManager::new(
+            ChannelManagerConfig::new(
+                1,
+                ChannelRuntimePolicy::new(
+                    ChannelAdmissionPolicy::new(config.channel_size),
+                    config.feature_flags,
+                    rtp_capabilities::router_rtp_capabilities(config.codec_flags),
+                ),
+            ),
+            Arc::new(MediaTap::default()),
+            Arc::clone(&metrics),
         )),
         config,
-        metrics: Arc::new(RuntimeMetrics::default()),
+        metrics,
         transport_adapter: RuntimeTransportAdapter::builder().stub().build(),
     }
 }

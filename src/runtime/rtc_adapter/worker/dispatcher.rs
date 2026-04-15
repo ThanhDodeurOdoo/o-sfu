@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
+use crate::runtime::metrics::RuntimeMetrics;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::bootstrap;
@@ -14,7 +15,9 @@ use super::{
         commands::RtcWorkerCommand,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
-    media, negotiation, publication, session,
+    media,
+    negotiation::{self, OfferBootstrapConfig},
+    publication, session,
 };
 
 pub(crate) fn handle_worker_command(
@@ -23,6 +26,7 @@ pub(crate) fn handle_worker_command(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
+    metrics: &RuntimeMetrics,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -51,6 +55,7 @@ pub(crate) fn handle_worker_command(
                 public_ip,
                 rtc_port_range,
                 codec_flags,
+                metrics,
                 command,
             );
         }
@@ -63,6 +68,7 @@ fn handle_core_worker_command(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
+    metrics: &RuntimeMetrics,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -77,6 +83,7 @@ fn handle_core_worker_command(
             bootstrap::WorkerBootstrapConfig::new(public_ip, rtc_port_range, codec_flags),
             &session_key,
             &router_capabilities,
+            metrics,
             response,
         ),
         #[cfg(test)]
@@ -103,13 +110,14 @@ fn handle_core_worker_command(
                 public_ip,
                 rtc_port_range,
                 codec_flags,
+                metrics,
                 command,
             );
         }
         RtcWorkerCommand::CloseSession {
             session_key,
             response,
-        } => session::respond_close_session(state, snapshot_state, &session_key, response),
+        } => session::respond_close_session(state, snapshot_state, &session_key, metrics, response),
         RtcWorkerCommand::ResolveNegotiatedProducerParameters {
             session_key,
             transport_media_id,
@@ -140,6 +148,7 @@ fn handle_negotiation_command(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
+    metrics: &RuntimeMetrics,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -149,9 +158,12 @@ fn handle_negotiation_command(
         } => negotiation::respond_create_initial_session_offer(
             state,
             snapshot_state,
-            public_ip,
-            rtc_port_range,
-            codec_flags,
+            OfferBootstrapConfig {
+                public_ip,
+                rtc_port_range,
+                codec_flags,
+                metrics,
+            },
             &session_key,
             response,
         ),

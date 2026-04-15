@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 use crate::{
     config::MediaCodecFlags,
     config::RtcPortRange,
+    runtime::metrics::RuntimeMetrics,
     runtime::transport_adapter::{SessionOffer, TransportAdapterError, TransportSessionKey},
 };
 
@@ -25,21 +26,25 @@ use super::publication::refresh_negotiated_producer_parameters;
 const INITIAL_NEGOTIATION_DIRECTION: Direction = Direction::RecvOnly;
 const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, MediaKind::Video];
 
+#[derive(Clone, Copy)]
+pub(super) struct OfferBootstrapConfig<'a> {
+    pub(super) public_ip: IpAddr,
+    pub(super) rtc_port_range: RtcPortRange,
+    pub(super) codec_flags: MediaCodecFlags,
+    pub(super) metrics: &'a RuntimeMetrics,
+}
+
 pub(super) fn respond_create_initial_session_offer(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
+    config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
 ) {
     let _ = response.send(worker_create_initial_session_offer(
         state,
         snapshot_state,
-        public_ip,
-        rtc_port_range,
-        codec_flags,
+        config,
         session_key,
     ));
 }
@@ -67,19 +72,10 @@ pub(super) fn respond_apply_session_answer(
 fn worker_create_initial_session_offer(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
+    config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    ensure_session_ready_for_offer(
-        state,
-        snapshot_state,
-        public_ip,
-        rtc_port_range,
-        codec_flags,
-        session_key,
-    )?;
+    ensure_session_ready_for_offer(state, snapshot_state, config, session_key)?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
@@ -242,27 +238,29 @@ fn ensure_initial_negotiation_media(bootstrap_mids: &mut Vec<Mid>, sdp_api: &mut
 fn ensure_session_ready_for_offer(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
+    config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<(), TransportAdapterError> {
     let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
         shared_socket.candidate_addr
     } else {
-        let shared_socket = bootstrap::bind_shared_rtc_socket(public_ip, rtc_port_range)?;
+        let shared_socket =
+            bootstrap::bind_shared_rtc_socket(config.public_ip, config.rtc_port_range)?;
         let candidate_addr = shared_socket.candidate_addr;
         state.shared_socket = Some(shared_socket);
         candidate_addr
     };
-    bootstrap::ensure_session_rtc_state(
+    let created_session = bootstrap::ensure_session_rtc_state(
         &mut state.sessions,
         session_key,
         candidate_addr,
-        codec_flags,
+        config.codec_flags,
     )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
+    }
+    if created_session {
+        config.metrics.add_active_transport_sessions(1);
     }
     Ok(())
 }

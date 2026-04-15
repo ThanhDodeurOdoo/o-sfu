@@ -261,7 +261,6 @@ impl ChannelState {
             .map(|session| session.connection_id)
     }
 
-    #[cfg(test)]
     pub(in crate::runtime::channel) fn session_count(&self) -> usize {
         self.sessions.len()
     }

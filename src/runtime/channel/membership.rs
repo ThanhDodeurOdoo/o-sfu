@@ -385,7 +385,6 @@ impl Channel {
         state.set_transport_ready(session_id, connection_id, SessionTransportReady::Consume)
     }
 
-    #[cfg(test)]
     pub(super) async fn session_count(&self) -> usize {
         self.state.read().await.session_count()
     }
