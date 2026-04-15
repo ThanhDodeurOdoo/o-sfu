@@ -9,7 +9,7 @@ use crate::runtime::{
 
 use super::{
     demux::MediaRouteDestination, forwarded_packet::ForwardedPacket,
-    local_forwarding::LocalPacketDestination, relay_registry::RelayPacketSink,
+    local_forwarding::LocalPacketDestination, relay_registry::RelayPacketMailbox,
     state::RtcBootstrapState,
 };
 
@@ -41,7 +41,7 @@ pub(super) struct RecordingPacketDestination {
 #[derive(Clone)]
 pub(super) struct RelayPacketDestination {
     transport_media_id: TransportMediaId,
-    sink: Arc<dyn RelayPacketSink>,
+    mailbox: RelayPacketMailbox,
 }
 
 impl PacketForward {
@@ -75,13 +75,13 @@ impl PacketForward {
     pub(super) fn from_relay_sink(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
-        sink: Arc<dyn RelayPacketSink>,
+        mailbox: RelayPacketMailbox,
     ) -> Self {
         Self {
             packet_idx,
             destination: ForwardingDestination::Relay(RelayPacketDestination {
                 transport_media_id,
-                sink,
+                mailbox,
             }),
         }
     }
@@ -162,7 +162,7 @@ impl RecordingPacketDestination {
 
 impl RelayPacketDestination {
     fn send(&self, packet: &ForwardedPacket) -> Option<usize> {
-        self.sink.forward_packet(packet, self.transport_media_id);
+        self.mailbox.forward_packet(packet, self.transport_media_id);
         None
     }
 }
@@ -196,7 +196,7 @@ mod tests {
     use str0m::media::Mid;
 
     use super::*;
-    use crate::runtime::rtc_adapter::relay_registry::RelayPacketSink;
+    use crate::runtime::rtc_adapter::sample_forwarded_packet;
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
 
@@ -219,16 +219,6 @@ mod tests {
             _transport_media_id: TransportMediaId,
             _received_at: Instant,
             _payload: &[u8],
-        ) {
-            self.packets.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    impl RelayPacketSink for CountingSink {
-        fn forward_packet(
-            &self,
-            _packet: &ForwardedPacket,
-            _source_transport_media_id: TransportMediaId,
         ) {
             self.packets.fetch_add(1, Ordering::Relaxed);
         }
@@ -269,8 +259,14 @@ mod tests {
 
     #[test]
     fn packet_forward_wraps_relay_sinks_in_the_named_contract() {
-        let sink = Arc::new(CountingSink::new());
-        let forward = PacketForward::from_relay_sink(6, TransportMediaId::new(9), sink);
+        let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
+        let packet = sample_forwarded_packet(
+            TransportSessionKey::new(11, 0, 12, SessionId::Integer(13)),
+            "aud-up",
+            b"payload",
+        );
+        let forward = PacketForward::from_relay_sink(6, TransportMediaId::new(9), mailbox);
+        let mut relay_packet = packet.share_for_relay(TransportMediaId::new(8));
 
         assert_eq!(forward.packet_idx(), 6);
         assert!(matches!(
@@ -278,5 +274,10 @@ mod tests {
             ForwardingDestination::Relay(destination)
                 if destination.transport_media_id == TransportMediaId::new(9)
         ));
+        let _ =
+            forward
+                .destination()
+                .send(&mut RtcBootstrapState::default(), &mut relay_packet, true);
+        assert!(relay_rx.try_recv().is_ok());
     }
 }

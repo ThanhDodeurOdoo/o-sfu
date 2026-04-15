@@ -1,7 +1,9 @@
+use std::time::Instant;
+
 use str0m::{
     RtcError,
     media::{MediaData, Mid},
-    rtp::{RtpPacket, StreamTx},
+    rtp::{RtpHeader, RtpPacket, SeqNo, StreamTx},
 };
 
 use super::packet_mode::{ACTIVE_PACKET_MODE, PacketMode};
@@ -24,8 +26,17 @@ pub(super) struct LocalForwardedFrame<'a> {
 }
 
 pub(super) struct LocalForwardedRtp<'a> {
-    rtp_packet: &'a mut RtpPacket,
+    data: LocalForwardedRtpData<'a>,
     payload: &'a mut SharedPayload,
+}
+
+enum LocalForwardedRtpData<'a> {
+    Str0m(&'a RtpPacket),
+    Relay {
+        seq_no: SeqNo,
+        header: &'a RtpHeader,
+        timestamp: Instant,
+    },
 }
 
 impl<'a> LocalForwardedFrame<'a> {
@@ -38,10 +49,47 @@ impl<'a> LocalForwardedFrame<'a> {
 }
 
 impl<'a> LocalForwardedRtp<'a> {
-    pub(super) fn new(rtp_packet: &'a mut RtpPacket, payload: &'a mut SharedPayload) -> Self {
+    pub(super) fn new(rtp_packet: &'a RtpPacket, payload: &'a mut SharedPayload) -> Self {
         Self {
-            rtp_packet,
+            data: LocalForwardedRtpData::Str0m(rtp_packet),
             payload,
+        }
+    }
+
+    pub(super) fn from_relay(
+        seq_no: SeqNo,
+        header: &'a RtpHeader,
+        timestamp: Instant,
+        payload: &'a mut SharedPayload,
+    ) -> Self {
+        Self {
+            data: LocalForwardedRtpData::Relay {
+                seq_no,
+                header,
+                timestamp,
+            },
+            payload,
+        }
+    }
+
+    fn seq_no(&self) -> SeqNo {
+        match self.data {
+            LocalForwardedRtpData::Str0m(packet) => packet.seq_no,
+            LocalForwardedRtpData::Relay { seq_no, .. } => seq_no,
+        }
+    }
+
+    fn header(&self) -> &RtpHeader {
+        match self.data {
+            LocalForwardedRtpData::Str0m(packet) => &packet.header,
+            LocalForwardedRtpData::Relay { header, .. } => header,
+        }
+    }
+
+    fn timestamp(&self) -> Instant {
+        match self.data {
+            LocalForwardedRtpData::Str0m(packet) => packet.timestamp,
+            LocalForwardedRtpData::Relay { timestamp, .. } => timestamp,
         }
     }
 }
@@ -113,11 +161,10 @@ impl LocalPacketDestination {
             .media(self.dest_mid)
             .is_some_and(|media| !media.kind().is_audio());
         let rid = rtp
-            .rtp_packet
-            .header
+            .header()
             .ext_vals
             .rid
-            .or(rtp.rtp_packet.header.ext_vals.rid_repair);
+            .or(rtp.header().ext_vals.rid_repair);
         let payload_len = rtp.payload.len();
         let write_result = {
             let mut direct_api = session_state.rtc.direct_api();
@@ -147,19 +194,19 @@ fn write_rtp(
     is_last_destination: bool,
     dest_mid: Mid,
 ) -> Result<(), RtcError> {
-    let payload_type = rtp.rtp_packet.header.payload_type;
+    let payload_type = rtp.header().payload_type;
     stream_tx
         .write_rtp_with_csrc(
-            rtp.rtp_packet.header.payload_type,
-            rtp.rtp_packet.seq_no,
-            rtp.rtp_packet.header.timestamp,
-            rtp.rtp_packet.timestamp,
-            rtp.rtp_packet.header.marker,
-            rtp.rtp_packet.header.ext_vals.clone(),
+            rtp.header().payload_type,
+            rtp.seq_no(),
+            rtp.header().timestamp,
+            rtp.timestamp(),
+            rtp.header().marker,
+            rtp.header().ext_vals.clone(),
             nackable,
             rtp.payload.take_write_payload(is_last_destination),
-            rtp.rtp_packet.header.csrc_count,
-            rtp.rtp_packet.header.csrc,
+            rtp.header().csrc_count,
+            rtp.header().csrc,
         )
         .map_err(|error| RtcError::Packet(dest_mid, payload_type, error))
 }

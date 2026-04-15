@@ -27,7 +27,7 @@ pub(super) fn populate_forward_routes(
             ));
         }
         if let Some(sink) =
-            relay_registry.sink_for_channel(packet.source_session_key().channel_runtime_id())
+            relay_registry.mailbox_for_channel(packet.source_session_key().channel_runtime_id())
         {
             forwards.push(PacketForward::from_relay_sink(
                 packet_idx,
@@ -69,7 +69,7 @@ mod tests {
         demux::{MediaRouteDestination, MediaRouteEntry},
         forwarding_destination::ForwardingDestination,
         media_registry::RegisteredMediaHandle,
-        relay_registry::{RelayPacketSink, RelayRegistry},
+        relay_registry::{RelayPacketMailbox, RelayRegistry},
         sample_forwarded_packet,
     };
     use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
@@ -94,16 +94,6 @@ mod tests {
             _transport_media_id: TransportMediaId,
             _received_at: Instant,
             _payload: &[u8],
-        ) {
-            self.packets.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    impl RelayPacketSink for CountingSink {
-        fn forward_packet(
-            &self,
-            _packet: &ForwardedPacket,
-            _source_transport_media_id: TransportMediaId,
         ) {
             self.packets.fetch_add(1, Ordering::Relaxed);
         }
@@ -232,7 +222,7 @@ mod tests {
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
         let recording_sink = Arc::new(CountingSink::new());
-        let relay_sink = Arc::new(CountingSink::new());
+        let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
         let source_transport_media_id =
             state.register_media_handle(RegisteredMediaHandle::Producer {
                 session_key: producer_session.clone(),
@@ -260,10 +250,7 @@ mod tests {
             producer_session.channel_runtime_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
-        relay_registry.activate_channel(
-            producer_session.channel_runtime_id(),
-            Arc::<CountingSink>::clone(&relay_sink),
-        );
+        relay_registry.activate_channel(producer_session.channel_runtime_id(), relay_mailbox);
         let pending_packets = vec![sample_forwarded_packet(
             producer_session,
             "aud-up",

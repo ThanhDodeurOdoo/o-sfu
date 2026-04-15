@@ -48,15 +48,26 @@ use super::validation;
 use super::{
     commands::{CloseSessionOutcome, RtcWorkerCommand},
     packet_loop::{self, PacketLoopConfig},
-    relay_registry::RelayRegistry,
+    relay_registry::{RelayPacketMailbox, RelayRegistry},
     state::{RtcSnapshotState, TransportSessionHealth},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct RtcWorkerHandle {
     command_tx: mpsc::Sender<RtcWorkerCommand>,
+    relay_mailbox: RelayPacketMailbox,
     pub(crate) snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     shutdown_token: CancellationToken,
+}
+
+impl fmt::Debug for RtcWorkerHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RtcWorkerHandle")
+            .field("command_tx", &self.command_tx)
+            .field("relay_mailbox", &self.relay_mailbox)
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) struct RtcTransportAdapter {
@@ -337,10 +348,12 @@ impl RtcTransportAdapter {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         let (command_tx, command_rx) = mpsc::channel(64);
+        let (relay_tx, relay_rx) = mpsc::unbounded_channel();
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
         let shutdown_token = CancellationToken::new();
         let worker_handle = RtcWorkerHandle {
             command_tx,
+            relay_mailbox: RelayPacketMailbox::new(relay_tx),
             snapshot_state: Arc::clone(&snapshot_state),
             shutdown_token: shutdown_token.clone(),
         };
@@ -362,6 +375,7 @@ impl RtcTransportAdapter {
             },
             snapshot_state,
             command_rx,
+            relay_rx,
             shutdown_token,
         ));
         Ok(worker_handle)
@@ -688,6 +702,27 @@ impl RtcTransportAdapter {
                 response,
             })
             .await;
+    }
+
+    pub(crate) fn debug_activate_relay_channel(
+        &self,
+        channel_runtime_id: u64,
+        target: &Self,
+    ) -> Result<(), TransportAdapterError> {
+        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
+        self.relay_registry
+            .activate_channel(channel_runtime_id, mailbox);
+        Ok(())
+    }
+
+    pub(crate) fn debug_deactivate_relay_channel(&self, channel_runtime_id: u64) {
+        self.relay_registry.deactivate_channel(channel_runtime_id);
+    }
+
+    pub(crate) fn debug_has_relay_channel(&self, channel_runtime_id: u64) -> bool {
+        self.relay_registry
+            .mailbox_for_channel(channel_runtime_id)
+            .is_some()
     }
 }
 

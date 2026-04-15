@@ -11,7 +11,7 @@
 //! - `forwarding_destination`: named packet-forwarding destinations for local RTC, recording, and relay sends
 //! - `forwarding_planner`: adapter-local destination planning over forwarded packets
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
-//! - `relay_registry`: channel-scoped relay sinks for future inter-worker and inter-node forwarding
+//! - `relay_registry`: channel-scoped relay mailboxes for future inter-worker and inter-node forwarding
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing

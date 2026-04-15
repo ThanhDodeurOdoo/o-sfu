@@ -239,6 +239,7 @@ pub(super) async fn run_packet_loop(
     config: PacketLoopConfig,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
+    mut relay_rx: mpsc::UnboundedReceiver<ForwardedPacket>,
     shutdown_token: CancellationToken,
 ) {
     let mut bootstrap_state = RtcBootstrapState::default();
@@ -255,8 +256,13 @@ pub(super) async fn run_packet_loop(
                 &mut routing_state,
             );
         }
-        let snapshot =
-            snapshot_and_pump(&mut bootstrap_state, &snapshot_state, &config, &mut buffers);
+        let snapshot = snapshot_and_pump(
+            &mut bootstrap_state,
+            &snapshot_state,
+            &config,
+            &mut relay_rx,
+            &mut buffers,
+        );
         if let Some(info) = snapshot.as_ref() {
             for pending_transmit in buffers.pending_transmits() {
                 if info
@@ -434,6 +440,7 @@ fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
+    relay_rx: &mut mpsc::UnboundedReceiver<ForwardedPacket>,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<SnapshotInfo> {
     buffers.clear();
@@ -462,6 +469,8 @@ fn snapshot_and_pump(
         state.update_session_timeout(&session_id, session_timeout);
     }
 
+    drain_relay_packets(relay_rx, &mut buffers.pending_packets);
+
     // Two-pass: collect matching routes, then write to destination sessions
     record_incoming_stats(state, snapshot_state, &config.metrics, buffers);
     populate_forward_routes(
@@ -478,6 +487,15 @@ fn snapshot_and_pump(
         candidate_addr,
         next_timeout: state.next_timeout_deadline(),
     })
+}
+
+fn drain_relay_packets(
+    relay_rx: &mut mpsc::UnboundedReceiver<ForwardedPacket>,
+    pending_packets: &mut Vec<ForwardedPacket>,
+) {
+    while let Ok(packet) = relay_rx.try_recv() {
+        pending_packets.push(packet);
+    }
 }
 
 fn flush_forward_routes(
@@ -907,7 +925,8 @@ mod tests {
     use super::*;
     use crate::runtime::recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink};
     use crate::runtime::rtc_adapter::{
-        media_registry::RegisteredMediaHandle, sample_forwarded_packet,
+        media_registry::RegisteredMediaHandle, relay_registry::RelayPacketMailbox,
+        sample_forwarded_packet,
     };
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionId;
@@ -1128,5 +1147,29 @@ mod tests {
         assert_eq!(buffers.forwards.len(), 1);
         assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.snapshot().rtp_payload_bytes_egress, 0);
+    }
+
+    #[test]
+    fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
+        let source_session = TransportSessionKey::new(25, 0, 26, SessionId::Integer(27));
+        let packet = sample_forwarded_packet(source_session.clone(), "aud-up", b"payload");
+        let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
+        let mut pending_packets = Vec::new();
+
+        mailbox.forward_packet(&packet, TransportMediaId::new(17));
+        drain_relay_packets(&mut relay_rx, &mut pending_packets);
+
+        assert_eq!(pending_packets.len(), 1);
+        let forwarded = pending_packets.first();
+        assert!(forwarded.is_some());
+        let Some(forwarded) = forwarded else {
+            return;
+        };
+        assert_eq!(forwarded.source_session_key(), &source_session);
+        assert_eq!(forwarded.payload().as_slice(), b"payload");
+        assert_eq!(
+            forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+            Some(TransportMediaId::new(17))
+        );
     }
 }

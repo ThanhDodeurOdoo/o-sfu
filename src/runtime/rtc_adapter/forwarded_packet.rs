@@ -1,12 +1,14 @@
 use std::{mem::take, time::Instant};
 
-use str0m::{media::MediaData, rtp::RtpPacket};
+use str0m::{
+    media::MediaData,
+    rtp::{RtpHeader, RtpPacket, SeqNo},
+};
 
 #[cfg(test)]
 use str0m::{
     format::{Codec, CodecExtra, CodecSpec, FormatParams, PayloadParams},
     media::{ExtensionValues, Frequency, MediaTime, Mid, Pt},
-    rtp::SeqNo,
 };
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
@@ -18,6 +20,7 @@ use super::state::RtcBootstrapState;
 #[derive(Debug)]
 pub(crate) struct ForwardedPacket {
     source_session_key: TransportSessionKey,
+    source_transport_media_id: Option<TransportMediaId>,
     received_at: Instant,
     data: ForwardedPacketData,
 }
@@ -26,6 +29,7 @@ pub(crate) struct ForwardedPacket {
 enum ForwardedPacketData {
     Str0mFrame(ForwardedFrameData),
     Str0mRtp(ForwardedRtpData),
+    RelayRtp(ForwardedRelayRtpData),
 }
 
 #[derive(Debug)]
@@ -40,6 +44,14 @@ struct ForwardedRtpData {
     payload: SharedPayload,
 }
 
+#[derive(Debug)]
+pub(super) struct ForwardedRelayRtpData {
+    pub(super) seq_no: SeqNo,
+    pub(super) header: RtpHeader,
+    pub(super) timestamp: Instant,
+    payload: SharedPayload,
+}
+
 impl ForwardedPacket {
     pub(super) fn from_media_data(
         source_session_key: TransportSessionKey,
@@ -47,6 +59,7 @@ impl ForwardedPacket {
     ) -> Self {
         Self {
             source_session_key,
+            source_transport_media_id: None,
             received_at: media_data.network_time,
             data: ForwardedPacketData::Str0mFrame(ForwardedFrameData {
                 payload: SharedPayload::from_vec(take(&mut media_data.data)),
@@ -61,6 +74,7 @@ impl ForwardedPacket {
     ) -> Self {
         Self {
             source_session_key,
+            source_transport_media_id: None,
             received_at: rtp_packet.timestamp,
             data: ForwardedPacketData::Str0mRtp(ForwardedRtpData {
                 payload: SharedPayload::from_vec(take(&mut rtp_packet.payload)),
@@ -81,6 +95,44 @@ impl ForwardedPacket {
         match &self.data {
             ForwardedPacketData::Str0mFrame(frame_data) => &frame_data.payload,
             ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.payload,
+            ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.payload,
+        }
+    }
+
+    pub(super) fn share_for_relay(&self, source_transport_media_id: TransportMediaId) -> Self {
+        let shared_payload = self.payload().to_shared();
+        let data = match &self.data {
+            ForwardedPacketData::Str0mFrame(frame_data) => {
+                ForwardedPacketData::Str0mFrame(ForwardedFrameData {
+                    media_data: clone_media_data_without_payload(
+                        &frame_data.media_data,
+                        self.received_at,
+                    ),
+                    payload: SharedPayload::from_shared(shared_payload),
+                })
+            }
+            ForwardedPacketData::Str0mRtp(rtp_data) => {
+                ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+                    seq_no: rtp_data.rtp_packet.seq_no,
+                    header: rtp_data.rtp_packet.header.clone(),
+                    timestamp: self.received_at,
+                    payload: SharedPayload::from_shared(shared_payload),
+                })
+            }
+            ForwardedPacketData::RelayRtp(rtp_data) => {
+                ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+                    seq_no: rtp_data.seq_no,
+                    header: rtp_data.header.clone(),
+                    timestamp: rtp_data.timestamp,
+                    payload: SharedPayload::from_shared(shared_payload),
+                })
+            }
+        };
+        Self {
+            source_session_key: self.source_session_key.clone(),
+            source_transport_media_id: Some(source_transport_media_id),
+            received_at: self.received_at,
+            data,
         }
     }
 
@@ -92,6 +144,9 @@ impl ForwardedPacket {
         &self,
         state: &RtcBootstrapState,
     ) -> Option<TransportMediaId> {
+        if let Some(source_transport_media_id) = self.source_transport_media_id {
+            return Some(source_transport_media_id);
+        }
         match &self.data {
             ForwardedPacketData::Str0mFrame(frame_data) => state.source_transport_media_id_for_mid(
                 &self.source_session_key,
@@ -99,6 +154,10 @@ impl ForwardedPacket {
             ),
             ForwardedPacketData::Str0mRtp(rtp_data) => {
                 let source_mid = rtp_data.rtp_packet.header.ext_vals.mid?;
+                state.source_transport_media_id_for_mid(&self.source_session_key, source_mid)
+            }
+            ForwardedPacketData::RelayRtp(rtp_data) => {
+                let source_mid = rtp_data.header.ext_vals.mid?;
                 state.source_transport_media_id_for_mid(&self.source_session_key, source_mid)
             }
         }
@@ -110,9 +169,36 @@ impl ForwardedPacket {
                 LocalForwardedFrame::new(&mut frame_data.media_data, &mut frame_data.payload),
             ),
             ForwardedPacketData::Str0mRtp(rtp_data) => LocalForwardedPacket::Str0mRtp(
-                LocalForwardedRtp::new(&mut rtp_data.rtp_packet, &mut rtp_data.payload),
+                LocalForwardedRtp::new(&rtp_data.rtp_packet, &mut rtp_data.payload),
             ),
+            ForwardedPacketData::RelayRtp(rtp_data) => {
+                let seq_no = rtp_data.seq_no;
+                let timestamp = rtp_data.timestamp;
+                let header = &rtp_data.header;
+                let payload = &mut rtp_data.payload;
+                LocalForwardedPacket::Str0mRtp(LocalForwardedRtp::from_relay(
+                    seq_no, header, timestamp, payload,
+                ))
+            }
         }
+    }
+}
+
+fn clone_media_data_without_payload(media_data: &MediaData, network_time: Instant) -> MediaData {
+    MediaData {
+        mid: media_data.mid,
+        pt: media_data.pt,
+        rid: media_data.rid,
+        params: media_data.params,
+        time: media_data.time,
+        network_time,
+        seq_range: media_data.seq_range.clone(),
+        contiguous: media_data.contiguous,
+        data: Vec::new(),
+        ext_vals: media_data.ext_vals.clone(),
+        codec_extra: media_data.codec_extra,
+        last_sender_info: media_data.last_sender_info,
+        audio_start_of_talk_spurt: media_data.audio_start_of_talk_spurt,
     }
 }
 
@@ -187,5 +273,19 @@ mod tests {
         assert_eq!(packet.payload().as_slice(), b"payload");
         assert_eq!(packet.payload_len(), 7);
         assert!(packet.received_at() <= Instant::now());
+    }
+
+    #[test]
+    fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
+        let session_key = TransportSessionKey::new(43, 0, 11, SessionId::Integer(9));
+        let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
+        let relay_packet = packet.share_for_relay(TransportMediaId::new(18));
+
+        assert_eq!(relay_packet.source_session_key(), &session_key);
+        assert_eq!(relay_packet.payload().as_slice(), b"payload");
+        assert_eq!(
+            relay_packet.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+            Some(TransportMediaId::new(18))
+        );
     }
 }
