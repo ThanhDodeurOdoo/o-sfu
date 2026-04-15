@@ -22,6 +22,7 @@ pub(crate) struct ForwardedPacket {
     source_session_key: TransportSessionKey,
     source_transport_media_id: Option<TransportMediaId>,
     received_at: Instant,
+    payload: SharedPayload,
     data: ForwardedPacketData,
 }
 
@@ -35,21 +36,17 @@ enum ForwardedPacketData {
 #[derive(Debug)]
 struct ForwardedFrameData {
     media_data: MediaData,
-    payload: SharedPayload,
 }
 
 #[derive(Debug)]
 struct ForwardedRtpData {
     rtp_packet: RtpPacket,
-    payload: SharedPayload,
 }
 
 #[derive(Debug)]
 pub(super) struct ForwardedRelayRtpData {
     pub(super) seq_no: SeqNo,
     pub(super) header: RtpHeader,
-    pub(super) timestamp: Instant,
-    payload: SharedPayload,
 }
 
 impl ForwardedPacket {
@@ -61,10 +58,8 @@ impl ForwardedPacket {
             source_session_key,
             source_transport_media_id: None,
             received_at: media_data.network_time,
-            data: ForwardedPacketData::Str0mFrame(ForwardedFrameData {
-                payload: SharedPayload::from_vec(take(&mut media_data.data)),
-                media_data,
-            }),
+            payload: SharedPayload::from_vec(take(&mut media_data.data)),
+            data: ForwardedPacketData::Str0mFrame(ForwardedFrameData { media_data }),
         }
     }
 
@@ -76,10 +71,8 @@ impl ForwardedPacket {
             source_session_key,
             source_transport_media_id: None,
             received_at: rtp_packet.timestamp,
-            data: ForwardedPacketData::Str0mRtp(ForwardedRtpData {
-                payload: SharedPayload::from_vec(take(&mut rtp_packet.payload)),
-                rtp_packet,
-            }),
+            payload: SharedPayload::from_vec(take(&mut rtp_packet.payload)),
+            data: ForwardedPacketData::Str0mRtp(ForwardedRtpData { rtp_packet }),
         }
     }
 
@@ -92,11 +85,7 @@ impl ForwardedPacket {
     }
 
     pub(crate) fn payload(&self) -> &SharedPayload {
-        match &self.data {
-            ForwardedPacketData::Str0mFrame(frame_data) => &frame_data.payload,
-            ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.payload,
-            ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.payload,
-        }
+        &self.payload
     }
 
     pub(super) fn route_control_rid(&self) -> Option<Rid> {
@@ -125,7 +114,6 @@ impl ForwardedPacket {
     }
 
     pub(super) fn share_for_relay(&self, source_transport_media_id: TransportMediaId) -> Self {
-        let shared_payload = self.payload().to_shared();
         let data = match &self.data {
             ForwardedPacketData::Str0mFrame(frame_data) => {
                 ForwardedPacketData::Str0mFrame(ForwardedFrameData {
@@ -133,23 +121,18 @@ impl ForwardedPacket {
                         &frame_data.media_data,
                         self.received_at,
                     ),
-                    payload: SharedPayload::from_shared(shared_payload),
                 })
             }
             ForwardedPacketData::Str0mRtp(rtp_data) => {
                 ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
                     seq_no: rtp_data.rtp_packet.seq_no,
                     header: rtp_data.rtp_packet.header.clone(),
-                    timestamp: self.received_at,
-                    payload: SharedPayload::from_shared(shared_payload),
                 })
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
                     seq_no: rtp_data.seq_no,
                     header: rtp_data.header.clone(),
-                    timestamp: rtp_data.timestamp,
-                    payload: SharedPayload::from_shared(shared_payload),
                 })
             }
         };
@@ -157,6 +140,7 @@ impl ForwardedPacket {
             source_session_key: self.source_session_key.clone(),
             source_transport_media_id: Some(source_transport_media_id),
             received_at: self.received_at,
+            payload: self.payload.share(),
             data,
         }
     }
@@ -193,20 +177,22 @@ impl ForwardedPacket {
     }
 
     pub(super) fn local_send_packet(&mut self) -> LocalForwardedPacket<'_> {
+        let payload = &mut self.payload;
         match &mut self.data {
             ForwardedPacketData::Str0mFrame(frame_data) => LocalForwardedPacket::Str0mFrame(
-                LocalForwardedFrame::new(&mut frame_data.media_data, &mut frame_data.payload),
+                LocalForwardedFrame::new(&mut frame_data.media_data, payload),
             ),
             ForwardedPacketData::Str0mRtp(rtp_data) => LocalForwardedPacket::Str0mRtp(
-                LocalForwardedRtp::new(&rtp_data.rtp_packet, &mut rtp_data.payload),
+                LocalForwardedRtp::new(&rtp_data.rtp_packet, payload),
             ),
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 let seq_no = rtp_data.seq_no;
-                let timestamp = rtp_data.timestamp;
                 let header = &rtp_data.header;
-                let payload = &mut rtp_data.payload;
                 LocalForwardedPacket::Str0mRtp(LocalForwardedRtp::from_relay(
-                    seq_no, header, timestamp, payload,
+                    seq_no,
+                    header,
+                    self.received_at,
+                    payload,
                 ))
             }
         }

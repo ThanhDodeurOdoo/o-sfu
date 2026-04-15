@@ -22,12 +22,6 @@ impl SharedPayload {
         }
     }
 
-    pub(super) fn from_shared(payload: Arc<[u8]>) -> Self {
-        Self {
-            storage: SharedPayloadStorage::Shared(payload),
-        }
-    }
-
     pub(crate) fn as_slice(&self) -> &[u8] {
         match &self.storage {
             SharedPayloadStorage::Owned(payload) => payload.as_slice(),
@@ -35,10 +29,16 @@ impl SharedPayload {
         }
     }
 
-    pub(super) fn to_shared(&self) -> Arc<[u8]> {
-        match &self.storage {
-            SharedPayloadStorage::Owned(payload) => Arc::from(payload.as_slice()),
-            SharedPayloadStorage::Shared(payload) => Arc::clone(payload),
+    pub(super) fn share(&self) -> Self {
+        Self {
+            storage: match &self.storage {
+                SharedPayloadStorage::Owned(payload) => {
+                    SharedPayloadStorage::Shared(Arc::from(payload.as_slice()))
+                }
+                SharedPayloadStorage::Shared(payload) => {
+                    SharedPayloadStorage::Shared(Arc::clone(payload))
+                }
+            },
         }
     }
 
@@ -108,8 +108,9 @@ mod tests {
     fn shared_payload_promotes_owned_storage_into_shared_storage() {
         let payload = SharedPayload::from_vec(vec![12, 13, 14]);
 
-        let shared = payload.to_shared();
+        let shared = payload.share();
 
-        assert_eq!(shared.as_ref(), [12, 13, 14]);
+        assert_eq!(shared.as_slice(), [12, 13, 14]);
+        assert!(matches!(shared.storage, SharedPayloadStorage::Shared(_)));
     }
 }
