@@ -131,6 +131,7 @@ fn handle_core_worker_command(
         RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
+        | RtcWorkerCommand::RequestRemoteKeyframe { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. } => {
             handle_media_command(state, command);
@@ -204,16 +205,32 @@ fn handle_media_command(state: &mut RtcBootstrapState, command: RtcWorkerCommand
             media_kind,
             source_session_key,
             source_transport_media_id,
+            remote_source_control,
             consumer_rtp_parameters,
             response,
         } => media::respond_add_send_media(
             state,
-            &consumer_session_key,
-            media_kind,
+            media::AddSendMediaRequest {
+                consumer_session_key: &consumer_session_key,
+                media_kind,
+                source_session_key: &source_session_key,
+                source_transport_media_id,
+                remote_source_control,
+                consumer_rtp_parameters: &consumer_rtp_parameters,
+            },
+            response,
+        ),
+        RtcWorkerCommand::RequestRemoteKeyframe {
+            source_session_key,
+            source_transport_media_id,
+            rid,
+            kind,
+        } => media::respond_request_remote_keyframe(
+            state,
             &source_session_key,
             source_transport_media_id,
-            &consumer_rtp_parameters,
-            response,
+            rid,
+            kind,
         ),
         RtcWorkerCommand::SetProducerActive {
             session_key,

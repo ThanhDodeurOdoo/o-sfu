@@ -10,6 +10,7 @@ use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
+use super::commands::RemoteSourceControl;
 use super::state::RtcBootstrapState;
 
 // ---------------------------------------------------------------------------
@@ -43,18 +44,26 @@ impl RegisteredMediaHandle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) struct RemoteSourceRegistration {
     source_session_key: TransportSessionKey,
+    source_control: RemoteSourceControl,
 }
 
 impl RemoteSourceRegistration {
-    fn new(source_session_key: TransportSessionKey) -> Self {
-        Self { source_session_key }
+    fn new(source_session_key: TransportSessionKey, source_control: RemoteSourceControl) -> Self {
+        Self {
+            source_session_key,
+            source_control,
+        }
     }
 
     pub(super) fn source_session_key(&self) -> &TransportSessionKey {
         &self.source_session_key
+    }
+
+    pub(super) fn source_control(&self) -> &RemoteSourceControl {
+        &self.source_control
     }
 }
 
@@ -126,14 +135,21 @@ impl RtcBootstrapState {
         &mut self,
         source_transport_media_id: TransportMediaId,
         source_session_key: &TransportSessionKey,
+        source_control: RemoteSourceControl,
     ) -> Result<(), TransportAdapterError> {
         match self.remote_source_registry.get(&source_transport_media_id) {
-            Some(existing) if existing.source_session_key() == source_session_key => Ok(()),
+            Some(existing) if existing.source_session_key() == source_session_key => {
+                self.remote_source_registry.insert(
+                    source_transport_media_id,
+                    RemoteSourceRegistration::new(source_session_key.clone(), source_control),
+                );
+                Ok(())
+            }
             Some(_existing) => Err(TransportAdapterError::InvalidInput),
             None => {
                 self.remote_source_registry.insert(
                     source_transport_media_id,
-                    RemoteSourceRegistration::new(source_session_key.clone()),
+                    RemoteSourceRegistration::new(source_session_key.clone(), source_control),
                 );
                 Ok(())
             }
@@ -180,6 +196,23 @@ impl RtcBootstrapState {
                 source_mid,
             ))
             .copied()
+    }
+
+    pub(super) fn consumer_source_transport_media_id_for_mid(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_mid: Mid,
+    ) -> Option<TransportMediaId> {
+        self.mid_registry.values().find_map(|handle| match handle {
+            RegisteredMediaHandle::Consumer {
+                session_key,
+                mid,
+                source_transport_media_id,
+            } if session_key == consumer_session_key && *mid == consumer_mid => {
+                Some(*source_transport_media_id)
+            }
+            RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => None,
+        })
     }
 
     pub(super) fn remove_session_media_handles(

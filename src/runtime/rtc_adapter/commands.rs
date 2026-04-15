@@ -1,10 +1,10 @@
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::RtpCapabilities;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-use str0m::media::MediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
-use tokio::sync::oneshot;
+use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
+use tokio::sync::{mpsc, oneshot};
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use std::net::SocketAddr;
@@ -106,6 +106,32 @@ impl RemoveMediaOutcome {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteSourceControl {
+    tx: mpsc::Sender<RtcWorkerCommand>,
+}
+
+impl RemoteSourceControl {
+    pub(super) fn new(tx: mpsc::Sender<RtcWorkerCommand>) -> Self {
+        Self { tx }
+    }
+
+    pub(crate) fn request_keyframe(
+        &self,
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        rid: Option<Rid>,
+        kind: KeyframeRequestKind,
+    ) {
+        let _ = self.tx.try_send(RtcWorkerCommand::RequestRemoteKeyframe {
+            source_session_key,
+            source_transport_media_id,
+            rid,
+            kind,
+        });
+    }
+}
+
 pub(super) enum RtcWorkerCommand {
     #[cfg(any(test, feature = "internal-benchmarks"))]
     BuildBootstrap {
@@ -159,8 +185,15 @@ pub(super) enum RtcWorkerCommand {
         media_kind: MediaKind,
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
+        remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: RouterRtpParameters,
         response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+    },
+    RequestRemoteKeyframe {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        rid: Option<Rid>,
+        kind: KeyframeRequestKind,
     },
     SetProducerActive {
         session_key: TransportSessionKey,

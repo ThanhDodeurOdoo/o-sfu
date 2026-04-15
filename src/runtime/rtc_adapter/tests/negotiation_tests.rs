@@ -286,6 +286,7 @@ async fn rtc_session_renegotiation_offer_stages_native_consumer_additions() {
             Str0mMediaKind::Video,
             &source_session_key,
             source_media_id,
+            None,
             &sample_router_rtp_parameters("compat-mid", 82_000),
         )
         .await
@@ -361,6 +362,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
             Str0mMediaKind::Video,
             &source_session_key,
             source_media_id,
+            None,
             &sample_router_rtp_parameters("compat-mid-remove", 84_000),
         )
         .await
@@ -579,6 +581,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
             Str0mMediaKind::Video,
             &source_session_key,
             second_source_media_id,
+            None,
             &sample_router_rtp_parameters("compat-mid-queued-remove-b", 88_000),
         )
         .await
@@ -772,6 +775,7 @@ async fn add_negotiated_consumer_media(
             Str0mMediaKind::Video,
             source_session_key,
             source_media_id,
+            None,
             &sample_router_rtp_parameters(mid, ssrc),
         )
         .await

@@ -1,5 +1,5 @@
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-use str0m::media::{Direction, MediaKind, Mid, Rid};
+use str0m::media::{Direction, KeyframeRequestKind, MediaKind, Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -9,7 +9,7 @@ use crate::runtime::transport_adapter::{
 };
 
 use super::super::{
-    commands::{RelayCleanup, RemoveMediaOutcome},
+    commands::{RelayCleanup, RemoteSourceControl, RemoveMediaOutcome},
     demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     state::RtcBootstrapState,
@@ -18,6 +18,15 @@ use super::super::{
 enum RouteSourceKind {
     Local { source_mid: Mid },
     Remote,
+}
+
+pub(super) struct AddSendMediaRequest<'a> {
+    pub(super) consumer_session_key: &'a TransportSessionKey,
+    pub(super) media_kind: MediaKind,
+    pub(super) source_session_key: &'a TransportSessionKey,
+    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) remote_source_control: Option<RemoteSourceControl>,
+    pub(super) consumer_rtp_parameters: &'a RouterRtpParameters,
 }
 
 pub(super) fn respond_remove_media(
@@ -46,21 +55,34 @@ pub(super) fn respond_add_recv_media(
 
 pub(super) fn respond_add_send_media(
     state: &mut RtcBootstrapState,
-    consumer_session_key: &TransportSessionKey,
-    media_kind: MediaKind,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    consumer_rtp_parameters: &RouterRtpParameters,
+    request: AddSendMediaRequest<'_>,
     response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
 ) {
     let _ = response.send(worker_add_send_media(
         state,
-        consumer_session_key,
-        media_kind,
+        request.consumer_session_key,
+        request.media_kind,
+        request.source_session_key,
+        request.source_transport_media_id,
+        request.remote_source_control,
+        request.consumer_rtp_parameters,
+    ));
+}
+
+pub(super) fn respond_request_remote_keyframe(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+) {
+    request_keyframe_for_source(
+        state,
         source_session_key,
         source_transport_media_id,
-        consumer_rtp_parameters,
-    ));
+        rid,
+        kind,
+    );
 }
 
 pub(super) fn respond_set_producer_active(
@@ -303,6 +325,7 @@ fn worker_add_send_media(
     media_kind: MediaKind,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
+    remote_source_control: Option<RemoteSourceControl>,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Result<TransportMediaId, TransportAdapterError> {
     let route_source = ensure_route_source_registered(
@@ -310,6 +333,7 @@ fn worker_add_send_media(
         consumer_session_key,
         source_session_key,
         source_transport_media_id,
+        remote_source_control,
     )?;
     let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
@@ -499,6 +523,7 @@ fn ensure_route_source_registered(
     route_owner_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
+    remote_source_control: Option<RemoteSourceControl>,
 ) -> Result<RouteSourceKind, TransportAdapterError> {
     if let Some(handle) = state.mid_registry.get(&source_transport_media_id.as_u64()) {
         return match handle {
@@ -516,7 +541,14 @@ fn ensure_route_source_registered(
     if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
         return Err(TransportAdapterError::TransportUnavailable);
     }
-    state.register_remote_source(source_transport_media_id, source_session_key)?;
+    let Some(remote_source_control) = remote_source_control else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    state.register_remote_source(
+        source_transport_media_id,
+        source_session_key,
+        remote_source_control,
+    )?;
     Ok(RouteSourceKind::Remote)
 }
 
@@ -545,4 +577,35 @@ fn ensure_route_source_exists(
         Some(_registration) => Err(TransportAdapterError::InvalidInput),
         None => Err(TransportAdapterError::TransportUnavailable),
     }
+}
+
+pub(crate) fn request_keyframe_for_source(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+) {
+    let Some(handle) = state
+        .mid_registry
+        .get(&source_transport_media_id.as_u64())
+        .cloned()
+    else {
+        return;
+    };
+    let RegisteredMediaHandle::Producer { session_key, mid } = handle else {
+        return;
+    };
+    if &session_key != source_session_key {
+        return;
+    }
+    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+        return;
+    };
+    let mut direct_api = session_state.rtc.direct_api();
+    let Some(stream_rx) = direct_api.stream_rx_by_mid(mid, rid) else {
+        return;
+    };
+    stream_rx.request_keyframe(kind);
+    state.mark_session_dirty(&session_key);
 }

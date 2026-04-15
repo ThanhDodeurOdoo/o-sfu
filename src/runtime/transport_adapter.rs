@@ -705,6 +705,10 @@ impl RuntimeTransportAdapter {
                 }
                 let relay_route =
                     adapter.relay_registration_shards(consumer_session_key, source_session_key);
+                let remote_source_control = relay_route
+                    .as_ref()
+                    .map(|(source_shard, _consumer_shard)| source_shard.remote_source_control())
+                    .transpose()?;
                 if let Some((source_shard, consumer_shard)) = &relay_route {
                     source_shard.activate_relay_route(
                         source_session_key.channel_runtime_id(),
@@ -719,6 +723,7 @@ impl RuntimeTransportAdapter {
                         signaling_to_str0m_media_kind(media_kind),
                         source_session_key,
                         source_media_id,
+                        remote_source_control,
                         consumer_rtp_parameters,
                     )
                     .await;

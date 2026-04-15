@@ -8,6 +8,7 @@ use std::{
 };
 
 use str0m::IceConnectionState;
+use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
@@ -21,13 +22,14 @@ use super::{
     forwarding_planner::populate_forward_routes,
     relay_registry::RelayRegistry,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
-    worker::handle_worker_command,
+    worker::{handle_worker_command, request_keyframe_for_source},
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::metrics::{
     RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, TransportIceState,
 };
 use crate::runtime::recording::MediaTap;
+use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
 const RECEIVE_BUFFER_LEN: usize = 2000;
@@ -60,6 +62,7 @@ struct PacketLoopBuffers {
     pending_transmits: Vec<PendingTransmit>,
     pending_transmit_count: usize,
     pending_packets: Vec<ForwardedPacket>,
+    pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     forwards: Vec<PacketForward>,
 }
 
@@ -69,6 +72,7 @@ impl PacketLoopBuffers {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
             pending_packets: Vec::with_capacity(32),
+            pending_keyframe_requests: Vec::with_capacity(8),
             forwards: Vec::with_capacity(64),
         }
     }
@@ -76,6 +80,7 @@ impl PacketLoopBuffers {
     fn clear(&mut self) {
         self.pending_transmit_count = 0;
         self.pending_packets.clear();
+        self.pending_keyframe_requests.clear();
         self.forwards.clear();
     }
 
@@ -101,6 +106,23 @@ struct SnapshotInfo {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
     next_timeout: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingKeyframeRequest {
+    consumer_mid: Mid,
+    consumer_rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+}
+
+impl PendingKeyframeRequest {
+    fn new(request: KeyframeRequest) -> Self {
+        Self {
+            consumer_mid: request.mid,
+            consumer_rid: request.rid,
+            kind: request.kind,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -470,6 +492,7 @@ fn snapshot_and_pump(
     }
 
     drain_relay_packets(relay_rx, &mut buffers.pending_packets);
+    flush_pending_keyframe_requests(state, buffers);
 
     // Two-pass: collect matching routes, then write to destination sessions
     record_incoming_stats(state, snapshot_state, &config.metrics, buffers);
@@ -495,6 +518,45 @@ fn drain_relay_packets(
 ) {
     while let Ok(packet) = relay_rx.try_recv() {
         pending_packets.push(packet);
+    }
+}
+
+fn flush_pending_keyframe_requests(state: &mut RtcBootstrapState, buffers: &mut PacketLoopBuffers) {
+    for (consumer_session_key, request) in buffers.pending_keyframe_requests.drain(..) {
+        let Some(source_transport_media_id) = state.consumer_source_transport_media_id_for_mid(
+            &consumer_session_key,
+            request.consumer_mid,
+        ) else {
+            continue;
+        };
+        if let Some(handle) = state
+            .mid_registry
+            .get(&source_transport_media_id.as_u64())
+            .cloned()
+        {
+            if let RegisteredMediaHandle::Producer { session_key, .. } = handle {
+                request_keyframe_for_source(
+                    state,
+                    &session_key,
+                    source_transport_media_id,
+                    request.consumer_rid,
+                    request.kind,
+                );
+            }
+            continue;
+        }
+        let Some(remote_source) = state
+            .remote_source_registration(source_transport_media_id)
+            .cloned()
+        else {
+            continue;
+        };
+        remote_source.source_control().request_keyframe(
+            remote_source.source_session_key().clone(),
+            source_transport_media_id,
+            request.consumer_rid,
+            request.kind,
+        );
     }
 }
 
@@ -554,6 +616,19 @@ fn drain_single_session(
                         session_key.clone(),
                         packet,
                     ));
+            }
+            Ok(Output::Event(Event::KeyframeRequest(request))) => {
+                buffers
+                    .pending_keyframe_requests
+                    .push((session_key.clone(), PendingKeyframeRequest::new(request)));
+                trace!(
+                    session_id = ?session_key.session_id(),
+                    channel_runtime_id = session_key.channel_runtime_id(),
+                    mid = %request.mid,
+                    rid = ?request.rid,
+                    kind = ?request.kind,
+                    "queued route-level keyframe request from rtc packet-loop event"
+                );
             }
             Ok(Output::Event(event)) => {
                 observe_rtc_event(snapshot_state, metrics, session_key, &event);
@@ -920,12 +995,18 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use str0m::media::Mid;
+    use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
+    use str0m::rtp::Ssrc;
+    use tokio::sync::mpsc;
 
     use super::*;
+    use crate::config::MediaCodecFlags;
     use crate::runtime::recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink};
     use crate::runtime::rtc_adapter::{
-        media_registry::RegisteredMediaHandle, relay_registry::RelayPacketMailbox,
+        bootstrap,
+        commands::{RemoteSourceControl, RtcWorkerCommand},
+        media_registry::RegisteredMediaHandle,
+        relay_registry::RelayPacketMailbox,
         sample_forwarded_packet,
     };
     use crate::runtime::transport_adapter::TransportMediaId;
@@ -1171,5 +1252,105 @@ mod tests {
             forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(TransportMediaId::new(17))
         );
+    }
+
+    #[test]
+    fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_050));
+        let source_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(63));
+        let consumer_session = TransportSessionKey::new(61, 0, 64, SessionId::Integer(65));
+        let source_mid = Mid::from("cam-up");
+        let consumer_mid = Mid::from("cam-down");
+        let mut state = RtcBootstrapState::default();
+        let mut buffers = PacketLoopBuffers::new();
+
+        assert!(
+            bootstrap::ensure_session_rtc_state(
+                &mut state.sessions,
+                &source_session,
+                candidate_addr,
+                MediaCodecFlags::default(),
+            )
+            .is_ok()
+        );
+        let Some(source_session_state) = state.sessions.get_mut(&source_session) else {
+            return;
+        };
+        let mut direct_api = source_session_state.rtc.direct_api();
+        direct_api.declare_media(source_mid, MediaKind::Video);
+        direct_api.expect_stream_rx(Ssrc::from(44_444_u32), None, source_mid, None);
+
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: source_session.clone(),
+                mid: source_mid,
+            });
+        let _consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: consumer_mid,
+                source_transport_media_id,
+            });
+        buffers.pending_keyframe_requests.push((
+            consumer_session,
+            PendingKeyframeRequest {
+                consumer_mid,
+                consumer_rid: None,
+                kind: KeyframeRequestKind::Pli,
+            },
+        ));
+
+        flush_pending_keyframe_requests(&mut state, &mut buffers);
+
+        assert!(state.dirty_sessions.contains(&source_session));
+    }
+
+    #[test]
+    fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id() {
+        let source_session = TransportSessionKey::new(71, 0, 72, SessionId::Integer(73));
+        let consumer_session = TransportSessionKey::new(71, 1, 74, SessionId::Integer(75));
+        let consumer_mid = Mid::from("cam-down");
+        let source_transport_media_id = TransportMediaId::new(91);
+        let mut state = RtcBootstrapState::default();
+        let mut buffers = PacketLoopBuffers::new();
+        let (control_tx, mut control_rx) = mpsc::channel(1);
+
+        assert!(
+            state
+                .register_remote_source(
+                    source_transport_media_id,
+                    &source_session,
+                    RemoteSourceControl::new(control_tx),
+                )
+                .is_ok()
+        );
+        let _consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: consumer_mid,
+                source_transport_media_id,
+            });
+        buffers.pending_keyframe_requests.push((
+            consumer_session,
+            PendingKeyframeRequest {
+                consumer_mid,
+                consumer_rid: None,
+                kind: KeyframeRequestKind::Fir,
+            },
+        ));
+
+        flush_pending_keyframe_requests(&mut state, &mut buffers);
+
+        let command = control_rx.try_recv().ok();
+        assert!(matches!(
+            command,
+            Some(RtcWorkerCommand::RequestRemoteKeyframe {
+                source_session_key,
+                source_transport_media_id: forwarded_transport_media_id,
+                rid: None,
+                kind: KeyframeRequestKind::Fir,
+            }) if source_session_key == source_session
+                && forwarded_transport_media_id == source_transport_media_id
+        ));
     }
 }

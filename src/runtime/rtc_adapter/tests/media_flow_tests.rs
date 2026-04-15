@@ -112,6 +112,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
             Str0mMediaKind::Audio,
             &producer_session_key,
             source_media_id,
+            None,
             &consumer_rtp_parameters,
         )
         .await;
@@ -180,6 +181,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
             Str0mMediaKind::Video,
             &producer_session_key,
             source_media_id,
+            None,
             &consumer_rtp_parameters,
         )
         .await;

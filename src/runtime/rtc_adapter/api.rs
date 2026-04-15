@@ -46,7 +46,10 @@ use super::state::{TransportLifecycleState, TransportStateKey};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::validation;
 use super::{
-    commands::{CloseSessionOutcome, CloseSessionState, RemoveMediaOutcome, RtcWorkerCommand},
+    commands::{
+        CloseSessionOutcome, CloseSessionState, RemoteSourceControl, RemoveMediaOutcome,
+        RtcWorkerCommand,
+    },
     packet_loop::{self, PacketLoopConfig},
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     state::{RtcSnapshotState, TransportSessionHealth},
@@ -310,6 +313,7 @@ impl RtcTransportAdapter {
         media_kind: MediaKind,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
+        remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.request_worker(|response| RtcWorkerCommand::AddSendMedia {
@@ -317,6 +321,7 @@ impl RtcTransportAdapter {
             media_kind,
             source_session_key: source_session_key.clone(),
             source_transport_media_id,
+            remote_source_control,
             consumer_rtp_parameters: consumer_rtp_parameters.clone(),
             response,
         })
@@ -409,6 +414,13 @@ impl RtcTransportAdapter {
             shutdown_token,
         ));
         Ok(worker_handle)
+    }
+
+    pub(crate) fn remote_source_control(
+        &self,
+    ) -> Result<RemoteSourceControl, TransportAdapterError> {
+        let worker_handle = self.ensure_packet_loop_started()?;
+        Ok(RemoteSourceControl::new(worker_handle.command_tx))
     }
 
     async fn request_worker<T, F>(&self, build_command: F) -> Result<T, TransportAdapterError>
