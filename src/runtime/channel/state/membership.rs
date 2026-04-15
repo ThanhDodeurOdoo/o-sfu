@@ -426,6 +426,7 @@ mod tests {
         state::{ids::ProducerRuntimeId, shared::ConsumerKey, shared::ConsumerState},
         topology::{RoutedConsumerId, RoutedProducerId},
     };
+    use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::{
@@ -439,7 +440,11 @@ mod tests {
             RouterId(1),
             ChannelAdmissionPolicy::new(4),
             router_rtp_capabilities(MediaCodecFlags::default()),
-            Arc::new(RecordingService::new(0, media_source)),
+            Arc::new(RecordingService::new(
+                0,
+                media_source,
+                Arc::new(RuntimeMetrics::default()),
+            )),
         )
     }
 

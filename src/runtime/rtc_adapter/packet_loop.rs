@@ -433,7 +433,13 @@ fn snapshot_and_pump(
             let Some(session_state) = state.sessions.get_mut(&session_id) else {
                 continue;
             };
-            drain_single_session(&session_id, session_state, snapshot_state, buffers)
+            drain_single_session(
+                &session_id,
+                session_state,
+                snapshot_state,
+                &config.metrics,
+                buffers,
+            )
         };
         state.update_session_timeout(&session_id, session_timeout);
     }
@@ -544,6 +550,7 @@ fn drain_single_session(
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<Instant> {
     loop {
@@ -556,7 +563,7 @@ fn drain_single_session(
                 buffers.pending_media.push((session_key.clone(), data));
             }
             Ok(Output::Event(event)) => {
-                observe_rtc_event(snapshot_state, session_key, &event);
+                observe_rtc_event(snapshot_state, metrics, session_key, &event);
                 log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {
@@ -624,6 +631,7 @@ fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
 
 fn observe_rtc_event(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    metrics: &RuntimeMetrics,
     session_key: &TransportSessionKey,
     event: &Event,
 ) {
@@ -633,7 +641,8 @@ fn observe_rtc_event(
     let Ok(mut snapshot_state) = snapshot_state.lock() else {
         return;
     };
-    snapshot_state.set_transport_health(session_key, health);
+    let previous = snapshot_state.set_transport_health(session_key, health);
+    metrics.record_transport_health_transition(previous, Some(health));
 }
 
 pub(super) fn transport_health_from_event(event: &Event) -> Option<TransportSessionHealth> {

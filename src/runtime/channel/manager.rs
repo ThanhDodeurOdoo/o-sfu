@@ -182,6 +182,7 @@ impl ChannelManager {
             key.map(str::to_owned),
             config.clone(),
             Arc::clone(&self.recording_media_tap),
+            Arc::clone(&self.metrics),
         ));
         let channel_uuid = channel.uuid().to_owned();
         state

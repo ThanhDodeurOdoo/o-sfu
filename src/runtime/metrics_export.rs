@@ -14,6 +14,8 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     append_ws_loop_metrics(&mut output, snapshot);
     append_ws_bus_metrics(&mut output, snapshot);
     append_live_gauges(&mut output, snapshot);
+    append_recording_metrics(&mut output, snapshot);
+    append_transport_health_gauges(&mut output, snapshot);
     append_rtp_metrics(&mut output, snapshot);
     output
 }
@@ -243,6 +245,52 @@ fn append_live_gauges(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     );
 }
 
+fn append_recording_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_labeled_counter_family_2(
+        output,
+        "osfu_recording_actions_total",
+        "Total recording control actions by action and outcome.",
+        ("action", "outcome"),
+        &[
+            LabeledValue2::new("start", "accepted", snapshot.recording_start_accepted),
+            LabeledValue2::new("start", "rejected", snapshot.recording_start_rejected),
+            LabeledValue2::new("stop", "accepted", snapshot.recording_stop_accepted),
+            LabeledValue2::new("stop", "rejected", snapshot.recording_stop_rejected),
+        ],
+    );
+    append_gauge(
+        output,
+        "osfu_recording_channels_active",
+        "Current number of channels with an active recording session.",
+        snapshot.active_recording_channels,
+    );
+    append_counter(
+        output,
+        "osfu_recording_captured_packets_total",
+        "Total packets accepted by the recording capture path.",
+        snapshot.recording_captured_packets,
+    );
+    append_counter(
+        output,
+        "osfu_recording_captured_streams_total",
+        "Total unique media streams first seen by the recording capture path.",
+        snapshot.recording_captured_streams,
+    );
+}
+
+fn append_transport_health_gauges(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_labeled_gauge_family(
+        output,
+        "osfu_transport_health_sessions",
+        "Current number of transport sessions by observed health state.",
+        "state",
+        &[
+            LabeledGaugeValue::new("connected", snapshot.connected_transport_sessions),
+            LabeledGaugeValue::new("disconnected", snapshot.disconnected_transport_sessions),
+        ],
+    );
+}
+
 fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_labeled_counter_family(
         output,
@@ -274,6 +322,39 @@ struct LabeledValue {
 
 impl LabeledValue {
     const fn new(label_value: &'static str, value: u64) -> Self {
+        Self { label_value, value }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LabeledValue2 {
+    first_label_value: &'static str,
+    second_label_value: &'static str,
+    value: u64,
+}
+
+impl LabeledValue2 {
+    const fn new(
+        first_label_value: &'static str,
+        second_label_value: &'static str,
+        value: u64,
+    ) -> Self {
+        Self {
+            first_label_value,
+            second_label_value,
+            value,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LabeledGaugeValue {
+    label_value: &'static str,
+    value: i64,
+}
+
+impl LabeledGaugeValue {
+    const fn new(label_value: &'static str, value: i64) -> Self {
         Self { label_value, value }
     }
 }
@@ -335,6 +416,64 @@ fn append_labeled_counter_family(
     }
 }
 
+fn append_labeled_counter_family_2(
+    output: &mut String,
+    name: &str,
+    help: &str,
+    label_names: (&str, &str),
+    values: &[LabeledValue2],
+) {
+    output.push_str("# HELP ");
+    output.push_str(name);
+    output.push(' ');
+    output.push_str(help);
+    output.push('\n');
+    output.push_str("# TYPE ");
+    output.push_str(name);
+    output.push_str(" counter\n");
+    for value in values {
+        output.push_str(name);
+        output.push('{');
+        output.push_str(label_names.0);
+        output.push_str("=\"");
+        output.push_str(value.first_label_value);
+        output.push_str("\",");
+        output.push_str(label_names.1);
+        output.push_str("=\"");
+        output.push_str(value.second_label_value);
+        output.push_str("\"} ");
+        append_u64(output, value.value);
+        output.push('\n');
+    }
+}
+
+fn append_labeled_gauge_family(
+    output: &mut String,
+    name: &str,
+    help: &str,
+    label_name: &str,
+    values: &[LabeledGaugeValue],
+) {
+    output.push_str("# HELP ");
+    output.push_str(name);
+    output.push(' ');
+    output.push_str(help);
+    output.push('\n');
+    output.push_str("# TYPE ");
+    output.push_str(name);
+    output.push_str(" gauge\n");
+    for value in values {
+        output.push_str(name);
+        output.push('{');
+        output.push_str(label_name);
+        output.push_str("=\"");
+        output.push_str(value.label_value);
+        output.push_str("\"} ");
+        output.push_str(&value.value.to_string());
+        output.push('\n');
+    }
+}
+
 fn append_u64(output: &mut String, value: u64) {
     output.push_str(&value.to_string());
 }
@@ -357,6 +496,7 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
         runtime::metrics::{RuntimeMetrics, WsSessionLoopExitReason},
+        runtime::rtc_adapter::TransportSessionHealth,
         signaling::protocol::WebSocketCloseCode,
     };
 
@@ -372,7 +512,13 @@ mod tests {
         metrics.record_ws_bus_send_failure();
         metrics.add_active_channels(1);
         metrics.add_active_sessions(2);
+        metrics.add_active_recording_channels(1);
         metrics.add_active_transport_sessions(1);
+        metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
+        metrics.record_recording_start_accepted();
+        metrics.record_recording_stop_rejected();
+        metrics.record_recording_captured_packet();
+        metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
 
@@ -398,7 +544,19 @@ mod tests {
         assert!(rendered.contains("osfu_ws_bus_failures_total{kind=\"send\"} 1"));
         assert!(rendered.contains("# TYPE osfu_channels_active gauge"));
         assert!(rendered.contains("osfu_sessions_active 2"));
+        assert!(rendered.contains("osfu_recording_channels_active 1"));
         assert!(rendered.contains("osfu_transport_sessions_active 1"));
+        assert!(rendered.contains("osfu_transport_health_sessions{state=\"connected\"} 1"));
+        assert!(
+            rendered
+                .contains("osfu_recording_actions_total{action=\"start\",outcome=\"accepted\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("osfu_recording_actions_total{action=\"stop\",outcome=\"rejected\"} 1")
+        );
+        assert!(rendered.contains("osfu_recording_captured_packets_total 1"));
+        assert!(rendered.contains("osfu_recording_captured_streams_total 1"));
         assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
         assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
     }

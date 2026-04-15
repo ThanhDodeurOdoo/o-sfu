@@ -219,6 +219,9 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
         &session_key,
         super::super::state::TransportSessionHealth::Disconnected,
     );
+    let metrics_snapshot = adapter.metrics.snapshot();
+    assert_eq!(metrics_snapshot.connected_transport_sessions, 0);
+    assert_eq!(metrics_snapshot.disconnected_transport_sessions, 1);
     assert_eq!(
         adapter.session_transport_health(&session_key),
         Some(super::super::state::TransportSessionHealth::Disconnected)
@@ -226,6 +229,9 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
 
     assert_eq!(adapter.close_session(&session_key).await, Ok(()));
     assert_eq!(adapter.session_transport_health(&session_key), None);
+    let metrics_snapshot = adapter.metrics.snapshot();
+    assert_eq!(metrics_snapshot.connected_transport_sessions, 0);
+    assert_eq!(metrics_snapshot.disconnected_transport_sessions, 0);
 }
 
 #[tokio::test]

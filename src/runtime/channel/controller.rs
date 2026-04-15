@@ -20,6 +20,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::config::RuntimeFeatureFlags;
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 use crate::signaling::{
@@ -157,6 +158,7 @@ pub struct Channel {
         reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
     )]
     pub(super) recording_service: Arc<RecordingService>,
+    pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) state: RwLock<ChannelState>,
 }
 
@@ -168,11 +170,13 @@ impl Channel {
         key: Option<String>,
         config: ChannelConfig,
         recording_media_tap: Arc<MediaTap>,
+        metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
         let recording_service = Arc::new(RecordingService::new(
             runtime_context.runtime,
             recording_media_source,
+            Arc::clone(&metrics),
         ));
         Self {
             runtime_id: runtime_context.runtime,
@@ -184,6 +188,7 @@ impl Channel {
             feature_flags: runtime_policy.feature_flags,
             recording_address: config.recording_address,
             recording_service: Arc::clone(&recording_service),
+            metrics,
             state: RwLock::new(ChannelState::new(
                 runtime_context.router,
                 runtime_policy.admission_policy,

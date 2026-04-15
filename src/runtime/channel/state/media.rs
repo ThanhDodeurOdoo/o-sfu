@@ -837,6 +837,7 @@ mod tests {
         ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
         state::ids::ProducerRuntimeId, topology::RoutedProducerId,
     };
+    use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::signaling::shared::SessionPermissions;
@@ -847,7 +848,11 @@ mod tests {
             RouterId(1),
             ChannelAdmissionPolicy::new(4),
             router_rtp_capabilities(MediaCodecFlags::default()),
-            Arc::new(RecordingService::new(0, media_source)),
+            Arc::new(RecordingService::new(
+                0,
+                media_source,
+                Arc::new(RuntimeMetrics::default()),
+            )),
         )
     }
 

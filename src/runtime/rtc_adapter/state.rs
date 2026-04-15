@@ -293,12 +293,15 @@ impl RtcSnapshotState {
         self.live_sessions.insert(session_key.clone());
     }
 
-    pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn remove_session(
+        &mut self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
         self.live_sessions.remove(session_key);
         self.remote_addr_demux
             .forget_session_remote_addrs(session_key);
         self.incoming_bitrates_by_session.remove(session_key);
-        self.transport_health_by_session.remove(session_key);
+        self.transport_health_by_session.remove(session_key)
     }
 
     pub(super) fn record_incoming_media(
@@ -334,9 +337,9 @@ impl RtcSnapshotState {
         &mut self,
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
-    ) {
+    ) -> Option<TransportSessionHealth> {
         self.transport_health_by_session
-            .insert(session_key.clone(), health);
+            .insert(session_key.clone(), health)
     }
 
     pub(crate) fn transport_health(

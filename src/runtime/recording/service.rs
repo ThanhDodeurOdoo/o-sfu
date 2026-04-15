@@ -10,6 +10,7 @@ use std::{
 
 use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId, TransportId};
 
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::{MediaFrameSink, MediaSource, into_frame_sink, session::RecordingSession};
@@ -78,6 +79,7 @@ struct RecordingFrameCollector {
     lifecycle: Arc<AtomicU8>,
     captured_packet_count: Arc<AtomicU64>,
     captured_streams: Arc<RwLock<BTreeSet<(TransportSessionKey, TransportMediaId)>>>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl MediaFrameSink for RecordingFrameCollector {
@@ -95,6 +97,7 @@ impl MediaFrameSink for RecordingFrameCollector {
         }
 
         self.captured_packet_count.fetch_add(1, Ordering::Relaxed);
+        self.metrics.record_recording_captured_packet();
 
         let key = (session_key.clone(), transport_media_id);
         {
@@ -111,7 +114,9 @@ impl MediaFrameSink for RecordingFrameCollector {
             .captured_streams
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        captured_streams.insert(key);
+        if captured_streams.insert(key) {
+            self.metrics.record_recording_captured_stream();
+        }
     }
 }
 
@@ -130,7 +135,11 @@ pub(crate) struct RecordingService {
 }
 
 impl RecordingService {
-    pub(crate) fn new(channel_runtime_id: u64, media_source: Arc<dyn MediaSource>) -> Self {
+    pub(crate) fn new(
+        channel_runtime_id: u64,
+        media_source: Arc<dyn MediaSource>,
+        metrics: Arc<RuntimeMetrics>,
+    ) -> Self {
         let lifecycle = Arc::new(AtomicU8::new(RecordingLifecycleState::Idle.as_u8()));
         let sessions = Arc::new(Mutex::new(RecordingServiceState {
             sessions: BTreeMap::new(),
@@ -148,6 +157,7 @@ impl RecordingService {
                 lifecycle,
                 captured_packet_count,
                 captured_streams,
+                metrics,
             }),
         }
     }

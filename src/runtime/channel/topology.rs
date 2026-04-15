@@ -14,6 +14,8 @@ use o_sfu_router::{
 use super::router_state::ChannelRouterState;
 #[cfg(test)]
 use crate::config::MediaCodecFlags;
+#[cfg(test)]
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::RecordingService;
 #[cfg(test)]
 use crate::runtime::recording::{MediaSource, MediaTap};
@@ -87,7 +89,11 @@ impl ChannelTopology {
         Self::new_with_recording_service(
             primary_router_id,
             super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-            Arc::new(RecordingService::new(0, media_source)),
+            Arc::new(RecordingService::new(
+                0,
+                media_source,
+                Arc::new(RuntimeMetrics::default()),
+            )),
         )
     }
 

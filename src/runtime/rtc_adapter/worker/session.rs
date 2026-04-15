@@ -79,7 +79,8 @@ fn worker_close_session(
         state.shared_socket = None;
     }
     if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.remove_session(session_key);
+        let previous = snapshot.remove_session(session_key);
+        metrics.record_transport_health_transition(previous, None);
     }
     if removed_session {
         metrics.add_active_transport_sessions(-1);

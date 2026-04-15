@@ -536,7 +536,9 @@ impl RtcTransportAdapter {
         let Ok(mut snapshot_state) = worker_handle.snapshot_state.lock() else {
             return;
         };
-        snapshot_state.set_transport_health(session_key, health);
+        let previous = snapshot_state.set_transport_health(session_key, health);
+        self.metrics
+            .record_transport_health_transition(previous, Some(health));
     }
 
     async fn request_debug_worker<T, F>(&self, build_command: F) -> Option<T>

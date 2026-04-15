@@ -1,6 +1,10 @@
 use super::fixtures::*;
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
-use crate::runtime::channel::{ChannelManagerConfig, ChannelRuntimePolicy, rtp_capabilities};
+use crate::runtime::{
+    channel::{ChannelManagerConfig, ChannelRuntimePolicy, rtp_capabilities},
+    metrics::RuntimeMetrics,
+    recording::MediaTap,
+};
 use crate::signaling::{
     protocol::RecordingOptions,
     shared::{RecordingState, RecordingStateUpdate, StopCode},
@@ -8,21 +12,27 @@ use crate::signaling::{
 
 async fn build_recording_channel() -> (
     Arc<super::super::Channel>,
+    Arc<RuntimeMetrics>,
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
-    let manager = ChannelManager::for_test_with_config(ChannelManagerConfig::new(
-        1,
-        ChannelRuntimePolicy::new(
-            ChannelAdmissionPolicy::new(100),
-            RuntimeFeatureFlags {
-                transcription: true,
-                audio_recording: true,
-                video_recording: true,
-            },
-            rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = ChannelManager::new(
+        ChannelManagerConfig::new(
+            1,
+            ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(100),
+                RuntimeFeatureFlags {
+                    transcription: true,
+                    audio_recording: true,
+                    video_recording: true,
+                },
+                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
         ),
-    ));
+        Arc::new(MediaTap::default()),
+        Arc::clone(&metrics),
+    );
     let channel = manager
         .create_or_get(
             "issuer-recording",
@@ -58,7 +68,7 @@ async fn build_recording_channel() -> (
         )
         .await
         .expect("recording observer should join");
-    (channel, rx1, rx2)
+    (channel, metrics, rx1, rx2)
 }
 
 async fn expect_recording_message(
@@ -77,7 +87,7 @@ async fn expect_recording_message(
 
 #[tokio::test]
 async fn recording_start_and_stop_update_channel_state_for_all_sessions() {
-    let (channel, mut publisher_rx, mut observer_rx) = build_recording_channel().await;
+    let (channel, metrics, mut publisher_rx, mut observer_rx) = build_recording_channel().await;
 
     assert!(
         channel
@@ -105,6 +115,9 @@ async fn recording_start_and_stop_update_channel_state_for_all_sessions() {
     let observer_start = expect_recording_message(&mut observer_rx).await;
     assert_eq!(publisher_start.stop_code, None);
     assert_eq!(observer_start, publisher_start);
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_start_accepted, 1);
+    assert_eq!(metrics_snapshot.active_recording_channels, 1);
 
     assert!(channel.stop_recording(&SessionId::Integer(1)).await);
     assert_eq!(
@@ -121,11 +134,14 @@ async fn recording_start_and_stop_update_channel_state_for_all_sessions() {
     let observer_stop = expect_recording_message(&mut observer_rx).await;
     assert_eq!(publisher_stop.stop_code, Some(StopCode::UserRequest));
     assert_eq!(observer_stop, publisher_stop);
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_stop_accepted, 1);
+    assert_eq!(metrics_snapshot.active_recording_channels, 0);
 }
 
 #[tokio::test]
 async fn recording_allows_transcription_toggle_but_rejects_new_media_while_active() {
-    let (channel, mut publisher_rx, _observer_rx) = build_recording_channel().await;
+    let (channel, metrics, mut publisher_rx, _observer_rx) = build_recording_channel().await;
 
     assert!(
         channel
@@ -182,4 +198,8 @@ async fn recording_allows_transcription_toggle_but_rejects_new_media_while_activ
             .is_err(),
         "no extra recording update should be emitted for rejected reconfiguration"
     );
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_start_accepted, 2);
+    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
+    assert_eq!(metrics_snapshot.active_recording_channels, 1);
 }

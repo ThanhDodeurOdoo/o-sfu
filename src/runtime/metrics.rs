@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
+use crate::runtime::rtc_adapter::TransportSessionHealth;
 use crate::signaling::protocol::WebSocketCloseCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,14 @@ pub(super) enum WsBusClientFrameKind {
 pub(super) enum RtpFlowDirection {
     Ingress,
     Egress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RecordingActionOutcome {
+    StartAccepted,
+    StartRejected,
+    StopAccepted,
+    StopRejected,
 }
 
 trait MetricLabel: Copy {
@@ -297,6 +306,19 @@ impl MetricLabel for RtpFlowDirection {
     }
 }
 
+impl MetricLabel for RecordingActionOutcome {
+    const COUNT: usize = 4;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::StartAccepted => 0,
+            Self::StartRejected => 1,
+            Self::StopAccepted => 2,
+            Self::StopRejected => 3,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeMetrics {
     http_requests: CounterFamily<HttpRoute>,
@@ -315,7 +337,13 @@ pub(crate) struct RuntimeMetrics {
     ws_bus_client_frames: CounterFamily<WsBusClientFrameKind>,
     active_channels: UpDownCounter,
     active_sessions: UpDownCounter,
+    active_recording_channels: UpDownCounter,
     active_transport_sessions: UpDownCounter,
+    connected_transport_sessions: UpDownCounter,
+    disconnected_transport_sessions: UpDownCounter,
+    recording_actions: CounterFamily<RecordingActionOutcome>,
+    recording_captured_packets: Counter,
+    recording_captured_streams: Counter,
     rtp_packets: CounterFamily<RtpFlowDirection>,
     rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
 }
@@ -369,7 +397,16 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub ws_bus_send_failures: u64,
     pub active_channels: i64,
     pub active_sessions: i64,
+    pub active_recording_channels: i64,
     pub active_transport_sessions: i64,
+    pub connected_transport_sessions: i64,
+    pub disconnected_transport_sessions: i64,
+    pub recording_start_accepted: u64,
+    pub recording_start_rejected: u64,
+    pub recording_stop_accepted: u64,
+    pub recording_stop_rejected: u64,
+    pub recording_captured_packets: u64,
+    pub recording_captured_streams: u64,
     pub rtp_packets_ingress: u64,
     pub rtp_packets_egress: u64,
     pub rtp_payload_bytes_ingress: u64,
@@ -426,7 +463,19 @@ struct WebSocketSnapshot {
 struct LiveSnapshot {
     channels: i64,
     sessions: i64,
+    recording_channels: i64,
     transport_sessions: i64,
+    connected_transport_sessions: i64,
+    disconnected_transport_sessions: i64,
+}
+
+struct RecordingSnapshot {
+    start_accepted: u64,
+    start_rejected: u64,
+    stop_accepted: u64,
+    stop_rejected: u64,
+    captured_packets: u64,
+    captured_streams: u64,
 }
 
 struct RtpSnapshot {
@@ -445,6 +494,7 @@ impl RuntimeMetrics {
         let http = self.snapshot_http();
         let websocket = self.snapshot_websocket();
         let live = self.snapshot_live();
+        let recording = self.snapshot_recording();
         let rtp = self.snapshot_rtp();
         RuntimeMetricsSnapshot {
             http_noop_requests: http.noop_requests,
@@ -495,7 +545,16 @@ impl RuntimeMetrics {
             ws_bus_send_failures: websocket.bus_send_failures,
             active_channels: live.channels,
             active_sessions: live.sessions,
+            active_recording_channels: live.recording_channels,
             active_transport_sessions: live.transport_sessions,
+            connected_transport_sessions: live.connected_transport_sessions,
+            disconnected_transport_sessions: live.disconnected_transport_sessions,
+            recording_start_accepted: recording.start_accepted,
+            recording_start_rejected: recording.start_rejected,
+            recording_stop_accepted: recording.stop_accepted,
+            recording_stop_rejected: recording.stop_rejected,
+            recording_captured_packets: recording.captured_packets,
+            recording_captured_streams: recording.captured_streams,
             rtp_packets_ingress: rtp.packets_ingress,
             rtp_packets_egress: rtp.packets_egress,
             rtp_payload_bytes_ingress: rtp.payload_bytes_ingress,
@@ -608,7 +667,29 @@ impl RuntimeMetrics {
         LiveSnapshot {
             channels: self.active_channels.load(),
             sessions: self.active_sessions.load(),
+            recording_channels: self.active_recording_channels.load(),
             transport_sessions: self.active_transport_sessions.load(),
+            connected_transport_sessions: self.connected_transport_sessions.load(),
+            disconnected_transport_sessions: self.disconnected_transport_sessions.load(),
+        }
+    }
+
+    fn snapshot_recording(&self) -> RecordingSnapshot {
+        RecordingSnapshot {
+            start_accepted: self
+                .recording_actions
+                .load(RecordingActionOutcome::StartAccepted),
+            start_rejected: self
+                .recording_actions
+                .load(RecordingActionOutcome::StartRejected),
+            stop_accepted: self
+                .recording_actions
+                .load(RecordingActionOutcome::StopAccepted),
+            stop_rejected: self
+                .recording_actions
+                .load(RecordingActionOutcome::StopRejected),
+            captured_packets: self.recording_captured_packets.load(),
+            captured_streams: self.recording_captured_streams.load(),
         }
     }
 
@@ -771,8 +852,64 @@ impl RuntimeMetrics {
         self.active_sessions.add(delta);
     }
 
+    pub(super) fn add_active_recording_channels(&self, delta: i64) {
+        self.active_recording_channels.add(delta);
+    }
+
     pub(super) fn add_active_transport_sessions(&self, delta: i64) {
         self.active_transport_sessions.add(delta);
+    }
+
+    pub(super) fn record_transport_health_transition(
+        &self,
+        previous: Option<TransportSessionHealth>,
+        next: Option<TransportSessionHealth>,
+    ) {
+        if previous == next {
+            return;
+        }
+        match previous {
+            Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(-1),
+            Some(TransportSessionHealth::Disconnected) => {
+                self.disconnected_transport_sessions.add(-1);
+            }
+            None => {}
+        }
+        match next {
+            Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(1),
+            Some(TransportSessionHealth::Disconnected) => {
+                self.disconnected_transport_sessions.add(1);
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn record_recording_start_accepted(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StartAccepted);
+    }
+
+    pub(super) fn record_recording_start_rejected(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StartRejected);
+    }
+
+    pub(super) fn record_recording_stop_accepted(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StopAccepted);
+    }
+
+    pub(super) fn record_recording_stop_rejected(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StopRejected);
+    }
+
+    pub(super) fn record_recording_captured_packet(&self) {
+        self.recording_captured_packets.increment();
+    }
+
+    pub(super) fn record_recording_captured_stream(&self) {
+        self.recording_captured_streams.increment();
     }
 
     pub(super) fn record_rtp_ingress(&self, payload_bytes: usize) {
@@ -791,7 +928,9 @@ impl RuntimeMetrics {
 #[cfg(test)]
 mod tests {
     use super::{RuntimeMetrics, WsSessionLoopExitReason};
-    use crate::signaling::protocol::WebSocketCloseCode;
+    use crate::{
+        runtime::rtc_adapter::TransportSessionHealth, signaling::protocol::WebSocketCloseCode,
+    };
 
     #[test]
     fn metrics_snapshot_tracks_http_and_websocket_counters() {
@@ -848,7 +987,12 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         metrics.add_active_channels(1);
         metrics.add_active_sessions(2);
+        metrics.add_active_recording_channels(1);
         metrics.add_active_transport_sessions(1);
+        metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
+        metrics.record_recording_start_accepted();
+        metrics.record_recording_captured_packet();
+        metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
 
@@ -856,11 +1000,35 @@ mod tests {
 
         assert_eq!(snapshot.active_channels, 1);
         assert_eq!(snapshot.active_sessions, 2);
+        assert_eq!(snapshot.active_recording_channels, 1);
         assert_eq!(snapshot.active_transport_sessions, 1);
+        assert_eq!(snapshot.connected_transport_sessions, 1);
+        assert_eq!(snapshot.disconnected_transport_sessions, 0);
+        assert_eq!(snapshot.recording_start_accepted, 1);
+        assert_eq!(snapshot.recording_captured_packets, 1);
+        assert_eq!(snapshot.recording_captured_streams, 1);
         assert_eq!(snapshot.rtp_packets_ingress, 1);
         assert_eq!(snapshot.rtp_packets_egress, 1);
         assert_eq!(snapshot.rtp_payload_bytes_ingress, 1200);
         assert_eq!(snapshot.rtp_payload_bytes_egress, 900);
+    }
+
+    #[test]
+    fn transport_health_transition_updates_connected_and_disconnected_gauges() {
+        let metrics = RuntimeMetrics::default();
+
+        metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
+        metrics.record_transport_health_transition(
+            Some(TransportSessionHealth::Connected),
+            Some(TransportSessionHealth::Disconnected),
+        );
+        metrics
+            .record_transport_health_transition(Some(TransportSessionHealth::Disconnected), None);
+
+        let snapshot = metrics.snapshot();
+
+        assert_eq!(snapshot.connected_transport_sessions, 0);
+        assert_eq!(snapshot.disconnected_transport_sessions, 0);
     }
 
     #[test]

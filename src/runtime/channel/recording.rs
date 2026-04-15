@@ -26,10 +26,12 @@ impl Channel {
             state.recording_request_context(session_id)
         };
         let Some(request_context) = request_context else {
+            self.metrics.record_recording_start_rejected();
             return false;
         };
         let permissions = self.recording_permissions(request_context.permissions());
         if !permissions.any() {
+            self.metrics.record_recording_start_rejected();
             return false;
         }
 
@@ -37,12 +39,15 @@ impl Channel {
         let is_recording = current_state.recording == Some(true);
         if is_recording {
             if options.audio.is_some() || options.video.is_some() {
+                self.metrics.record_recording_start_rejected();
                 return false;
             }
             let Some(transcription) = options.transcription else {
+                self.metrics.record_recording_start_rejected();
                 return false;
             };
             if !permissions.transcription {
+                self.metrics.record_recording_start_rejected();
                 return false;
             }
             let mut next_state = current_state.clone();
@@ -54,6 +59,7 @@ impl Channel {
             if let Some(fanout) = fanout {
                 fanout.emit();
             }
+            self.metrics.record_recording_start_accepted();
             return true;
         }
 
@@ -65,10 +71,12 @@ impl Channel {
             || (wants_video && !permissions.video)
             || (wants_transcription && !permissions.transcription)
         {
+            self.metrics.record_recording_start_rejected();
             return false;
         }
 
         if self.recording_service.start().is_err() {
+            self.metrics.record_recording_start_rejected();
             return false;
         }
 
@@ -87,6 +95,8 @@ impl Channel {
         if let Some(fanout) = fanout {
             fanout.emit();
         }
+        self.metrics.record_recording_start_accepted();
+        self.metrics.add_active_recording_channels(1);
         true
     }
 
@@ -96,19 +106,23 @@ impl Channel {
             state.recording_request_context(session_id)
         };
         let Some(request_context) = request_context else {
+            self.metrics.record_recording_stop_rejected();
             return false;
         };
         if !self
             .recording_permissions(request_context.permissions())
             .any()
         {
+            self.metrics.record_recording_stop_rejected();
             return false;
         }
         let current_state = request_context.recording_state();
         if current_state.recording != Some(true) {
+            self.metrics.record_recording_stop_accepted();
             return true;
         }
         if self.recording_service.stop().is_err() {
+            self.metrics.record_recording_stop_rejected();
             return false;
         }
         let fanout = {
@@ -126,6 +140,8 @@ impl Channel {
         if let Some(fanout) = fanout {
             fanout.emit();
         }
+        self.metrics.record_recording_stop_accepted();
+        self.metrics.add_active_recording_channels(-1);
         true
     }
 
