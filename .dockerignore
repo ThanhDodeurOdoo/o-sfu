@@ -1,0 +1,10 @@
+.git
+.github
+target
+client/node_modules
+client/dist
+fuzz/artifacts
+fuzz/corpus
+internal-documentation
+tests
+.DS_Store

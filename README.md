@@ -23,7 +23,39 @@ cargo test --workspace
 npm --prefix client run verify
 ```
 
-TODO: copy the liting and formatting rules from odoo/sfu
+The primary Rust CI coverage now lives in `.github/workflows/tests.yml`, which runs formatting, the full workspace test suite, clippy, and a Docker image build for the server binary.
+
+## Container image
+
+Build the server image from the repository root with:
+
+```bash
+docker build --tag o-sfu:local .
+```
+
+Run a local container with the minimum required auth key:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -e AUTH_KEY=dev-secret \
+  o-sfu:local
+```
+
+For real RTC traffic, also expose the UDP worker range and provide the advertised public IP:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -p 40000-49999:40000-49999/udp \
+  -e AUTH_KEY=dev-secret \
+  -e PROXY=true \
+  -e TRANSPORT_BACKEND=rtc \
+  -e PUBLIC_IP=203.0.113.10 \
+  o-sfu:local
+```
+
+Production deployment is expected to keep `o-sfu` on plain HTTP behind a trusted NGINX reverse proxy. Terminate TLS in NGINX, keep `o-sfu` bound on its local HTTP listener, and enable `PROXY=true` only on that trusted proxied path.
 
 parser/auth fuzzing is in `fuzz/` crate.
  Install `cargo-fuzz` separately:
@@ -61,8 +93,7 @@ cargo kani -p o-sfu-router
 
 ## TODO cleanup later
 
-- "rust" and "tests" github workflows have overlap, "rust" exists because it's the default one from github, will probably remove later 
-The router and rfc sections may be split into separate crates later (but too annoying for now)
+- The router and rfc sections may be split into separate crates later (but too annoying for now)
 
 ## random thoughts
 
