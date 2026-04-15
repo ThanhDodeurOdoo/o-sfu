@@ -93,6 +93,13 @@ pub(super) enum RtcDatagramDropReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RtcRouteControlOutcome {
+    Absorbed,
+    Forwarded,
+    RouteGatedRelayDrop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TransportIceState {
     New,
     Checking,
@@ -364,6 +371,18 @@ impl MetricLabel for RtcDatagramDropReason {
     }
 }
 
+impl MetricLabel for RtcRouteControlOutcome {
+    const COUNT: usize = 3;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::Absorbed => 0,
+            Self::Forwarded => 1,
+            Self::RouteGatedRelayDrop => 2,
+        }
+    }
+}
+
 impl MetricLabel for TransportIceState {
     const COUNT: usize = 5;
 
@@ -440,6 +459,7 @@ pub(crate) struct RuntimeMetrics {
     rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
     rtc_datagram_fallback_scans: Counter,
     rtc_datagram_scan_sessions: Counter,
+    rtc_route_control: CounterFamily<RtcRouteControlOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -524,6 +544,9 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtc_datagram_drops_malformed: u64,
     pub rtc_datagram_fallback_scans: u64,
     pub rtc_datagram_scan_sessions: u64,
+    pub rtc_route_control_absorbed: u64,
+    pub rtc_route_control_forwarded: u64,
+    pub rtc_route_control_route_gated_relay_drops: u64,
 }
 
 struct HttpSnapshot {
@@ -623,6 +646,12 @@ struct RtcDatagramSnapshot {
     scan_sessions: u64,
 }
 
+struct RtcRouteControlSnapshot {
+    absorbed: u64,
+    forwarded: u64,
+    route_gated_relay_drops: u64,
+}
+
 impl RuntimeMetrics {
     #[allow(
         dead_code,
@@ -636,6 +665,7 @@ impl RuntimeMetrics {
         let rtp = self.snapshot_rtp();
         let transport_lifecycle = self.snapshot_transport_lifecycle();
         let rtc_datagram = self.snapshot_rtc_datagram();
+        let rtc_route_control = self.snapshot_rtc_route_control();
         RuntimeMetricsSnapshot {
             http_noop_requests: http.noop_requests,
             http_stats_requests: http.stats_requests,
@@ -723,6 +753,9 @@ impl RuntimeMetrics {
             rtc_datagram_drops_malformed: rtc_datagram.drops_malformed,
             rtc_datagram_fallback_scans: rtc_datagram.fallback_scans,
             rtc_datagram_scan_sessions: rtc_datagram.scan_sessions,
+            rtc_route_control_absorbed: rtc_route_control.absorbed,
+            rtc_route_control_forwarded: rtc_route_control.forwarded,
+            rtc_route_control_route_gated_relay_drops: rtc_route_control.route_gated_relay_drops,
         }
     }
 
@@ -916,6 +949,20 @@ impl RuntimeMetrics {
                 .load(RtcDatagramDropReason::Malformed),
             fallback_scans: self.rtc_datagram_fallback_scans.load(),
             scan_sessions: self.rtc_datagram_scan_sessions.load(),
+        }
+    }
+
+    fn snapshot_rtc_route_control(&self) -> RtcRouteControlSnapshot {
+        RtcRouteControlSnapshot {
+            absorbed: self
+                .rtc_route_control
+                .load(RtcRouteControlOutcome::Absorbed),
+            forwarded: self
+                .rtc_route_control
+                .load(RtcRouteControlOutcome::Forwarded),
+            route_gated_relay_drops: self
+                .rtc_route_control
+                .load(RtcRouteControlOutcome::RouteGatedRelayDrop),
         }
     }
 
@@ -1183,13 +1230,17 @@ impl RuntimeMetrics {
         self.rtc_datagram_fallback_scans.increment();
         self.rtc_datagram_scan_sessions.add(examined_sessions);
     }
+
+    pub(super) fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
+        self.rtc_route_control.increment(outcome);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, TransportIceState,
-        WsSessionLoopExitReason,
+        RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RuntimeMetrics,
+        TransportIceState, WsSessionLoopExitReason,
     };
     use crate::{
         runtime::rtc_adapter::TransportSessionHealth, signaling::protocol::WebSocketCloseCode,
@@ -1238,6 +1289,9 @@ mod tests {
         assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
         assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
         assert_eq!(snapshot.rtc_datagram_scan_sessions, 3);
+        assert_eq!(snapshot.rtc_route_control_absorbed, 1);
+        assert_eq!(snapshot.rtc_route_control_forwarded, 1);
+        assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 1);
     }
 
     #[test]
@@ -1313,6 +1367,9 @@ mod tests {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
         metrics.record_rtc_datagram_fallback_scan(3);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
 
         let snapshot = metrics.snapshot();
 

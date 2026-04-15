@@ -131,7 +131,7 @@ fn handle_core_worker_command(
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. } => {
-            handle_media_command(state, context.relay_registry, command);
+            handle_media_command(state, context.metrics, context.relay_registry, command);
         }
         #[cfg(test)]
         RtcWorkerCommand::Debug(_command) => {}
@@ -176,6 +176,7 @@ fn handle_negotiation_command(
 
 fn handle_media_command(
     state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
     relay_registry: &RelayRegistry,
     command: RtcWorkerCommand,
 ) {
@@ -220,14 +221,20 @@ fn handle_media_command(
         RtcWorkerCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id,
+            target_id,
             rid,
             kind,
         } => media::respond_request_remote_keyframe(
             state,
-            &source_session_key,
-            source_transport_media_id,
-            rid,
-            kind,
+            metrics,
+            relay_registry,
+            &media::RemoteKeyframeRequest {
+                source_session_key: &source_session_key,
+                source_transport_media_id,
+                target_id,
+                rid,
+                kind,
+            },
         ),
         RtcWorkerCommand::SetRemoteSourceRouteActive {
             source_session_key,

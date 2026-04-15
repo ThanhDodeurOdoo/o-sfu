@@ -19,6 +19,7 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     append_rtp_metrics(&mut output, snapshot);
     append_transport_lifecycle_metrics(&mut output, snapshot);
     append_rtc_datagram_metrics(&mut output, snapshot);
+    append_rtc_route_control_metrics(&mut output, snapshot);
     output
 }
 
@@ -393,6 +394,23 @@ fn append_rtc_datagram_metrics(output: &mut String, snapshot: &RuntimeMetricsSna
     );
 }
 
+fn append_rtc_route_control_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
+    append_labeled_counter_family(
+        output,
+        "osfu_rtc_route_control_total",
+        "Total RTC route-control decisions observed at the transport boundary.",
+        "outcome",
+        &[
+            LabeledValue::new("absorbed", snapshot.rtc_route_control_absorbed),
+            LabeledValue::new("forwarded", snapshot.rtc_route_control_forwarded),
+            LabeledValue::new(
+                "route_gated_relay_drop",
+                snapshot.rtc_route_control_route_gated_relay_drops,
+            ),
+        ],
+    );
+}
+
 #[derive(Clone, Copy)]
 struct LabeledValue {
     label_value: &'static str,
@@ -641,8 +659,8 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
         runtime::metrics::{
-            RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics, TransportIceState,
-            WsSessionLoopExitReason,
+            RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RuntimeMetrics,
+            TransportIceState, WsSessionLoopExitReason,
         },
         runtime::rtc_adapter::TransportSessionHealth,
         signaling::protocol::WebSocketCloseCode,
@@ -687,6 +705,8 @@ mod tests {
     fn assert_transport_lifecycle_metrics(rendered: &str) {
         assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
         assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
+        assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"absorbed\"} 1"));
+        assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"forwarded\"} 1"));
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
         assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
@@ -725,6 +745,9 @@ mod tests {
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
         metrics.record_rtc_datagram_fallback_scan(4);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         metrics
     }
 
@@ -750,5 +773,8 @@ mod tests {
         assert!(rendered.contains("osfu_rtc_datagram_drops_total{reason=\"malformed\"} 1"));
         assert!(rendered.contains("osfu_rtc_datagram_fallback_scans_total 1"));
         assert!(rendered.contains("osfu_rtc_datagram_scan_sessions_total 4"));
+        assert!(
+            rendered.contains("osfu_rtc_route_control_total{outcome=\"route_gated_relay_drop\"} 1")
+        );
     }
 }

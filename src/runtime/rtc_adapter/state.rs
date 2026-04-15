@@ -30,6 +30,7 @@ use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::media_registry::{
     ProducerMidLookupKey, RegisteredMediaHandle, RemoteSourceRegistration,
 };
+use super::route_control::RouteControlState;
 
 pub(super) const BITRATE_WINDOW: Duration = Duration::from_secs(1);
 
@@ -208,6 +209,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
+    pub(super) route_control: RouteControlState,
     pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     pub(super) remote_addr_demux: RemoteAddrDemux,

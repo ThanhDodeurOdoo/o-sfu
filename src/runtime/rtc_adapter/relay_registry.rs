@@ -151,6 +151,12 @@ impl RelaySourceRegistration {
             .any(|registration| registration.active_reference_count > 0)
     }
 
+    fn is_target_active(&self, target_id: RelayTargetId) -> bool {
+        self.targets
+            .get(&target_id)
+            .is_some_and(|registration| registration.active_reference_count > 0)
+    }
+
     fn rebuild_mailboxes(&mut self) {
         self.mailboxes = self
             .targets
@@ -269,6 +275,18 @@ impl RelayRegistry {
             .any(RelaySourceRegistration::has_active_targets);
         drop(active_sources);
         self.any_active.store(has_active_sources, Ordering::Release);
+    }
+
+    pub(super) fn is_source_target_active(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+    ) -> bool {
+        self.active_sources
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&source_transport_media_id)
+            .is_some_and(|source_registration| source_registration.is_target_active(target_id))
     }
 
     fn active_source_count(&self) -> usize {

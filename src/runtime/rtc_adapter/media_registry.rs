@@ -115,6 +115,7 @@ impl RtcBootstrapState {
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
             self.producer_mid_registry
                 .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
+            self.route_control.forget_source(transport_media_id);
         }
         Some(handle)
     }
@@ -175,6 +176,7 @@ impl RtcBootstrapState {
         }
         self.remote_source_registry
             .remove(&source_transport_media_id);
+        self.route_control.forget_source(source_transport_media_id);
     }
 
     pub(super) fn prune_unrouted_remote_sources(&mut self) {
@@ -182,6 +184,14 @@ impl RtcBootstrapState {
             .retain(|source_transport_media_id, _registration| {
                 self.media_route_index
                     .contains_key(source_transport_media_id)
+            });
+        self.route_control
+            .retain_sources(|source_transport_media_id| {
+                self.mid_registry
+                    .contains_key(&source_transport_media_id.as_u64())
+                    || self
+                        .remote_source_registry
+                        .contains_key(source_transport_media_id)
             });
     }
 

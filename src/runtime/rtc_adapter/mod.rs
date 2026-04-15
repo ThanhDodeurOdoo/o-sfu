@@ -12,6 +12,7 @@
 //! - `forwarding_planner`: adapter-local destination planning over forwarded packets
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
 //! - `relay_registry`: source-media-scoped relay mailboxes for future inter-worker and inter-node forwarding
+//! - `route_control`: transport-native control policy for keyed feedback absorption and gating
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
@@ -42,6 +43,7 @@ mod packet_mode;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod parse_diagnostic;
 mod relay_registry;
+mod route_control;
 #[cfg(test)]
 mod sdp;
 mod shared_payload;

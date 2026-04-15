@@ -128,6 +128,7 @@ impl RemoteSourceControl {
         let _ = self.tx.try_send(RtcWorkerCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id,
+            target_id: self.target_id,
             rid,
             kind,
         });
@@ -210,6 +211,7 @@ pub(super) enum RtcWorkerCommand {
     RequestRemoteKeyframe {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
     },

@@ -1,9 +1,11 @@
 use o_sfu_router::RtpParameters as RouterRtpParameters;
+use std::time::Instant;
 use str0m::media::{Direction, KeyframeRequestKind, MediaKind, Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
@@ -72,17 +74,23 @@ pub(super) fn respond_add_send_media(
 
 pub(super) fn respond_request_remote_keyframe(
     state: &mut RtcBootstrapState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    rid: Option<Rid>,
-    kind: KeyframeRequestKind,
+    metrics: &RuntimeMetrics,
+    relay_registry: &RelayRegistry,
+    request: &RemoteKeyframeRequest<'_>,
 ) {
+    if !relay_registry.is_source_target_active(request.source_transport_media_id, request.target_id)
+    {
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
+        return;
+    }
     request_keyframe_for_source(
         state,
-        source_session_key,
-        source_transport_media_id,
-        rid,
-        kind,
+        metrics,
+        request.source_session_key,
+        request.source_transport_media_id,
+        request.rid,
+        request.kind,
+        Instant::now(),
     );
 }
 
@@ -102,6 +110,14 @@ pub(super) fn respond_set_remote_source_route_active(
         target_id,
         active,
     );
+}
+
+pub(super) struct RemoteKeyframeRequest<'a> {
+    pub(super) source_session_key: &'a TransportSessionKey,
+    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) target_id: super::super::relay_registry::RelayTargetId,
+    pub(super) rid: Option<Rid>,
+    pub(super) kind: KeyframeRequestKind,
 }
 
 pub(super) fn respond_set_producer_active(
@@ -645,10 +661,12 @@ fn ensure_route_source_exists(
 
 pub(crate) fn request_keyframe_for_source(
     state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
+    now: Instant,
 ) {
     let Some(handle) = state
         .mid_registry
@@ -666,12 +684,33 @@ pub(crate) fn request_keyframe_for_source(
     let Some(session_state) = state.sessions.get_mut(&session_key) else {
         return;
     };
+    if session_state
+        .rtc
+        .direct_api()
+        .stream_rx_by_mid(mid, rid)
+        .is_none()
+    {
+        return;
+    }
+    if matches!(
+        state
+            .route_control
+            .decide_keyframe_request(source_transport_media_id, now),
+        super::super::route_control::KeyframeRequestDecision::Absorb
+    ) {
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+        return;
+    }
+    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+        return;
+    };
     let mut direct_api = session_state.rtc.direct_api();
     let Some(stream_rx) = direct_api.stream_rx_by_mid(mid, rid) else {
         return;
     };
     stream_rx.request_keyframe(kind);
     state.mark_session_dirty(&session_key);
+    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
 }
 
 fn set_remote_source_route_active(
@@ -696,4 +735,131 @@ fn set_remote_source_route_active(
         return;
     }
     relay_registry.set_source_target_active(source_transport_media_id, target_id, active);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use str0m::media::MediaKind;
+
+    use super::*;
+    use crate::config::MediaCodecFlags;
+    use crate::runtime::rtc_adapter::{
+        bootstrap,
+        media_registry::RegisteredMediaHandle,
+        relay_registry::{RelayPacketMailbox, RelayTargetId},
+    };
+    use crate::signaling::shared::SessionId;
+
+    fn prepare_source_session(
+        state: &mut RtcBootstrapState,
+        source_session: &TransportSessionKey,
+        source_mid: Mid,
+        ssrc: u32,
+    ) -> TransportMediaId {
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
+        assert!(
+            bootstrap::ensure_session_rtc_state(
+                &mut state.sessions,
+                source_session,
+                candidate_addr,
+                MediaCodecFlags::default(),
+            )
+            .is_ok()
+        );
+        let Some(source_session_state) = state.sessions.get_mut(source_session) else {
+            return TransportMediaId::default();
+        };
+        let mut direct_api = source_session_state.rtc.direct_api();
+        direct_api.declare_media(source_mid, MediaKind::Video);
+        direct_api.expect_stream_rx(Ssrc::from(ssrc), None, source_mid, None);
+        state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: source_session.clone(),
+            mid: source_mid,
+        })
+    }
+
+    #[test]
+    fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
+        let source_session = TransportSessionKey::new(101, 0, 102, SessionId::Integer(103));
+        let source_mid = Mid::from("cam-up");
+        let mut state = RtcBootstrapState::default();
+        let metrics = RuntimeMetrics::default();
+        let relay_registry = RelayRegistry::default();
+        let (_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+        let source_transport_media_id =
+            prepare_source_session(&mut state, &source_session, source_mid, 66_666);
+
+        respond_request_remote_keyframe(
+            &mut state,
+            &metrics,
+            &relay_registry,
+            &RemoteKeyframeRequest {
+                source_session_key: &source_session,
+                source_transport_media_id,
+                target_id: RelayTargetId::new(7),
+                rid: None,
+                kind: KeyframeRequestKind::Pli,
+            },
+        );
+
+        assert!(!state.dirty_sessions.contains(&source_session));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_forwarded, 0);
+        assert_eq!(snapshot.rtc_route_control_absorbed, 0);
+        assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 1);
+    }
+
+    #[test]
+    fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
+        let source_session = TransportSessionKey::new(111, 0, 112, SessionId::Integer(113));
+        let source_mid = Mid::from("cam-up");
+        let mut state = RtcBootstrapState::default();
+        let metrics = RuntimeMetrics::default();
+        let relay_registry = RelayRegistry::default();
+        let (mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+        let source_transport_media_id =
+            prepare_source_session(&mut state, &source_session, source_mid, 77_777);
+        let relay_target_id = RelayTargetId::new(8);
+
+        relay_registry.activate_source_target(
+            source_session.channel_runtime_id(),
+            source_transport_media_id,
+            relay_target_id,
+            mailbox,
+        );
+        relay_registry.set_source_target_active(source_transport_media_id, relay_target_id, true);
+
+        respond_request_remote_keyframe(
+            &mut state,
+            &metrics,
+            &relay_registry,
+            &RemoteKeyframeRequest {
+                source_session_key: &source_session,
+                source_transport_media_id,
+                target_id: relay_target_id,
+                rid: None,
+                kind: KeyframeRequestKind::Pli,
+            },
+        );
+        respond_request_remote_keyframe(
+            &mut state,
+            &metrics,
+            &relay_registry,
+            &RemoteKeyframeRequest {
+                source_session_key: &source_session,
+                source_transport_media_id,
+                target_id: relay_target_id,
+                rid: None,
+                kind: KeyframeRequestKind::Fir,
+            },
+        );
+
+        assert!(state.dirty_sessions.contains(&source_session));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_forwarded, 1);
+        assert_eq!(snapshot.rtc_route_control_absorbed, 1);
+        assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 0);
+    }
 }
