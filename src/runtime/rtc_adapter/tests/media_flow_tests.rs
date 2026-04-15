@@ -314,6 +314,16 @@ async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
         source_adapter.debug_relay_target_count_for_source(source_transport_media_id),
         1
     );
+    assert_eq!(
+        source_adapter.debug_active_relay_target_count_for_source(source_transport_media_id),
+        0
+    );
+
+    source_adapter.set_relay_route_active(source_transport_media_id, &target_adapter, true);
+    assert_eq!(
+        source_adapter.debug_active_relay_target_count_for_source(source_transport_media_id),
+        1
+    );
 
     source_adapter.debug_deactivate_relay_route(source_transport_media_id, &target_adapter);
 

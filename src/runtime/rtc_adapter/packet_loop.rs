@@ -22,7 +22,7 @@ use super::{
     forwarding_planner::populate_forward_routes,
     relay_registry::RelayRegistry,
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
-    worker::{handle_worker_command, request_keyframe_for_source},
+    worker::{WorkerCommandContext, handle_worker_command, request_keyframe_for_source},
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::metrics::{
@@ -448,11 +448,14 @@ fn handle_worker_command_and_clear_routing_cache(
 ) {
     handle_worker_command(
         bootstrap_state,
-        snapshot_state,
-        config.public_ip,
-        config.rtc_port_range,
-        config.codec_flags,
-        &config.metrics,
+        &WorkerCommandContext {
+            snapshot_state,
+            relay_registry: &config.relay_registry,
+            public_ip: config.public_ip,
+            rtc_port_range: config.rtc_port_range,
+            codec_flags: config.codec_flags,
+            metrics: &config.metrics,
+        },
         command,
     );
     routing_state.clear_on_topology_change();
@@ -1006,7 +1009,7 @@ mod tests {
         bootstrap,
         commands::{RemoteSourceControl, RtcWorkerCommand},
         media_registry::RegisteredMediaHandle,
-        relay_registry::RelayPacketMailbox,
+        relay_registry::{RelayPacketMailbox, RelayTargetId},
         sample_forwarded_packet,
     };
     use crate::runtime::transport_adapter::TransportMediaId;
@@ -1320,7 +1323,7 @@ mod tests {
                 .register_remote_source(
                     source_transport_media_id,
                     &source_session,
-                    RemoteSourceControl::new(control_tx),
+                    RemoteSourceControl::new(control_tx, RelayTargetId::new(1)),
                 )
                 .is_ok()
         );

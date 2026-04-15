@@ -52,6 +52,7 @@ impl RelayTargetId {
 struct RelayTargetRegistration {
     mailbox: RelayPacketMailbox,
     reference_count: usize,
+    active_reference_count: usize,
 }
 
 #[derive(Clone, Default)]
@@ -80,9 +81,9 @@ impl RelaySourceRegistration {
                 RelayTargetRegistration {
                     mailbox,
                     reference_count: 1,
+                    active_reference_count: 0,
                 },
             );
-            self.rebuild_mailboxes();
         }
     }
 
@@ -92,11 +93,34 @@ impl RelaySourceRegistration {
         };
         if registration.reference_count > 1 {
             registration.reference_count -= 1;
+            if registration.active_reference_count > registration.reference_count {
+                registration.active_reference_count = registration.reference_count;
+                self.rebuild_mailboxes();
+            }
             return false;
         }
         self.targets.remove(&target_id);
         self.rebuild_mailboxes();
         self.targets.is_empty()
+    }
+
+    fn set_target_active(&mut self, target_id: RelayTargetId, active: bool) {
+        let Some(registration) = self.targets.get_mut(&target_id) else {
+            return;
+        };
+        let was_forwarding = registration.active_reference_count > 0;
+        if active {
+            registration.active_reference_count = registration
+                .active_reference_count
+                .saturating_add(1)
+                .min(registration.reference_count);
+        } else if registration.active_reference_count > 0 {
+            registration.active_reference_count -= 1;
+        }
+        let is_forwarding = registration.active_reference_count > 0;
+        if was_forwarding != is_forwarding {
+            self.rebuild_mailboxes();
+        }
     }
 
     fn mailboxes(&self) -> Arc<[RelayPacketMailbox]> {
@@ -113,10 +137,25 @@ impl RelaySourceRegistration {
         self.targets.len()
     }
 
+    #[cfg(test)]
+    fn active_target_count(&self) -> usize {
+        self.targets
+            .values()
+            .filter(|registration| registration.active_reference_count > 0)
+            .count()
+    }
+
+    fn has_active_targets(&self) -> bool {
+        self.targets
+            .values()
+            .any(|registration| registration.active_reference_count > 0)
+    }
+
     fn rebuild_mailboxes(&mut self) {
         self.mailboxes = self
             .targets
             .values()
+            .filter(|registration| registration.active_reference_count > 0)
             .map(|registration| registration.mailbox.clone())
             .collect::<Vec<_>>()
             .into();
@@ -149,7 +188,11 @@ impl RelayRegistry {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&source_transport_media_id)
-            .map(RelaySourceRegistration::mailboxes)
+            .and_then(|registration| {
+                registration
+                    .has_active_targets()
+                    .then(|| registration.mailboxes())
+            })
     }
 
     pub(super) fn activate_source_target(
@@ -161,9 +204,11 @@ impl RelayRegistry {
     ) {
         #[cfg(not(test))]
         let _ = channel_runtime_id;
-        self.active_sources
+        let mut active_sources = self
+            .active_sources
             .write()
-            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner);
+        active_sources
             .entry(source_transport_media_id)
             .or_insert_with(|| {
                 #[cfg(test)]
@@ -176,7 +221,11 @@ impl RelayRegistry {
                 }
             })
             .add_target(target_id, mailbox);
-        self.any_active.store(true, Ordering::Release);
+        let has_active_sources = active_sources
+            .values()
+            .any(RelaySourceRegistration::has_active_targets);
+        drop(active_sources);
+        self.any_active.store(has_active_sources, Ordering::Release);
     }
 
     pub(super) fn deactivate_source_target(
@@ -194,8 +243,32 @@ impl RelayRegistry {
         if remove_source {
             active_sources.remove(&source_transport_media_id);
         }
-        self.any_active
-            .store(!active_sources.is_empty(), Ordering::Release);
+        let has_active_sources = active_sources
+            .values()
+            .any(RelaySourceRegistration::has_active_targets);
+        drop(active_sources);
+        self.any_active.store(has_active_sources, Ordering::Release);
+    }
+
+    pub(super) fn set_source_target_active(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        active: bool,
+    ) {
+        let mut active_sources = self
+            .active_sources
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(source_registration) = active_sources.get_mut(&source_transport_media_id) else {
+            return;
+        };
+        source_registration.set_target_active(target_id, active);
+        let has_active_sources = active_sources
+            .values()
+            .any(RelaySourceRegistration::has_active_targets);
+        drop(active_sources);
+        self.any_active.store(has_active_sources, Ordering::Release);
     }
 
     fn active_source_count(&self) -> usize {
@@ -215,6 +288,18 @@ impl RelayRegistry {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&source_transport_media_id)
             .map_or(0, RelaySourceRegistration::target_count)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_target_count_for_source(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> usize {
+        self.active_sources
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&source_transport_media_id)
+            .map_or(0, RelaySourceRegistration::active_target_count)
     }
 
     #[cfg(test)]
@@ -258,6 +343,7 @@ mod tests {
             relay_target,
             mailbox,
         );
+        registry.set_source_target_active(source_transport_media_id, relay_target, true);
         assert!(
             registry
                 .mailboxes_for_source(source_transport_media_id)
@@ -290,6 +376,7 @@ mod tests {
             relay_target,
             mailbox,
         );
+        registry.set_source_target_active(source_transport_media_id, relay_target, true);
 
         let relay_mailboxes = registry.mailboxes_for_source(source_transport_media_id);
         assert!(relay_mailboxes.is_some());
@@ -327,12 +414,14 @@ mod tests {
             RelayTargetId::new(1),
             first_mailbox,
         );
+        registry.set_source_target_active(source_transport_media_id, RelayTargetId::new(1), true);
         registry.activate_source_target(
             channel_runtime_id,
             source_transport_media_id,
             RelayTargetId::new(2),
             second_mailbox,
         );
+        registry.set_source_target_active(source_transport_media_id, RelayTargetId::new(2), true);
 
         let relay_mailboxes = registry.mailboxes_for_source(source_transport_media_id);
         assert!(relay_mailboxes.is_some());
@@ -367,8 +456,14 @@ mod tests {
             relay_target,
             mailbox,
         );
+        registry.set_source_target_active(source_transport_media_id, relay_target, true);
+        registry.set_source_target_active(source_transport_media_id, relay_target, true);
         assert_eq!(
             registry.target_count_for_source(source_transport_media_id),
+            1
+        );
+        assert_eq!(
+            registry.active_target_count_for_source(source_transport_media_id),
             1
         );
 
@@ -402,11 +497,21 @@ mod tests {
             RelayTargetId::new(1),
             first_mailbox,
         );
+        registry.set_source_target_active(
+            first_source_transport_media_id,
+            RelayTargetId::new(1),
+            true,
+        );
         registry.activate_source_target(
             channel_runtime_id,
             second_source_transport_media_id,
             RelayTargetId::new(2),
             second_mailbox,
+        );
+        registry.set_source_target_active(
+            second_source_transport_media_id,
+            RelayTargetId::new(2),
+            true,
         );
 
         assert_eq!(
@@ -427,6 +532,58 @@ mod tests {
             registry
                 .mailboxes_for_source(second_source_transport_media_id)
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn relay_registry_only_forwards_to_targets_with_active_routes() {
+        let registry = RelayRegistry::default();
+        let (first_mailbox, _first_rx) = RelayPacketMailbox::channel_for_test();
+        let (second_mailbox, _second_rx) = RelayPacketMailbox::channel_for_test();
+        let channel_runtime_id = 27;
+        let source_transport_media_id = TransportMediaId::new(41);
+        let first_target = RelayTargetId::new(1);
+        let second_target = RelayTargetId::new(2);
+
+        registry.activate_source_target(
+            channel_runtime_id,
+            source_transport_media_id,
+            first_target,
+            first_mailbox,
+        );
+        registry.activate_source_target(
+            channel_runtime_id,
+            source_transport_media_id,
+            second_target,
+            second_mailbox,
+        );
+        assert!(
+            registry
+                .mailboxes_for_source(source_transport_media_id)
+                .is_none()
+        );
+
+        registry.set_source_target_active(source_transport_media_id, second_target, true);
+        let relay_mailboxes = registry.mailboxes_for_source(source_transport_media_id);
+        assert!(relay_mailboxes.is_some());
+        let Some(relay_mailboxes) = relay_mailboxes else {
+            return;
+        };
+        assert_eq!(relay_mailboxes.len(), 1);
+        assert_eq!(
+            registry.active_target_count_for_source(source_transport_media_id),
+            1
+        );
+
+        registry.set_source_target_active(source_transport_media_id, second_target, false);
+        assert!(
+            registry
+                .mailboxes_for_source(source_transport_media_id)
+                .is_none()
+        );
+        assert_eq!(
+            registry.active_target_count_for_source(source_transport_media_id),
+            0
         );
     }
 }

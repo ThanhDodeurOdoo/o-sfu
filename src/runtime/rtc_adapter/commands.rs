@@ -19,6 +19,7 @@ use crate::runtime::transport_adapter::{
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 
+use super::relay_registry::RelayTargetId;
 #[cfg(test)]
 use super::{dtls, state::ParsedRemoteIceCredentials};
 
@@ -109,11 +110,12 @@ impl RemoveMediaOutcome {
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteSourceControl {
     tx: mpsc::Sender<RtcWorkerCommand>,
+    target_id: RelayTargetId,
 }
 
 impl RemoteSourceControl {
-    pub(super) fn new(tx: mpsc::Sender<RtcWorkerCommand>) -> Self {
-        Self { tx }
+    pub(super) fn new(tx: mpsc::Sender<RtcWorkerCommand>, target_id: RelayTargetId) -> Self {
+        Self { tx, target_id }
     }
 
     pub(crate) fn request_keyframe(
@@ -129,6 +131,22 @@ impl RemoteSourceControl {
             rid,
             kind,
         });
+    }
+
+    pub(crate) fn set_route_active(
+        &self,
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        active: bool,
+    ) {
+        let _ = self
+            .tx
+            .try_send(RtcWorkerCommand::SetRemoteSourceRouteActive {
+                source_session_key,
+                source_transport_media_id,
+                target_id: self.target_id,
+                active,
+            });
     }
 }
 
@@ -194,6 +212,12 @@ pub(super) enum RtcWorkerCommand {
         source_transport_media_id: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+    },
+    SetRemoteSourceRouteActive {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        active: bool,
     },
     SetProducerActive {
         session_key: TransportSessionKey,

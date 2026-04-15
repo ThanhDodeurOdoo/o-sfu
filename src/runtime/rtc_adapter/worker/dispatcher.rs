@@ -13,6 +13,7 @@ use super::debug;
 use super::{
     super::{
         commands::RtcWorkerCommand,
+        relay_registry::RelayRegistry,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
     media,
@@ -20,19 +21,24 @@ use super::{
     publication, session,
 };
 
+pub(crate) struct WorkerCommandContext<'a> {
+    pub(crate) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub(crate) relay_registry: &'a RelayRegistry,
+    pub(crate) public_ip: IpAddr,
+    pub(crate) rtc_port_range: RtcPortRange,
+    pub(crate) codec_flags: MediaCodecFlags,
+    pub(crate) metrics: &'a RuntimeMetrics,
+}
+
 pub(crate) fn handle_worker_command(
     state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
-    metrics: &RuntimeMetrics,
+    context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
         #[cfg(test)]
         RtcWorkerCommand::Debug(command) => {
-            debug::handle_debug_command(state, snapshot_state, command);
+            debug::handle_debug_command(state, context.snapshot_state, command);
         }
         #[cfg(feature = "internal-benchmarks")]
         RtcWorkerCommand::RememberRemoteAddr {
@@ -42,33 +48,21 @@ pub(crate) fn handle_worker_command(
         } => {
             session::respond_remember_remote_addr(
                 state,
-                snapshot_state,
+                context.snapshot_state,
                 source_addr,
                 &session_key,
                 response,
             );
         }
         command => {
-            handle_core_worker_command(
-                state,
-                snapshot_state,
-                public_ip,
-                rtc_port_range,
-                codec_flags,
-                metrics,
-                command,
-            );
+            handle_core_worker_command(state, context, command);
         }
     }
 }
 
 fn handle_core_worker_command(
     state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
-    metrics: &RuntimeMetrics,
+    context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -79,11 +73,15 @@ fn handle_core_worker_command(
             response,
         } => bootstrap::respond_build_bootstrap(
             state,
-            snapshot_state,
-            bootstrap::WorkerBootstrapConfig::new(public_ip, rtc_port_range, codec_flags),
+            context.snapshot_state,
+            bootstrap::WorkerBootstrapConfig::new(
+                context.public_ip,
+                context.rtc_port_range,
+                context.codec_flags,
+            ),
             &session_key,
             &router_capabilities,
-            metrics,
+            context.metrics,
             response,
         ),
         #[cfg(test)]
@@ -104,20 +102,18 @@ fn handle_core_worker_command(
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
-            handle_negotiation_command(
-                state,
-                snapshot_state,
-                public_ip,
-                rtc_port_range,
-                codec_flags,
-                metrics,
-                command,
-            );
+            handle_negotiation_command(state, context, command);
         }
         RtcWorkerCommand::CloseSession {
             session_key,
             response,
-        } => session::respond_close_session(state, snapshot_state, &session_key, metrics, response),
+        } => session::respond_close_session(
+            state,
+            context.snapshot_state,
+            &session_key,
+            context.metrics,
+            response,
+        ),
         RtcWorkerCommand::ResolveNegotiatedProducerParameters {
             session_key,
             transport_media_id,
@@ -132,9 +128,10 @@ fn handle_core_worker_command(
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
         | RtcWorkerCommand::RequestRemoteKeyframe { .. }
+        | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. } => {
-            handle_media_command(state, command);
+            handle_media_command(state, context.relay_registry, command);
         }
         #[cfg(test)]
         RtcWorkerCommand::Debug(_command) => {}
@@ -145,11 +142,7 @@ fn handle_core_worker_command(
 
 fn handle_negotiation_command(
     state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    public_ip: IpAddr,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
-    metrics: &RuntimeMetrics,
+    context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -158,12 +151,12 @@ fn handle_negotiation_command(
             response,
         } => negotiation::respond_create_initial_session_offer(
             state,
-            snapshot_state,
+            context.snapshot_state,
             OfferBootstrapConfig {
-                public_ip,
-                rtc_port_range,
-                codec_flags,
-                metrics,
+                public_ip: context.public_ip,
+                rtc_port_range: context.rtc_port_range,
+                codec_flags: context.codec_flags,
+                metrics: context.metrics,
             },
             &session_key,
             response,
@@ -181,7 +174,11 @@ fn handle_negotiation_command(
     }
 }
 
-fn handle_media_command(state: &mut RtcBootstrapState, command: RtcWorkerCommand) {
+fn handle_media_command(
+    state: &mut RtcBootstrapState,
+    relay_registry: &RelayRegistry,
+    command: RtcWorkerCommand,
+) {
     match command {
         RtcWorkerCommand::RemoveMedia {
             session_key,
@@ -231,6 +228,19 @@ fn handle_media_command(state: &mut RtcBootstrapState, command: RtcWorkerCommand
             source_transport_media_id,
             rid,
             kind,
+        ),
+        RtcWorkerCommand::SetRemoteSourceRouteActive {
+            source_session_key,
+            source_transport_media_id,
+            target_id,
+            active,
+        } => media::respond_set_remote_source_route_active(
+            state,
+            relay_registry,
+            &source_session_key,
+            source_transport_media_id,
+            target_id,
+            active,
         ),
         RtcWorkerCommand::SetProducerActive {
             session_key,

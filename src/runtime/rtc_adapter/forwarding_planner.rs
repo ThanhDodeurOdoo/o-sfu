@@ -261,11 +261,21 @@ mod tests {
             RelayTargetId::new(1),
             first_relay_mailbox,
         );
+        relay_registry.set_source_target_active(
+            source_transport_media_id,
+            RelayTargetId::new(1),
+            true,
+        );
         relay_registry.activate_source_target(
             producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(2),
             second_relay_mailbox,
+        );
+        relay_registry.set_source_target_active(
+            source_transport_media_id,
+            RelayTargetId::new(2),
+            true,
         );
         let pending_packets = vec![sample_forwarded_packet(
             producer_session,
@@ -339,6 +349,11 @@ mod tests {
             RelayTargetId::new(1),
             relay_mailbox,
         );
+        relay_registry.set_source_target_active(
+            source_transport_media_id,
+            RelayTargetId::new(1),
+            true,
+        );
         let pending_packets = vec![
             sample_forwarded_packet(producer_session, "aud-up", b"payload")
                 .share_for_relay(source_transport_media_id),
@@ -402,6 +417,11 @@ mod tests {
             first_source_transport_media_id,
             RelayTargetId::new(1),
             relay_mailbox,
+        );
+        relay_registry.set_source_target_active(
+            first_source_transport_media_id,
+            RelayTargetId::new(1),
+            true,
         );
         let pending_packets = vec![
             sample_forwarded_packet(first_producer_session, "aud-up-1", b"payload-1"),

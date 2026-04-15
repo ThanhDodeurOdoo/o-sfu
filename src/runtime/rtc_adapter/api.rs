@@ -418,9 +418,13 @@ impl RtcTransportAdapter {
 
     pub(crate) fn remote_source_control(
         &self,
+        target: &Self,
     ) -> Result<RemoteSourceControl, TransportAdapterError> {
         let worker_handle = self.ensure_packet_loop_started()?;
-        Ok(RemoteSourceControl::new(worker_handle.command_tx))
+        Ok(RemoteSourceControl::new(
+            worker_handle.command_tx,
+            target.relay_target_id,
+        ))
     }
 
     async fn request_worker<T, F>(&self, build_command: F) -> Result<T, TransportAdapterError>
@@ -561,6 +565,19 @@ impl RtcTransportAdapter {
     ) {
         self.relay_registry
             .deactivate_source_target(source_transport_media_id, target.relay_target_id);
+    }
+
+    pub(crate) fn set_relay_route_active(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        target: &Self,
+        active: bool,
+    ) {
+        self.relay_registry.set_source_target_active(
+            source_transport_media_id,
+            target.relay_target_id,
+            active,
+        );
     }
 }
 
@@ -811,6 +828,14 @@ impl RtcTransportAdapter {
     ) -> usize {
         self.relay_registry
             .target_count_for_source(source_transport_media_id)
+    }
+
+    pub(crate) fn debug_active_relay_target_count_for_source(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> usize {
+        self.relay_registry
+            .active_target_count_for_source(source_transport_media_id)
     }
 }
 
