@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use str0m::media::KeyframeRequestKind;
+use str0m::media::{KeyframeRequestKind, Rid};
 
 use crate::runtime::transport_adapter::TransportMediaId;
 
@@ -15,9 +15,27 @@ pub(super) enum KeyframeRequestDecision {
     Absorb,
 }
 
+#[allow(
+    dead_code,
+    reason = "route-level packet gating is intentionally wired before its production policy caller lands, so only tests construct non-default gates in this slice"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) enum PacketLayerGate {
+    #[default]
+    Open,
+    Block,
+    Rid(Rid),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PacketRouteDecision {
+    Forward,
+    Drop,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct RouteControlState {
-    keyframe_requests: BTreeMap<TransportMediaId, KeyframeRequestWindow>,
+    sources: BTreeMap<TransportMediaId, SourceRouteControl>,
 }
 
 impl RouteControlState {
@@ -26,29 +44,60 @@ impl RouteControlState {
         source_transport_media_id: TransportMediaId,
         now: Instant,
     ) -> KeyframeRequestDecision {
-        let Some(window) = self.keyframe_requests.get(&source_transport_media_id) else {
-            self.keyframe_requests
-                .insert(source_transport_media_id, KeyframeRequestWindow::new(now));
+        let source_control = self.sources.entry(source_transport_media_id).or_default();
+        let Some(window) = source_control.keyframe_request else {
+            source_control.keyframe_request = Some(KeyframeRequestWindow::new(now));
             return KeyframeRequestDecision::Forward;
         };
         if window.is_open(now) {
             return KeyframeRequestDecision::Absorb;
         }
-        self.keyframe_requests
-            .insert(source_transport_media_id, KeyframeRequestWindow::new(now));
+        source_control.keyframe_request = Some(KeyframeRequestWindow::new(now));
         KeyframeRequestDecision::Forward
     }
 
+    pub(super) fn decide_packet_route(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        rid: Option<Rid>,
+    ) -> PacketRouteDecision {
+        let Some(source_control) = self.sources.get(&source_transport_media_id) else {
+            return PacketRouteDecision::Forward;
+        };
+        match &source_control.packet_gate {
+            PacketLayerGate::Open => PacketRouteDecision::Forward,
+            PacketLayerGate::Block => PacketRouteDecision::Drop,
+            PacketLayerGate::Rid(selected_rid) => rid
+                .as_ref()
+                .filter(|packet_rid| *packet_rid == selected_rid)
+                .map_or(PacketRouteDecision::Drop, |_rid| {
+                    PacketRouteDecision::Forward
+                }),
+        }
+    }
+
     pub(super) fn forget_source(&mut self, source_transport_media_id: TransportMediaId) {
-        self.keyframe_requests.remove(&source_transport_media_id);
+        self.sources.remove(&source_transport_media_id);
     }
 
     pub(super) fn retain_sources<F>(&mut self, mut keep: F)
     where
         F: FnMut(&TransportMediaId) -> bool,
     {
-        self.keyframe_requests
-            .retain(|source_transport_media_id, _window| keep(source_transport_media_id));
+        self.sources
+            .retain(|source_transport_media_id, _source_control| keep(source_transport_media_id));
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: PacketLayerGate,
+    ) {
+        self.sources
+            .entry(source_transport_media_id)
+            .or_default()
+            .packet_gate = packet_gate;
     }
 }
 
@@ -65,6 +114,12 @@ pub(super) fn coalesce_keyframe_kind(
 #[derive(Debug, Clone, Copy)]
 struct KeyframeRequestWindow {
     blocked_until: Instant,
+}
+
+#[derive(Debug, Default)]
+struct SourceRouteControl {
+    keyframe_request: Option<KeyframeRequestWindow>,
+    packet_gate: PacketLayerGate,
 }
 
 impl KeyframeRequestWindow {
@@ -85,7 +140,10 @@ mod tests {
 
     use str0m::media::KeyframeRequestKind;
 
-    use super::{KeyframeRequestDecision, RouteControlState, coalesce_keyframe_kind};
+    use super::{
+        KeyframeRequestDecision, PacketLayerGate, PacketRouteDecision, RouteControlState,
+        coalesce_keyframe_kind,
+    };
     use crate::runtime::transport_adapter::TransportMediaId;
 
     #[test]
@@ -129,6 +187,38 @@ mod tests {
         assert_eq!(
             coalesce_keyframe_kind(KeyframeRequestKind::Fir, KeyframeRequestKind::Pli),
             KeyframeRequestKind::Fir
+        );
+    }
+
+    #[test]
+    fn route_control_drops_packets_when_the_source_is_blocked() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(19);
+        state.set_packet_gate(source_transport_media_id, PacketLayerGate::Block);
+
+        assert_eq!(
+            state.decide_packet_route(source_transport_media_id, None),
+            PacketRouteDecision::Drop
+        );
+    }
+
+    #[test]
+    fn route_control_only_forwards_the_selected_rid() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(20);
+        state.set_packet_gate(source_transport_media_id, PacketLayerGate::Rid("hi".into()));
+
+        assert_eq!(
+            state.decide_packet_route(source_transport_media_id, Some("hi".into())),
+            PacketRouteDecision::Forward
+        );
+        assert_eq!(
+            state.decide_packet_route(source_transport_media_id, Some("lo".into())),
+            PacketRouteDecision::Drop
+        );
+        assert_eq!(
+            state.decide_packet_route(source_transport_media_id, None),
+            PacketRouteDecision::Drop
         );
     }
 }

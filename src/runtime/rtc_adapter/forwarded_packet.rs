@@ -1,7 +1,7 @@
 use std::{mem::take, time::Instant};
 
 use str0m::{
-    media::MediaData,
+    media::{MediaData, Rid},
     rtp::{RtpHeader, RtpPacket, SeqNo},
 };
 
@@ -96,6 +96,23 @@ impl ForwardedPacket {
             ForwardedPacketData::Str0mFrame(frame_data) => &frame_data.payload,
             ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.payload,
             ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.payload,
+        }
+    }
+
+    pub(super) fn route_control_rid(&self) -> Option<Rid> {
+        match &self.data {
+            ForwardedPacketData::Str0mFrame(frame_data) => frame_data.media_data.rid,
+            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data
+                .rtp_packet
+                .header
+                .ext_vals
+                .rid
+                .or(rtp_data.rtp_packet.header.ext_vals.rid_repair),
+            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data
+                .header
+                .ext_vals
+                .rid
+                .or(rtp_data.header.ext_vals.rid_repair),
         }
     }
 
@@ -212,12 +229,22 @@ pub(crate) fn sample_forwarded_packet(
     mid: &str,
     payload: &[u8],
 ) -> ForwardedPacket {
+    sample_forwarded_packet_with_rid(source_session_key, mid, None, payload)
+}
+
+#[cfg(test)]
+pub(crate) fn sample_forwarded_packet_with_rid(
+    source_session_key: TransportSessionKey,
+    mid: &str,
+    rid: Option<&str>,
+    payload: &[u8],
+) -> ForwardedPacket {
     ForwardedPacket::from_media_data(
         source_session_key,
         MediaData {
             mid: Mid::from(mid),
             pt: Pt::from(111),
-            rid: None,
+            rid: rid.map(Rid::from),
             params: sample_payload_params(),
             time: MediaTime::from_millis(5),
             network_time: Instant::now(),

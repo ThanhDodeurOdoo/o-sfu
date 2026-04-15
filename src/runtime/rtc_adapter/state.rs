@@ -280,6 +280,16 @@ impl RtcBootstrapState {
         self.dirty_sessions.remove(session_key);
         self.session_timeouts.remove(session_key);
     }
+
+    #[cfg(test)]
+    pub(super) fn set_source_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: super::route_control::PacketLayerGate,
+    ) {
+        self.route_control
+            .set_packet_gate(source_transport_media_id, packet_gate);
+    }
 }
 
 // ---------------------------------------------------------------------------

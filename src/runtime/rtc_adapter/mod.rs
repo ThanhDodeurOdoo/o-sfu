@@ -61,5 +61,7 @@ pub(crate) use commands::RelayCleanup;
 pub(crate) use forwarded_packet::ForwardedPacket;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet;
+#[cfg(test)]
+pub(crate) use forwarded_packet::sample_forwarded_packet_with_rid;
 pub(crate) use negotiated_capabilities::client_rtp_capabilities_from_answer;
 pub(crate) use state::TransportSessionHealth;

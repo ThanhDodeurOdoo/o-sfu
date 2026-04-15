@@ -1,14 +1,16 @@
+use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::recording::MediaTap;
 
 use super::{
     forwarded_packet::ForwardedPacket, forwarding_destination::PacketForward,
-    relay_registry::RelayRegistry, state::RtcBootstrapState,
+    relay_registry::RelayRegistry, route_control::PacketRouteDecision, state::RtcBootstrapState,
 };
 
 pub(super) fn populate_forward_routes(
     state: &RtcBootstrapState,
     media_tap: &MediaTap,
     relay_registry: &RelayRegistry,
+    metrics: &RuntimeMetrics,
     pending_packets: &[ForwardedPacket],
     forwards: &mut Vec<PacketForward>,
 ) {
@@ -17,29 +19,46 @@ pub(super) fn populate_forward_routes(
         else {
             continue;
         };
-        if packet.uses_channel_side_sinks() {
-            if let Some(sink) =
+        if packet.uses_channel_side_sinks()
+            && let Some(sink) =
                 media_tap.sink_for_channel(packet.source_session_key().channel_runtime_id())
+        {
+            forwards.push(PacketForward::from_recording_sink(
+                packet_idx,
+                source_transport_media_id,
+                sink,
+            ));
+        }
+        let relay_mailboxes = if packet.uses_channel_side_sinks() {
+            relay_registry.mailboxes_for_source(source_transport_media_id)
+        } else {
+            None
+        };
+        let route_entry = state.media_route_index.get(&source_transport_media_id);
+        if has_routed_forward(relay_mailboxes.as_deref(), route_entry) {
+            match state
+                .route_control
+                .decide_packet_route(source_transport_media_id, packet.route_control_rid())
             {
-                forwards.push(PacketForward::from_recording_sink(
-                    packet_idx,
-                    source_transport_media_id,
-                    sink,
-                ));
-            }
-            if let Some(relay_mailboxes) =
-                relay_registry.mailboxes_for_source(source_transport_media_id)
-            {
-                for relay_mailbox in relay_mailboxes.iter().cloned() {
-                    forwards.push(PacketForward::from_relay_sink(
-                        packet_idx,
-                        source_transport_media_id,
-                        relay_mailbox,
-                    ));
+                PacketRouteDecision::Forward => {
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
+                }
+                PacketRouteDecision::Drop => {
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+                    continue;
                 }
             }
         }
-        let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
+        if let Some(relay_mailboxes) = relay_mailboxes {
+            for relay_mailbox in relay_mailboxes.iter().cloned() {
+                forwards.push(PacketForward::from_relay_sink(
+                    packet_idx,
+                    source_transport_media_id,
+                    relay_mailbox,
+                ));
+            }
+        }
+        let Some(route_entry) = route_entry else {
             continue;
         };
         if !route_entry.source_active {
@@ -57,6 +76,20 @@ pub(super) fn populate_forward_routes(
     }
 }
 
+fn has_routed_forward(
+    relay_mailboxes: Option<&[super::relay_registry::RelayPacketMailbox]>,
+    route_entry: Option<&super::demux::MediaRouteEntry>,
+) -> bool {
+    relay_mailboxes.is_some_and(|mailboxes| !mailboxes.is_empty())
+        || route_entry.is_some_and(|entry| {
+            entry.source_active
+                && entry
+                    .destinations
+                    .iter()
+                    .any(|destination| destination.active)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -68,13 +101,15 @@ mod tests {
     use str0m::media::Mid;
 
     use super::*;
+    use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink};
     use crate::runtime::rtc_adapter::{
         demux::{MediaRouteDestination, MediaRouteEntry},
         forwarding_destination::ForwardingDestination,
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
-        sample_forwarded_packet,
+        route_control::PacketLayerGate,
+        sample_forwarded_packet, sample_forwarded_packet_with_rid,
     };
     use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
     use crate::signaling::shared::SessionId;
@@ -110,6 +145,7 @@ mod tests {
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
         let source_transport_media_id =
             state.register_media_handle(RegisteredMediaHandle::Producer {
                 session_key: producer_session.clone(),
@@ -144,6 +180,7 @@ mod tests {
             &state,
             &media_tap,
             &relay_registry,
+            &metrics,
             &pending_packets,
             &mut forwards,
         );
@@ -164,6 +201,7 @@ mod tests {
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
         let sink = Arc::new(CountingSink::new());
         let source_transport_media_id =
             state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -203,6 +241,7 @@ mod tests {
             &state,
             &media_tap,
             &relay_registry,
+            &metrics,
             &pending_packets,
             &mut forwards,
         );
@@ -225,6 +264,7 @@ mod tests {
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
         let recording_sink = Arc::new(CountingSink::new());
         let (first_relay_mailbox, _first_relay_rx) = RelayPacketMailbox::channel_for_test();
         let (second_relay_mailbox, _second_relay_rx) = RelayPacketMailbox::channel_for_test();
@@ -288,6 +328,7 @@ mod tests {
             &state,
             &media_tap,
             &relay_registry,
+            &metrics,
             &pending_packets,
             &mut forwards,
         );
@@ -318,6 +359,7 @@ mod tests {
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
         let recording_sink = Arc::new(CountingSink::new());
         let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
         let source_transport_media_id = TransportMediaId::new(51);
@@ -364,6 +406,7 @@ mod tests {
             &state,
             &media_tap,
             &relay_registry,
+            &metrics,
             &pending_packets,
             &mut forwards,
         );
@@ -383,6 +426,7 @@ mod tests {
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
         let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
         let first_source_transport_media_id =
             state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -433,6 +477,7 @@ mod tests {
             &state,
             &media_tap,
             &relay_registry,
+            &metrics,
             &pending_packets,
             &mut forwards,
         );
@@ -452,5 +497,125 @@ mod tests {
                 .and_then(|packet| packet.resolve_source_transport_media_id(&state)),
             Some(second_source_transport_media_id)
         );
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the mixed local-plus-remote routing setup is easiest to audit when the full source-to-destination matrix stays inline in one regression test"
+    )]
+    #[test]
+    fn populate_forward_routes_gates_only_the_selected_source_media() {
+        let gated_producer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(63));
+        let open_producer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(64));
+        let gated_consumer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(65));
+        let open_consumer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(66));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let recording_sink = Arc::new(CountingSink::new());
+        let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+        let gated_source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: gated_producer_session.clone(),
+                mid: Mid::from("cam-up"),
+            });
+        let open_source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: open_producer_session.clone(),
+                mid: Mid::from("screen-up"),
+            });
+        let gated_consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: gated_consumer_session.clone(),
+                mid: Mid::from("cam-down"),
+                source_transport_media_id: gated_source_transport_media_id,
+            });
+        let open_consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: open_consumer_session.clone(),
+                mid: Mid::from("screen-down"),
+                source_transport_media_id: open_source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            gated_source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: gated_consumer_session,
+                    dest_transport_media_id: gated_consumer_transport_media_id,
+                    dest_mid: Mid::from("cam-down"),
+                    active: true,
+                }],
+            },
+        );
+        state.media_route_index.insert(
+            open_source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: open_consumer_session.clone(),
+                    dest_transport_media_id: open_consumer_transport_media_id,
+                    dest_mid: Mid::from("screen-down"),
+                    active: true,
+                }],
+            },
+        );
+        state.set_source_packet_gate(
+            gated_source_transport_media_id,
+            PacketLayerGate::Rid("hi".into()),
+        );
+        media_tap.activate_channel(
+            gated_producer_session.channel_runtime_id(),
+            into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        );
+        relay_registry.activate_source_target(
+            gated_producer_session.channel_runtime_id(),
+            gated_source_transport_media_id,
+            RelayTargetId::new(1),
+            relay_mailbox,
+        );
+        relay_registry.set_source_target_active(
+            gated_source_transport_media_id,
+            RelayTargetId::new(1),
+            true,
+        );
+        let pending_packets = vec![
+            sample_forwarded_packet_with_rid(
+                gated_producer_session,
+                "cam-up",
+                Some("lo"),
+                b"camera-packet",
+            ),
+            sample_forwarded_packet(open_producer_session, "screen-up", b"screen-packet"),
+        ];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 3);
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(ForwardingDestination::Recording(_))
+        ));
+        assert!(matches!(
+            forwards.get(1).map(PacketForward::destination),
+            Some(ForwardingDestination::Recording(_))
+        ));
+        assert!(matches!(
+            forwards.get(2).map(PacketForward::destination),
+            Some(destination)
+                if destination.session_key() == Some(&open_consumer_session)
+        ));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 1);
     }
 }

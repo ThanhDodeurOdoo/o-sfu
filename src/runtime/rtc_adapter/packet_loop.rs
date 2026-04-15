@@ -545,6 +545,7 @@ fn snapshot_and_pump(
         state,
         &config.media_tap,
         &config.relay_registry,
+        &config.metrics,
         &buffers.pending_packets,
         &mut buffers.forwards,
     );
@@ -1317,6 +1318,7 @@ mod tests {
             &state,
             &media_tap,
             &relay_registry,
+            &metrics,
             &buffers.pending_packets,
             &mut buffers.forwards,
         );

@@ -407,6 +407,8 @@ fn append_rtc_route_control_metrics(output: &mut String, snapshot: &RuntimeMetri
                 "route_gated_relay_drop",
                 snapshot.rtc_route_control_route_gated_relay_drops,
             ),
+            LabeledValue::new("layer_allowed", snapshot.rtc_route_control_layer_allowed),
+            LabeledValue::new("layer_dropped", snapshot.rtc_route_control_layer_dropped),
         ],
     );
 }
@@ -748,6 +750,8 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
         metrics
     }
 
@@ -776,5 +780,7 @@ mod tests {
         assert!(
             rendered.contains("osfu_rtc_route_control_total{outcome=\"route_gated_relay_drop\"} 1")
         );
+        assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"layer_allowed\"} 1"));
+        assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"layer_dropped\"} 1"));
     }
 }

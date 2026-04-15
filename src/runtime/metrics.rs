@@ -97,6 +97,8 @@ pub(super) enum RtcRouteControlOutcome {
     Absorbed,
     Forwarded,
     RouteGatedRelayDrop,
+    LayerAllowed,
+    LayerDropped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,13 +374,15 @@ impl MetricLabel for RtcDatagramDropReason {
 }
 
 impl MetricLabel for RtcRouteControlOutcome {
-    const COUNT: usize = 3;
+    const COUNT: usize = 5;
 
     fn as_index(self) -> usize {
         match self {
             Self::Absorbed => 0,
             Self::Forwarded => 1,
             Self::RouteGatedRelayDrop => 2,
+            Self::LayerAllowed => 3,
+            Self::LayerDropped => 4,
         }
     }
 }
@@ -547,6 +551,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtc_route_control_absorbed: u64,
     pub rtc_route_control_forwarded: u64,
     pub rtc_route_control_route_gated_relay_drops: u64,
+    pub rtc_route_control_layer_allowed: u64,
+    pub rtc_route_control_layer_dropped: u64,
 }
 
 struct HttpSnapshot {
@@ -650,12 +656,18 @@ struct RtcRouteControlSnapshot {
     absorbed: u64,
     forwarded: u64,
     route_gated_relay_drops: u64,
+    layer_allowed: u64,
+    layer_dropped: u64,
 }
 
 impl RuntimeMetrics {
     #[allow(
         dead_code,
         reason = "Snapshot reads are intentionally available before external exporters are wired."
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the snapshot builder is a flat counter-to-field table, and keeping the mapping literal makes the exported metrics surface easier to audit"
     )]
     pub(super) fn snapshot(&self) -> RuntimeMetricsSnapshot {
         let http = self.snapshot_http();
@@ -756,6 +768,8 @@ impl RuntimeMetrics {
             rtc_route_control_absorbed: rtc_route_control.absorbed,
             rtc_route_control_forwarded: rtc_route_control.forwarded,
             rtc_route_control_route_gated_relay_drops: rtc_route_control.route_gated_relay_drops,
+            rtc_route_control_layer_allowed: rtc_route_control.layer_allowed,
+            rtc_route_control_layer_dropped: rtc_route_control.layer_dropped,
         }
     }
 
@@ -963,6 +977,12 @@ impl RuntimeMetrics {
             route_gated_relay_drops: self
                 .rtc_route_control
                 .load(RtcRouteControlOutcome::RouteGatedRelayDrop),
+            layer_allowed: self
+                .rtc_route_control
+                .load(RtcRouteControlOutcome::LayerAllowed),
+            layer_dropped: self
+                .rtc_route_control
+                .load(RtcRouteControlOutcome::LayerDropped),
         }
     }
 
@@ -1292,6 +1312,8 @@ mod tests {
         assert_eq!(snapshot.rtc_route_control_absorbed, 1);
         assert_eq!(snapshot.rtc_route_control_forwarded, 1);
         assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 1);
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 1);
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
     }
 
     #[test]
@@ -1370,6 +1392,8 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
 
         let snapshot = metrics.snapshot();
 
