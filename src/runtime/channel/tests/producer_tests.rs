@@ -1153,6 +1153,53 @@ async fn production_change_updates_transport_route_activity() {
 }
 
 #[tokio::test]
+async fn production_change_commits_session_state_before_transport_update_finishes() {
+    let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+
+    channel
+        .publish_track(
+            &SessionId::Integer(1),
+            StreamType::Camera,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &adapter,
+        )
+        .await;
+    drain_outbound(&mut rx1);
+    drain_outbound(&mut rx2);
+
+    stub.set_producer_active_delay(Some(Duration::from_millis(200)));
+
+    let update_task = tokio::spawn({
+        let channel = Arc::clone(&channel);
+        let adapter = adapter.clone();
+        async move {
+            channel
+                .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
+                .await;
+        }
+    });
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::ProducerActivityUpdated {
+                session_id: SessionId::Integer(1),
+                active: false,
+            }
+        )
+    })
+    .await;
+
+    let Some((_, info)) = channel.session_info_snapshot(&SessionId::Integer(1)).await else {
+        panic!("publisher session should still be present");
+    };
+    assert_eq!(info.is_camera_on, Some(false));
+
+    update_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_adapter() {
     let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;

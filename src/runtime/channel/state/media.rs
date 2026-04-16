@@ -116,6 +116,13 @@ pub(in crate::runtime::channel) struct ConsumerRouteUpdate {
 }
 
 #[derive(Debug)]
+pub(in crate::runtime::channel) struct ProducerActivityOutcome {
+    pub(in crate::runtime::channel) transport_media_id: TransportMediaId,
+    pub(in crate::runtime::channel) active: bool,
+    pub(in crate::runtime::channel) fanout: MessageFanout,
+}
+
+#[derive(Debug)]
 pub(in crate::runtime::channel) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
@@ -582,7 +589,7 @@ impl ChannelState {
         producer_target: &ProducerRouteTarget,
         stream_type: StreamType,
         active: bool,
-    ) -> Option<MessageFanout> {
+    ) -> Option<ProducerActivityOutcome> {
         let current_connection_id = self.session_connection_id(session_id);
         let producer = self.producers.get(&producer_target.producer_id)?;
         if producer.owner_connection_id != producer_target.owner_connection_id
@@ -610,7 +617,11 @@ impl ChannelState {
             producer.active = active;
         }
         let snapshot = BTreeMap::from([self.session_info_snapshot(session_id)?]);
-        Some(self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)))
+        Some(ProducerActivityOutcome {
+            transport_media_id: producer_target.transport_media_id,
+            active,
+            fanout: self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)),
+        })
     }
 
     pub(in crate::runtime::channel) fn download_route_updates(
@@ -647,8 +658,9 @@ impl ChannelState {
         session_id: &SessionId,
         target_session_id: &SessionId,
         committed_updates: impl IntoIterator<Item = ConsumerRouteUpdate>,
-    ) {
+    ) -> Vec<ConsumerRouteUpdate> {
         let consumer_connection_id = self.session_connection_id(session_id);
+        let mut accepted_updates = Vec::new();
         for route_update in committed_updates {
             let key = ConsumerKey {
                 consumer_session_id: session_id.clone(),
@@ -675,8 +687,11 @@ impl ChannelState {
                     ?route_update.stream_type,
                     "failed to set consumer pause state in channel router"
                 );
+                continue;
             }
+            accepted_updates.push(route_update);
         }
+        accepted_updates
     }
 }
 
@@ -829,7 +844,10 @@ fn to_router_stream_type(stream_type: StreamType) -> RouterStreamType {
 mod tests {
     use std::sync::Arc;
 
-    use o_sfu_router::{ProducerId, RouterId, RtpParameters};
+    use o_sfu_router::{
+        ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId, RtpParameters,
+        StreamType as RouterStreamType,
+    };
     use tokio::sync::mpsc;
 
     use super::*;
@@ -914,5 +932,110 @@ mod tests {
                 .is_some_and(|producer| producer.active),
             "channel state must keep the previous activity flag when router pause propagation fails"
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::panic,
+        reason = "test fixture wiring intentionally aborts on impossible setup failures"
+    )]
+    fn stale_download_route_updates_are_ignored_before_transport_commit() {
+        let mut state = test_state();
+        let producer_session_id = SessionId::Integer(1);
+        let consumer_session_id = SessionId::Integer(2);
+        let (producer_sender, _producer_rx) = mpsc::unbounded_channel();
+        let (consumer_sender, _consumer_rx) = mpsc::unbounded_channel();
+
+        assert!(
+            state
+                .apply_join(
+                    &producer_session_id,
+                    None,
+                    SessionPermissions::default(),
+                    producer_sender,
+                    false,
+                )
+                .is_ok()
+        );
+        assert!(
+            state
+                .apply_join(
+                    &consumer_session_id,
+                    None,
+                    SessionPermissions::default(),
+                    consumer_sender,
+                    false,
+                )
+                .is_ok()
+        );
+
+        let Some(producer_connection_id) = state.session_connection_id(&producer_session_id) else {
+            panic!("producer session should have a connection id");
+        };
+        let Some(consumer_connection_id) = state.session_connection_id(&consumer_session_id) else {
+            panic!("consumer session should have a connection id");
+        };
+        let routed_producer_id = match state.topology.add_producer(
+            &producer_session_id,
+            RouterMediaKind::Video,
+            RouterStreamType::Camera,
+        ) {
+            Ok(routed_producer_id) => routed_producer_id,
+            Err(error) => panic!("failed to create test producer route: {error:?}"),
+        };
+        let routed_consumer_id = match state.topology.add_consumer(
+            &consumer_session_id,
+            routed_producer_id,
+            RouterMediaKind::Video,
+            RouterStreamType::Camera,
+            ConsumerCapability::Compatible,
+        ) {
+            Ok(routed_consumer_id) => routed_consumer_id,
+            Err(error) => panic!("failed to create test consumer route: {error:?}"),
+        };
+
+        let consumer_media = TransportMediaId::new(2);
+        let route_key = ConsumerKey {
+            consumer_session_id: consumer_session_id.clone(),
+            producer_session_id: producer_session_id.clone(),
+            stream_type: StreamType::Camera,
+        };
+        let consumer_state = ConsumerState {
+            routed_consumer_id,
+            consumer_connection_id,
+            source_connection_id: producer_connection_id,
+            source_media: TransportMediaId::new(1),
+            consumer_media,
+        };
+        state
+            .consumer_index
+            .insert(route_key.clone(), consumer_state);
+
+        let route_updates = state.download_route_updates(
+            &consumer_session_id,
+            &producer_session_id,
+            &DownloadStates {
+                camera: Some(false),
+                audio: None,
+                screen: None,
+            },
+        );
+        assert_eq!(route_updates.len(), 1);
+
+        state.consumer_index.insert(
+            route_key,
+            ConsumerState {
+                consumer_connection_id: consumer_connection_id.saturating_add(1),
+                ..consumer_state
+            },
+        );
+
+        let committed_updates = state.commit_download_route_updates(
+            &consumer_session_id,
+            &producer_session_id,
+            route_updates,
+        );
+
+        assert!(committed_updates.is_empty());
     }
 }

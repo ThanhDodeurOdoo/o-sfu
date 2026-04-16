@@ -519,6 +519,14 @@ impl Channel {
     }
 
     #[cfg(test)]
+    pub(super) async fn session_info_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<(SessionId, SessionInfo)> {
+        self.state.read().await.session_info_snapshot(session_id)
+    }
+
+    #[cfg(test)]
     pub(super) async fn has_session(&self, session_id: &SessionId) -> bool {
         self.state.read().await.has_session(session_id)
     }

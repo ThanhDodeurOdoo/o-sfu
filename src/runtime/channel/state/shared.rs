@@ -178,6 +178,35 @@ impl ChannelState {
             .collect()
     }
 
+    pub(in crate::runtime::channel) fn collect_producer_transport_removals(
+        &self,
+        departing_session_ids: &BTreeSet<SessionId>,
+    ) -> Vec<TransportMediaRemoval> {
+        self.producers
+            .values()
+            .filter_map(|producer| {
+                if !departing_session_ids.contains(&producer.owner_session_id) {
+                    return None;
+                }
+                let transport_media = producer.transport_media_id?;
+                Some(TransportMediaRemoval {
+                    session: producer.owner_session_id.clone(),
+                    connection: producer.owner_connection_id,
+                    transport_media,
+                })
+            })
+            .collect()
+    }
+
+    pub(in crate::runtime::channel) fn collect_session_transport_removals(
+        &self,
+        departing_session_ids: &BTreeSet<SessionId>,
+    ) -> Vec<TransportMediaRemoval> {
+        let mut removals = self.collect_producer_transport_removals(departing_session_ids);
+        removals.extend(self.collect_consumer_transport_removals(departing_session_ids));
+        removals
+    }
+
     pub(in crate::runtime::channel) fn purge_session_media_state(
         &mut self,
         session_id: &SessionId,

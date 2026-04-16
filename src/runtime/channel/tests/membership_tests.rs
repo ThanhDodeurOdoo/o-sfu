@@ -388,6 +388,15 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
         )
     })
     .await;
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::MediaRemoved { session_id, .. }
+                if *session_id == SessionId::Integer(1)
+        )
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -440,6 +449,15 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
             event,
             StubWebRtcEvent::MediaRemoved { session_id, .. }
                 if *session_id == SessionId::Integer(2)
+        )
+    })
+    .await;
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::MediaRemoved { session_id, .. }
+                if *session_id == SessionId::Integer(1)
         )
     })
     .await;

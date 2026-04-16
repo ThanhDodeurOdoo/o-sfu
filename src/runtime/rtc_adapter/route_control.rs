@@ -89,9 +89,24 @@ impl RouteControlState {
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<PacketLayerGate>,
     ) {
-        let source_control = self.sources.entry(source_transport_media_id).or_default();
-        source_control.local_packet_gate = packet_gate;
-        if source_control.is_empty() {
+        let should_remove =
+            if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
+                source_control.local_packet_gate = packet_gate;
+                source_control.is_empty()
+            } else {
+                let Some(packet_gate) = packet_gate else {
+                    return;
+                };
+                self.sources.insert(
+                    source_transport_media_id,
+                    SourceRouteControl {
+                        local_packet_gate: Some(packet_gate),
+                        ..Default::default()
+                    },
+                );
+                return;
+            };
+        if should_remove {
             self.sources.remove(&source_transport_media_id);
         }
     }
@@ -101,9 +116,24 @@ impl RouteControlState {
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<PacketLayerGate>,
     ) {
-        let source_control = self.sources.entry(source_transport_media_id).or_default();
-        source_control.source_packet_gate = packet_gate;
-        if source_control.is_empty() {
+        let should_remove =
+            if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
+                source_control.source_packet_gate = packet_gate;
+                source_control.is_empty()
+            } else {
+                let Some(packet_gate) = packet_gate else {
+                    return;
+                };
+                self.sources.insert(
+                    source_transport_media_id,
+                    SourceRouteControl {
+                        source_packet_gate: Some(packet_gate),
+                        ..Default::default()
+                    },
+                );
+                return;
+            };
+        if should_remove {
             self.sources.remove(&source_transport_media_id);
         }
     }
@@ -115,22 +145,26 @@ impl RouteControlState {
         audio_level_dbov: Option<i8>,
         now: Instant,
     ) {
-        let Some(mut source_control) = self.sources.remove(&source_transport_media_id) else {
-            if voice_activity.is_none() && audio_level_dbov.is_none() {
+        let should_remove =
+            if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
+                source_control.observe_audio_activity(voice_activity, audio_level_dbov, now);
+                source_control.is_empty()
+            } else {
+                if voice_activity.is_none() && audio_level_dbov.is_none() {
+                    return;
+                }
+                let mut source_control = SourceRouteControl::default();
+                source_control.observe_audio_activity(voice_activity, audio_level_dbov, now);
+                if source_control.is_empty() {
+                    return;
+                }
+                self.sources
+                    .insert(source_transport_media_id, source_control);
                 return;
-            }
-            let mut source_control = SourceRouteControl::default();
-            source_control.observe_audio_activity(voice_activity, audio_level_dbov, now);
-            self.sources
-                .insert(source_transport_media_id, source_control);
-            return;
-        };
-        source_control.observe_audio_activity(voice_activity, audio_level_dbov, now);
-        if source_control.is_empty() {
-            return;
+            };
+        if should_remove {
+            self.sources.remove(&source_transport_media_id);
         }
-        self.sources
-            .insert(source_transport_media_id, source_control);
     }
 
     pub(super) fn set_relay_packet_gate(

@@ -250,11 +250,17 @@ impl Channel {
         };
         let transport_session_key =
             self.transport_session_key(session_id, producer_target.owner_connection_id());
+        let Some(outcome) = ({
+            let mut state = self.state.write().await;
+            state.apply_producer_activity(session_id, &producer_target, stream_type, active)
+        }) else {
+            return;
+        };
         if transport_adapter
             .set_producer_active(
                 &transport_session_key,
-                producer_target.transport_media_id(),
-                active,
+                outcome.transport_media_id,
+                outcome.active,
             )
             .await
             .is_err()
@@ -262,18 +268,11 @@ impl Channel {
             warn!(
                 ?session_id,
                 ?stream_type,
-                active,
+                active = outcome.active,
                 "transport adapter failed to update producer route activity"
             );
-            return;
         }
-        let fanout = {
-            let mut state = self.state.write().await;
-            state.apply_producer_activity(session_id, &producer_target, stream_type, active)
-        };
-        if let Some(fanout) = fanout {
-            fanout.emit();
-        }
+        outcome.fanout.emit();
     }
 
     pub async fn update_subscription(
@@ -287,8 +286,11 @@ impl Channel {
             let state = self.state.read().await;
             state.download_route_updates(session_id, target_session_id, states)
         };
-        let mut committed_updates = Vec::new();
-        for route_update in route_updates {
+        let committed_updates = {
+            let mut state = self.state.write().await;
+            state.commit_download_route_updates(session_id, target_session_id, route_updates)
+        };
+        for route_update in committed_updates {
             if transport_adapter
                 .set_consumer_active(
                     &self.transport_session_key(session_id, route_update.consumer_connection_id()),
@@ -310,12 +312,8 @@ impl Channel {
                     active = route_update.active(),
                     "transport adapter failed to update consumer route activity"
                 );
-                continue;
             }
-            committed_updates.push(route_update);
         }
-        let mut state = self.state.write().await;
-        state.commit_download_route_updates(session_id, target_session_id, committed_updates);
     }
 
     pub(crate) async fn is_stream_published(

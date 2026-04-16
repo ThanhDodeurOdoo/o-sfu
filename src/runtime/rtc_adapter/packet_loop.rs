@@ -1,6 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
-    hash::{DefaultHasher, Hash, Hasher},
+    collections::{BTreeMap, VecDeque},
     io::Error as IoError,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
@@ -172,58 +171,85 @@ struct PacketLoopRoutingMissKey {
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet_len: usize,
-    packet_hash: u64,
+    packet_fingerprint: u64,
 }
 
 impl PacketLoopRoutingMissKey {
     fn new(source_addr: SocketAddr, candidate_addr: SocketAddr, packet: &[u8]) -> Self {
-        let mut hasher = DefaultHasher::new();
-        packet.hash(&mut hasher);
         Self {
             source_addr,
             candidate_addr,
             packet_len: packet.len(),
-            packet_hash: hasher.finish(),
+            packet_fingerprint: packet_fingerprint(packet),
         }
     }
 }
 
+fn packet_fingerprint(packet: &[u8]) -> u64 {
+    fn load_u64(bytes: &[u8]) -> u64 {
+        let mut buffer = [0_u8; 8];
+        for (slot, byte) in buffer.iter_mut().zip(bytes.iter().copied()) {
+            *slot = byte;
+        }
+        u64::from_le_bytes(buffer)
+    }
+
+    let len = u64::try_from(packet.len()).map_or(u64::MAX, |len| len);
+    let prefix = load_u64(packet);
+    let suffix = load_u64(
+        packet
+            .get(packet.len().saturating_sub(8)..)
+            .unwrap_or(packet),
+    );
+    len.rotate_left(17) ^ prefix.rotate_left(29) ^ suffix.rotate_left(43)
+}
+
+#[derive(Debug, Clone)]
+struct PacketLoopRoutingMissRecord {
+    key: PacketLoopRoutingMissKey,
+    packet: Box<[u8]>,
+}
+
 #[derive(Default)]
 struct PacketLoopRoutingMissCache {
-    entries: VecDeque<PacketLoopRoutingMissKey>,
-    entry_set: HashSet<PacketLoopRoutingMissKey>,
+    entries: VecDeque<PacketLoopRoutingMissRecord>,
 }
 
 impl PacketLoopRoutingMissCache {
     fn clear(&mut self) {
         self.entries.clear();
-        self.entry_set.clear();
     }
 
-    fn contains(&self, key: PacketLoopRoutingMissKey) -> bool {
-        self.entry_set.contains(&key)
+    fn contains(&self, key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
+        self.entries
+            .iter()
+            .any(|candidate| candidate.key == key && candidate.packet.as_ref() == packet)
     }
 
-    fn record(&mut self, key: PacketLoopRoutingMissKey) {
-        if !self.entry_set.insert(key) {
+    fn record(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
+        if self.contains(key, packet) {
             return;
         }
-        self.entries.push_back(key);
+        self.entries.push_back(PacketLoopRoutingMissRecord {
+            key,
+            packet: packet.to_vec().into_boxed_slice(),
+        });
         while self.entries.len() > RECENT_MISS_CACHE_LIMIT {
-            let Some(evicted_key) = self.entries.pop_front() else {
+            let Some(_) = self.entries.pop_front() else {
                 break;
             };
-            self.entry_set.remove(&evicted_key);
         }
     }
 
-    fn forget(&mut self, key: PacketLoopRoutingMissKey) {
-        if !self.entry_set.remove(&key) {
+    fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
+        let Some(position) = self
+            .entries
+            .iter()
+            .position(|candidate| candidate.key == key && candidate.packet.as_ref() == packet)
+        else {
             return;
-        }
-        if let Some(position) = self.entries.iter().position(|candidate| *candidate == key) {
-            let _ = self.entries.remove(position);
-        }
+        };
+        let _ = self.entries.remove(position);
     }
 }
 
@@ -246,16 +272,16 @@ impl PacketLoopRoutingState {
         self.miss_cache.clear();
     }
 
-    fn should_skip_scan(&self, miss_key: PacketLoopRoutingMissKey) -> bool {
-        self.miss_cache.contains(miss_key)
+    fn should_skip_scan(&self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
+        self.miss_cache.contains(miss_key, packet)
     }
 
-    fn record_miss(&mut self, miss_key: PacketLoopRoutingMissKey) {
-        self.miss_cache.record(miss_key);
+    fn record_miss(&mut self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) {
+        self.miss_cache.record(miss_key, packet);
     }
 
-    fn forget_miss(&mut self, miss_key: PacketLoopRoutingMissKey) {
-        self.miss_cache.forget(miss_key);
+    fn forget_miss(&mut self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) {
+        self.miss_cache.forget(miss_key, packet);
     }
 
     #[cfg(test)]
@@ -889,7 +915,7 @@ fn route_packet_to_matching_session(
     ) {
         CachedRouteOutcome::Routed => {
             metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
-            routing_state.forget_miss(miss_key);
+            routing_state.forget_miss(miss_key, packet);
             return;
         }
         CachedRouteOutcome::Malformed => {
@@ -898,7 +924,7 @@ fn route_packet_to_matching_session(
         }
         CachedRouteOutcome::NotMatched => {}
     }
-    if routing_state.should_skip_scan(miss_key) {
+    if routing_state.should_skip_scan(miss_key, packet) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
         trace!(
             source = %source_addr,
@@ -906,15 +932,19 @@ fn route_packet_to_matching_session(
         );
         return;
     }
-    route_packet_by_scan(
-        state,
+    let route = PacketRouteContext {
         snapshot_state,
-        routing_state,
         metrics,
         source_addr,
         candidate_addr,
         packet,
-    );
+        now: Instant::now(),
+    };
+    if state.sessions.len() == 1 {
+        route_packet_by_single_session(state, routing_state, miss_key, &route);
+        return;
+    }
+    route_packet_by_scan(state, routing_state, miss_key, &route);
 }
 
 fn route_packet_with_cached_session(
@@ -1016,52 +1046,31 @@ fn log_malformed_datagram(source_addr: SocketAddr) {
     );
 }
 
-fn route_packet_by_scan(
-    state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    routing_state: &mut PacketLoopRoutingState,
-    metrics: &RuntimeMetrics,
+struct PacketRouteContext<'a> {
+    snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    metrics: &'a RuntimeMetrics,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
-    packet: &[u8],
-) {
-    #[cfg(test)]
-    {
-        routing_state.scan_attempts = routing_state.scan_attempts.saturating_add(1);
-    }
-    let now = Instant::now();
-    let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, packet);
-    let session_key =
-        match matching_session_key_for_packet(state, source_addr, candidate_addr, packet, now) {
-            PacketScanOutcome::Matched {
-                session_key,
-                examined_sessions,
-            } => {
-                metrics.record_rtc_datagram_fallback_scan(examined_sessions);
-                session_key
-            }
-            PacketScanOutcome::NoMatch { examined_sessions } => {
-                metrics.record_rtc_datagram_fallback_scan(examined_sessions);
-                metrics.record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
-                routing_state.record_miss(miss_key);
-                trace!(
-                    source = %source_addr,
-                    "dropping UDP datagram because no rtc session accepted it"
-                );
-                return;
-            }
-            PacketScanOutcome::Malformed => {
-                metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-                log_malformed_datagram(source_addr);
-                return;
-            }
-        };
-    let Some(session_state) = state.sessions.get_mut(&session_key) else {
-        return;
+    packet: &'a [u8],
+    now: Instant,
+}
+
+fn route_packet_to_session(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    route: &PacketRouteContext<'_>,
+) -> bool {
+    let Some(session_state) = state.sessions.get_mut(session_key) else {
+        return false;
     };
-    let Some(input) = receive_input(now, source_addr, candidate_addr, packet) else {
-        log_malformed_datagram(source_addr);
-        return;
+    let Some(input) = receive_input(
+        route.now,
+        route.source_addr,
+        route.candidate_addr,
+        route.packet,
+    ) else {
+        log_malformed_datagram(route.source_addr);
+        return false;
     };
     let handle_result = session_state.rtc.handle_input(input);
     let _ = session_state;
@@ -1072,19 +1081,121 @@ fn route_packet_by_scan(
             "failed to feed incoming UDP datagram into rtc session state"
         );
     } else {
-        state.mark_session_dirty(&session_key);
+        state.mark_session_dirty(session_key);
     }
     if state
         .remote_addr_demux
-        .remember_remote_addr(source_addr, &session_key)
-        && let Ok(mut snapshot) = snapshot_state.lock()
+        .remember_remote_addr(route.source_addr, session_key)
+        && let Ok(mut snapshot) = route.snapshot_state.lock()
     {
         snapshot
             .remote_addr_demux
-            .remember_remote_addr(source_addr, &session_key);
+            .remember_remote_addr(route.source_addr, session_key);
     }
-    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
-    routing_state.forget_miss(miss_key);
+    route
+        .metrics
+        .record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+    true
+}
+
+fn route_packet_by_single_session(
+    state: &mut RtcBootstrapState,
+    routing_state: &mut PacketLoopRoutingState,
+    miss_key: PacketLoopRoutingMissKey,
+    route: &PacketRouteContext<'_>,
+) {
+    #[cfg(test)]
+    {
+        routing_state.scan_attempts = routing_state.scan_attempts.saturating_add(1);
+    }
+    let Some(session_key) = state.sessions.keys().next().cloned() else {
+        return;
+    };
+    let Some(input) = receive_input(
+        route.now,
+        route.source_addr,
+        route.candidate_addr,
+        route.packet,
+    ) else {
+        route
+            .metrics
+            .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+        log_malformed_datagram(route.source_addr);
+        return;
+    };
+    let accepts_input = state
+        .sessions
+        .get(&session_key)
+        .is_some_and(|session_state| session_state.rtc.accepts(&input));
+    route.metrics.record_rtc_datagram_fallback_scan(1);
+    if !accepts_input {
+        route
+            .metrics
+            .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
+        routing_state.record_miss(miss_key, route.packet);
+        trace!(
+            source = %route.source_addr,
+            "dropping UDP datagram because no rtc session accepted it"
+        );
+        return;
+    }
+    if route_packet_to_session(state, &session_key, route) {
+        routing_state.forget_miss(miss_key, route.packet);
+    }
+}
+
+fn route_packet_by_scan(
+    state: &mut RtcBootstrapState,
+    routing_state: &mut PacketLoopRoutingState,
+    miss_key: PacketLoopRoutingMissKey,
+    route: &PacketRouteContext<'_>,
+) {
+    #[cfg(test)]
+    {
+        routing_state.scan_attempts = routing_state.scan_attempts.saturating_add(1);
+    }
+    let session_key =
+        match matching_session_key_for_packet(
+            state,
+            route.source_addr,
+            route.candidate_addr,
+            route.packet,
+            route.now,
+        ) {
+            PacketScanOutcome::Matched {
+                session_key,
+                examined_sessions,
+            } => {
+                route
+                    .metrics
+                    .record_rtc_datagram_fallback_scan(examined_sessions);
+                session_key
+            }
+            PacketScanOutcome::NoMatch { examined_sessions } => {
+                route
+                    .metrics
+                    .record_rtc_datagram_fallback_scan(examined_sessions);
+                route
+                    .metrics
+                    .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
+                routing_state.record_miss(miss_key, route.packet);
+                trace!(
+                    source = %route.source_addr,
+                    "dropping UDP datagram because no rtc session accepted it"
+                );
+                return;
+            }
+            PacketScanOutcome::Malformed => {
+                route
+                    .metrics
+                    .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+                log_malformed_datagram(route.source_addr);
+                return;
+            }
+        };
+    if route_packet_to_session(state, &session_key, route) {
+        routing_state.forget_miss(miss_key, route.packet);
+    }
 }
 
 #[cfg(test)]

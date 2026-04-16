@@ -71,6 +71,7 @@ pub(crate) struct StubWebRtcAdapter {
 struct StubWebRtcAdapterDelays {
     publish_media: Option<Duration>,
     consume_media: Option<Duration>,
+    producer_activity: Option<Duration>,
 }
 
 #[allow(
@@ -103,6 +104,13 @@ impl StubWebRtcAdapter {
         }
     }
 
+    fn delay_for_producer_activity(&self) -> Option<Duration> {
+        match self.delays.lock() {
+            Ok(delays) => delays.producer_activity,
+            Err(poisoned) => poisoned.into_inner().producer_activity,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn snapshot_events(&self) -> Vec<StubWebRtcEvent> {
         match self.events.lock() {
@@ -131,6 +139,18 @@ impl StubWebRtcAdapter {
             }
             Err(poisoned) => {
                 poisoned.into_inner().consume_media = delay;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_producer_active_delay(&self, delay: Option<Duration>) {
+        match self.delays.lock() {
+            Ok(mut delays) => {
+                delays.producer_activity = delay;
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().producer_activity = delay;
             }
         }
     }
@@ -354,6 +374,9 @@ impl StubWebRtcAdapter {
             session_id: session_key.session_id().clone(),
             active,
         });
+        if let Some(delay) = self.delay_for_producer_activity() {
+            sleep(delay).await;
+        }
         Ok(())
     }
 

@@ -155,7 +155,7 @@ impl ChannelState {
         if is_new {
             return Vec::new();
         }
-        self.collect_consumer_transport_removals(&BTreeSet::from([session_id.clone()]))
+        self.collect_session_transport_removals(&BTreeSet::from([session_id.clone()]))
     }
 
     fn install_joined_session(
@@ -292,7 +292,7 @@ impl ChannelState {
             return None;
         }
         let transport_removals =
-            self.collect_consumer_transport_removals(&BTreeSet::from([session_id.clone()]));
+            self.collect_session_transport_removals(&BTreeSet::from([session_id.clone()]));
         if self.topology.apply_client_leave(session_id).is_err() {
             error!(
                 ?session_id,
@@ -349,7 +349,7 @@ impl ChannelState {
                 continue;
             }
             transport_removals.extend(
-                self.collect_consumer_transport_removals(&BTreeSet::from([session_id.clone()])),
+                self.collect_session_transport_removals(&BTreeSet::from([session_id.clone()])),
             );
             if let Some(session) = self.sessions.remove(session_id) {
                 self.purge_session_media_state(session_id);
@@ -558,6 +558,27 @@ mod tests {
             .session_connection_id(&consumer_session_id)
             .unwrap_or(u64::MAX);
 
+        let producer_media = TransportMediaId::new(1);
+        let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+        state.producer_ids_by_owner_stream.insert(
+            super::super::shared::ProducerKey::new(&producer_session_id, StreamType::Camera),
+            producer_id,
+        );
+        state.producers.insert(
+            producer_id,
+            super::super::shared::PublishedProducer {
+                owner_session_id: producer_session_id.clone(),
+                owner_connection_id: producer_connection_id,
+                stream_type: StreamType::Camera,
+                media_kind: SignalingMediaKind::Video,
+                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
+                routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(55)),
+                transport_media_id: Some(producer_media),
+                source_packet_selection: None,
+                active: true,
+            },
+        );
+
         let consumer_media = TransportMediaId::default();
         state.consumer_index.insert(
             ConsumerKey {
@@ -579,11 +600,18 @@ mod tests {
 
         assert_eq!(
             outcome.transport_removals,
-            vec![TransportMediaRemoval {
-                session: consumer_session_id,
-                connection: consumer_connection_id,
-                transport_media: consumer_media,
-            }]
+            vec![
+                TransportMediaRemoval {
+                    session: SessionId::Integer(1),
+                    connection: producer_connection_id,
+                    transport_media: producer_media,
+                },
+                TransportMediaRemoval {
+                    session: consumer_session_id,
+                    connection: consumer_connection_id,
+                    transport_media: consumer_media,
+                },
+            ]
         );
         assert!(!state.has_session(&producer_session_id));
         assert!(!state.consumer_index.contains_key(&ConsumerKey {

@@ -42,7 +42,7 @@ export type { SfuClientDependencies } from "./sfu_client/browser_types.js";
 export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public recordingState: RecordingState = {};
-    public _consumers: Map<SessionId, ConsumersCompat>;
+    public readonly _consumers: ReadonlyMap<SessionId, ConsumersCompat>;
 
     private readonly _localUploads = new LocalUploads();
     private readonly _pendingRequests = new PendingRequests();
