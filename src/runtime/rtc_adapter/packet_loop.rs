@@ -708,11 +708,6 @@ fn drain_single_session(
             Ok(Output::Transmit(transmit)) => {
                 buffers.push_pending_transmit(transmit.destination, &transmit.contents);
             }
-            Ok(Output::Event(Event::MediaData(data))) => {
-                buffers
-                    .pending_packets
-                    .push(ForwardedPacket::from_media_data(session_key.clone(), data));
-            }
             Ok(Output::Event(Event::RtpPacket(packet))) => {
                 buffers
                     .pending_packets

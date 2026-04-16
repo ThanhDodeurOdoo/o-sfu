@@ -2,27 +2,16 @@ use std::time::Instant;
 
 use str0m::{
     RtcError,
-    media::{MediaData, Mid},
+    media::Mid,
     rtp::{RtpHeader, RtpPacket, SeqNo, StreamTx},
 };
 
-use super::packet_mode::{ACTIVE_PACKET_MODE, PacketMode};
 use super::shared_payload::SharedPayload;
 use super::state::RtcSessionState;
 
 #[derive(Debug, Clone)]
 pub(super) struct LocalPacketDestination {
     dest_mid: Mid,
-}
-
-pub(super) enum LocalForwardedPacket<'a> {
-    Str0mFrame(LocalForwardedFrame<'a>),
-    Str0mRtp(LocalForwardedRtp<'a>),
-}
-
-pub(super) struct LocalForwardedFrame<'a> {
-    media_data: &'a mut MediaData,
-    payload: &'a mut SharedPayload,
 }
 
 pub(super) struct LocalForwardedRtp<'a> {
@@ -37,15 +26,6 @@ enum LocalForwardedRtpData<'a> {
         header: &'a RtpHeader,
         timestamp: Instant,
     },
-}
-
-impl<'a> LocalForwardedFrame<'a> {
-    pub(super) fn new(media_data: &'a mut MediaData, payload: &'a mut SharedPayload) -> Self {
-        Self {
-            media_data,
-            payload,
-        }
-    }
 }
 
 impl<'a> LocalForwardedRtp<'a> {
@@ -102,49 +82,11 @@ impl LocalPacketDestination {
     pub(super) fn send(
         &self,
         session_state: &mut RtcSessionState,
-        packet: LocalForwardedPacket<'_>,
+        packet: LocalForwardedRtp<'_>,
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
-        match packet {
-            LocalForwardedPacket::Str0mFrame(mut frame) => {
-                self.send_frame(session_state, &mut frame, is_last_destination)
-            }
-            LocalForwardedPacket::Str0mRtp(mut rtp) => {
-                self.send_rtp(session_state, &mut rtp, is_last_destination)
-            }
-        }
-    }
-
-    fn send_frame(
-        &self,
-        session_state: &mut RtcSessionState,
-        frame: &mut LocalForwardedFrame<'_>,
-        is_last_destination: bool,
-    ) -> Result<Option<usize>, RtcError> {
-        if ACTIVE_PACKET_MODE != PacketMode::Frame {
-            return Ok(None);
-        }
-        let Some(writer) = session_state.rtc.writer(self.dest_mid) else {
-            return Ok(None);
-        };
-        let Some(pt) = writer.match_params(frame.media_data.params) else {
-            return Ok(None);
-        };
-        let mut data_writer = writer;
-        if let Some(rid) = frame.media_data.rid {
-            data_writer = data_writer.rid(rid);
-        }
-        if frame.media_data.audio_start_of_talk_spurt {
-            data_writer = data_writer.start_of_talkspurt(true);
-        }
-        let payload_len = frame.payload.len();
-        data_writer.write(
-            pt,
-            frame.media_data.network_time,
-            frame.media_data.time,
-            frame.payload.take_write_payload(is_last_destination),
-        )?;
-        Ok(Some(payload_len))
+        let mut rtp = packet;
+        self.send_rtp(session_state, &mut rtp, is_last_destination)
     }
 
     fn send_rtp(
@@ -153,9 +95,6 @@ impl LocalPacketDestination {
         rtp: &mut LocalForwardedRtp<'_>,
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
-        if ACTIVE_PACKET_MODE != PacketMode::Rtp {
-            return Ok(None);
-        }
         let nackable = session_state
             .rtc
             .media(self.dest_mid)
@@ -219,16 +158,12 @@ mod tests {
     use crate::signaling::shared::SessionId;
 
     #[test]
-    fn local_send_contract_keeps_payload_inside_the_adapter_boundary() -> Result<(), &'static str> {
+    fn local_send_contract_keeps_payload_inside_the_adapter_boundary() {
         let session_key = TransportSessionKey::new(45, 0, 12, SessionId::Integer(9));
         let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
+        let rtp = packet.local_send_packet();
 
-        let LocalForwardedPacket::Str0mFrame(frame) = packet.local_send_packet() else {
-            return Err("sample_forwarded_packet should use the frame-backed test path");
-        };
-
-        assert_eq!(frame.media_data.mid, Mid::from("aud-up"));
-        assert_eq!(frame.payload.as_slice(), b"payload");
-        Ok(())
+        assert_eq!(rtp.header().ext_vals.mid, Some(Mid::from("aud-up")));
+        assert_eq!(rtp.payload.as_slice(), b"payload");
     }
 }

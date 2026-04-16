@@ -7,7 +7,7 @@
 //! - `state`: pure state types and session scheduling
 //! - `media_registry`: media handle tracking and mid registry
 //! - `demux`: IP hash-indexed demux and media route entries
-//! - `forwarded_packet`: adapter-local forwarded packet model and packet-mode-specific send edges
+//! - `forwarded_packet`: adapter-local forwarded RTP packet model and local send edges
 //! - `forwarding_destination`: named packet-forwarding destinations for local RTC, recording, intra-node relay, and inter-node relay sends
 //! - `forwarding_planner`: adapter-local destination planning over forwarded packets
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
@@ -16,7 +16,6 @@
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
-//! - `packet_mode`: adapter-local str0m frame-versus-RTP mode switch for the forwarding path
 //! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
 //! - `dtls`: DTLS parameter parsing (RFC 8122, RFC 4572)
 //! - `ice`: ICE candidate parsing (RFC 8839, RFC 8445)
@@ -39,7 +38,6 @@ mod local_forwarding;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;
-mod packet_mode;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod parse_diagnostic;
 mod relay_registry;

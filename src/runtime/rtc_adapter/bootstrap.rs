@@ -12,7 +12,6 @@ use str0m::config::Fingerprint;
 use str0m::{Candidate, Rtc};
 use tokio::net::UdpSocket;
 
-use super::packet_mode::ACTIVE_PACKET_MODE;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::state::SessionTransportIds;
 use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
@@ -135,7 +134,7 @@ fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
         .enable_h265(codec_flags.h265_enabled())
         .enable_vp9(codec_flags.vp9_enabled())
         .enable_av1(codec_flags.av1_enabled())
-        .set_rtp_mode(ACTIVE_PACKET_MODE.uses_str0m_rtp_mode())
+        .set_rtp_mode(true)
 }
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
