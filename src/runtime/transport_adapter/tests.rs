@@ -15,10 +15,9 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
-        stub_bus::StubWebRtcAdapter,
         transport_adapter::{
-            RtcTransportAdapterShardSetConfig, TransportAdapterError, TransportMediaId,
-            TransportSessionKey,
+            RtcTransportAdapterShardSetConfig, StubWebRtcAdapter, TransportAdapterError,
+            TransportMediaId, TransportSessionKey,
         },
     },
     signaling::shared::SessionId,

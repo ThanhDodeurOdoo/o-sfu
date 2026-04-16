@@ -4,9 +4,9 @@ use crate::signaling::protocol::{ServerMessage, ServerRequest, TrackBinding};
 use o_sfu_router::MediaKind;
 
 #[tokio::test]
-async fn native_session_serializes_topology_renegotiations() {
+async fn protocol_session_serializes_topology_renegotiations() {
     let Some((server, channel, mut publisher_socket, mut subscriber_socket)) =
-        setup_negotiated_native_pair().await
+        setup_negotiated_protocol_pair().await
     else {
         return;
     };
@@ -51,7 +51,7 @@ async fn native_session_serializes_topology_renegotiations() {
     );
 
     assert!(
-        respond_to_native_negotiation_request(
+        respond_to_protocol_negotiation_request(
             &mut subscriber_socket,
             first_renegotiation_id,
             first_renegotiation_request,
@@ -70,9 +70,9 @@ async fn native_session_serializes_topology_renegotiations() {
     let _ = publisher_socket.close(None).await;
 }
 
-async fn setup_negotiated_native_pair()
+async fn setup_negotiated_protocol_pair()
 -> Option<(TestServer, Arc<Channel>, TestWebSocket, TestWebSocket)> {
-    let server = spawn_native_protocol_test_server(1_000, 100).await?;
+    let server = spawn_protocol_test_server(1_000, 100).await?;
     let channel = create_channel(
         &server,
         "issuer-native-negotiation",
@@ -89,20 +89,17 @@ async fn setup_negotiated_native_pair()
 
     read_welcome(&mut publisher_socket).await?;
     read_welcome(&mut subscriber_socket).await?;
-    answer_initial_native_offer(&mut publisher_socket, "publisher-answer").await?;
-    answer_initial_native_offer(&mut subscriber_socket, "subscriber-answer").await?;
+    answer_initial_offer(&mut publisher_socket, "publisher-answer").await?;
+    answer_initial_offer(&mut subscriber_socket, "subscriber-answer").await?;
 
     Some((server, channel, publisher_socket, subscriber_socket))
 }
 
-async fn answer_initial_native_offer(
-    websocket: &mut TestWebSocket,
-    answer_name: &str,
-) -> Option<()> {
-    let offer_batch = read_native_server_batch(websocket).await?;
-    let (request_id, request) = first_native_server_request(&offer_batch)?;
+async fn answer_initial_offer(websocket: &mut TestWebSocket, answer_name: &str) -> Option<()> {
+    let offer_batch = read_protocol_server_batch(websocket).await?;
+    let (request_id, request) = first_protocol_server_request(&offer_batch)?;
     assert!(matches!(request, ServerRequest::Offer(_)));
-    respond_to_native_negotiation_request(
+    respond_to_protocol_negotiation_request(
         websocket,
         request_id,
         request,
@@ -143,8 +140,8 @@ async fn assert_track_snapshot(
     websocket: &mut TestWebSocket,
     bindings: Vec<TrackBinding>,
 ) -> Option<()> {
-    let batch = read_native_server_batch(websocket).await?;
-    let messages = native_server_messages(&batch)?;
+    let batch = read_protocol_server_batch(websocket).await?;
+    let messages = protocol_server_messages(&batch)?;
     assert_eq!(messages, vec![ServerMessage::Tracks(bindings)]);
     Some(())
 }
@@ -152,8 +149,8 @@ async fn assert_track_snapshot(
 async fn expect_renegotiation_request(
     websocket: &mut TestWebSocket,
 ) -> Option<(RequestId, ServerRequest)> {
-    let batch = read_native_server_batch(websocket).await?;
-    let (request_id, request) = first_native_server_request(&batch)?;
+    let batch = read_protocol_server_batch(websocket).await?;
+    let (request_id, request) = first_protocol_server_request(&batch)?;
     assert!(matches!(request, ServerRequest::Renegotiate(_)));
     Some((request_id, request))
 }

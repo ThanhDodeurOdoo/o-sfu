@@ -10,20 +10,7 @@ use crate::runtime::{
 use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
 
 use super::super::WsWriter;
-use super::native::NativeSessionProtocol;
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SessionProtocolMode;
-
-#[cfg(test)]
-impl SessionProtocolMode {
-    #[allow(
-        non_upper_case_globals,
-        reason = "test harnesses already use `SessionProtocolMode::Native`, so the marker keeps that call shape without reintroducing a fake enum mode"
-    )]
-    pub(crate) const Native: Self = Self;
-}
+use super::post_auth::PostAuthSessionProtocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::websocket_server) enum SessionProtocolOutcome {
@@ -33,17 +20,17 @@ pub(in crate::runtime::websocket_server) enum SessionProtocolOutcome {
 }
 
 #[derive(Debug)]
-pub(in crate::runtime::websocket_server) struct SessionProtocol(NativeSessionProtocol);
+pub(in crate::runtime::websocket_server) struct SessionProtocol(PostAuthSessionProtocol);
 
 impl SessionProtocol {
-    pub(in crate::runtime::websocket_server) fn native(
+    pub(in crate::runtime::websocket_server) fn new(
         session_id: SessionId,
         connection_id: u64,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
-        Self(NativeSessionProtocol::new(
+        Self(PostAuthSessionProtocol::new(
             session_id,
             connection_id,
             channel,

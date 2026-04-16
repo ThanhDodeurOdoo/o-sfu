@@ -37,7 +37,7 @@ pub(super) async fn establish_session(
         join_authenticated_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
-    let mut session_protocol = SessionProtocol::native(
+    let mut session_protocol = SessionProtocol::new(
         session_id.clone(),
         connection_id,
         Arc::clone(&channel),

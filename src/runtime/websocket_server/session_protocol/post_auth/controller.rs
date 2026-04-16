@@ -19,25 +19,25 @@ use super::super::{
     controller::SessionProtocolOutcome,
     frame_codec::{send_server_messages, send_server_request},
     negotiation::NegotiationState,
-    request_state::NativeRequestState,
+    request_state::SessionRequestState,
     track_projection::RemoteTrackProjection,
 };
-use super::state::NativeSessionState;
+use super::state::PostAuthSessionState;
 
 #[derive(Debug)]
-pub(in crate::runtime::websocket_server) struct NativeSessionProtocol {
+pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) session_id: SessionId,
     pub(super) connection_id: u64,
     pub(super) channel: Arc<Channel>,
     pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) metrics: Arc<RuntimeMetrics>,
-    pub(super) request_state: NativeRequestState,
+    pub(super) request_state: SessionRequestState,
     pub(super) negotiation: NegotiationState,
     pub(super) track_projection: RemoteTrackProjection,
-    pub(super) state: NativeSessionState,
+    pub(super) state: PostAuthSessionState,
 }
 
-impl NativeSessionProtocol {
+impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
         session_id: SessionId,
         connection_id: u64,
@@ -51,10 +51,10 @@ impl NativeSessionProtocol {
             channel,
             transport_adapter,
             metrics,
-            request_state: NativeRequestState::default(),
+            request_state: SessionRequestState::default(),
             negotiation: NegotiationState::default(),
             track_projection: RemoteTrackProjection::default(),
-            state: NativeSessionState::default(),
+            state: PostAuthSessionState::default(),
         }
     }
 

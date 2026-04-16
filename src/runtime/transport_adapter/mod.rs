@@ -1,13 +1,13 @@
+mod stub;
+#[cfg(test)]
+mod stub_bootstrap;
+
 use std::{cmp::Reverse, collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc, time::Instant};
 
 #[cfg(test)]
 use super::rtc_adapter::DebugRouteEntry;
-use super::{
-    rtc_adapter::{
-        RelayCleanup, RtcTransportAdapter, TransportSessionHealth,
-        client_rtp_capabilities_from_answer,
-    },
-    stub_bus::StubWebRtcAdapter,
+use super::rtc_adapter::{
+    RelayCleanup, RtcTransportAdapter, TransportSessionHealth, client_rtp_capabilities_from_answer,
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::metrics::RuntimeMetrics;
@@ -25,6 +25,10 @@ use o_sfu_router::{MediaCapabilities, MediaKind, RtpParameters as RouterRtpParam
 use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
+
+pub(crate) use stub::StubWebRtcAdapter;
+#[cfg(test)]
+pub(crate) use stub::StubWebRtcEvent;
 
 /// Channel-scooped transport-adapter session identity.
 ///

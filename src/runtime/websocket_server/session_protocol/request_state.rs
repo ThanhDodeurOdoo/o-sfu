@@ -1,12 +1,12 @@
 use crate::signaling::protocol::RequestId;
 
 #[derive(Debug, Default)]
-pub(super) struct NativeRequestState {
+pub(super) struct SessionRequestState {
     next_request_counter: u64,
     pending_ping_request_id: Option<RequestId>,
 }
 
-impl NativeRequestState {
+impl SessionRequestState {
     pub(super) fn awaiting_ping_response(&self) -> bool {
         self.pending_ping_request_id.is_some()
     }

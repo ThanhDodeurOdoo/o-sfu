@@ -11,9 +11,9 @@ use super::super::{
     frame_codec::send_server_request,
     negotiation::{PendingNegotiationAction, PendingNegotiationRequest, RenegotiationDisposition},
 };
-use super::controller::NativeSessionProtocol;
+use super::controller::PostAuthSessionProtocol;
 
-impl NativeSessionProtocol {
+impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_initial_offer(
         &mut self,
         writer: &mut WsWriter,

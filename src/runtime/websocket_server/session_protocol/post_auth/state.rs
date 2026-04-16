@@ -25,11 +25,11 @@ pub(super) enum ClearedPublishTransition {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct NativeSessionState {
+pub(super) struct PostAuthSessionState {
     publish_transitions: BTreeMap<StreamType, PublishTransition>,
 }
 
-impl NativeSessionState {
+impl PostAuthSessionState {
     pub(super) fn contains_publish_transition(&self, stream_type: StreamType) -> bool {
         self.publish_transitions.contains_key(&stream_type)
     }
@@ -94,13 +94,13 @@ impl NativeSessionState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClearedPublishTransition, NativeSessionState, StagedPublishTransaction};
+    use super::{ClearedPublishTransition, PostAuthSessionState, StagedPublishTransaction};
     use crate::{runtime::transport_adapter::TransportMediaId, signaling::shared::StreamType};
     use o_sfu_router::MediaKind;
 
     #[test]
     fn queued_and_staged_publish_transitions_are_tracked_separately() {
-        let mut state = NativeSessionState::default();
+        let mut state = PostAuthSessionState::default();
 
         state.queue_publish_stream(StreamType::Camera);
         state.stage_publish_transaction(StagedPublishTransaction {
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn staged_publish_transactions_drain_without_touching_queued_entries() {
-        let mut state = NativeSessionState::default();
+        let mut state = PostAuthSessionState::default();
 
         state.queue_publish_stream(StreamType::Audio);
         state.stage_publish_transaction(StagedPublishTransaction {

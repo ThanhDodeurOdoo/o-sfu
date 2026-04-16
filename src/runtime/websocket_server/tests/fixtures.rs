@@ -26,10 +26,11 @@ pub(super) use crate::{
         http_server::app,
         metrics::RuntimeMetrics,
         recording::MediaTap,
-        stub_bus::{StubWebRtcAdapter, StubWebRtcEvent},
-        testing::decode_native_welcome_batch,
-        transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter},
-        websocket_server::SessionProtocolMode,
+        testing::decode_protocol_welcome_batch,
+        transport_adapter::{
+            RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, StubWebRtcAdapter,
+            StubWebRtcEvent,
+        },
     },
     signaling::{
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -94,13 +95,12 @@ pub(super) async fn spawn_test_server(
     authentication_timeout_ms: u64,
     channel_size: usize,
 ) -> Option<TestServer> {
-    spawn_test_server_with_timeouts_and_protocol(
+    spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
         channel_size,
         RuntimeTransportAdapter::builder().stub().build(),
-        SessionProtocolMode::Native,
     )
     .await
 }
@@ -112,39 +112,39 @@ pub(super) async fn spawn_test_server_with_timeouts(
     channel_size: usize,
     transport_adapter: RuntimeTransportAdapter,
 ) -> Option<TestServer> {
-    spawn_test_server_with_timeouts_and_protocol(
+    spawn_test_server_impl(
         authentication_timeout_ms,
         session_timeout_ms,
         ping_interval_ms,
         channel_size,
         transport_adapter,
-        SessionProtocolMode::Native,
+        RuntimeFeatureFlags::default(),
     )
     .await
 }
 
-pub(super) async fn spawn_test_server_with_timeouts_and_protocol(
+async fn spawn_test_server_impl(
     authentication_timeout_ms: u64,
     session_timeout_ms: u64,
     ping_interval_ms: u64,
     channel_size: usize,
     transport_adapter: RuntimeTransportAdapter,
-    session_protocol_mode: SessionProtocolMode,
+    feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
-    assert_eq!(session_protocol_mode, SessionProtocolMode::Native);
-    let config = test_config(
+    let mut config = test_config(
         authentication_timeout_ms,
         session_timeout_ms,
         ping_interval_ms,
         channel_size,
     );
+    config.feature_flags = feature_flags;
     let metrics = Arc::new(RuntimeMetrics::default());
     let channels = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
             1,
             ChannelRuntimePolicy::new(
                 ChannelAdmissionPolicy::new(config.channel_size),
-                RuntimeFeatureFlags::default(),
+                feature_flags,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
@@ -190,17 +190,16 @@ pub(super) async fn spawn_test_server_with_adapter(
     .await
 }
 
-pub(super) async fn spawn_native_protocol_test_server(
+pub(super) async fn spawn_protocol_test_server(
     authentication_timeout_ms: u64,
     channel_size: usize,
 ) -> Option<TestServer> {
-    spawn_test_server_with_timeouts_and_protocol(
+    spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
         channel_size,
         RuntimeTransportAdapter::builder().stub().build(),
-        SessionProtocolMode::Native,
     )
     .await
 }
@@ -209,47 +208,17 @@ pub(super) async fn spawn_test_server_with_feature_flags(
     authentication_timeout_ms: u64,
     channel_size: usize,
     transport_adapter: RuntimeTransportAdapter,
-    session_protocol_mode: SessionProtocolMode,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
-    assert_eq!(session_protocol_mode, SessionProtocolMode::Native);
-    let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, channel_size);
-    let metrics = Arc::new(RuntimeMetrics::default());
-    let channels = Arc::new(ChannelManager::new(
-        ChannelManagerConfig::new(
-            1,
-            ChannelRuntimePolicy::new(
-                ChannelAdmissionPolicy::new(config.channel_size),
-                feature_flags,
-                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-            ),
-        ),
-        Arc::new(MediaTap::default()),
-        Arc::clone(&metrics),
-    ));
-    config.feature_flags = feature_flags;
-    let state = RuntimeState {
-        config,
-        channels: Arc::clone(&channels),
-        metrics,
+    spawn_test_server_impl(
+        authentication_timeout_ms,
+        10_000,
+        60_000,
+        channel_size,
         transport_adapter,
-    };
-    let state_for_server = state.clone();
-    let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
-    let addr = listener.local_addr().ok()?;
-    let handle = tokio::spawn(async move {
-        let result = axum::serve(listener, app(state_for_server)).await;
-        assert!(
-            result.is_ok(),
-            "test server should stop cleanly: {result:?}"
-        );
-    });
-    Some(TestServer {
-        addr,
-        handle,
-        channels,
-        state,
-    })
+        feature_flags,
+    )
+    .await
 }
 
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
@@ -265,17 +234,16 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
         .build()
 }
 
-pub(super) async fn spawn_native_protocol_rtc_test_server(
+pub(super) async fn spawn_protocol_rtc_test_server(
     authentication_timeout_ms: u64,
     channel_size: usize,
 ) -> Option<TestServer> {
-    spawn_test_server_with_timeouts_and_protocol(
+    spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
         channel_size,
         build_real_rtc_transport_adapter(),
-        SessionProtocolMode::Native,
     )
     .await
 }
@@ -346,7 +314,7 @@ pub(super) async fn authenticate_with_jwt(
     token: &str,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = encode_native_auth(AuthPayload {
+    let payload = encode_protocol_auth(AuthPayload {
         jwt: token.to_owned(),
         channel: None,
     })?;
@@ -363,7 +331,7 @@ pub(super) async fn authenticate_with_channel(
     channel_uuid: Option<&str>,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
-    let payload = encode_native_auth(AuthPayload {
+    let payload = encode_protocol_auth(AuthPayload {
         jwt: token.to_owned(),
         channel: channel_uuid.map(str::to_owned),
     })?;
@@ -374,7 +342,7 @@ pub(super) async fn authenticate_with_channel(
     Some(websocket)
 }
 
-fn encode_native_auth(auth_payload: AuthPayload) -> Option<String> {
+fn encode_protocol_auth(auth_payload: AuthPayload) -> Option<String> {
     let envelope = ClientEnvelope::Message(ClientMessage::Auth(auth_payload))
         .into_envelope()
         .ok()?;
@@ -394,8 +362,8 @@ pub(super) async fn complete_initial_negotiation(
     websocket: &mut TestWebSocket,
     sdp: &str,
 ) -> Option<()> {
-    let (request_id, request) = wait_for_native_server_request(websocket).await?;
-    respond_to_native_negotiation_request(websocket, request_id, request, sdp).await
+    let (request_id, request) = wait_for_protocol_server_request(websocket).await?;
+    respond_to_protocol_negotiation_request(websocket, request_id, request, sdp).await
 }
 
 pub(super) async fn setup_negotiated_session(
@@ -411,28 +379,28 @@ pub(super) async fn setup_negotiated_session(
 
 pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
-    decode_native_welcome_batch(&payload)
+    decode_protocol_welcome_batch(&payload)
 }
 
-pub(super) async fn read_native_server_batch(
+pub(super) async fn read_protocol_server_batch(
     websocket: &mut TestWebSocket,
 ) -> Option<EnvelopeBatch> {
     let payload = read_text_message(websocket).await?;
     serde_json::from_str(&payload).ok()
 }
 
-pub(super) async fn wait_for_native_server_request(
+pub(super) async fn wait_for_protocol_server_request(
     websocket: &mut TestWebSocket,
 ) -> Option<(RequestId, ServerRequest)> {
     loop {
-        let batch = read_native_server_batch(websocket).await?;
-        if let Some(request) = first_native_server_request(&batch) {
+        let batch = read_protocol_server_batch(websocket).await?;
+        if let Some(request) = first_protocol_server_request(&batch) {
             return Some(request);
         }
     }
 }
 
-pub(super) fn first_native_server_request(
+pub(super) fn first_protocol_server_request(
     batch: &EnvelopeBatch,
 ) -> Option<(RequestId, ServerRequest)> {
     let envelope = batch.first()?.clone();
@@ -445,7 +413,7 @@ pub(super) fn first_native_server_request(
     }
 }
 
-pub(super) fn native_server_messages(batch: &EnvelopeBatch) -> Option<Vec<ServerMessage>> {
+pub(super) fn protocol_server_messages(batch: &EnvelopeBatch) -> Option<Vec<ServerMessage>> {
     let mut messages = Vec::new();
     for envelope in batch.clone() {
         match ServerEnvelope::decode(envelope).ok()? {
@@ -456,7 +424,7 @@ pub(super) fn native_server_messages(batch: &EnvelopeBatch) -> Option<Vec<Server
     Some(messages)
 }
 
-pub(super) async fn respond_to_native_negotiation_request(
+pub(super) async fn respond_to_protocol_negotiation_request(
     websocket: &mut TestWebSocket,
     response_to: RequestId,
     request: ServerRequest,
@@ -487,7 +455,7 @@ pub(super) async fn respond_to_native_negotiation_request(
     Some(())
 }
 
-pub(super) async fn respond_to_native_ping(
+pub(super) async fn respond_to_protocol_ping(
     websocket: &mut TestWebSocket,
     response_to: RequestId,
 ) -> Option<()> {

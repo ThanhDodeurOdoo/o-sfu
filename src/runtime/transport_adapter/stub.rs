@@ -5,7 +5,7 @@ use std::{
 };
 
 #[cfg(test)]
-use super::bootstrap;
+use super::stub_bootstrap;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
     TransportSessionKey,
@@ -239,7 +239,9 @@ impl StubWebRtcAdapter {
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
         self.record_event(StubWebRtcEvent::BootstrapRequested);
-        Ok(bootstrap::transport_bootstrap_payload(router_capabilities))
+        Ok(stub_bootstrap::transport_bootstrap_payload(
+            router_capabilities,
+        ))
     }
 
     #[allow(

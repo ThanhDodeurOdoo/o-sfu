@@ -5,9 +5,9 @@ use crate::signaling::protocol::{
 };
 
 use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_response};
-use super::controller::NativeSessionProtocol;
+use super::controller::PostAuthSessionProtocol;
 
-impl NativeSessionProtocol {
+impl PostAuthSessionProtocol {
     pub(super) async fn dispatch_client_envelope(
         &mut self,
         writer: &mut WsWriter,

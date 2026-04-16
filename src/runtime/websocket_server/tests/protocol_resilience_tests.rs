@@ -2,7 +2,7 @@ use super::fixtures::*;
 use crate::signaling::client_batch::{MAX_CLIENT_BATCH_ENVELOPES, MAX_CLIENT_FRAME_BYTES};
 
 #[tokio::test]
-async fn websocket_rejects_unknown_native_envelope_tag() {
+async fn websocket_rejects_unknown_protocol_envelope_tag() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -34,7 +34,7 @@ async fn websocket_rejects_unknown_native_envelope_tag() {
         .await;
     assert!(
         send_result.is_ok(),
-        "invalid native envelope should still send: {send_result:?}"
+        "invalid protocol envelope should still send: {send_result:?}"
     );
 
     assert_eq!(
@@ -132,7 +132,7 @@ async fn websocket_rejects_oversized_auth_frame() {
 }
 
 #[tokio::test]
-async fn websocket_rejects_batches_over_native_envelope_limit() {
+async fn websocket_rejects_batches_over_protocol_envelope_limit() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -187,7 +187,7 @@ async fn websocket_rejects_batches_over_native_envelope_limit() {
 }
 
 #[tokio::test]
-async fn invalid_native_initial_answer_closes_before_session_negotiates() {
+async fn invalid_protocol_initial_answer_closes_before_session_negotiates() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -227,17 +227,17 @@ async fn invalid_native_initial_answer_closes_before_session_negotiates() {
         .await;
     assert!(
         send_result.is_ok(),
-        "native publish intent should still send: {send_result:?}"
+        "protocol publish intent should still send: {send_result:?}"
     );
 
-    let initial_offer = wait_for_native_server_request(&mut websocket).await;
+    let initial_offer = wait_for_protocol_server_request(&mut websocket).await;
     assert!(initial_offer.is_some());
     let Some((request_id, request)) = initial_offer else {
         return;
     };
     assert!(matches!(request, ServerRequest::Offer(_)));
     assert!(
-        respond_to_native_negotiation_request(
+        respond_to_protocol_negotiation_request(
             &mut websocket,
             request_id,
             request,

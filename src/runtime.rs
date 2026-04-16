@@ -22,7 +22,6 @@ mod metrics;
 mod metrics_export;
 mod recording;
 mod rtc_adapter;
-mod stub_bus;
 #[cfg(test)]
 pub(crate) mod test_rtp_samples;
 #[doc(hidden)]

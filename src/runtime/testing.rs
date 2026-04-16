@@ -85,7 +85,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
 }
 
 #[must_use]
-pub fn decode_native_welcome_batch(payload: &str) -> Option<WelcomePayload> {
+pub fn decode_protocol_welcome_batch(payload: &str) -> Option<WelcomePayload> {
     let batch = serde_json::from_str::<EnvelopeBatch>(payload).ok()?;
     let envelope = batch.first()?.clone();
     match ServerEnvelope::decode(envelope).ok()? {

@@ -9,7 +9,7 @@ use crate::signaling::{protocol::WebSocketCloseCode, shared::StreamType};
 
 use super::super::controller::SessionProtocolOutcome;
 use super::{
-    controller::NativeSessionProtocol,
+    controller::PostAuthSessionProtocol,
     state::{ClearedPublishTransition, StagedPublishTransaction},
 };
 
@@ -78,7 +78,7 @@ impl PublishTransactionGuard {
     }
 }
 
-impl NativeSessionProtocol {
+impl PostAuthSessionProtocol {
     pub(super) async fn handle_publish_intent(
         &mut self,
         writer: &mut WsWriter,

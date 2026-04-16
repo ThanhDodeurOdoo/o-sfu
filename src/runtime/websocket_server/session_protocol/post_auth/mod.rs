@@ -4,4 +4,4 @@ mod negotiation_flow;
 mod publish_flow;
 mod state;
 
-pub(in crate::runtime::websocket_server) use controller::NativeSessionProtocol;
+pub(in crate::runtime::websocket_server) use controller::PostAuthSessionProtocol;

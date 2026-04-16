@@ -29,10 +29,7 @@ use str0m::{
 
 use super::fixtures::*;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
-use crate::runtime::{
-    rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey,
-    websocket_server::SessionProtocolMode,
-};
+use crate::runtime::{rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey};
 use crate::signaling::shared::SessionPermissions;
 use o_sfu_router::MediaKind;
 
@@ -354,7 +351,7 @@ async fn read_track_snapshot(peer: &mut ProtocolHarnessPeer) -> Option<Vec<Track
     let websocket = peer.websocket.as_mut()?;
     let payload = read_next_server_payload(websocket).await?;
     let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-    let messages = native_server_messages(&batch)?;
+    let messages = protocol_server_messages(&batch)?;
     let ServerMessage::Tracks(track_bindings) = messages.into_iter().next()? else {
         return None;
     };
@@ -520,13 +517,12 @@ async fn setup_stub_protocol_peers(
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
-    let server = spawn_test_server_with_timeouts_and_protocol(
+    let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
         RuntimeTransportAdapter::from_stub_adapter(adapter),
-        SessionProtocolMode::Native,
     )
     .await?;
     let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
@@ -545,12 +541,12 @@ async fn setup_stub_protocol_peers(
     Some((server, channel, alice, bob))
 }
 
-async fn read_single_native_server_message(
+async fn read_single_protocol_server_message(
     peer: &mut ProtocolHarnessPeer,
 ) -> Option<ServerMessage> {
     let payload = read_next_server_payload(peer.websocket.as_mut()?).await?;
     let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-    let mut messages = native_server_messages(&batch)?;
+    let mut messages = protocol_server_messages(&batch)?;
     if messages.len() != 1 {
         return None;
     }
@@ -610,7 +606,7 @@ async fn setup_real_rtc_protocol_peers(
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
-    let server = spawn_native_protocol_rtc_test_server(1_000, 100).await?;
+    let server = spawn_protocol_rtc_test_server(1_000, 100).await?;
     let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
     let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
     let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
@@ -710,7 +706,7 @@ async fn drain_peer_until_recording_update(
     )
 }
 
-async fn connect_native_recording_peer(
+async fn connect_protocol_recording_peer(
     server: &TestServer,
     channel: &Channel,
 ) -> Option<ProtocolHarnessPeer> {
@@ -890,8 +886,8 @@ async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
 }
 
 #[tokio::test]
-async fn protocol_core_answers_real_server_native_offer_when_enabled() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
+async fn protocol_core_answers_real_server_offer_when_enabled() {
+    let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -936,8 +932,8 @@ async fn protocol_core_answers_real_server_native_offer_when_enabled() {
 }
 
 #[tokio::test]
-async fn protocol_core_receives_native_broadcast_and_peer_updates() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
+async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
+    let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1040,8 +1036,8 @@ async fn protocol_core_receives_native_broadcast_and_peer_updates() {
 }
 
 #[tokio::test]
-async fn native_session_emits_peerjoined_message_for_existing_peers() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
+async fn protocol_session_emits_peerjoined_message_for_existing_peers() {
+    let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1091,7 +1087,7 @@ async fn native_session_emits_peerjoined_message_for_existing_peers() {
     let Some(peer_joined_batch) = peer_joined_batch else {
         return;
     };
-    let peer_joined_messages = native_server_messages(&peer_joined_batch);
+    let peer_joined_messages = protocol_server_messages(&peer_joined_batch);
     assert!(peer_joined_messages.is_some());
     let Some(peer_joined_messages) = peer_joined_messages else {
         return;
@@ -1109,8 +1105,8 @@ async fn native_session_emits_peerjoined_message_for_existing_peers() {
 }
 
 #[tokio::test]
-async fn native_session_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
+async fn protocol_session_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
+    let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1167,7 +1163,7 @@ async fn native_session_replacement_emits_peerleft_then_peerjoined_for_existing_
 
     assert!(
         matches!(
-            read_single_native_server_message(&mut alice).await,
+            read_single_protocol_server_message(&mut alice).await,
             Some(ServerMessage::PeerLeft(_))
         ),
         "replacement should emit peerleft before rejoin"
@@ -1181,7 +1177,7 @@ async fn native_session_replacement_emits_peerleft_then_peerjoined_for_existing_
 
     assert!(
         matches!(
-            read_single_native_server_message(&mut alice).await,
+            read_single_protocol_server_message(&mut alice).await,
             Some(ServerMessage::PeerJoined(_))
         ),
         "replacement should emit peerjoined after peerleft"
@@ -1197,7 +1193,7 @@ async fn native_session_replacement_emits_peerleft_then_peerjoined_for_existing_
 
 #[tokio::test]
 async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal() {
-    let server = spawn_native_protocol_test_server(1_000, 100).await;
+    let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1287,15 +1283,14 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
 }
 
 #[tokio::test]
-async fn protocol_core_native_publish_round_trips_through_real_server_session_protocol() {
+async fn protocol_core_publish_round_trips_through_real_server_session_protocol() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
-    let server = spawn_test_server_with_timeouts_and_protocol(
+    let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
         RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
-        SessionProtocolMode::Native,
     )
     .await;
     assert!(server.is_some());
@@ -1376,8 +1371,8 @@ async fn protocol_core_native_publish_round_trips_through_real_server_session_pr
 }
 
 #[tokio::test]
-async fn protocol_core_native_publish_round_trips_through_real_rtc_server_session_protocol() {
-    let server = spawn_native_protocol_rtc_test_server(1_000, 100).await;
+async fn protocol_core_publish_round_trips_through_real_rtc_server_session_protocol() {
+    let server = spawn_protocol_rtc_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1447,7 +1442,7 @@ async fn protocol_core_native_publish_round_trips_through_real_rtc_server_sessio
     let Some(track_batch) = track_batch else {
         return;
     };
-    let track_messages = native_server_messages(&track_batch);
+    let track_messages = protocol_server_messages(&track_batch);
     assert!(track_messages.is_some());
     let Some(track_messages) = track_messages else {
         return;
@@ -1481,8 +1476,8 @@ async fn protocol_core_native_publish_round_trips_through_real_rtc_server_sessio
 }
 
 #[tokio::test]
-async fn native_handshake_uses_answer_derived_client_capabilities_for_session_state() {
-    let server = spawn_native_protocol_rtc_test_server(1_000, 100).await;
+async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_state() {
+    let server = spawn_protocol_rtc_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -1551,7 +1546,7 @@ async fn native_handshake_uses_answer_derived_client_capabilities_for_session_st
 }
 
 #[tokio::test]
-async fn protocol_core_native_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
+async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-native-rtc-publish-queue",
         SessionId::Integer(73),
@@ -1646,7 +1641,7 @@ async fn protocol_core_native_publish_queues_follow_up_renegotiation_until_first
 }
 
 #[tokio::test]
-async fn protocol_core_native_unpublish_cancels_pending_publish_before_commit() {
+async fn protocol_core_unpublish_cancels_pending_publish_before_commit() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-native-rtc-publish-cancel",
         SessionId::Integer(75),
@@ -1717,7 +1712,7 @@ async fn protocol_core_native_unpublish_cancels_pending_publish_before_commit() 
 }
 
 #[tokio::test]
-async fn protocol_core_native_unpublish_round_trips_through_real_rtc_after_publish_commit() {
+async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_commit() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-native-rtc-unpublish",
         SessionId::Integer(77),
@@ -1806,8 +1801,7 @@ async fn protocol_core_native_unpublish_round_trips_through_real_rtc_after_publi
     clippy::too_many_lines,
     reason = "the regression keeps the full queued-removal rtc flow explicit in one place for reviewability"
 )]
-async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands()
-{
+async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-native-rtc-unpublish-removal-queue",
         SessionId::Integer(79),
@@ -1924,7 +1918,7 @@ async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_fligh
     let Some(peer_info_batch) = peer_info_batch else {
         return;
     };
-    let peer_info_messages = native_server_messages(&peer_info_batch);
+    let peer_info_messages = protocol_server_messages(&peer_info_batch);
     assert!(peer_info_messages.is_some());
     let Some(peer_info_messages) = peer_info_messages else {
         return;
@@ -1965,15 +1959,14 @@ async fn protocol_core_native_unpublish_queues_subscriber_removal_until_in_fligh
 }
 
 #[tokio::test]
-async fn protocol_core_native_subscribe_updates_consumer_activity() {
+async fn protocol_core_subscribe_updates_consumer_activity() {
     let adapter = Arc::new(StubWebRtcAdapter::default());
-    let server = spawn_test_server_with_timeouts_and_protocol(
+    let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
         RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
-        SessionProtocolMode::Native,
     )
     .await;
     assert!(server.is_some());
@@ -2064,7 +2057,7 @@ async fn protocol_core_native_subscribe_updates_consumer_activity() {
 }
 
 #[tokio::test]
-async fn protocol_core_native_subscribe_updates_real_rtc_consumer_activity() {
+async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
     let Some((server, channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-native-rtc-subscribe",
         SessionId::Integer(91),
@@ -2299,12 +2292,11 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
 }
 
 #[tokio::test]
-async fn protocol_core_native_recording_requests_resolve_against_real_server_responses() {
+async fn protocol_core_recording_requests_resolve_against_real_server_responses() {
     let server = spawn_test_server_with_feature_flags(
         1_000,
         100,
         RuntimeTransportAdapter::builder().stub().build(),
-        SessionProtocolMode::Native,
         RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,
@@ -2326,7 +2318,7 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
         },
     )
     .await;
-    let mut peer = connect_native_recording_peer(&server, &channel).await;
+    let mut peer = connect_protocol_recording_peer(&server, &channel).await;
     assert!(peer.is_some());
     let Some(ref mut peer) = peer else {
         return;
@@ -2378,7 +2370,7 @@ async fn protocol_core_native_recording_requests_resolve_against_real_server_res
 
 #[tokio::test]
 async fn protocol_core_replays_latest_info_after_real_server_recovery() {
-    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_native_recovery_peers(
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
         SessionId::Integer(71),
         SessionId::Integer(72),
     ))
@@ -2442,7 +2434,7 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
 
 #[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
-    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_native_recovery_peers(
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
         SessionId::Integer(81),
         SessionId::Integer(82),
     ))
@@ -2635,7 +2627,7 @@ async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() {
     assert!(peer_reached_state(&bob, BundleConnectionState::Connected));
 }
 
-async fn setup_native_recovery_peers(
+async fn setup_protocol_recovery_peers(
     alice_session_id: SessionId,
     bob_session_id: SessionId,
 ) -> Option<(
@@ -2644,7 +2636,7 @@ async fn setup_native_recovery_peers(
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
-    let server = spawn_native_protocol_test_server(1_000, 100).await?;
+    let server = spawn_protocol_test_server(1_000, 100).await?;
     let channel = create_channel(
         &server,
         "issuer-native-recovery",

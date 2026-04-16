@@ -1,7 +1,6 @@
 use super::fixtures::*;
 use crate::runtime::channel::SessionCleanupPolicy;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
-use crate::runtime::websocket_server::SessionProtocolMode;
 
 #[tokio::test]
 async fn websocket_sends_ping_requests_and_accepts_responses() {
@@ -36,7 +35,7 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
 
     let server_request = timeout(
         Duration::from_secs(1),
-        wait_for_native_server_request(&mut websocket),
+        wait_for_protocol_server_request(&mut websocket),
     )
     .await;
     assert!(
@@ -47,7 +46,7 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
         panic!("expected PING server request");
     };
     assert!(
-        respond_to_native_ping(&mut websocket, request_id)
+        respond_to_protocol_ping(&mut websocket, request_id)
             .await
             .is_some()
     );
@@ -99,7 +98,7 @@ async fn websocket_closes_when_ping_response_times_out() {
 
     let server_request = timeout(
         Duration::from_secs(1),
-        wait_for_native_server_request(&mut websocket),
+        wait_for_protocol_server_request(&mut websocket),
     )
     .await;
     assert!(
@@ -130,15 +129,9 @@ async fn websocket_closes_when_ping_response_times_out() {
 
 #[tokio::test]
 async fn websocket_closes_when_rtc_transport_disconnects() {
-    let server = spawn_test_server_with_timeouts_and_protocol(
-        1_000,
-        200,
-        20,
-        100,
-        build_real_rtc_transport_adapter(),
-        SessionProtocolMode::Native,
-    )
-    .await;
+    let server =
+        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_transport_adapter())
+            .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -162,14 +155,14 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         return;
     };
     assert!(read_welcome(&mut websocket).await.is_some());
-    let Some(offer_batch) = read_native_server_batch(&mut websocket).await else {
+    let Some(offer_batch) = read_protocol_server_batch(&mut websocket).await else {
         panic!("native session should receive an initial offer");
     };
-    let Some((request_id, request)) = first_native_server_request(&offer_batch) else {
+    let Some((request_id, request)) = first_protocol_server_request(&offer_batch) else {
         panic!("initial native frame should be an offer request");
     };
     assert!(
-        respond_to_native_negotiation_request(
+        respond_to_protocol_negotiation_request(
             &mut websocket,
             request_id,
             request,
@@ -318,8 +311,8 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
         .await;
 
     assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4003)));
-    let peer_message = read_native_server_batch(bob).await.and_then(|batch| {
-        native_server_messages(&batch).and_then(|mut messages| messages.drain(..).next())
+    let peer_message = read_protocol_server_batch(bob).await.and_then(|batch| {
+        protocol_server_messages(&batch).and_then(|mut messages| messages.drain(..).next())
     });
     assert!(
         matches!(peer_message, Some(ServerMessage::PeerLeft(_))),

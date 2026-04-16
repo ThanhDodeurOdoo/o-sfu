@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use o_sfu::{
     config::Config,
-    runtime::testing::{TestServer, decode_native_welcome_batch, spawn_test_server},
+    runtime::testing::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
     signaling::{
         http::{METRICS_PATH, STATS_PATH, StatsResponse},
         protocol::{
@@ -94,7 +94,7 @@ impl NativeLocalNetwork {
             .await
             .ok()?;
 
-        let welcome = decode_native_welcome_batch(&read_text_message(&mut websocket).await?)?;
+        let welcome = decode_protocol_welcome_batch(&read_text_message(&mut websocket).await?)?;
         let mut rtc_peer = NativeFakeRtcPeer::bind(next_negotiation_port()).await?;
         answer_next_server_request(&mut websocket, &mut rtc_peer).await?;
 
@@ -168,7 +168,7 @@ impl NativeFakePeer {
 
     pub async fn read_next_server_message(&mut self) -> Option<ServerMessage> {
         loop {
-            let batch = read_native_batch(&mut self.websocket).await?;
+            let batch = read_protocol_batch(&mut self.websocket).await?;
             for envelope in batch {
                 match ServerEnvelope::decode(envelope).ok()? {
                     ServerEnvelope::Message(message) => return Some(message),
@@ -195,7 +195,7 @@ impl NativeFakePeer {
 
     pub async fn complete_next_negotiation(&mut self) -> Option<()> {
         loop {
-            let batch = read_native_batch(&mut self.websocket).await?;
+            let batch = read_protocol_batch(&mut self.websocket).await?;
             for envelope in batch {
                 match ServerEnvelope::decode(envelope).ok()? {
                     ServerEnvelope::Request {
@@ -286,7 +286,7 @@ async fn answer_next_server_request(
     websocket: &mut TestWebSocket,
     rtc_peer: &mut NativeFakeRtcPeer,
 ) -> Option<()> {
-    let batch = read_native_batch(websocket).await?;
+    let batch = read_protocol_batch(websocket).await?;
     let envelope = batch.into_iter().next()?;
     let ServerEnvelope::Request {
         request_id,
@@ -330,6 +330,6 @@ fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {
     serde_json::to_string(&envelopes).ok()
 }
 
-async fn read_native_batch(websocket: &mut TestWebSocket) -> Option<EnvelopeBatch> {
+async fn read_protocol_batch(websocket: &mut TestWebSocket) -> Option<EnvelopeBatch> {
     serde_json::from_str(&read_text_message(websocket).await?).ok()
 }
