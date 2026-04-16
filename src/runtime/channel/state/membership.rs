@@ -429,10 +429,8 @@ mod tests {
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
-    use crate::signaling::{
-        shared::{SessionPermissions, StreamType},
-        webrtc::MediaKind as SignalingMediaKind,
-    };
+    use crate::signaling::shared::{SessionPermissions, StreamType};
+    use o_sfu_router::MediaKind;
 
     fn test_state() -> ChannelState {
         let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
@@ -475,7 +473,7 @@ mod tests {
                 owner_session_id: session_id.clone(),
                 owner_connection_id: original_connection_id.unwrap_or(u64::MAX),
                 stream_type: StreamType::Camera,
-                media_kind: SignalingMediaKind::Video,
+                media_kind: MediaKind::Video,
                 consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
                 routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(999)),
                 transport_media_id: None,
@@ -570,7 +568,7 @@ mod tests {
                 owner_session_id: producer_session_id.clone(),
                 owner_connection_id: producer_connection_id,
                 stream_type: StreamType::Camera,
-                media_kind: SignalingMediaKind::Video,
+                media_kind: MediaKind::Video,
                 consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
                 routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(55)),
                 transport_media_id: Some(producer_media),

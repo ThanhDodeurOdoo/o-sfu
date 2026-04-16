@@ -1154,45 +1154,44 @@ fn route_packet_by_scan(
     {
         routing_state.scan_attempts = routing_state.scan_attempts.saturating_add(1);
     }
-    let session_key =
-        match matching_session_key_for_packet(
-            state,
-            route.source_addr,
-            route.candidate_addr,
-            route.packet,
-            route.now,
-        ) {
-            PacketScanOutcome::Matched {
-                session_key,
-                examined_sessions,
-            } => {
-                route
-                    .metrics
-                    .record_rtc_datagram_fallback_scan(examined_sessions);
-                session_key
-            }
-            PacketScanOutcome::NoMatch { examined_sessions } => {
-                route
-                    .metrics
-                    .record_rtc_datagram_fallback_scan(examined_sessions);
-                route
-                    .metrics
-                    .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
-                routing_state.record_miss(miss_key, route.packet);
-                trace!(
-                    source = %route.source_addr,
-                    "dropping UDP datagram because no rtc session accepted it"
-                );
-                return;
-            }
-            PacketScanOutcome::Malformed => {
-                route
-                    .metrics
-                    .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-                log_malformed_datagram(route.source_addr);
-                return;
-            }
-        };
+    let session_key = match matching_session_key_for_packet(
+        state,
+        route.source_addr,
+        route.candidate_addr,
+        route.packet,
+        route.now,
+    ) {
+        PacketScanOutcome::Matched {
+            session_key,
+            examined_sessions,
+        } => {
+            route
+                .metrics
+                .record_rtc_datagram_fallback_scan(examined_sessions);
+            session_key
+        }
+        PacketScanOutcome::NoMatch { examined_sessions } => {
+            route
+                .metrics
+                .record_rtc_datagram_fallback_scan(examined_sessions);
+            route
+                .metrics
+                .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
+            routing_state.record_miss(miss_key, route.packet);
+            trace!(
+                source = %route.source_addr,
+                "dropping UDP datagram because no rtc session accepted it"
+            );
+            return;
+        }
+        PacketScanOutcome::Malformed => {
+            route
+                .metrics
+                .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+            log_malformed_datagram(route.source_addr);
+            return;
+        }
+    };
     if route_packet_to_session(state, &session_key, route) {
         routing_state.forget_miss(miss_key, route.packet);
     }

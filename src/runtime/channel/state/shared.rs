@@ -1,14 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, RouterId};
+use o_sfu_router::{
+    MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, MediaKind, RouterId,
+};
 
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
-use crate::signaling::{
-    shared::{RecordingState, SessionId, SessionPermissions, StreamType},
-    webrtc::MediaKind as SignalingMediaKind,
-};
+use crate::signaling::shared::{RecordingState, SessionId, SessionPermissions, StreamType};
 
 use super::super::{
     ChannelAdmissionPolicy,
@@ -89,7 +88,7 @@ pub(in crate::runtime::channel) struct PublishedProducer {
     pub(super) owner_session_id: SessionId,
     pub(super) owner_connection_id: u64,
     pub(super) stream_type: StreamType,
-    pub(super) media_kind: SignalingMediaKind,
+    pub(super) media_kind: MediaKind,
     pub(super) consumable_rtp_parameters: o_sfu_router::RtpParameters,
     pub(super) routed_producer_id: RoutedProducerId,
     pub(super) transport_media_id: Option<TransportMediaId>,

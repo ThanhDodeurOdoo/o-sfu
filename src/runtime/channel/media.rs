@@ -1,11 +1,10 @@
-use o_sfu_router::{RtpParameters as RouterRtpParameters, derive_consumable_rtp_parameters};
+use o_sfu_router::{
+    MediaKind, RtpParameters as RouterRtpParameters, derive_consumable_rtp_parameters,
+};
 use tracing::warn;
 
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
-use crate::signaling::{
-    shared::{DownloadStates, SessionId, StreamType},
-    webrtc::MediaKind as SignalingMediaKind,
-};
+use crate::signaling::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
     Channel,
@@ -19,7 +18,7 @@ use super::{
 pub(crate) struct NegotiatedPublish {
     pub(crate) connection_id: u64,
     pub(crate) stream_type: StreamType,
-    pub(crate) media_kind: SignalingMediaKind,
+    pub(crate) media_kind: MediaKind,
     pub(crate) transport_media_id: TransportMediaId,
     pub(crate) consumable_rtp_parameters: o_sfu_router::RtpParameters,
 }
@@ -105,7 +104,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         stream_type: StreamType,
-        media_kind: SignalingMediaKind,
+        media_kind: MediaKind,
         producer_rtp_parameters: RouterRtpParameters,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {

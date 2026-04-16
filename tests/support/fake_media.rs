@@ -5,7 +5,8 @@
 
 use std::time::Duration;
 
-use o_sfu::signaling::{shared::StreamType, webrtc::MediaKind};
+use o_sfu::signaling::shared::StreamType;
+use o_sfu_router::MediaKind;
 
 const AUDIO_FRAME_INTERVAL: Duration = Duration::from_millis(20);
 const AUDIO_TIMESTAMP_STEP: u32 = 960;

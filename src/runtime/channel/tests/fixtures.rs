@@ -1,8 +1,8 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
 pub(super) use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, RouterId, RtpCapabilities, RtpParameters,
-    SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
+    ConsumerCapability, MediaKind, MediaKind as RouterMediaKind, RouterId, RtpCapabilities,
+    RtpParameters, SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
 };
 pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::{task::yield_now, time::timeout};
@@ -13,216 +13,36 @@ pub(super) use super::super::{
     topology::ChannelTopology,
 };
 pub(super) use crate::runtime::stub_bus::{StubWebRtcAdapter, StubWebRtcEvent};
+use crate::runtime::test_rtp_samples::{
+    sample_audio_rtp_parameters, sample_client_rtp_capabilities,
+    sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
+    sample_video_rtp_parameters,
+};
 pub(super) use crate::runtime::transport_adapter::{ActiveSpeakerSource, RuntimeTransportAdapter};
 pub(super) use crate::signaling::{
-    ortc_mapper,
     protocol::WebSocketCloseCode,
     shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
-    webrtc::MediaKind,
 };
-pub(super) use serde_json::json;
 
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> RtpCapabilities {
-    parse_rtp_capabilities(&json!({
-        "codecs": [
-            {
-                "mimeType": "audio/opus",
-                "kind": "audio",
-                "preferredPayloadType": 111,
-                "clockRate": 48000,
-                "channels": 2,
-                "parameters": { "useinbandfec": "1" },
-                "rtcpFeedback": [{ "type": "transport-cc" }]
-            },
-            {
-                "mimeType": "video/VP8",
-                "kind": "video",
-                "preferredPayloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" },
-                    { "type": "transport-cc" }
-                ]
-            },
-            {
-                "mimeType": "video/rtx",
-                "kind": "video",
-                "preferredPayloadType": 97,
-                "clockRate": 90000,
-                "parameters": { "apt": "96" },
-                "rtcpFeedback": []
-            }
-        ],
-        "headerExtensions": [
-            {
-                "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
-                "preferredId": 1,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            },
-            {
-                "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
-                "preferredId": 4,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            },
-            {
-                "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
-                "preferredId": 5,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            },
-            {
-                "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
-                "preferredId": 10,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            }
-        ]
-    }))
+    sample_client_rtp_capabilities()
 }
 
 pub(super) fn test_audio_rtp_parameters() -> RtpParameters {
-    parse_rtp_parameters(&json!({
-        "codecs": [{
-            "mimeType": "audio/opus",
-            "payloadType": 111,
-            "clockRate": 48000,
-            "channels": 2,
-            "parameters": { "useinbandfec": "1" },
-            "rtcpFeedback": [{ "type": "transport-cc" }]
-        }],
-        "headerExtensions": [
-            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
-            { "uri": "urn:ietf:params:rtp-hdrext:ssrc-audio-level", "id": 10, "encrypt": false }
-        ],
-        "encodings": [{ "ssrc": 11111 }]
-    }))
+    sample_audio_rtp_parameters(11_111)
 }
 
 pub(super) fn test_client_rtp_capabilities_without_video_rtx() -> RtpCapabilities {
-    parse_rtp_capabilities(&json!({
-        "codecs": [
-            {
-                "mimeType": "audio/opus",
-                "kind": "audio",
-                "preferredPayloadType": 111,
-                "clockRate": 48000,
-                "channels": 2,
-                "parameters": { "useinbandfec": "1" },
-                "rtcpFeedback": [{ "type": "transport-cc" }]
-            },
-            {
-                "mimeType": "video/VP8",
-                "kind": "video",
-                "preferredPayloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" }
-                ]
-            }
-        ],
-        "headerExtensions": [
-            {
-                "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
-                "preferredId": 1,
-                "preferredEncrypt": false,
-                "kind": "audio",
-                "direction": "sendrecv"
-            }
-        ]
-    }))
+    sample_client_rtp_capabilities_without_video_rtx()
 }
 
 pub(super) fn test_video_rtp_parameters() -> RtpParameters {
-    parse_rtp_parameters(&json!({
-        "codecs": [
-            {
-                "mimeType": "video/VP8",
-                "payloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" },
-                    { "type": "transport-cc" }
-                ]
-            },
-            {
-                "mimeType": "video/rtx",
-                "payloadType": 97,
-                "clockRate": 90000,
-                "parameters": { "apt": "96" },
-                "rtcpFeedback": []
-            }
-        ],
-        "headerExtensions": [
-            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
-            { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
-            { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
-        ],
-        "encodings": [{ "ssrc": 22222 }]
-    }))
+    sample_video_rtp_parameters(None, 22_222)
 }
 
 pub(super) fn test_simulcast_video_rtp_parameters() -> RtpParameters {
-    parse_rtp_parameters(&json!({
-        "codecs": [
-            {
-                "mimeType": "video/VP8",
-                "payloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" },
-                    { "type": "transport-cc" }
-                ]
-            }
-        ],
-        "headerExtensions": [
-            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false }
-        ],
-        "encodings": [
-            { "ssrc": 31_001, "rid": "lo", "maxBitrate": 150_000 },
-            { "ssrc": 31_002, "rid": "hi", "maxBitrate": 900_000 }
-        ]
-    }))
-}
-
-fn parse_rtp_capabilities(value: &serde_json::Value) -> RtpCapabilities {
-    let parsed = ortc_mapper::parse_rtp_capabilities(value);
-    assert!(
-        parsed.is_some(),
-        "channel test capabilities should parse into router-native RTP capabilities"
-    );
-    parsed.unwrap_or_else(|| RtpCapabilities::new(Vec::new(), Vec::new()))
-}
-
-fn parse_rtp_parameters(value: &serde_json::Value) -> RtpParameters {
-    let parsed = ortc_mapper::parse_rtp_parameters(value);
-    assert!(
-        parsed.is_some(),
-        "channel test RTP parameters should parse into router-native RTP parameters"
-    );
-    parsed.unwrap_or_else(|| RtpParameters::new(Vec::new(), Vec::new(), Vec::new()))
+    sample_simulcast_video_rtp_parameters(None)
 }
 
 pub(super) fn test_sender() -> (

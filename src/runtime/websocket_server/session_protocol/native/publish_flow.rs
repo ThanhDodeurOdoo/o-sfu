@@ -1,10 +1,11 @@
 use std::future::Future;
 
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportMediaId};
+use o_sfu_router::MediaKind;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use crate::runtime::{channel::NegotiatedPublish, websocket_server::WsWriter};
-use crate::signaling::{shared::StreamType, webrtc::MediaKind as SignalingMediaKind};
+use crate::signaling::shared::StreamType;
 
 use super::super::controller::SessionProtocolOutcome;
 use super::{
@@ -224,10 +225,10 @@ impl NativeSessionProtocol {
     }
 }
 
-fn media_kind_for_stream_type(stream_type: StreamType) -> SignalingMediaKind {
+fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
     match stream_type {
-        StreamType::Audio => SignalingMediaKind::Audio,
-        StreamType::Camera | StreamType::Screen => SignalingMediaKind::Video,
+        StreamType::Audio => MediaKind::Audio,
+        StreamType::Camera | StreamType::Screen => MediaKind::Video,
     }
 }
 
@@ -247,9 +248,9 @@ mod tests {
     use super::{PublishTransactionGuard, StagedPublishTransaction};
     use crate::{
         runtime::transport_adapter::{TransportAdapterError, TransportMediaId},
-        signaling::{shared::StreamType, webrtc::MediaKind},
+        signaling::shared::StreamType,
     };
-    use o_sfu_router::RtpParameters as RouterRtpParameters;
+    use o_sfu_router::{MediaKind, RtpParameters as RouterRtpParameters};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Step {

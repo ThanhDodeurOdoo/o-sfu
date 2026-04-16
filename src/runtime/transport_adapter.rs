@@ -20,8 +20,8 @@ use crate::runtime::transport_connect::{
 };
 
 use crate::config::RtcPortRange;
-use crate::signaling::{shared::SessionId, webrtc::MediaKind as SignalingMediaKind};
-use o_sfu_router::{MediaCapabilities, RtpParameters as RouterRtpParameters};
+use crate::signaling::shared::SessionId;
+use o_sfu_router::{MediaCapabilities, MediaKind, RtpParameters as RouterRtpParameters};
 use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
@@ -701,7 +701,7 @@ impl RuntimeTransportAdapter {
     pub(crate) async fn publish_media(
         &self,
         session_key: &TransportSessionKey,
-        media_kind: SignalingMediaKind,
+        media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
@@ -727,7 +727,7 @@ impl RuntimeTransportAdapter {
     pub(crate) async fn consume_media(
         &self,
         consumer_session_key: &TransportSessionKey,
-        media_kind: SignalingMediaKind,
+        media_kind: MediaKind,
         source_session_key: &TransportSessionKey,
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
@@ -967,10 +967,10 @@ impl RuntimeTransportAdapter {
     }
 }
 
-fn signaling_to_str0m_media_kind(kind: SignalingMediaKind) -> Str0mMediaKind {
+fn signaling_to_str0m_media_kind(kind: MediaKind) -> Str0mMediaKind {
     match kind {
-        SignalingMediaKind::Audio => Str0mMediaKind::Audio,
-        SignalingMediaKind::Video => Str0mMediaKind::Video,
+        MediaKind::Audio => Str0mMediaKind::Audio,
+        MediaKind::Video => Str0mMediaKind::Video,
     }
 }
 

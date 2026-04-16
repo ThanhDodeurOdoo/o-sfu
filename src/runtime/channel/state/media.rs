@@ -8,10 +8,7 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::{
-    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
-    webrtc::MediaKind as SignalingMediaKind,
-};
+use crate::signaling::shared::{DownloadStates, SessionId, SessionInfo, StreamType};
 
 use super::super::{
     ChannelEventMessage, ChannelEventRequest, SessionOutbound, TrackBindingUpdate,
@@ -46,7 +43,7 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrapTarget {
     producer_connection_id: u64,
     producer_id: ProducerRuntimeId,
     stream_type: StreamType,
-    media_kind: SignalingMediaKind,
+    media_kind: RouterMediaKind,
     transport_media_id: TransportMediaId,
 }
 
@@ -57,7 +54,7 @@ pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
     producer_owner_session_id: SessionId,
     producer_connection_id: u64,
     producer_stream_type: StreamType,
-    producer_media_kind: SignalingMediaKind,
+    producer_media_kind: RouterMediaKind,
     producer_routed_id: RoutedProducerId,
     producer_id: ProducerRuntimeId,
     producer_active: bool,
@@ -68,7 +65,7 @@ pub(in crate::runtime::channel) struct PreparedPublishedTrack {
     owner_session_id: SessionId,
     owner_connection_id: u64,
     stream_type: StreamType,
-    media_kind: SignalingMediaKind,
+    media_kind: RouterMediaKind,
     consumable_rtp_parameters: RouterRtpParameters,
 }
 
@@ -79,7 +76,7 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
     producer_owner_session_id: SessionId,
     producer_connection_id: u64,
     producer_stream_type: StreamType,
-    producer_media_kind: SignalingMediaKind,
+    producer_media_kind: RouterMediaKind,
     producer_routed_id: RoutedProducerId,
     producer_id: ProducerRuntimeId,
     producer_active: bool,
@@ -88,7 +85,7 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteTrackBootstrap {
     consumer_id: ConsumerRuntimeId,
-    media_kind: SignalingMediaKind,
+    media_kind: RouterMediaKind,
     producer_id: ProducerRuntimeId,
     rtp_parameters: RouterRtpParameters,
     session_id: SessionId,
@@ -212,7 +209,7 @@ impl ChannelState {
         producer_connection_id: u64,
         producer_id: ProducerRuntimeId,
         stream_type: StreamType,
-        media_kind: SignalingMediaKind,
+        media_kind: RouterMediaKind,
         transport_media_id: TransportMediaId,
     ) -> Vec<PendingConsumerBootstrapTarget> {
         self.sessions
@@ -241,7 +238,7 @@ impl ChannelState {
         session_id: &SessionId,
         publisher_connection_id: u64,
         stream_type: StreamType,
-        media_kind: SignalingMediaKind,
+        media_kind: RouterMediaKind,
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<PreparedPublishedTrack> {
         let session = self.sessions.get(session_id)?;
@@ -271,7 +268,7 @@ impl ChannelState {
         let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
         let routed_producer_id = match self.topology.add_producer(
             &pending.owner_session_id,
-            to_router_media_kind(pending.media_kind),
+            pending.media_kind,
             to_router_stream_type(pending.stream_type),
         ) {
             Ok(producer_id) => producer_id,
@@ -552,7 +549,7 @@ impl ChannelState {
         let routed_consumer_id = match self.topology.add_consumer(
             &target.consumer_session_id,
             pending.producer_routed_id,
-            to_router_media_kind(pending.producer_media_kind),
+            pending.producer_media_kind,
             to_router_stream_type(pending.producer_stream_type),
             ConsumerCapability::Compatible,
         ) {
@@ -714,7 +711,7 @@ impl PendingConsumerBootstrapTarget {
         &self.consumer_session_id
     }
 
-    pub(in crate::runtime::channel) const fn media_kind(&self) -> SignalingMediaKind {
+    pub(in crate::runtime::channel) const fn media_kind(&self) -> RouterMediaKind {
         self.media_kind
     }
 
@@ -752,7 +749,7 @@ impl RemoteTrackBootstrap {
         self.consumer_id.into_wire_id()
     }
 
-    pub(crate) const fn media_kind(&self) -> SignalingMediaKind {
+    pub(crate) const fn media_kind(&self) -> RouterMediaKind {
         self.media_kind
     }
 
@@ -822,13 +819,6 @@ impl UnpublishTrackOutcome {
                 ));
             }
         }
-    }
-}
-
-fn to_router_media_kind(media_kind: SignalingMediaKind) -> RouterMediaKind {
-    match media_kind {
-        SignalingMediaKind::Audio => RouterMediaKind::Audio,
-        SignalingMediaKind::Video => RouterMediaKind::Video,
     }
 }
 
@@ -904,7 +894,7 @@ mod tests {
                 owner_session_id: session_id.clone(),
                 owner_connection_id: connection_id,
                 stream_type: StreamType::Camera,
-                media_kind: SignalingMediaKind::Video,
+                media_kind: RouterMediaKind::Video,
                 consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
                 routed_producer_id,
                 transport_media_id: Some(transport_media_id),

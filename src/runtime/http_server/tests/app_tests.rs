@@ -1,47 +1,12 @@
 use super::fixtures::*;
-use o_sfu_router::RtpParameters;
+use o_sfu_router::{MediaKind, RtpParameters};
 
 use crate::runtime::channel::Channel;
-use crate::signaling::ortc_mapper;
+use crate::runtime::test_rtp_samples::sample_video_rtp_parameters;
 use crate::signaling::shared::StreamType;
-use crate::signaling::webrtc::MediaKind;
 
 fn test_video_rtp_parameters(ssrc: u64) -> RtpParameters {
-    let parsed = ortc_mapper::parse_rtp_parameters(&serde_json::json!({
-        "codecs": [
-            {
-                "mimeType": "video/VP8",
-                "payloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" },
-                    { "type": "transport-cc" }
-                ]
-            },
-            {
-                "mimeType": "video/rtx",
-                "payloadType": 97,
-                "clockRate": 90000,
-                "parameters": { "apt": "96" },
-                "rtcpFeedback": []
-            }
-        ],
-        "headerExtensions": [
-            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
-            { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
-            { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
-        ],
-        "encodings": [{ "ssrc": ssrc }]
-    }));
-    assert!(
-        parsed.is_some(),
-        "HTTP app test RTP parameters should parse"
-    );
-    parsed.unwrap_or_else(|| RtpParameters::new(Vec::new(), Vec::new(), Vec::new()))
+    sample_video_rtp_parameters(None, u32::try_from(ssrc).unwrap_or(u32::MAX))
 }
 
 async fn publish_video_stream(

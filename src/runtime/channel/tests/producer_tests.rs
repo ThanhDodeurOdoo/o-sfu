@@ -7,9 +7,11 @@ use crate::runtime::channel::{Channel, NegotiatedPublish};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::stub_bus::StubWebRtcEvent;
+use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use crate::runtime::transport_adapter::{
     RtcTransportAdapterShardSetConfig, SourcePacketGate, TransportMediaId, TransportSessionKey,
 };
+use o_sfu_router::MediaKind;
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
 #[tokio::test]
@@ -1836,36 +1838,5 @@ async fn apply_offer_answer(
 }
 
 fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> RtpParameters {
-    ortc_mapper::parse_rtp_parameters(&json!({
-        "mid": mid,
-        "codecs": [
-            {
-                "mimeType": "video/VP8",
-                "payloadType": 96,
-                "clockRate": 90000,
-                "parameters": {},
-                "rtcpFeedback": [
-                    { "type": "nack" },
-                    { "type": "nack", "parameter": "pli" },
-                    { "type": "ccm", "parameter": "fir" },
-                    { "type": "goog-remb" },
-                    { "type": "transport-cc" }
-                ]
-            },
-            {
-                "mimeType": "video/rtx",
-                "payloadType": 97,
-                "clockRate": 90000,
-                "parameters": { "apt": "96" },
-                "rtcpFeedback": []
-            }
-        ],
-        "headerExtensions": [
-            { "uri": "urn:ietf:params:rtp-hdrext:sdes:mid", "id": 1, "encrypt": false },
-            { "uri": "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time", "id": 4, "encrypt": false },
-            { "uri": "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", "id": 5, "encrypt": false }
-        ],
-        "encodings": [{ "ssrc": ssrc }]
-    }))
-    .expect("test RTP parameters should parse")
+    router_sample_video_rtp_parameters(Some(mid), ssrc)
 }

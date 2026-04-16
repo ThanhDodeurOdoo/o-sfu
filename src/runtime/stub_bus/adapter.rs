@@ -12,10 +12,10 @@ use crate::runtime::transport_adapter::{
 };
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
-use crate::signaling::{shared::SessionId, webrtc::MediaKind};
+use crate::signaling::shared::SessionId;
 use o_sfu_router::{
-    MediaFormat as RouterMediaFormat, MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
-    RtpParameters as RouterRtpParameters, StreamBinding,
+    MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind, RtcpFeedback,
+    RtcpFeedbackKind, RtpParameters as RouterRtpParameters, StreamBinding,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;

@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 
+use o_sfu_router::MediaKind;
+
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::{shared::StreamType, webrtc::MediaKind as SignalingMediaKind};
+use crate::signaling::shared::StreamType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct StagedPublishTransaction {
     pub(super) stream_type: StreamType,
-    pub(super) media_kind: SignalingMediaKind,
+    pub(super) media_kind: MediaKind,
     pub(super) transport_media_id: TransportMediaId,
 }
 
@@ -93,10 +95,8 @@ impl NativeSessionState {
 #[cfg(test)]
 mod tests {
     use super::{ClearedPublishTransition, NativeSessionState, StagedPublishTransaction};
-    use crate::{
-        runtime::transport_adapter::TransportMediaId,
-        signaling::{shared::StreamType, webrtc::MediaKind},
-    };
+    use crate::{runtime::transport_adapter::TransportMediaId, signaling::shared::StreamType};
+    use o_sfu_router::MediaKind;
 
     #[test]
     fn queued_and_staged_publish_transitions_are_tracked_separately() {

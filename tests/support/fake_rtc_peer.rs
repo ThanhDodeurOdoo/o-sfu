@@ -12,10 +12,8 @@ use std::{
 use tokio::{net::UdpSocket, time::timeout};
 use tokio_util::bytes::Bytes;
 
-use o_sfu::{
-    signaling::protocol::SessionDescriptionPayload,
-    signaling::webrtc::MediaKind as SignalingMediaKind,
-};
+use o_sfu::signaling::protocol::SessionDescriptionPayload;
+use o_sfu_router::MediaKind;
 use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
     change::SdpOffer,
@@ -157,11 +155,7 @@ impl NativeFakeRtcPeer {
         .await
     }
 
-    fn write_rtp_packet(
-        &mut self,
-        media_kind: SignalingMediaKind,
-        frame: FakeMediaFrame,
-    ) -> Option<()> {
+    fn write_rtp_packet(&mut self, media_kind: MediaKind, frame: FakeMediaFrame) -> Option<()> {
         let send_path = *self.send_paths.get(&NativeMediaKey::from(media_kind))?;
         self.rtc
             .direct_api()
@@ -415,11 +409,11 @@ fn parse_offer_media_kind(line: &str) -> Option<NativeMediaKey> {
     }
 }
 
-impl From<SignalingMediaKind> for NativeMediaKey {
-    fn from(value: SignalingMediaKind) -> Self {
+impl From<MediaKind> for NativeMediaKey {
+    fn from(value: MediaKind) -> Self {
         match value {
-            SignalingMediaKind::Audio => Self::Audio,
-            SignalingMediaKind::Video => Self::Video,
+            MediaKind::Audio => Self::Audio,
+            MediaKind::Video => Self::Video,
         }
     }
 }
