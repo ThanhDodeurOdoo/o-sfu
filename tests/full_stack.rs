@@ -562,6 +562,99 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
 }
 
 #[tokio::test]
+async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotiation() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = NativeLocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-subscriber-replacement-mute", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let setup = Box::pin(connect_audio_media_flow_peers_for_sessions(
+        &network,
+        &channel,
+        SessionId::Integer(82),
+        SessionId::Integer(83),
+    ))
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber)) = setup else {
+        return;
+    };
+
+    let mut source = FakeMediaSource::audio();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber,
+        SessionId::Integer(82),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+
+    let mut clock = FakeClock::default();
+    assert_audio_packet_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+
+    assert!(
+        subscriber
+            .update_subscription(
+                SessionId::Integer(82),
+                DownloadStates {
+                    audio: Some(false),
+                    ..DownloadStates::default()
+                },
+            )
+            .await
+            .is_some()
+    );
+    drain_native_control_plane(&mut subscriber, Duration::from_millis(150)).await;
+
+    let replacement = network
+        .connect_fake_peer(&channel, SessionId::Integer(83), TEST_CHANNEL_KEY)
+        .await;
+    assert!(replacement.is_some());
+    let Some(mut replacement) = replacement else {
+        return;
+    };
+
+    assert_eq!(
+        subscriber.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+    assert_departure_message_native(&mut publisher, SessionId::Integer(83)).await;
+    assert_peer_joined_message_native(&mut publisher, SessionId::Integer(83)).await;
+    assert!(
+        replacement
+            .wait_until_connected(Duration::from_secs(5))
+            .await
+            .is_some()
+    );
+    assert_track_snapshot(
+        &mut replacement,
+        SessionId::Integer(82),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert!(replacement.complete_next_negotiation().await.is_some());
+    drain_native_control_plane(&mut replacement, Duration::from_millis(150)).await;
+
+    assert_audio_packet_dropped(&mut publisher, &mut replacement, &mut source, &mut clock).await;
+}
+
+#[tokio::test]
 async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_browsers() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;

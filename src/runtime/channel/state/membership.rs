@@ -174,7 +174,6 @@ impl ChannelState {
             session.presence = SessionPresence::default();
             session.layout = SessionLayout::default();
             session.negotiation = SessionNegotiation::default();
-            session.desired_download_states.clear();
             session.parsed_client_rtp_capabilities = None;
             session.connection_id = connection_id;
             session.sender = sender;
@@ -434,7 +433,7 @@ mod tests {
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
-    use crate::signaling::shared::{SessionPermissions, StreamType};
+    use crate::signaling::shared::{DownloadStates, SessionPermissions, StreamType};
     use o_sfu_router::MediaKind;
 
     fn test_state() -> ChannelState {
@@ -622,5 +621,71 @@ mod tests {
             producer_session_id,
             stream_type: StreamType::Camera,
         }));
+    }
+
+    #[test]
+    fn replacement_join_preserves_desired_download_states() {
+        let mut state = test_state();
+        let producer_session_id = SessionId::Integer(1);
+        let consumer_session_id = SessionId::Integer(2);
+        let (producer_sender, _producer_rx) = mpsc::unbounded_channel();
+        let (consumer_sender, _consumer_rx) = mpsc::unbounded_channel();
+        let (replacement_sender, _replacement_rx) = mpsc::unbounded_channel();
+
+        assert!(
+            state
+                .apply_join(
+                    &producer_session_id,
+                    None,
+                    SessionPermissions::default(),
+                    producer_sender,
+                    false,
+                )
+                .is_ok()
+        );
+        assert!(
+            state
+                .apply_join(
+                    &consumer_session_id,
+                    None,
+                    SessionPermissions::default(),
+                    consumer_sender,
+                    false,
+                )
+                .is_ok()
+        );
+
+        state.remember_download_states(
+            &consumer_session_id,
+            &producer_session_id,
+            &DownloadStates {
+                audio: Some(false),
+                ..DownloadStates::default()
+            },
+        );
+
+        assert!(
+            state
+                .apply_join(
+                    &consumer_session_id,
+                    Some(String::from("replacement")),
+                    SessionPermissions::default(),
+                    replacement_sender,
+                    false,
+                )
+                .is_ok()
+        );
+
+        let desired_download_states = state
+            .sessions
+            .get(&consumer_session_id)
+            .and_then(|session| session.desired_download_states.get(&producer_session_id));
+        assert_eq!(
+            desired_download_states,
+            Some(&DownloadStates {
+                audio: Some(false),
+                ..DownloadStates::default()
+            }),
+        );
     }
 }
