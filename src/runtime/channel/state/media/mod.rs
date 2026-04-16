@@ -3,7 +3,7 @@
 //! - `bootstrap` owns consumer bootstrap planning and commit paths.
 //! - `download` owns desired-download persistence and route activity updates.
 //! - `producer` owns producer publish lifecycle, unpublish cleanup, and activity fan-out.
-//! - `router_stream_type` keeps the shared native stream-type translation local to this boundary.
+//! - `router_stream_type` keeps the shared router-native stream-type translation local to this boundary.
 
 mod bootstrap;
 mod download;

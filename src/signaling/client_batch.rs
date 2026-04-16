@@ -40,7 +40,7 @@ impl ClientBatchDecodeError {
 ///
 /// Returns an error when the frame exceeds the byte limit, the batch exceeds
 /// the envelope limit, the payload is not valid JSON, or any decoded envelope
-/// violates the native signaling contract.
+/// violates the protocol signaling contract.
 pub fn decode_client_batch(payload: &str) -> Result<Vec<ClientEnvelope>, ClientBatchDecodeError> {
     if payload.len() > MAX_CLIENT_FRAME_BYTES {
         return Err(ClientBatchDecodeError::FrameTooLarge {
