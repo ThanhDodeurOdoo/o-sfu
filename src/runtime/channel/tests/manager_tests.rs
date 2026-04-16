@@ -1,6 +1,92 @@
 use super::fixtures::*;
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
+use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
+use std::time::Instant;
+
+async fn publish_audio_and_camera(
+    channel: &Arc<super::super::Channel>,
+    session_id: &SessionId,
+    transport_adapter: &RuntimeTransportAdapter,
+) {
+    assert!(
+        channel
+            .publish_track(
+                session_id,
+                StreamType::Audio,
+                MediaKind::Audio,
+                test_audio_rtp_parameters(),
+                transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    assert!(
+        channel
+            .publish_track(
+                session_id,
+                StreamType::Camera,
+                MediaKind::Video,
+                test_simulcast_video_rtp_parameters(),
+                transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+}
+
+async fn source_media_ids(
+    channel: &Arc<super::super::Channel>,
+    session_id: &SessionId,
+) -> (TransportMediaId, TransportMediaId) {
+    let Some(connection_id) = channel.session_connection_id(session_id).await else {
+        panic!("session should exist");
+    };
+    let Some(audio_media_id) = channel
+        .producer_transport_media_id(session_id, connection_id, StreamType::Audio)
+        .await
+    else {
+        panic!("audio producer should expose a transport media id");
+    };
+    let Some(camera_media_id) = channel
+        .producer_transport_media_id(session_id, connection_id, StreamType::Camera)
+        .await
+    else {
+        panic!("camera producer should expose a transport media id");
+    };
+    (audio_media_id, camera_media_id)
+}
+
+fn assert_source_packet_selection_update(
+    events: &[StubWebRtcEvent],
+    session_id: &SessionId,
+    transport_media_id: TransportMediaId,
+    selection: Option<&str>,
+) {
+    assert!(events.iter().any(|event| match (event, selection) {
+        (
+            StubWebRtcEvent::SourcePacketGateUpdated {
+                session_id: updated_session_id,
+                transport_media_id: updated_media_id,
+                packet_gate: None,
+            },
+            None,
+        ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
+        (
+            StubWebRtcEvent::SourcePacketGateUpdated {
+                session_id: updated_session_id,
+                transport_media_id: updated_media_id,
+                packet_gate: Some(SourcePacketGate::Rid(rid)),
+            },
+            Some(expected_rid),
+        ) => {
+            updated_session_id == session_id
+                && *updated_media_id == transport_media_id
+                && rid == expected_rid
+        }
+        _ => false,
+    }));
+}
 
 #[tokio::test]
 async fn channel_manager_is_idempotent_by_issuer() {
@@ -224,4 +310,84 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.active_channels, 0);
     assert_eq!(snapshot.active_sessions, 0);
+}
+
+#[tokio::test]
+async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
+    let manager = ChannelManager::for_test();
+    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let RuntimeTransportAdapter::Stub(stub) = &transport_adapter else {
+        panic!("test expects the stub transport adapter");
+    };
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+
+    for raw_session_id in [1_i64, 2_i64, 3_i64] {
+        let (sender, _receiver) = test_sender();
+        channel
+            .join_session(
+                SessionId::Integer(raw_session_id),
+                None,
+                SessionPermissions::default(),
+                sender,
+            )
+            .await
+            .expect("session join should succeed");
+        channel
+            .set_publish_transport_ready(&SessionId::Integer(raw_session_id))
+            .await;
+        channel
+            .set_consume_transport_ready(&SessionId::Integer(raw_session_id))
+            .await;
+        channel
+            .set_client_rtp_capabilities(
+                &SessionId::Integer(raw_session_id),
+                test_client_rtp_capabilities(),
+            )
+            .await;
+    }
+    for raw_session_id in [1_i64, 2_i64] {
+        publish_audio_and_camera(
+            &channel,
+            &SessionId::Integer(raw_session_id),
+            &transport_adapter,
+        )
+        .await;
+    }
+
+    let (_first_audio_media_id, first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+    let (second_audio_media_id, second_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(2)).await;
+
+    let baseline_event_count = stub.snapshot_events().len();
+    stub.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        second_audio_media_id,
+        Instant::now(),
+    )]);
+
+    manager
+        .sync_source_packet_selection_policies(&transport_adapter)
+        .await;
+
+    let events = stub.snapshot_events();
+    let policy_events = &events[baseline_event_count..];
+    assert_source_packet_selection_update(
+        policy_events,
+        &SessionId::Integer(2),
+        second_camera_media_id,
+        None,
+    );
+    assert!(!policy_events.iter().any(|event| {
+        matches!(
+            event,
+            StubWebRtcEvent::SourcePacketGateUpdated {
+                session_id,
+                transport_media_id,
+                packet_gate: None,
+            } if *session_id == SessionId::Integer(1)
+                && *transport_media_id == first_camera_media_id
+        )
+    }));
 }

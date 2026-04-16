@@ -233,6 +233,25 @@ impl ChannelManager {
         snapshots
     }
 
+    pub(crate) async fn sync_source_packet_selection_policies(
+        &self,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let channels = {
+            let state = self.state.read().await;
+            state
+                .channels_by_uuid
+                .values()
+                .map(|entry| Arc::clone(&entry.channel))
+                .collect::<Vec<_>>()
+        };
+        for channel in channels {
+            channel
+                .sync_source_packet_selection_policy(Some(transport_adapter))
+                .await;
+        }
+    }
+
     pub async fn join_session(
         &self,
         channel_uuid: &str,

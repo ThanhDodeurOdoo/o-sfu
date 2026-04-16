@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use anyhow::anyhow;
 use tokio::runtime::Builder;
+use tokio::task::JoinHandle;
+use tokio::time::{self, Duration, MissedTickBehavior};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::{Config, TransportBackend};
@@ -41,6 +43,8 @@ use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
 use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter};
+
+const SOURCE_PACKET_POLICY_SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct Runtime {
@@ -94,14 +98,38 @@ impl Runtime {
     }
 
     async fn run_until_stopped(self) -> Result<()> {
-        serve_http(RuntimeState {
+        let source_packet_policy_sync = spawn_source_packet_policy_sync_task(
+            Arc::clone(&self.channels),
+            self.transport_adapter.clone(),
+        );
+        let result = serve_http(RuntimeState {
             config: self.config,
             channels: self.channels,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,
         })
-        .await
+        .await;
+        source_packet_policy_sync.abort();
+        let _ = source_packet_policy_sync.await;
+        result
     }
+}
+
+fn spawn_source_packet_policy_sync_task(
+    channels: Arc<ChannelManager>,
+    transport_adapter: RuntimeTransportAdapter,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = time::interval(SOURCE_PACKET_POLICY_SYNC_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            channels
+                .sync_source_packet_selection_policies(&transport_adapter)
+                .await;
+        }
+    })
 }
 
 fn init_tracing() -> Result<()> {
