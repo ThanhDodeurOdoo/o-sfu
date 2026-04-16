@@ -51,6 +51,7 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrapTarget {
 pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
     consumer_rtp_parameters: RouterRtpParameters,
     sender: OutboundSender,
+    consumer_active: bool,
     producer_owner_session_id: SessionId,
     producer_connection_id: u64,
     producer_stream_type: StreamType,
@@ -73,6 +74,7 @@ pub(in crate::runtime::channel) struct PreparedPublishedTrack {
 pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
     sender: OutboundSender,
     bootstrap: RemoteTrackBootstrap,
+    consumer_active: bool,
     producer_owner_session_id: SessionId,
     producer_connection_id: u64,
     producer_stream_type: StreamType,
@@ -127,6 +129,38 @@ pub(in crate::runtime::channel) struct UnpublishTrackOutcome {
 }
 
 impl ChannelState {
+    pub(in crate::runtime::channel) fn remember_download_states(
+        &mut self,
+        session_id: &SessionId,
+        target_session_id: &SessionId,
+        states: &DownloadStates,
+    ) {
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return;
+        };
+        let existing_states = session
+            .desired_download_states
+            .entry(target_session_id.clone())
+            .or_default();
+        merge_download_states(existing_states, states);
+        if download_states_are_empty(existing_states) {
+            session.desired_download_states.remove(target_session_id);
+        }
+    }
+
+    fn desired_download_active(
+        &self,
+        session_id: &SessionId,
+        target_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.sessions
+            .get(session_id)
+            .and_then(|session| session.desired_download_states.get(target_session_id))
+            .and_then(|states| download_state_for_stream_type(states, stream_type))
+            .unwrap_or(true)
+    }
+
     pub(in crate::runtime::channel) fn publish_prerequisites(
         &self,
         session_id: &SessionId,
@@ -460,6 +494,7 @@ impl ChannelState {
                 active: prepared.producer_active,
                 stream_type: prepared.producer_stream_type,
             },
+            consumer_active: prepared.consumer_active,
             producer_owner_session_id: prepared.producer_owner_session_id.clone(),
             producer_connection_id: prepared.producer_connection_id,
             producer_stream_type: prepared.producer_stream_type,
@@ -501,6 +536,11 @@ impl ChannelState {
         let producer_routed_id = producer.routed_producer_id;
         let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
         let producer_active = producer.active;
+        let consumer_active = self.desired_download_active(
+            &target.consumer_session_id,
+            &target.producer_session_id,
+            target.stream_type,
+        );
 
         if !can_consume(&producer_consumable_rtp_parameters, client_capabilities) {
             return None;
@@ -513,6 +553,7 @@ impl ChannelState {
         Some(PreparedConsumerBootstrap {
             consumer_rtp_parameters: negotiated_rtp_parameters,
             sender,
+            consumer_active,
             producer_owner_session_id,
             producer_connection_id: producer.owner_connection_id,
             producer_stream_type,
@@ -528,7 +569,7 @@ impl ChannelState {
         target: &PendingConsumerBootstrapTarget,
         pending: PendingConsumerBootstrap,
         consumer_transport_media_id: TransportMediaId,
-    ) -> Option<(OutboundSender, RemoteTrackBootstrap)> {
+    ) -> Option<(OutboundSender, RemoteTrackBootstrap, bool)> {
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
             || !session.negotiation.can_consume()
@@ -563,6 +604,19 @@ impl ChannelState {
                 return None;
             }
         };
+        if !pending.consumer_active
+            && self
+                .topology
+                .set_consumer_paused(routed_consumer_id, true)
+                .is_err()
+        {
+            error!(
+                consumer_session_id = ?target.consumer_session_id,
+                producer_id = %pending.producer_id,
+                "failed to mirror initial consumer pause state into channel router"
+            );
+            return None;
+        }
         self.consumer_index.insert(
             ConsumerKey {
                 consumer_session_id: target.consumer_session_id.clone(),
@@ -577,7 +631,7 @@ impl ChannelState {
                 consumer_media: consumer_transport_media_id,
             },
         );
-        Some((pending.sender, pending.bootstrap))
+        Some((pending.sender, pending.bootstrap, pending.consumer_active))
     }
 
     pub(in crate::runtime::channel) fn apply_producer_activity(
@@ -731,6 +785,33 @@ impl PendingConsumerBootstrapTarget {
 impl PreparedConsumerBootstrap {
     pub(in crate::runtime::channel) fn consumer_rtp_parameters(&self) -> &RouterRtpParameters {
         &self.consumer_rtp_parameters
+    }
+}
+
+fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {
+    if let Some(audio) = update.audio {
+        target.audio = Some(audio);
+    }
+    if let Some(camera) = update.camera {
+        target.camera = Some(camera);
+    }
+    if let Some(screen) = update.screen {
+        target.screen = Some(screen);
+    }
+}
+
+fn download_states_are_empty(states: &DownloadStates) -> bool {
+    states.audio.is_none() && states.camera.is_none() && states.screen.is_none()
+}
+
+fn download_state_for_stream_type(
+    states: &DownloadStates,
+    stream_type: StreamType,
+) -> Option<bool> {
+    match stream_type {
+        StreamType::Audio => states.audio,
+        StreamType::Camera => states.camera,
+        StreamType::Screen => states.screen,
     }
 }
 

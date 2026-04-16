@@ -399,10 +399,12 @@ async fn assert_real_rtc_subscribe_activity(
     server: &TestServer,
     channel: &Arc<Channel>,
     published_track: &TrackBinding,
+    source_session_id: SessionId,
+    consumer_session_id: SessionId,
     active: bool,
 ) -> Option<()> {
     bob.subscribe(
-        ProtocolSessionId::Integer(91),
+        protocol_session_id(&source_session_id),
         ProtocolDownloadStates {
             camera: Some(active),
             ..ProtocolDownloadStates::default()
@@ -415,8 +417,8 @@ async fn assert_real_rtc_subscribe_activity(
     let (route_entry, consumer_session_key) = real_rtc_route_entry(
         server,
         channel,
-        SessionId::Integer(91),
-        SessionId::Integer(92),
+        source_session_id,
+        consumer_session_id,
         &published_track.mid,
     )
     .await?;
@@ -426,6 +428,123 @@ async fn assert_real_rtc_subscribe_activity(
         return None;
     }
     Some(())
+}
+
+async fn publish_camera_and_bootstrap_subscriber(
+    publisher: &mut ProtocolHarnessPeer,
+    subscriber: &mut ProtocolHarnessPeer,
+    publisher_session_id: &SessionId,
+    publish_context: &str,
+    renegotiation_context: &str,
+    snapshot_context: &str,
+) -> Option<TrackBinding> {
+    assert!(
+        publisher
+            .publish(ProtocolStreamType::Camera, true)
+            .await
+            .is_some(),
+        "{publish_context}"
+    );
+    assert!(
+        publisher.read_server_frame().await.is_some(),
+        "{renegotiation_context}"
+    );
+    let track_snapshot = read_track_snapshot(subscriber).await;
+    assert!(track_snapshot.is_some(), "{snapshot_context}");
+    let track_snapshot = track_snapshot?;
+    let track_binding = track_snapshot.first()?;
+    assert_eq!(
+        track_binding.session_id,
+        protocol_session_id(publisher_session_id)
+    );
+    assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
+    assert!(track_binding.active);
+    assert!(
+        subscriber.read_server_frame().await.is_some(),
+        "subscriber should consume the remote-track renegotiation request"
+    );
+    Some(track_binding.clone())
+}
+
+async fn recover_subscriber_and_replay_track(
+    publisher: &mut ProtocolHarnessPeer,
+    subscriber: &mut ProtocolHarnessPeer,
+    publisher_session_id: &SessionId,
+    reconnect_context: &str,
+    welcome_context: &str,
+    offer_context: &str,
+    snapshot_context: &str,
+) -> Option<TrackBinding> {
+    assert!(
+        close_peer_and_observe_recovery(subscriber, publisher)
+            .await
+            .is_some()
+    );
+    assert!(
+        subscriber
+            .flush_timers_with_delay(RECOVERY_DELAY_MS)
+            .await
+            .is_some(),
+        "{reconnect_context}"
+    );
+    assert!(
+        subscriber.read_server_frame().await.is_some(),
+        "{welcome_context}"
+    );
+    assert!(
+        subscriber.read_server_frame().await.is_some(),
+        "{offer_context}"
+    );
+    let replayed_track_snapshot = read_track_snapshot(subscriber).await;
+    assert!(replayed_track_snapshot.is_some(), "{snapshot_context}");
+    let replayed_track_snapshot = replayed_track_snapshot?;
+    assert_track_snapshot_contains(
+        &replayed_track_snapshot,
+        &protocol_session_id(publisher_session_id),
+        ProtocolStreamType::Camera,
+    );
+    let replayed_track = replayed_track_snapshot.first()?;
+    assert!(
+        subscriber.read_server_frame().await.is_some(),
+        "subscriber should consume the replayed remote-track renegotiation request"
+    );
+    Some(replayed_track.clone())
+}
+
+async fn setup_stub_protocol_peers(
+    adapter: Arc<StubWebRtcAdapter>,
+    channel_name: &str,
+    alice_session_id: SessionId,
+    bob_session_id: SessionId,
+) -> Option<(
+    TestServer,
+    Arc<Channel>,
+    ProtocolHarnessPeer,
+    ProtocolHarnessPeer,
+)> {
+    let server = spawn_test_server_with_timeouts_and_protocol(
+        1_000,
+        10_000,
+        60_000,
+        100,
+        RuntimeTransportAdapter::from_stub_adapter(adapter),
+        SessionProtocolMode::Native,
+    )
+    .await?;
+    let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
+    let alice_token =
+        signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id.clone())?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
+
+    let mut alice = ProtocolHarnessPeer::default();
+    let mut bob = ProtocolHarnessPeer::default();
+    alice
+        .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
+        .await?;
+    bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
+        .await?;
+    consume_peer_joined_update(&mut alice, protocol_session_id(&bob_session_id)).await?;
+    Some((server, channel, alice, bob))
 }
 
 async fn read_single_native_server_message(
@@ -1988,17 +2107,197 @@ async fn protocol_core_native_subscribe_updates_real_rtc_consumer_activity() {
     );
 
     assert!(
-        assert_real_rtc_subscribe_activity(&mut bob, &server, &channel, published_track, false)
-            .await
-            .is_some(),
+        assert_real_rtc_subscribe_activity(
+            &mut bob,
+            &server,
+            &channel,
+            published_track,
+            SessionId::Integer(91),
+            SessionId::Integer(92),
+            false,
+        )
+        .await
+        .is_some(),
         "subscriber should disable the existing rtc route without extra websocket signaling"
     );
     assert!(
-        assert_real_rtc_subscribe_activity(&mut bob, &server, &channel, published_track, true)
-            .await
-            .is_some(),
+        assert_real_rtc_subscribe_activity(
+            &mut bob,
+            &server,
+            &channel,
+            published_track,
+            SessionId::Integer(91),
+            SessionId::Integer(92),
+            true,
+        )
+        .await
+        .is_some(),
         "real rtc route should mark the subscriber destination active again after subscribe(camera=true)"
     );
+}
+
+#[tokio::test]
+async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
+    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let alice_session_id = SessionId::Integer(83);
+    let bob_session_id = SessionId::Integer(84);
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_stub_protocol_peers(
+        Arc::clone(&adapter),
+        "issuer-native-subscribe-recovery",
+        alice_session_id.clone(),
+        bob_session_id.clone(),
+    ))
+    .await
+    else {
+        return;
+    };
+
+    assert!(
+        publish_camera_and_bootstrap_subscriber(
+            &mut alice,
+            &mut bob,
+            &alice_session_id,
+            "publisher should stage the initial native publish",
+            "publisher should consume the initial publish renegotiation and answer it",
+            "subscriber should receive the initial translated track snapshot",
+        )
+        .await
+        .is_some()
+    );
+
+    assert!(
+        bob.subscribe(
+            protocol_session_id(&alice_session_id),
+            ProtocolDownloadStates {
+                camera: Some(false),
+                ..ProtocolDownloadStates::default()
+            },
+        )
+        .await
+        .is_some()
+    );
+    let baseline_event_count = adapter.snapshot_events().len();
+
+    assert!(
+        recover_subscriber_and_replay_track(
+            &mut alice,
+            &mut bob,
+            &alice_session_id,
+            "recovery timer should reconnect the subscriber",
+            "subscriber should consume the recovery welcome frame",
+            "subscriber should consume the recovery initial offer",
+            "subscriber should receive a replayed track snapshot after recovery",
+        )
+        .await
+        .is_some()
+    );
+
+    let replayed_inactive = timeout(Duration::from_secs(1), async {
+        loop {
+            if adapter
+                .snapshot_events()
+                .iter()
+                .skip(baseline_event_count)
+                .any(|event| {
+                    matches!(
+                        event,
+                        StubWebRtcEvent::ConsumerActivityUpdated {
+                            consumer_session_id,
+                            source_session_id,
+                            active: false,
+                        } if *consumer_session_id == bob_session_id
+                            && *source_session_id == alice_session_id
+                    )
+                })
+            {
+                return Some(());
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        matches!(replayed_inactive, Ok(Some(()))),
+        "subscriber recovery should replay the latest muted camera subscription"
+    );
+    assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));
+    assert!(peer_reached_state(&bob, BundleConnectionState::Connected));
+}
+
+#[tokio::test]
+async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery() {
+    let alice_session_id = SessionId::Integer(93);
+    let bob_session_id = SessionId::Integer(94);
+    let Some((server, channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+        "issuer-native-rtc-subscribe-recovery",
+        alice_session_id.clone(),
+        bob_session_id.clone(),
+        56_391,
+        56_392,
+    ))
+    .await
+    else {
+        return;
+    };
+
+    let Some(published_track) = publish_camera_and_bootstrap_subscriber(
+        &mut alice,
+        &mut bob,
+        &alice_session_id,
+        "publisher should stage the initial native publish on the real rtc path",
+        "publisher should consume the initial real-rtc publish renegotiation and answer it",
+        "subscriber should receive the initial translated track snapshot on the real rtc path",
+    )
+    .await
+    else {
+        return;
+    };
+    assert!(
+        assert_real_rtc_subscribe_activity(
+            &mut bob,
+            &server,
+            &channel,
+            &published_track,
+            alice_session_id.clone(),
+            bob_session_id.clone(),
+            false,
+        )
+        .await
+        .is_some(),
+        "subscriber should mark the initial rtc route inactive before recovery"
+    );
+
+    let Some(replayed_track) = recover_subscriber_and_replay_track(
+        &mut alice,
+        &mut bob,
+        &alice_session_id,
+        "recovery timer should reconnect the real-rtc subscriber",
+        "subscriber should consume the recovery welcome frame on the real rtc path",
+        "subscriber should consume the recovery initial offer on the real rtc path",
+        "subscriber should receive the replayed track snapshot after recovery on the real rtc path",
+    )
+    .await
+    else {
+        return;
+    };
+    let Some((route_entry, consumer_session_key)) = real_rtc_route_entry(
+        &server,
+        &channel,
+        alice_session_id.clone(),
+        bob_session_id.clone(),
+        &replayed_track.mid,
+    )
+    .await
+    else {
+        panic!("recovered subscriber route should exist");
+    };
+    assert!(route_entry.source_active);
+    assert!(
+        route_has_consumer_activity(&route_entry, &consumer_session_key, false),
+        "subscriber recovery should replay the latest muted camera subscription on the real rtc path"
+    );
+    assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));
+    assert!(peer_reached_state(&bob, BundleConnectionState::Connected));
 }
 
 #[tokio::test]

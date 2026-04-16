@@ -121,6 +121,48 @@ async fn consumption_change_ignores_nonexistent_consumer() {
 }
 
 #[tokio::test]
+async fn consumption_change_persists_preference_for_future_consumer_bootstrap() {
+    let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+
+    channel
+        .update_subscription(
+            &SessionId::Integer(2),
+            &SessionId::Integer(1),
+            &DownloadStates {
+                camera: Some(false),
+                audio: None,
+                screen: None,
+            },
+            &adapter,
+        )
+        .await;
+
+    channel
+        .publish_track(
+            &SessionId::Integer(1),
+            StreamType::Camera,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &adapter,
+        )
+        .await;
+    drain_outbound(&mut rx1);
+    drain_outbound(&mut rx2);
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::ConsumerActivityUpdated {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+                active: false,
+            }
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn consumption_change_handles_multiple_stream_types() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
 

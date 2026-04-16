@@ -7,7 +7,9 @@ use o_sfu_router::{
 
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
-use crate::signaling::shared::{RecordingState, SessionId, SessionPermissions, StreamType};
+use crate::signaling::shared::{
+    DownloadStates, RecordingState, SessionId, SessionPermissions, StreamType,
+};
 
 use super::super::{
     ChannelAdmissionPolicy,
@@ -80,6 +82,7 @@ pub(in crate::runtime::channel) struct ActiveSession {
     pub(super) presence: SessionPresence,
     pub(super) layout: SessionLayout,
     pub(super) negotiation: SessionNegotiation,
+    pub(super) desired_download_states: BTreeMap<SessionId, DownloadStates>,
     pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub(super) connection_id: u64,
     pub(super) sender: OutboundSender,

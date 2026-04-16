@@ -213,7 +213,7 @@ impl Channel {
             let mut state = self.state.write().await;
             state.commit_consumer_bootstrap(target, pending_bootstrap, consumer_transport_media_id)
         };
-        let Some((sender, bootstrap)) = outbound else {
+        let Some((sender, bootstrap, consumer_active)) = outbound else {
             let _result = transport_adapter
                 .remove_media(
                     &self.transport_session_key(
@@ -225,6 +225,31 @@ impl Channel {
                 .await;
             return;
         };
+        if !consumer_active
+            && transport_adapter
+                .set_consumer_active(
+                    &self.transport_session_key(
+                        target.consumer_session_id(),
+                        target.consumer_connection_id(),
+                    ),
+                    consumer_transport_media_id,
+                    &self.transport_session_key(
+                        target.producer_session_id(),
+                        target.producer_connection_id(),
+                    ),
+                    target.transport_media_id(),
+                    false,
+                )
+                .await
+                .is_err()
+        {
+            warn!(
+                consumer_session_id = ?target.consumer_session_id(),
+                producer_session_id = ?target.producer_session_id(),
+                ?origin,
+                "transport adapter failed to apply the initial consumer pause state"
+            );
+        }
         let _ = sender.send(super::SessionOutbound::Request(Box::new(
             bootstrap.into_channel_event_request(),
         )));
@@ -282,7 +307,8 @@ impl Channel {
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         let route_updates = {
-            let state = self.state.read().await;
+            let mut state = self.state.write().await;
+            state.remember_download_states(session_id, target_session_id, states);
             state.download_route_updates(session_id, target_session_id, states)
         };
         let committed_updates = {

@@ -174,6 +174,7 @@ impl ChannelState {
             session.presence = SessionPresence::default();
             session.layout = SessionLayout::default();
             session.negotiation = SessionNegotiation::default();
+            session.desired_download_states.clear();
             session.parsed_client_rtp_capabilities = None;
             session.connection_id = connection_id;
             session.sender = sender;
@@ -187,6 +188,7 @@ impl ChannelState {
                 presence: SessionPresence::default(),
                 layout: SessionLayout::default(),
                 negotiation: SessionNegotiation::default(),
+                desired_download_states: BTreeMap::new(),
                 parsed_client_rtp_capabilities: None,
                 connection_id,
                 sender,
