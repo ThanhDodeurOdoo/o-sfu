@@ -13,6 +13,7 @@ use super::super::{
     outbound::{MessageFanout, OutboundSender},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady},
 };
+use super::layout::SessionLayout;
 use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
 
@@ -171,6 +172,7 @@ impl ChannelState {
             session.label.clone_from(&label);
             session.permissions.clone_from(&permissions);
             session.presence = SessionPresence::default();
+            session.layout = SessionLayout::default();
             session.negotiation = SessionNegotiation::default();
             session.parsed_client_rtp_capabilities = None;
             session.connection_id = connection_id;
@@ -183,6 +185,7 @@ impl ChannelState {
                 label,
                 permissions,
                 presence: SessionPresence::default(),
+                layout: SessionLayout::default(),
                 negotiation: SessionNegotiation::default(),
                 parsed_client_rtp_capabilities: None,
                 connection_id,

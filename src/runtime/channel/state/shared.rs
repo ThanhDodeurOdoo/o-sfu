@@ -16,6 +16,7 @@ use super::super::{
     topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use super::ids::ProducerRuntimeId;
+use super::layout::SessionLayout;
 use super::presence::SessionPresence;
 
 const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
@@ -77,6 +78,7 @@ pub(in crate::runtime::channel) struct ActiveSession {
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
     pub(super) permissions: SessionPermissions,
     pub(super) presence: SessionPresence,
+    pub(super) layout: SessionLayout,
     pub(super) negotiation: SessionNegotiation,
     pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub(super) connection_id: u64,

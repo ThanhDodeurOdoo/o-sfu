@@ -2,6 +2,7 @@
 //!
 //! `ids` owns the typed runtime-only producer/consumer identifiers.
 //! `fanout` owns outbound fan-out preparation from state snapshots.
+//! `layout` owns server-driven session layout state.
 //! `presence` owns client-driven session presence state.
 //! `recording` owns channel recording-control state updates and fan-out.
 //! `session_info_projection` owns outward-facing session and peer projection.
@@ -12,6 +13,7 @@
 
 mod fanout;
 mod ids;
+mod layout;
 mod media;
 mod membership;
 mod presence;

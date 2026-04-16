@@ -13,15 +13,18 @@ impl Channel {
             return;
         };
         let active_speaker_sources = transport_adapter.active_speaker_source_snapshot().await;
-        let updates = {
+        let (source_packet_updates, featured_session_updates) = {
             let state = self.state.read().await;
-            state.source_packet_selection_updates(&active_speaker_sources)
+            (
+                state.source_packet_selection_updates(&active_speaker_sources),
+                state.featured_session_updates(&active_speaker_sources),
+            )
         };
-        if updates.is_empty() {
+        if source_packet_updates.is_empty() && featured_session_updates.is_empty() {
             return;
         }
-        let mut applied_updates = Vec::with_capacity(updates.len());
-        for update in updates {
+        let mut applied_source_packet_updates = Vec::with_capacity(source_packet_updates.len());
+        for update in source_packet_updates {
             if transport_adapter
                 .set_source_packet_gate(
                     &self.transport_session_key(
@@ -42,12 +45,15 @@ impl Channel {
                 );
                 continue;
             }
-            applied_updates.push(update);
+            applied_source_packet_updates.push(update);
         }
-        if applied_updates.is_empty() {
-            return;
+        let info_fanout = {
+            let mut state = self.state.write().await;
+            state.commit_source_packet_selection_updates(&applied_source_packet_updates);
+            state.commit_featured_session_updates(&featured_session_updates)
+        };
+        if let Some(info_fanout) = info_fanout {
+            info_fanout.emit();
         }
-        let mut state = self.state.write().await;
-        state.commit_source_packet_selection_updates(&applied_updates);
     }
 }

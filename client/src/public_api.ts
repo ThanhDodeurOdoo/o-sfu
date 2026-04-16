@@ -27,6 +27,7 @@ export interface UpdateInfoOptions {
 
 export interface SessionInfo {
     isTalking?: boolean;
+    isFeatured?: boolean;
     isCameraOn?: boolean;
     isScreenSharingOn?: boolean;
     isSelfMuted?: boolean;

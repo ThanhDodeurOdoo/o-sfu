@@ -366,6 +366,7 @@ mod tests {
         let update_info = BundleMethodCall::UpdateInfo(BundleUpdateInfoCall {
             info: SessionInfo {
                 is_talking: Some(true),
+                is_featured: None,
                 is_camera_on: Some(false),
                 is_screen_sharing_on: None,
                 is_self_muted: None,
@@ -559,6 +560,7 @@ mod tests {
             bundle_session_info_key(&SessionId::Integer(5)),
             SessionInfo {
                 is_talking: Some(false),
+                is_featured: None,
                 is_camera_on: Some(true),
                 is_screen_sharing_on: None,
                 is_self_muted: None,

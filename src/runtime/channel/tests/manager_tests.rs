@@ -88,6 +88,20 @@ fn assert_source_packet_selection_update(
     }));
 }
 
+fn assert_featured_snapshot_update(
+    messages: &[SessionOutbound],
+    session_id: &SessionId,
+    is_featured: bool,
+) {
+    assert!(messages.iter().any(|message| {
+        matches!(
+            message,
+            SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot))
+                if snapshot.get(session_id).is_some_and(|info| info.is_featured == Some(is_featured))
+        )
+    }));
+}
+
 #[tokio::test]
 async fn channel_manager_is_idempotent_by_issuer() {
     let manager = ChannelManager::for_test();
@@ -323,8 +337,10 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
 
+    let mut receivers = Vec::new();
     for raw_session_id in [1_i64, 2_i64, 3_i64] {
-        let (sender, _receiver) = test_sender();
+        let (sender, receiver) = test_sender();
+        receivers.push(receiver);
         channel
             .join_session(
                 SessionId::Integer(raw_session_id),
@@ -355,6 +371,9 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         )
         .await;
     }
+    for receiver in &mut receivers {
+        let _ = drain_outbound(receiver);
+    }
 
     let (_first_audio_media_id, first_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(1)).await;
@@ -373,6 +392,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
 
     let events = stub.snapshot_events();
     let policy_events = &events[baseline_event_count..];
+    let featured_messages = drain_outbound(&mut receivers[0]);
     assert_source_packet_selection_update(
         policy_events,
         &SessionId::Integer(2),
@@ -390,4 +410,6 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
                 && *transport_media_id == first_camera_media_id
         )
     }));
+    assert_featured_snapshot_update(&featured_messages, &SessionId::Integer(1), false);
+    assert_featured_snapshot_update(&featured_messages, &SessionId::Integer(2), true);
 }

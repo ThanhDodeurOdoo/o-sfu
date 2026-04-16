@@ -335,6 +335,7 @@ function validateRecordingState(value: unknown, context: string): RecordingState
 function validateSessionInfo(value: unknown, context: string): SessionInfo {
     const info = asRecord(value, context);
     requireOptionalBoolean(info.isTalking, `${context}.isTalking`);
+    requireOptionalBoolean(info.isFeatured, `${context}.isFeatured`);
     requireOptionalBoolean(info.isCameraOn, `${context}.isCameraOn`);
     requireOptionalBoolean(info.isScreenSharingOn, `${context}.isScreenSharingOn`);
     requireOptionalBoolean(info.isSelfMuted, `${context}.isSelfMuted`);

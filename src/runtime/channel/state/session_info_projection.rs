@@ -4,6 +4,7 @@ use crate::signaling::protocol::PeerSnapshot;
 use crate::signaling::shared::SessionInfo;
 use crate::signaling::shared::{SessionId, StreamType};
 
+use super::layout::SessionLayout;
 use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, ProducerKey};
 
@@ -16,10 +17,12 @@ pub(in crate::runtime::channel) struct SessionMediaView {
 #[must_use]
 pub(in crate::runtime::channel) fn project_session_info(
     presence: &SessionPresence,
+    layout: &SessionLayout,
     media: SessionMediaView,
 ) -> SessionInfo {
     SessionInfo {
         is_talking: presence.talking(),
+        is_featured: layout.featured(),
         is_camera_on: media.camera_active,
         is_screen_sharing_on: media.screen_active,
         is_self_muted: presence.self_muted(),
@@ -91,6 +94,7 @@ impl ChannelState {
     fn session_info(&self, session_id: &SessionId, session: &ActiveSession) -> SessionInfo {
         project_session_info(
             &session.presence,
+            &session.layout,
             self.session_media_view(session_id, session.connection_id),
         )
     }

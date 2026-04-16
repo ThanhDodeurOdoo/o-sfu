@@ -92,6 +92,8 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_talking: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_featured: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_camera_on: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_screen_sharing_on: Option<bool>,

@@ -3,6 +3,7 @@ use crate::signaling::shared::{SessionId, StreamType};
 use std::collections::BTreeSet;
 
 use super::{
+    super::{ChannelEventMessage, outbound::MessageFanout},
     ids::ProducerRuntimeId,
     shared::{ChannelState, ProducerKey, SourcePacketSelection},
 };
@@ -38,6 +39,22 @@ impl SourcePacketSelectionUpdate {
 
     pub(in crate::runtime::channel) fn selection(&self) -> Option<&SourcePacketSelection> {
         self.selection.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::channel) struct FeaturedSessionUpdate {
+    session_id: SessionId,
+    featured: Option<bool>,
+}
+
+impl FeaturedSessionUpdate {
+    pub(in crate::runtime::channel) fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub(in crate::runtime::channel) const fn featured(&self) -> Option<bool> {
+        self.featured
     }
 }
 
@@ -93,6 +110,50 @@ impl ChannelState {
             .collect()
     }
 
+    pub(in crate::runtime::channel) fn featured_session_updates(
+        &self,
+        active_speaker_sources: &[ActiveSpeakerSource],
+    ) -> Vec<FeaturedSessionUpdate> {
+        let desired_featured_session_id =
+            self.featured_session_id_for_active_speakers(active_speaker_sources);
+        let should_clear_featured_state = desired_featured_session_id.is_none()
+            && self
+                .sessions
+                .values()
+                .any(|session| session.layout.featured().is_some());
+        if desired_featured_session_id.is_none() && !should_clear_featured_state {
+            return Vec::new();
+        }
+        self.sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                let desired_featured = desired_featured_session_id.as_ref().map_or_else(
+                    || session.layout.featured().is_some().then_some(false),
+                    |featured_session_id| Some(featured_session_id == session_id),
+                );
+                (desired_featured != session.layout.featured()).then(|| FeaturedSessionUpdate {
+                    session_id: session_id.clone(),
+                    featured: desired_featured,
+                })
+            })
+            .collect()
+    }
+
+    fn featured_session_id_for_active_speakers(
+        &self,
+        active_speaker_sources: &[ActiveSpeakerSource],
+    ) -> Option<SessionId> {
+        active_speaker_sources.iter().find_map(|source| {
+            let owner_session_id = self.producer_owner_session_id_for_transport_media_id(
+                source.transport_media_id(),
+                StreamType::Audio,
+            )?;
+            self.producer_ids_by_owner_stream
+                .contains_key(&ProducerKey::new(&owner_session_id, StreamType::Camera))
+                .then_some(owner_session_id)
+        })
+    }
+
     fn producer_owner_session_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
@@ -123,6 +184,31 @@ impl ChannelState {
                 .source_packet_selection
                 .clone_from(&update.selection);
         }
+    }
+
+    pub(in crate::runtime::channel) fn commit_featured_session_updates(
+        &mut self,
+        updates: &[FeaturedSessionUpdate],
+    ) -> Option<MessageFanout> {
+        let changed_session_ids = updates
+            .iter()
+            .filter_map(|update| {
+                let session = self.sessions.get_mut(update.session_id())?;
+                if session.layout.featured() == update.featured() {
+                    return None;
+                }
+                session.layout.set_featured(update.featured());
+                Some(update.session_id().clone())
+            })
+            .collect::<Vec<_>>();
+        if changed_session_ids.is_empty() {
+            return None;
+        }
+        let snapshot = changed_session_ids
+            .into_iter()
+            .filter_map(|session_id| self.session_info_snapshot(&session_id))
+            .collect();
+        Some(self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)))
     }
 }
 
