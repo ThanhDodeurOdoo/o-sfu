@@ -13,10 +13,19 @@ export default defineConfig({
         trace: "retain-on-failure",
         video: "retain-on-failure"
     },
-    webServer: {
-        command: "node ./playwright/serve_client.mjs",
-        reuseExistingServer: true,
-        timeout: 10_000,
-        url: "http://127.0.0.1:4173/playwright/fixtures/harness.html"
-    }
+    webServer: [
+        {
+            command: "node ./playwright/serve_client.mjs",
+            reuseExistingServer: true,
+            timeout: 10_000,
+            url: "http://127.0.0.1:4173/playwright/fixtures/harness.html"
+        },
+        {
+            command:
+                "AUTH_KEY=u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng= BIND_ADDRESS=127.0.0.1:18080 PUBLIC_IP=127.0.0.1 RTC_MIN_PORT=58000 RTC_MAX_PORT=58031 TRANSPORT_BACKEND=rtc cargo run --quiet --manifest-path ../Cargo.toml -p o-sfu",
+            reuseExistingServer: true,
+            timeout: 120_000,
+            url: "http://127.0.0.1:18080/v1/noop"
+        }
+    ]
 });
