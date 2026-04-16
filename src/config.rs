@@ -18,9 +18,10 @@ const DEFAULT_ENABLE_TRANSCRIPTION_FEATURE: bool = false;
 const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
 const DEFAULT_TRUST_PROXY_HEADERS: bool = false;
-const TRANSPORT_BACKEND_STUB: &str = "stub";
+const TRANSPORT_BACKEND_FAKE: &str = "fake";
+const TRANSPORT_BACKEND_FAKE_LEGACY_ALIAS: &str = "stub";
 const TRANSPORT_BACKEND_RTC: &str = "rtc";
-const STUB_PUBLIC_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+const FAKE_PUBLIC_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeFeatureFlags {
@@ -213,7 +214,7 @@ impl RtcPortRange {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportBackend {
-    Stub,
+    Fake,
     Rtc,
 }
 
@@ -222,10 +223,10 @@ impl FromStr for TransportBackend {
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
-            TRANSPORT_BACKEND_STUB => Ok(Self::Stub),
+            TRANSPORT_BACKEND_FAKE | TRANSPORT_BACKEND_FAKE_LEGACY_ALIAS => Ok(Self::Fake),
             TRANSPORT_BACKEND_RTC => Ok(Self::Rtc),
             _ => Err(anyhow!(
-                "TRANSPORT_BACKEND must be either `{TRANSPORT_BACKEND_STUB}` or `{TRANSPORT_BACKEND_RTC}`"
+                "TRANSPORT_BACKEND must be either `{TRANSPORT_BACKEND_FAKE}` or `{TRANSPORT_BACKEND_RTC}`"
             )),
         }
     }
@@ -444,9 +445,9 @@ fn load_transport_config(
     let transport_backend = parse_optional_env(
         &mut get_var,
         "TRANSPORT_BACKEND",
-        "TRANSPORT_BACKEND must be either `stub` or `rtc`",
+        "TRANSPORT_BACKEND must be either `fake` or `rtc`",
     )?
-    .unwrap_or(TransportBackend::Stub);
+    .unwrap_or(TransportBackend::Fake);
     ensure!(
         rtc_min_port <= rtc_max_port,
         "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
@@ -462,7 +463,7 @@ fn load_transport_config(
     );
     let public_ip = match (transport_backend, public_ip) {
         (_, Some(public_ip)) => public_ip,
-        (TransportBackend::Stub, None) => STUB_PUBLIC_IP_DEFAULT,
+        (TransportBackend::Fake, None) => FAKE_PUBLIC_IP_DEFAULT,
         (TransportBackend::Rtc, None) => {
             return Err(anyhow!(
                 "PUBLIC_IP env variable is required when TRANSPORT_BACKEND=rtc"
@@ -505,7 +506,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, STUB_PUBLIC_IP_DEFAULT,
+        Config, FAKE_PUBLIC_IP_DEFAULT, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TransportBackend,
     };
 
@@ -538,10 +539,10 @@ mod tests {
         assert!(!config.trust_proxy_headers);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
-        assert_eq!(config.public_ip, STUB_PUBLIC_IP_DEFAULT);
+        assert_eq!(config.public_ip, FAKE_PUBLIC_IP_DEFAULT);
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.rtc_media_worker_count, 1);
-        assert_eq!(config.transport_backend, TransportBackend::Stub);
+        assert_eq!(config.transport_backend, TransportBackend::Fake);
     }
 
     #[test]
@@ -645,6 +646,20 @@ mod tests {
             return;
         };
         assert_eq!(config.transport_backend, TransportBackend::Rtc);
+    }
+
+    #[test]
+    fn config_accepts_legacy_stub_transport_backend_alias() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "TRANSPORT_BACKEND" => Some("stub".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(config.transport_backend, TransportBackend::Fake);
     }
 
     #[test]

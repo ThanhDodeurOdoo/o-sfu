@@ -9,7 +9,7 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
         200,
         20,
         100,
-        RuntimeTransportAdapter::builder().stub().build(),
+        RuntimeTransportAdapter::builder().fake().build(),
     )
     .await;
     assert!(server.is_some());
@@ -65,7 +65,7 @@ async fn websocket_closes_when_ping_response_times_out() {
         30,
         15,
         100,
-        RuntimeTransportAdapter::builder().stub().build(),
+        RuntimeTransportAdapter::builder().fake().build(),
     )
     .await;
     assert!(server.is_some());
@@ -195,9 +195,9 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
 
 #[tokio::test]
 async fn websocket_closure_emits_stub_webrtc_session_closed_event() {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
-        RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
+        RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -220,15 +220,15 @@ async fn websocket_closure_emits_stub_webrtc_session_closed_event() {
     };
     assert_eq!(
         events.last(),
-        Some(&StubWebRtcEvent::SessionClosed { session_id })
+        Some(&FakeWebRtcEvent::SessionClosed { session_id })
     );
 }
 
 #[tokio::test]
 async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
-        RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
+        RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -259,7 +259,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
     };
     assert_eq!(
         events.last(),
-        Some(&StubWebRtcEvent::SessionClosed {
+        Some(&FakeWebRtcEvent::SessionClosed {
             session_id: session_id.clone(),
         })
     );
@@ -273,15 +273,15 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
     };
     assert_eq!(
         events.last(),
-        Some(&StubWebRtcEvent::SessionClosed { session_id })
+        Some(&FakeWebRtcEvent::SessionClosed { session_id })
     );
 }
 
 #[tokio::test]
 async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
-        RuntimeTransportAdapter::from_stub_adapter(Arc::<StubWebRtcAdapter>::clone(&adapter));
+        RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 10, transport_adapter).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -326,7 +326,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
     };
     assert_eq!(
         events.last(),
-        Some(&StubWebRtcEvent::SessionClosed {
+        Some(&FakeWebRtcEvent::SessionClosed {
             session_id: SessionId::Integer(1)
         })
     );

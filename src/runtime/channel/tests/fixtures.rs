@@ -18,7 +18,7 @@ use crate::runtime::test_rtp_samples::{
     sample_video_rtp_parameters,
 };
 pub(super) use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, RuntimeTransportAdapter, StubWebRtcAdapter, StubWebRtcEvent,
+    ActiveSpeakerSource, FakeWebRtcAdapter, FakeWebRtcEvent, RuntimeTransportAdapter,
 };
 pub(super) use crate::signaling::{
     protocol::WebSocketCloseCode,
@@ -53,10 +53,10 @@ pub(super) fn test_sender() -> (
     mpsc::unbounded_channel()
 }
 
-pub(super) fn stub_adapter() -> (RuntimeTransportAdapter, Arc<StubWebRtcAdapter>) {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+pub(super) fn stub_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     (
-        RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
+        RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
         adapter,
     )
 }
@@ -107,7 +107,7 @@ pub(super) async fn setup_two_ready_sessions() -> (
 pub(super) async fn setup_two_ready_sessions_with_stub() -> (
     Arc<super::super::Channel>,
     RuntimeTransportAdapter,
-    Arc<StubWebRtcAdapter>,
+    Arc<FakeWebRtcAdapter>,
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
@@ -149,7 +149,7 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
 pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     Arc<super::super::Channel>,
     RuntimeTransportAdapter,
-    Arc<StubWebRtcAdapter>,
+    Arc<FakeWebRtcAdapter>,
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
@@ -218,8 +218,8 @@ pub(super) fn drain_outbound(
 }
 
 pub(super) async fn wait_for_stub_event(
-    adapter: &StubWebRtcAdapter,
-    predicate: impl Fn(&StubWebRtcEvent) -> bool,
+    adapter: &FakeWebRtcAdapter,
+    predicate: impl Fn(&FakeWebRtcEvent) -> bool,
 ) {
     let wait_result = timeout(Duration::from_secs(1), async {
         loop {
@@ -232,6 +232,6 @@ pub(super) async fn wait_for_stub_event(
     .await;
     assert!(
         wait_result.is_ok(),
-        "timed out waiting for stub transport event"
+        "timed out waiting for fake transport event"
     );
 }

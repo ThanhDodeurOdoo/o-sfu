@@ -52,7 +52,7 @@ pub(super) fn test_config() -> Config {
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,
-        transport_backend: TransportBackend::Stub,
+        transport_backend: TransportBackend::Fake,
     }
 }
 
@@ -74,7 +74,7 @@ pub(super) fn test_state() -> RuntimeState {
         )),
         config,
         metrics,
-        transport_adapter: RuntimeTransportAdapter::builder().stub().build(),
+        transport_adapter: RuntimeTransportAdapter::builder().fake().build(),
     }
 }
 

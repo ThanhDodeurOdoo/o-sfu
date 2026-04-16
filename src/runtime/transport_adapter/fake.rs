@@ -5,7 +5,7 @@ use std::{
 };
 
 #[cfg(test)]
-use super::stub_bootstrap;
+use super::fake_bootstrap;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
     TransportSessionKey,
@@ -20,10 +20,10 @@ use o_sfu_router::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 
-const STUB_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-stub-offer\r\n";
+const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StubWebRtcEvent {
+pub(crate) enum FakeWebRtcEvent {
     #[cfg(test)]
     BootstrapRequested,
     SessionClosed {
@@ -59,16 +59,16 @@ pub(crate) enum StubWebRtcEvent {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct StubWebRtcAdapter {
-    events: Arc<Mutex<Vec<StubWebRtcEvent>>>,
+pub(crate) struct FakeWebRtcAdapter {
+    events: Arc<Mutex<Vec<FakeWebRtcEvent>>>,
     next_media_id: Arc<AtomicU64>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
-    delays: Arc<Mutex<StubWebRtcAdapterDelays>>,
+    delays: Arc<Mutex<FakeWebRtcAdapterDelays>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct StubWebRtcAdapterDelays {
+struct FakeWebRtcAdapterDelays {
     publish_media: Option<Duration>,
     consume_media: Option<Duration>,
     producer_activity: Option<Duration>,
@@ -76,10 +76,10 @@ struct StubWebRtcAdapterDelays {
 
 #[allow(
     clippy::unused_async,
-    reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
 )]
-impl StubWebRtcAdapter {
-    fn record_event(&self, event: StubWebRtcEvent) {
+impl FakeWebRtcAdapter {
+    fn record_event(&self, event: FakeWebRtcEvent) {
         match self.events.lock() {
             Ok(mut events) => {
                 events.push(event);
@@ -112,7 +112,7 @@ impl StubWebRtcAdapter {
     }
 
     #[cfg(test)]
-    pub(crate) fn snapshot_events(&self) -> Vec<StubWebRtcEvent> {
+    pub(crate) fn snapshot_events(&self) -> Vec<FakeWebRtcEvent> {
         match self.events.lock() {
             Ok(events) => events.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -168,10 +168,10 @@ impl StubWebRtcAdapter {
     }
 }
 
-impl StubWebRtcAdapter {
+impl FakeWebRtcAdapter {
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self.active_speaker_sources.lock() {
@@ -192,33 +192,33 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn create_initial_session_offer(
         &self,
         _session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         Ok(SessionOffer::new(String::from(
-            STUB_SESSION_NEGOTIATION_OFFER_SDP,
+            FAKE_SESSION_NEGOTIATION_OFFER_SDP,
         )))
     }
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn create_session_renegotiation_offer(
         &self,
         _session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         Ok(SessionOffer::new(String::from(
-            STUB_SESSION_NEGOTIATION_OFFER_SDP,
+            FAKE_SESSION_NEGOTIATION_OFFER_SDP,
         )))
     }
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn apply_session_answer(
         &self,
@@ -230,7 +230,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     #[cfg(test)]
     pub(crate) async fn transport_bootstrap_payload(
@@ -238,25 +238,21 @@ impl StubWebRtcAdapter {
         _session_key: &TransportSessionKey,
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::BootstrapRequested);
-        Ok(stub_bootstrap::transport_bootstrap_payload(
+        self.record_event(FakeWebRtcEvent::BootstrapRequested);
+        Ok(fake_bootstrap::transport_bootstrap_payload(
             router_capabilities,
         ))
     }
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
-    )]
-    #[allow(
-        clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::SessionClosed {
+        self.record_event(FakeWebRtcEvent::SessionClosed {
             session_id: session_key.session_id().clone(),
         });
         Ok(())
@@ -264,7 +260,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn remove_media(
         &self,
@@ -279,7 +275,7 @@ impl StubWebRtcAdapter {
                 poisoned.into_inner().remove(&transport_media_id);
             }
         }
-        self.record_event(StubWebRtcEvent::MediaRemoved {
+        self.record_event(FakeWebRtcEvent::MediaRemoved {
             session_id: session_key.session_id().clone(),
             transport_media_id,
         });
@@ -288,7 +284,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn negotiated_producer_parameters(
         &self,
@@ -310,7 +306,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn publish_media(
         &self,
@@ -318,7 +314,7 @@ impl StubWebRtcAdapter {
         media_kind: MediaKind,
         _rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::PublishMediaRequested {
+        self.record_event(FakeWebRtcEvent::PublishMediaRequested {
             session_id: session_key.session_id().clone(),
             media_kind,
         });
@@ -341,7 +337,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn consume_media(
         &self,
@@ -350,7 +346,7 @@ impl StubWebRtcAdapter {
         source_session_key: &TransportSessionKey,
         _consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::ConsumeMediaRequested {
+        self.record_event(FakeWebRtcEvent::ConsumeMediaRequested {
             consumer_session_id: consumer_session_key.session_id().clone(),
             source_session_id: source_session_key.session_id().clone(),
             media_kind,
@@ -364,7 +360,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn set_producer_active(
         &self,
@@ -372,7 +368,7 @@ impl StubWebRtcAdapter {
         _transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::ProducerActivityUpdated {
+        self.record_event(FakeWebRtcEvent::ProducerActivityUpdated {
             session_id: session_key.session_id().clone(),
             active,
         });
@@ -384,7 +380,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn set_consumer_active(
         &self,
@@ -394,7 +390,7 @@ impl StubWebRtcAdapter {
         _source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::ConsumerActivityUpdated {
+        self.record_event(FakeWebRtcEvent::ConsumerActivityUpdated {
             consumer_session_id: consumer_session_key.session_id().clone(),
             source_session_id: source_session_key.session_id().clone(),
             active,
@@ -404,7 +400,7 @@ impl StubWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
     pub(crate) async fn set_source_packet_gate(
         &self,
@@ -412,7 +408,7 @@ impl StubWebRtcAdapter {
         transport_media_id: TransportMediaId,
         packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::SourcePacketGateUpdated {
+        self.record_event(FakeWebRtcEvent::SourcePacketGateUpdated {
             session_id: session_key.session_id().clone(),
             transport_media_id,
             packet_gate,
@@ -446,5 +442,5 @@ fn synthetic_negotiated_producer_parameters(
                 .with_payload_type(payload_type),
         ],
     )
-    .with_mid(format!("stub-mid-{transport_media_u64}"))
+    .with_mid(format!("fake-mid-{transport_media_u64}"))
 }

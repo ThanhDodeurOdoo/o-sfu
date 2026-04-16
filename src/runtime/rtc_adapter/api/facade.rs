@@ -253,7 +253,7 @@ impl RtcTransportAdapter {
 
     #[allow(
         dead_code,
-        reason = "native publish commit wiring is landing incrementally and this lookup is already exercised by negotiation tests"
+        reason = "protocol publish commit wiring is landing incrementally and this lookup is already exercised by negotiation tests"
     )]
     pub(crate) async fn negotiated_producer_parameters(
         &self,

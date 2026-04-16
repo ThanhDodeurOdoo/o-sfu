@@ -8,7 +8,7 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterShardSetConfig, SourcePacketGate, StubWebRtcEvent, TransportMediaId,
+    FakeWebRtcEvent, RtcTransportAdapterShardSetConfig, SourcePacketGate, TransportMediaId,
     TransportSessionKey,
 };
 use o_sfu_router::MediaKind;
@@ -153,7 +153,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     let removed_media_events = stub
         .snapshot_events()
         .into_iter()
-        .filter(|event| matches!(event, StubWebRtcEvent::MediaRemoved { .. }))
+        .filter(|event| matches!(event, FakeWebRtcEvent::MediaRemoved { .. }))
         .count();
     assert_eq!(removed_media_events, 2);
 }
@@ -207,7 +207,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
     assert!(stub.snapshot_events().iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: Some(SourcePacketGate::Rid(rid)),
@@ -245,7 +245,7 @@ async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() 
         !stub
             .snapshot_events()
             .iter()
-            .any(|event| matches!(event, StubWebRtcEvent::SourcePacketGateUpdated { .. })),
+            .any(|event| matches!(event, FakeWebRtcEvent::SourcePacketGateUpdated { .. })),
         "two-party camera publish should not force a shared source layer yet"
     );
 }
@@ -297,7 +297,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
     assert!(stub.snapshot_events().iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: Some(SourcePacketGate::Rid(rid)),
@@ -370,7 +370,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     assert!(stub.snapshot_events().iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: None,
@@ -385,7 +385,7 @@ async fn setup_ready_sessions_with_stub(
 ) -> (
     Arc<Channel>,
     RuntimeTransportAdapter,
-    Arc<StubWebRtcAdapter>,
+    Arc<FakeWebRtcAdapter>,
 ) {
     let manager = ChannelManager::for_test();
     let channel = manager
@@ -418,7 +418,7 @@ async fn setup_ready_sessions_with_stub(
 async fn setup_three_ready_sessions_with_stub() -> (
     Arc<Channel>,
     RuntimeTransportAdapter,
-    Arc<StubWebRtcAdapter>,
+    Arc<FakeWebRtcAdapter>,
 ) {
     setup_ready_sessions_with_stub(&[1, 2, 3]).await
 }
@@ -477,14 +477,14 @@ async fn source_media_ids(
 }
 
 fn assert_source_packet_selection_update(
-    events: &[StubWebRtcEvent],
+    events: &[FakeWebRtcEvent],
     session_id: &SessionId,
     transport_media_id: TransportMediaId,
     selection: Option<&str>,
 ) {
     assert!(events.iter().any(|event| match (event, selection) {
         (
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: None,
@@ -492,7 +492,7 @@ fn assert_source_packet_selection_update(
             None,
         ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
         (
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: Some(SourcePacketGate::Rid(rid)),
@@ -544,7 +544,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
     assert!(!speaker_two_events.iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id,
                 packet_gate: None,
@@ -630,7 +630,7 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
     assert!(!active_speaker_events.iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id,
                 packet_gate: None,
@@ -922,8 +922,8 @@ async fn session_replacement_purges_all_published_stream_mappings() {
 async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
     let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     let (stub_adapter, _) = stub_adapter();
-    let RuntimeTransportAdapter::Stub(stub) = &stub_adapter else {
-        panic!("expected stub transport adapter");
+    let RuntimeTransportAdapter::Fake(stub) = &stub_adapter else {
+        panic!("expected fake transport adapter");
     };
     stub.set_publish_media_delay(Some(Duration::from_millis(200)));
 
@@ -946,7 +946,7 @@ async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter(
     wait_for_stub_event(stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::PublishMediaRequested {
+            FakeWebRtcEvent::PublishMediaRequested {
                 session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
             }
@@ -1013,7 +1013,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::PublishMediaRequested {
+            FakeWebRtcEvent::PublishMediaRequested {
                 session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
             }
@@ -1067,7 +1067,7 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::PublishMediaRequested {
+            FakeWebRtcEvent::PublishMediaRequested {
                 session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
             }
@@ -1081,7 +1081,7 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::MediaRemoved {
+            FakeWebRtcEvent::MediaRemoved {
                 session_id: SessionId::Integer(1),
                 ..
             }
@@ -1145,7 +1145,7 @@ async fn production_change_updates_transport_route_activity() {
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ProducerActivityUpdated {
+            FakeWebRtcEvent::ProducerActivityUpdated {
                 session_id: SessionId::Integer(1),
                 active: false,
             }
@@ -1185,7 +1185,7 @@ async fn production_change_commits_session_state_before_transport_update_finishe
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ProducerActivityUpdated {
+            FakeWebRtcEvent::ProducerActivityUpdated {
                 session_id: SessionId::Integer(1),
                 active: false,
             }
@@ -1229,7 +1229,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumeMediaRequested {
+            FakeWebRtcEvent::ConsumeMediaRequested {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1304,7 +1304,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumeMediaRequested {
+            FakeWebRtcEvent::ConsumeMediaRequested {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1348,7 +1348,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumeMediaRequested {
+            FakeWebRtcEvent::ConsumeMediaRequested {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1363,7 +1363,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::MediaRemoved {
+            FakeWebRtcEvent::MediaRemoved {
                 session_id: SessionId::Integer(2),
                 ..
             }
@@ -1422,7 +1422,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumeMediaRequested {
+            FakeWebRtcEvent::ConsumeMediaRequested {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1473,7 +1473,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumeMediaRequested {
+            FakeWebRtcEvent::ConsumeMediaRequested {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 media_kind: MediaKind::Video,

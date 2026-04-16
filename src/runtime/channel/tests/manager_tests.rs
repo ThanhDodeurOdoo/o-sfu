@@ -58,14 +58,14 @@ async fn source_media_ids(
 }
 
 fn assert_source_packet_selection_update(
-    events: &[StubWebRtcEvent],
+    events: &[FakeWebRtcEvent],
     session_id: &SessionId,
     transport_media_id: TransportMediaId,
     selection: Option<&str>,
 ) {
     assert!(events.iter().any(|event| match (event, selection) {
         (
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: None,
@@ -73,7 +73,7 @@ fn assert_source_packet_selection_update(
             None,
         ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
         (
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
                 packet_gate: Some(SourcePacketGate::Rid(rid)),
@@ -151,7 +151,7 @@ async fn channel_manager_lookup_by_uuid() {
 #[tokio::test]
 async fn channel_manager_join_session_reports_missing_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
     let (tx, _rx) = test_sender();
     let result = manager
         .join_session(
@@ -175,7 +175,7 @@ async fn channel_manager_join_session_reports_missing_channel() {
 #[tokio::test]
 async fn manager_leave_session_removes_empty_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
     let first_channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -219,7 +219,7 @@ async fn manager_leave_session_removes_empty_channel() {
 #[tokio::test]
 async fn manager_disconnect_sessions_removes_empty_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
     let first_channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -271,7 +271,7 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
         Arc::new(MediaTap::default()),
         Arc::clone(&metrics),
     );
-    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
+    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
@@ -329,9 +329,9 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
 #[tokio::test]
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = ChannelManager::for_test();
-    let transport_adapter = RuntimeTransportAdapter::builder().stub().build();
-    let RuntimeTransportAdapter::Stub(stub) = &transport_adapter else {
-        panic!("test expects the stub transport adapter");
+    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
+    let RuntimeTransportAdapter::Fake(stub) = &transport_adapter else {
+        panic!("test expects the fake transport adapter");
     };
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
@@ -402,7 +402,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     assert!(!policy_events.iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketGateUpdated {
+            FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id,
                 packet_gate: None,

@@ -7,20 +7,20 @@ use crate::runtime::transport_bootstrap::{
     TransportSctpParameters,
 };
 
-const STUB_STC_TRANSPORT_ID: &str = "stc-stub";
-const STUB_CTS_TRANSPORT_ID: &str = "cts-stub";
+const FAKE_STC_TRANSPORT_ID: &str = "stc-fake";
+const FAKE_CTS_TRANSPORT_ID: &str = "cts-fake";
 
 pub(super) fn transport_bootstrap_payload(
     router_capabilities: &o_sfu_router::RtpCapabilities,
 ) -> SessionTransportBootstrap {
     SessionTransportBootstrap::new(
         router_capabilities,
-        stub_transport_bootstrap(STUB_STC_TRANSPORT_ID),
-        stub_transport_bootstrap(STUB_CTS_TRANSPORT_ID),
+        fake_transport_bootstrap(FAKE_STC_TRANSPORT_ID),
+        fake_transport_bootstrap(FAKE_CTS_TRANSPORT_ID),
     )
 }
 
-fn stub_transport_bootstrap(id: &str) -> TransportEndpointBootstrap {
+fn fake_transport_bootstrap(id: &str) -> TransportEndpointBootstrap {
     TransportEndpointBootstrap {
         id: id.to_owned(),
         ice_parameters: TransportIceParameters {

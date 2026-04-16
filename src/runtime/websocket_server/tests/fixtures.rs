@@ -28,8 +28,8 @@ pub(super) use crate::{
         recording::MediaTap,
         testing::decode_protocol_welcome_batch,
         transport_adapter::{
-            RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, StubWebRtcAdapter,
-            StubWebRtcEvent,
+            FakeWebRtcAdapter, FakeWebRtcEvent, RtcTransportAdapterShardSetConfig,
+            RuntimeTransportAdapter,
         },
     },
     signaling::{
@@ -87,7 +87,7 @@ pub(super) fn test_config(
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,
-        transport_backend: TransportBackend::Stub,
+        transport_backend: TransportBackend::Fake,
     }
 }
 
@@ -100,7 +100,7 @@ pub(super) async fn spawn_test_server(
         10_000,
         60_000,
         channel_size,
-        RuntimeTransportAdapter::builder().stub().build(),
+        RuntimeTransportAdapter::builder().fake().build(),
     )
     .await
 }
@@ -199,7 +199,7 @@ pub(super) async fn spawn_protocol_test_server(
         10_000,
         60_000,
         channel_size,
-        RuntimeTransportAdapter::builder().stub().build(),
+        RuntimeTransportAdapter::builder().fake().build(),
     )
     .await
 }
@@ -249,9 +249,9 @@ pub(super) async fn spawn_protocol_rtc_test_server(
 }
 
 pub(super) async fn wait_for_stub_webrtc_events(
-    adapter: &StubWebRtcAdapter,
+    adapter: &FakeWebRtcAdapter,
     event_count: usize,
-) -> Option<Vec<StubWebRtcEvent>> {
+) -> Option<Vec<FakeWebRtcEvent>> {
     timeout(Duration::from_secs(1), async {
         loop {
             let events = adapter.snapshot_events();

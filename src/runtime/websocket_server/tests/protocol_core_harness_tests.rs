@@ -507,7 +507,7 @@ async fn recover_subscriber_and_replay_track(
 }
 
 async fn setup_stub_protocol_peers(
-    adapter: Arc<StubWebRtcAdapter>,
+    adapter: Arc<FakeWebRtcAdapter>,
     channel_name: &str,
     alice_session_id: SessionId,
     bob_session_id: SessionId,
@@ -522,7 +522,7 @@ async fn setup_stub_protocol_peers(
         10_000,
         60_000,
         100,
-        RuntimeTransportAdapter::from_stub_adapter(adapter),
+        RuntimeTransportAdapter::from_fake_adapter(adapter),
     )
     .await?;
     let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
@@ -1284,13 +1284,13 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
 
 #[tokio::test]
 async fn protocol_core_publish_round_trips_through_real_server_session_protocol() {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
-        RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
+        RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
     )
     .await;
     assert!(server.is_some());
@@ -1346,9 +1346,9 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
         "subscriber should receive the translated track snapshot after publish commit"
     );
     assert_eq!(
-        bob.core.track_binding("stub-mid-0"),
+        bob.core.track_binding("fake-mid-0"),
         Some(&TrackBinding {
-            mid: String::from("stub-mid-0"),
+            mid: String::from("fake-mid-0"),
             session_id: ProtocolSessionId::Integer(53),
             stream_type: ProtocolStreamType::Camera,
             active: true,
@@ -1361,7 +1361,7 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
     assert!(
         adapter.snapshot_events().iter().any(|event| matches!(
             event,
-            StubWebRtcEvent::PublishMediaRequested {
+            FakeWebRtcEvent::PublishMediaRequested {
                 session_id,
                 media_kind,
             } if *session_id == SessionId::Integer(53) && *media_kind == MediaKind::Video
@@ -1960,13 +1960,13 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
 
 #[tokio::test]
 async fn protocol_core_subscribe_updates_consumer_activity() {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
-        RuntimeTransportAdapter::from_stub_adapter(Arc::clone(&adapter)),
+        RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
     )
     .await;
     assert!(server.is_some());
@@ -2037,7 +2037,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
             if adapter.snapshot_events().iter().any(|event| {
                 matches!(
                     event,
-                    StubWebRtcEvent::ConsumerActivityUpdated {
+                    FakeWebRtcEvent::ConsumerActivityUpdated {
                         consumer_session_id,
                         source_session_id,
                         active: false,
@@ -2053,7 +2053,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     .await
     .ok()
     .unwrap_or(false);
-    assert!(observed, "stub adapter should record subscribe activity");
+    assert!(observed, "fake adapter should record subscribe activity");
 }
 
 #[tokio::test]
@@ -2129,7 +2129,7 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
 
 #[tokio::test]
 async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
-    let adapter = Arc::new(StubWebRtcAdapter::default());
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
     let alice_session_id = SessionId::Integer(83);
     let bob_session_id = SessionId::Integer(84);
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_stub_protocol_peers(
@@ -2192,7 +2192,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
                 .any(|event| {
                     matches!(
                         event,
-                        StubWebRtcEvent::ConsumerActivityUpdated {
+                        FakeWebRtcEvent::ConsumerActivityUpdated {
                             consumer_session_id,
                             source_session_id,
                             active: false,
@@ -2296,7 +2296,7 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     let server = spawn_test_server_with_feature_flags(
         1_000,
         100,
-        RuntimeTransportAdapter::builder().stub().build(),
+        RuntimeTransportAdapter::builder().fake().build(),
         RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,

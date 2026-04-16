@@ -16,7 +16,7 @@ use crate::{
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::{
-            RtcTransportAdapterShardSetConfig, StubWebRtcAdapter, TransportAdapterError,
+            FakeWebRtcAdapter, RtcTransportAdapterShardSetConfig, TransportAdapterError,
             TransportMediaId, TransportSessionKey,
         },
     },
@@ -181,21 +181,21 @@ fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> Runtim
 }
 
 #[test]
-fn stub_adapter_uses_explicit_compatibility_capability_projection() {
+fn fake_adapter_uses_explicit_compatibility_capability_projection() {
     let adapter =
-        RuntimeTransportAdapter::from_stub_adapter(Arc::new(StubWebRtcAdapter::default()));
+        RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
     let offered = sample_router_capabilities();
 
     let projected =
-        adapter.negotiated_client_rtp_capabilities("v=0\r\ns=stub-answer\r\n", &offered);
+        adapter.negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
 
     assert_eq!(projected, Ok(offered));
 }
 
 #[test]
-fn stub_adapter_rejects_answers_without_minimal_sdp_shape() {
+fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
     let adapter =
-        RuntimeTransportAdapter::from_stub_adapter(Arc::new(StubWebRtcAdapter::default()));
+        RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
 
     let projected =
         adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());

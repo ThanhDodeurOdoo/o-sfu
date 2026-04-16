@@ -88,7 +88,7 @@ async fn consumption_change_updates_transport_route_activity() {
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumerActivityUpdated {
+            FakeWebRtcEvent::ConsumerActivityUpdated {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 active: false,
@@ -152,7 +152,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
     wait_for_stub_event(&stub, |event| {
         matches!(
             event,
-            StubWebRtcEvent::ConsumerActivityUpdated {
+            FakeWebRtcEvent::ConsumerActivityUpdated {
                 consumer_session_id: SessionId::Integer(2),
                 source_session_id: SessionId::Integer(1),
                 active: false,

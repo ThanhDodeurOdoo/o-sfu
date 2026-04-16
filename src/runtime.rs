@@ -14,7 +14,7 @@ use crate::config::{Config, TransportBackend};
 pub mod benchmark_support;
 #[allow(
     dead_code,
-    reason = "native session establishment does not yet exercise the remaining publish and transport-readiness channel paths that stay scheduled for the next implementation phase"
+    reason = "protocol session establishment does not yet exercise the remaining publish and transport-readiness channel paths that stay scheduled for the next implementation phase"
 )]
 pub(crate) mod channel;
 mod http_server;
@@ -163,7 +163,7 @@ fn build_transport_adapter(
 ) -> RuntimeTransportAdapter {
     let builder = RuntimeTransportAdapter::builder();
     match config.transport_backend {
-        TransportBackend::Stub => builder.stub().build(),
+        TransportBackend::Fake => builder.fake().build(),
         TransportBackend::Rtc => builder
             .rtc(RtcTransportAdapterShardSetConfig::new(
                 config.public_ip,

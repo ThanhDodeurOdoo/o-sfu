@@ -1,6 +1,6 @@
-mod stub;
+mod fake;
 #[cfg(test)]
-mod stub_bootstrap;
+mod fake_bootstrap;
 
 use std::{cmp::Reverse, collections::BTreeMap, fmt::Debug, net::IpAddr, sync::Arc, time::Instant};
 
@@ -26,9 +26,9 @@ use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
 
-pub(crate) use stub::StubWebRtcAdapter;
+pub(crate) use fake::FakeWebRtcAdapter;
 #[cfg(test)]
-pub(crate) use stub::StubWebRtcEvent;
+pub(crate) use fake::FakeWebRtcEvent;
 
 /// Channel-scooped transport-adapter session identity.
 ///
@@ -366,7 +366,7 @@ pub(crate) struct RuntimeTransportAdapterBuilder {
 
 impl RuntimeTransportAdapterBuilder {
     #[must_use]
-    pub(crate) fn stub(mut self) -> Self {
+    pub(crate) fn fake(mut self) -> Self {
         self.rtc_config = None;
         self
     }
@@ -380,7 +380,7 @@ impl RuntimeTransportAdapterBuilder {
     #[must_use]
     pub(crate) fn build(self) -> RuntimeTransportAdapter {
         self.rtc_config.map_or_else(
-            || RuntimeTransportAdapter::Stub(Arc::new(StubWebRtcAdapter::default())),
+            || RuntimeTransportAdapter::Fake(Arc::new(FakeWebRtcAdapter::default())),
             |config| {
                 RuntimeTransportAdapter::Rtc(Arc::new(RtcTransportAdapterShardSet::new(&config)))
             },
@@ -394,7 +394,7 @@ impl RuntimeTransportAdapterBuilder {
 /// without leaking concrete WebRTC library details into the signaling flow.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeTransportAdapter {
-    Stub(Arc<StubWebRtcAdapter>),
+    Fake(Arc<FakeWebRtcAdapter>),
     Rtc(Arc<RtcTransportAdapterShardSet>),
 }
 
@@ -547,17 +547,17 @@ impl RuntimeTransportAdapter {
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn from_stub_adapter(adapter: Arc<StubWebRtcAdapter>) -> Self {
-        Self::Stub(adapter)
+    pub(crate) fn from_fake_adapter(adapter: Arc<FakeWebRtcAdapter>) -> Self {
+        Self::Fake(adapter)
     }
 
-    /// Create the first server-authored SDP offer for the native signaling path.
+    /// Create the first server-authored SDP offer for the protocol signaling path.
     pub(crate) async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.create_initial_session_offer(session_key).await,
+            Self::Fake(adapter) => adapter.create_initial_session_offer(session_key).await,
             Self::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
@@ -567,13 +567,13 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    /// Create a follow-up renegotiation offer for the native signaling path.
+    /// Create a follow-up renegotiation offer for the protocol signaling path.
     pub(crate) async fn create_session_renegotiation_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .create_session_renegotiation_offer(session_key)
                     .await
@@ -587,14 +587,14 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    /// Apply the remote answer to the outstanding native session offer.
+    /// Apply the remote answer to the outstanding protocol session offer.
     pub(crate) async fn apply_session_answer(
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.apply_session_answer(session_key, answer_sdp).await,
+            Self::Fake(adapter) => adapter.apply_session_answer(session_key, answer_sdp).await,
             Self::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
@@ -610,7 +610,7 @@ impl RuntimeTransportAdapter {
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         match self {
-            Self::Stub(_adapter) => StubWebRtcAdapter::compatibility_client_rtp_capabilities(
+            Self::Fake(_adapter) => FakeWebRtcAdapter::compatibility_client_rtp_capabilities(
                 answer_sdp,
                 offered_router_capabilities,
             ),
@@ -627,7 +627,7 @@ impl RuntimeTransportAdapter {
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .transport_bootstrap_payload(session_key, router_capabilities)
                     .await
@@ -647,7 +647,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.close_session(session_key).await,
+            Self::Fake(adapter) => adapter.close_session(session_key).await,
             Self::Rtc(adapter) => {
                 let session_shard = adapter.shard_for_session(session_key);
                 let close_outcome = session_shard
@@ -666,7 +666,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => adapter.remove_media(session_key, transport_media_id).await,
+            Self::Fake(adapter) => adapter.remove_media(session_key, transport_media_id).await,
             Self::Rtc(adapter) => {
                 let session_shard = adapter.shard_for_session(session_key);
                 let remove_outcome = session_shard
@@ -683,7 +683,7 @@ impl RuntimeTransportAdapter {
 
     #[allow(
         dead_code,
-        reason = "native publish commit wiring is staged separately from answered-SDP publication extraction"
+        reason = "protocol publish commit wiring is staged separately from answered-SDP publication extraction"
     )]
     pub(crate) async fn negotiated_producer_parameters(
         &self,
@@ -691,7 +691,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
@@ -713,7 +713,7 @@ impl RuntimeTransportAdapter {
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .publish_media(session_key, media_kind, rtp_parameters)
                     .await
@@ -741,7 +741,7 @@ impl RuntimeTransportAdapter {
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .consume_media(
                         consumer_session_key,
@@ -796,14 +796,14 @@ impl RuntimeTransportAdapter {
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
         match self {
-            Self::Stub(_adapter) => TransportBitrateSnapshot::default(),
+            Self::Fake(_adapter) => TransportBitrateSnapshot::default(),
             Self::Rtc(adapter) => adapter.transport_bitrate_snapshot(session_keys),
         }
     }
 
     pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self {
-            Self::Stub(adapter) => adapter.active_speaker_source_snapshot().await,
+            Self::Fake(adapter) => adapter.active_speaker_source_snapshot().await,
             Self::Rtc(adapter) => adapter.active_speaker_source_snapshot().await,
         }
     }
@@ -813,7 +813,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         match self {
-            Self::Stub(_adapter) => None,
+            Self::Fake(_adapter) => None,
             Self::Rtc(adapter) => adapter
                 .shard_for_session(session_key)
                 .session_transport_health(session_key),
@@ -828,7 +828,7 @@ impl RuntimeTransportAdapter {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .set_producer_active(session_key, transport_media_id, active)
                     .await
@@ -852,7 +852,7 @@ impl RuntimeTransportAdapter {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .set_consumer_active(
                         consumer_session_key,
@@ -889,7 +889,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
         match self {
-            Self::Stub(_adapter) => None,
+            Self::Fake(_adapter) => None,
             Self::Rtc(adapter) => adapter
                 .shard_for_session(session_key)
                 .transport_media_mid(transport_media_id)
@@ -907,7 +907,7 @@ impl RuntimeTransportAdapter {
         packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
         match self {
-            Self::Stub(adapter) => {
+            Self::Fake(adapter) => {
                 adapter
                     .set_source_packet_gate(
                         source_session_key,
@@ -953,7 +953,7 @@ impl RuntimeTransportAdapter {
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         match self {
-            Self::Stub(_) => None,
+            Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
                     .debug_route_entry(source_session_key, source_mid)
@@ -969,7 +969,7 @@ impl RuntimeTransportAdapter {
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         match self {
-            Self::Stub(_) => None,
+            Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 if let Some(entry) = adapter
                     .primary_shard
@@ -1001,7 +1001,7 @@ impl RuntimeTransportAdapter {
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
         match self {
-            Self::Stub(_) => None,
+            Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 if let Some(entry) = adapter
                     .primary_shard
