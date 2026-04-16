@@ -5,8 +5,8 @@ use crate::{
 };
 
 use super::{
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RuntimeMetrics,
-    RuntimeMetricsSnapshot, TransportIceState, WsSessionLoopExitReason,
+    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind,
+    RuntimeMetrics, RuntimeMetricsSnapshot, TransportIceState, WsSessionLoopExitReason,
 };
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
@@ -25,6 +25,24 @@ fn assert_recording_metrics(snapshot: &RuntimeMetricsSnapshot) {
 }
 
 fn assert_transport_lifecycle_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.transport_health_transitions_unset_to_connected, 1);
+    assert_eq!(
+        snapshot.transport_health_transitions_unset_to_disconnected,
+        0
+    );
+    assert_eq!(
+        snapshot.transport_health_transitions_connected_to_disconnected,
+        0
+    );
+    assert_eq!(
+        snapshot.transport_health_transitions_disconnected_to_connected,
+        0
+    );
+    assert_eq!(snapshot.transport_health_transitions_connected_to_unset, 0);
+    assert_eq!(
+        snapshot.transport_health_transitions_disconnected_to_unset,
+        0
+    );
     assert_eq!(snapshot.transport_ice_state_changes_new, 0);
     assert_eq!(snapshot.transport_ice_state_changes_checking, 1);
     assert_eq!(snapshot.transport_ice_state_changes_connected, 1);
@@ -39,11 +57,25 @@ fn assert_transport_lifecycle_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.transport_session_lifetime_sum_micros, 1_500_000);
 }
 
-fn assert_rtp_and_datagram_metrics(snapshot: &RuntimeMetricsSnapshot) {
+fn assert_rtp_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtp_packets_ingress, 1);
     assert_eq!(snapshot.rtp_packets_egress, 1);
     assert_eq!(snapshot.rtp_payload_bytes_ingress, 1200);
     assert_eq!(snapshot.rtp_payload_bytes_egress, 900);
+}
+
+fn assert_forwarding_volume_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc, 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_recording, 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay, 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_inter_node_relay, 1);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc, 900);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording, 700);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay, 500);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay, 300);
+}
+
+fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtc_datagram_routes_indexed, 1);
     assert_eq!(snapshot.rtc_datagram_routes_scan, 1);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 1);
@@ -122,6 +154,10 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_recording_captured_stream();
     metrics.record_rtp_ingress(1200);
     metrics.record_rtp_egress(900);
+    metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
+    metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
+    metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
+    metrics.record_rtp_forwarded(RtpForwardDestinationKind::InterNodeRelay, 300);
     metrics.record_transport_ice_state_change(TransportIceState::Checking);
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();
@@ -144,7 +180,9 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     assert_live_gauges(&snapshot);
     assert_recording_metrics(&snapshot);
     assert_transport_lifecycle_metrics(&snapshot);
-    assert_rtp_and_datagram_metrics(&snapshot);
+    assert_rtp_metrics(&snapshot);
+    assert_forwarding_volume_metrics(&snapshot);
+    assert_rtc_datagram_and_route_control_metrics(&snapshot);
 }
 
 #[test]
@@ -162,6 +200,24 @@ fn transport_health_transition_updates_connected_and_disconnected_gauges() {
 
     assert_eq!(snapshot.connected_transport_sessions, 0);
     assert_eq!(snapshot.disconnected_transport_sessions, 0);
+    assert_eq!(snapshot.transport_health_transitions_unset_to_connected, 1);
+    assert_eq!(
+        snapshot.transport_health_transitions_connected_to_disconnected,
+        1
+    );
+    assert_eq!(
+        snapshot.transport_health_transitions_disconnected_to_unset,
+        1
+    );
+    assert_eq!(
+        snapshot.transport_health_transitions_unset_to_disconnected,
+        0
+    );
+    assert_eq!(
+        snapshot.transport_health_transitions_disconnected_to_connected,
+        0
+    );
+    assert_eq!(snapshot.transport_health_transitions_connected_to_unset, 0);
 }
 
 #[test]

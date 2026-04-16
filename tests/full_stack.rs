@@ -460,6 +460,11 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
 
     assert_eq!(after_live_metrics.connected_transport_sessions, 0);
     assert_eq!(after_live_metrics.disconnected_transport_sessions, 0);
+    assert_eq!(
+        after_live_metrics.transport_health_transitions_connected_to_unset
+            - during_live_metrics.transport_health_transitions_connected_to_unset,
+        2
+    );
 }
 
 #[tokio::test]
@@ -1136,6 +1141,9 @@ struct TransportSessionLifetimeMetrics {
 struct LiveRtcMetrics {
     connected_transport_sessions: i64,
     disconnected_transport_sessions: i64,
+    transport_health_transitions_unset_to_connected: u64,
+    transport_health_transitions_connected_to_disconnected: u64,
+    transport_health_transitions_connected_to_unset: u64,
     transport_ice_state_changes_new: u64,
     transport_ice_state_changes_checking: u64,
     transport_ice_state_changes_connected: u64,
@@ -1146,6 +1154,8 @@ struct LiveRtcMetrics {
     rtp_packets_egress: u64,
     rtp_payload_bytes_ingress: u64,
     rtp_payload_bytes_egress: u64,
+    rtp_forwarded_packets_local_rtc: u64,
+    rtp_forwarded_payload_bytes_local_rtc: u64,
     indexed_routes: u64,
     scan_routes: u64,
     fallback_scans: u64,
@@ -1227,6 +1237,18 @@ fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
             metrics_text,
             "osfu_transport_health_sessions{state=\"disconnected\"}",
         )?,
+        transport_health_transitions_unset_to_connected: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_health_transitions_total{from=\"unset\",to=\"connected\"}",
+        )?,
+        transport_health_transitions_connected_to_disconnected: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_health_transitions_total{from=\"connected\",to=\"disconnected\"}",
+        )?,
+        transport_health_transitions_connected_to_unset: parse_prometheus_u64(
+            metrics_text,
+            "osfu_transport_health_transitions_total{from=\"connected\",to=\"unset\"}",
+        )?,
         transport_ice_state_changes_new: parse_prometheus_u64(
             metrics_text,
             "osfu_transport_ice_state_changes_total{state=\"new\"}",
@@ -1267,6 +1289,14 @@ fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
             metrics_text,
             "osfu_rtp_payload_bytes_total{direction=\"egress\"}",
         )?,
+        rtp_forwarded_packets_local_rtc: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtp_forwarded_packets_total{destination=\"local_rtc\"}",
+        )?,
+        rtp_forwarded_payload_bytes_local_rtc: parse_prometheus_u64(
+            metrics_text,
+            "osfu_rtp_forwarded_payload_bytes_total{destination=\"local_rtc\"}",
+        )?,
         indexed_routes: parse_prometheus_u64(
             metrics_text,
             "osfu_rtc_datagram_routes_total{path=\"indexed\"}",
@@ -1287,6 +1317,15 @@ fn assert_initial_live_rtc_metrics(metrics: &LiveRtcMetrics, initial_forwarded_b
     assert_eq!(metrics.connected_transport_sessions, 2);
     assert_eq!(metrics.disconnected_transport_sessions, 0);
     assert!(
+        metrics.transport_health_transitions_unset_to_connected >= 2,
+        "expected both RTC sessions to enter a connected transport health state"
+    );
+    assert_eq!(
+        metrics.transport_health_transitions_connected_to_disconnected,
+        0
+    );
+    assert_eq!(metrics.transport_health_transitions_connected_to_unset, 0);
+    assert!(
         metrics.transport_ice_state_changes_new + metrics.transport_ice_state_changes_checking >= 2,
         "expected both RTC sessions to emit early ICE lifecycle counters"
     );
@@ -1302,6 +1341,11 @@ fn assert_initial_live_rtc_metrics(metrics: &LiveRtcMetrics, initial_forwarded_b
     assert_eq!(metrics.rtp_packets_egress, 2);
     assert_eq!(metrics.rtp_payload_bytes_ingress, initial_forwarded_bytes);
     assert_eq!(metrics.rtp_payload_bytes_egress, initial_forwarded_bytes);
+    assert_eq!(metrics.rtp_forwarded_packets_local_rtc, 2);
+    assert_eq!(
+        metrics.rtp_forwarded_payload_bytes_local_rtc,
+        initial_forwarded_bytes
+    );
 }
 
 fn assert_steady_state_live_rtc_metrics(
@@ -1311,6 +1355,18 @@ fn assert_steady_state_live_rtc_metrics(
 ) {
     assert_eq!(during.connected_transport_sessions, 2);
     assert_eq!(during.disconnected_transport_sessions, 0);
+    assert_eq!(
+        during.transport_health_transitions_unset_to_connected,
+        before.transport_health_transitions_unset_to_connected
+    );
+    assert_eq!(
+        during.transport_health_transitions_connected_to_disconnected,
+        before.transport_health_transitions_connected_to_disconnected
+    );
+    assert_eq!(
+        during.transport_health_transitions_connected_to_unset,
+        before.transport_health_transitions_connected_to_unset
+    );
     assert_eq!(
         during.transport_ice_state_changes_new,
         before.transport_ice_state_changes_new
@@ -1350,6 +1406,14 @@ fn assert_steady_state_live_rtc_metrics(
     );
     assert_eq!(
         during.rtp_payload_bytes_egress - before.rtp_payload_bytes_egress,
+        additional_forwarded_bytes
+    );
+    assert_eq!(
+        during.rtp_forwarded_packets_local_rtc - before.rtp_forwarded_packets_local_rtc,
+        4
+    );
+    assert_eq!(
+        during.rtp_forwarded_payload_bytes_local_rtc - before.rtp_forwarded_payload_bytes_local_rtc,
         additional_forwarded_bytes
     );
 }

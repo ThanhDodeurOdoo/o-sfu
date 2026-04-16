@@ -77,6 +77,14 @@ pub(super) enum RtpFlowDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RtpForwardDestinationKind {
+    LocalRtc,
+    Recording,
+    IntraNodeRelay,
+    InterNodeRelay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RtcDatagramRoutePath {
     Indexed,
     Scan,
@@ -106,6 +114,16 @@ pub(crate) enum TransportIceState {
     Connected,
     Completed,
     Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TransportHealthTransition {
+    UnsetToConnected,
+    UnsetToDisconnected,
+    ConnectedToDisconnected,
+    DisconnectedToConnected,
+    ConnectedToUnset,
+    DisconnectedToUnset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +283,19 @@ impl MetricLabel for RtpFlowDirection {
     }
 }
 
+impl MetricLabel for RtpForwardDestinationKind {
+    const COUNT: usize = 4;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::LocalRtc => 0,
+            Self::Recording => 1,
+            Self::IntraNodeRelay => 2,
+            Self::InterNodeRelay => 3,
+        }
+    }
+}
+
 impl MetricLabel for RtcDatagramRoutePath {
     const COUNT: usize = 2;
 
@@ -313,6 +344,21 @@ impl MetricLabel for TransportIceState {
             Self::Connected => 2,
             Self::Completed => 3,
             Self::Disconnected => 4,
+        }
+    }
+}
+
+impl MetricLabel for TransportHealthTransition {
+    const COUNT: usize = 6;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::UnsetToConnected => 0,
+            Self::UnsetToDisconnected => 1,
+            Self::ConnectedToDisconnected => 2,
+            Self::DisconnectedToConnected => 3,
+            Self::ConnectedToUnset => 4,
+            Self::DisconnectedToUnset => 5,
         }
     }
 }

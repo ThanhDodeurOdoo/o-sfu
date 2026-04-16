@@ -8,7 +8,7 @@ mod tests;
 
 pub(crate) use catalog::RuntimeMetrics;
 pub(crate) use labels::{
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, TransportIceState,
-    WsSessionLoopExitReason,
+    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind,
+    TransportIceState, WsSessionLoopExitReason,
 };
 pub(crate) use snapshot::RuntimeMetricsSnapshot;

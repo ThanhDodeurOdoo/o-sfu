@@ -16,6 +16,7 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     append_live_gauges(&mut output, snapshot);
     append_recording_metrics(&mut output, snapshot);
     append_transport_health_gauges(&mut output, snapshot);
+    append_transport_health_transition_metrics(&mut output, snapshot);
     append_rtp_metrics(&mut output, snapshot);
     append_transport_lifecycle_metrics(&mut output, snapshot);
     append_rtc_datagram_metrics(&mut output, snapshot);
@@ -294,6 +295,50 @@ fn append_transport_health_gauges(output: &mut String, snapshot: &RuntimeMetrics
     );
 }
 
+fn append_transport_health_transition_metrics(
+    output: &mut String,
+    snapshot: &RuntimeMetricsSnapshot,
+) {
+    append_labeled_counter_family_2(
+        output,
+        "osfu_transport_health_transitions_total",
+        "Total transport health-state transitions observed from the transport adapter.",
+        ("from", "to"),
+        &[
+            LabeledValue2::new(
+                "unset",
+                "connected",
+                snapshot.transport_health_transitions_unset_to_connected,
+            ),
+            LabeledValue2::new(
+                "unset",
+                "disconnected",
+                snapshot.transport_health_transitions_unset_to_disconnected,
+            ),
+            LabeledValue2::new(
+                "connected",
+                "disconnected",
+                snapshot.transport_health_transitions_connected_to_disconnected,
+            ),
+            LabeledValue2::new(
+                "disconnected",
+                "connected",
+                snapshot.transport_health_transitions_disconnected_to_connected,
+            ),
+            LabeledValue2::new(
+                "connected",
+                "unset",
+                snapshot.transport_health_transitions_connected_to_unset,
+            ),
+            LabeledValue2::new(
+                "disconnected",
+                "unset",
+                snapshot.transport_health_transitions_disconnected_to_unset,
+            ),
+        ],
+    );
+}
+
 fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_labeled_counter_family(
         output,
@@ -313,6 +358,42 @@ fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
         &[
             LabeledValue::new("ingress", snapshot.rtp_payload_bytes_ingress),
             LabeledValue::new("egress", snapshot.rtp_payload_bytes_egress),
+        ],
+    );
+    append_labeled_counter_family(
+        output,
+        "osfu_rtp_forwarded_packets_total",
+        "Total RTP packet fan-out operations by forwarding destination.",
+        "destination",
+        &[
+            LabeledValue::new("local_rtc", snapshot.rtp_forwarded_packets_local_rtc),
+            LabeledValue::new("recording", snapshot.rtp_forwarded_packets_recording),
+            LabeledValue::new(
+                "intra_node_relay",
+                snapshot.rtp_forwarded_packets_intra_node_relay,
+            ),
+            LabeledValue::new(
+                "inter_node_relay",
+                snapshot.rtp_forwarded_packets_inter_node_relay,
+            ),
+        ],
+    );
+    append_labeled_counter_family(
+        output,
+        "osfu_rtp_forwarded_payload_bytes_total",
+        "Total RTP payload bytes fanned out by forwarding destination.",
+        "destination",
+        &[
+            LabeledValue::new("local_rtc", snapshot.rtp_forwarded_payload_bytes_local_rtc),
+            LabeledValue::new("recording", snapshot.rtp_forwarded_payload_bytes_recording),
+            LabeledValue::new(
+                "intra_node_relay",
+                snapshot.rtp_forwarded_payload_bytes_intra_node_relay,
+            ),
+            LabeledValue::new(
+                "inter_node_relay",
+                snapshot.rtp_forwarded_payload_bytes_inter_node_relay,
+            ),
         ],
     );
 }
@@ -665,8 +746,8 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
         runtime::metrics::{
-            RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RuntimeMetrics,
-            TransportIceState, WsSessionLoopExitReason,
+            RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+            RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
         },
         runtime::rtc_adapter::TransportSessionHealth,
         signaling::protocol::WebSocketCloseCode,
@@ -709,8 +790,16 @@ mod tests {
     }
 
     fn assert_transport_lifecycle_metrics(rendered: &str) {
+        assert!(rendered.contains(
+            "osfu_transport_health_transitions_total{from=\"unset\",to=\"connected\"} 1"
+        ));
         assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
         assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
+        assert!(rendered.contains("osfu_rtp_forwarded_packets_total{destination=\"local_rtc\"} 1"));
+        assert!(
+            rendered
+                .contains("osfu_rtp_forwarded_payload_bytes_total{destination=\"recording\"} 700")
+        );
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"absorbed\"} 1"));
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"forwarded\"} 1"));
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
@@ -743,6 +832,10 @@ mod tests {
         metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
+        metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
+        metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
+        metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
+        metrics.record_rtp_forwarded(RtpForwardDestinationKind::InterNodeRelay, 300);
         metrics.record_transport_ice_state_change(TransportIceState::Checking);
         metrics.record_transport_ice_state_change(TransportIceState::Connected);
         metrics.record_transport_dtls_connected();

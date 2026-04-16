@@ -68,9 +68,14 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() {
     assert!(payload.contains("osfu_transport_sessions_active 0"));
     assert!(payload.contains("osfu_transport_health_sessions{state=\"connected\"} 0"));
     assert!(
+        payload
+            .contains("osfu_transport_health_transitions_total{from=\"unset\",to=\"connected\"} 0")
+    );
+    assert!(
         payload.contains("osfu_recording_actions_total{action=\"start\",outcome=\"accepted\"} 0")
     );
     assert!(payload.contains("osfu_rtp_packets_total{direction=\"ingress\"} 0"));
+    assert!(payload.contains("osfu_rtp_forwarded_packets_total{destination=\"local_rtc\"} 0"));
     assert!(payload.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 0"));
     assert!(payload.contains("osfu_transport_dtls_connected_total 0"));
     assert!(payload.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"1\"} 0"));
@@ -88,8 +93,10 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() {
     assert_eq!(snapshot.active_recording_channels, 0);
     assert_eq!(snapshot.active_transport_sessions, 0);
     assert_eq!(snapshot.connected_transport_sessions, 0);
+    assert_eq!(snapshot.transport_health_transitions_unset_to_connected, 0);
     assert_eq!(snapshot.transport_ice_state_changes_checking, 0);
     assert_eq!(snapshot.transport_dtls_connected, 0);
     assert_eq!(snapshot.transport_session_lifetime_count, 0);
     assert_eq!(snapshot.recording_start_accepted, 0);
+    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc, 0);
 }

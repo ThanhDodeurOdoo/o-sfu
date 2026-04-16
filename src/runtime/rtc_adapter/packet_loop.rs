@@ -29,8 +29,8 @@ use super::{
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::metrics::{
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RuntimeMetrics,
-    TransportIceState,
+    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind,
+    RuntimeMetrics, TransportIceState,
 };
 use crate::runtime::recording::MediaTap;
 use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
@@ -619,6 +619,13 @@ fn flush_forward_routes(
             continue;
         };
         let destination = forward.destination();
+        let destination_kind = match destination {
+            ForwardingDestination::LocalRtc(_) => RtpForwardDestinationKind::LocalRtc,
+            ForwardingDestination::Recording(_) => RtpForwardDestinationKind::Recording,
+            ForwardingDestination::IntraNodeRelay(_) => RtpForwardDestinationKind::IntraNodeRelay,
+            ForwardingDestination::InterNodeRelay(_) => RtpForwardDestinationKind::InterNodeRelay,
+        };
+        let payload_len = packet.payload_len();
         let relay_packet = match destination {
             ForwardingDestination::IntraNodeRelay(_) | ForwardingDestination::InterNodeRelay(_) => {
                 let Some(source_transport_media_id) =
@@ -638,7 +645,20 @@ fn flush_forward_routes(
         };
         let packet = relay_packet.unwrap_or(packet);
         match destination.send(state, packet, is_last_destination) {
-            Ok(Some(payload_len)) => metrics.record_rtp_egress(payload_len),
+            Ok(Some(payload_len)) => {
+                metrics.record_rtp_egress(payload_len);
+                metrics.record_rtp_forwarded(destination_kind, payload_len);
+            }
+            Ok(None)
+                if matches!(
+                    destination,
+                    ForwardingDestination::Recording(_)
+                        | ForwardingDestination::IntraNodeRelay(_)
+                        | ForwardingDestination::InterNodeRelay(_)
+                ) =>
+            {
+                metrics.record_rtp_forwarded(destination_kind, payload_len);
+            }
             Ok(None) => {}
             Err(error) => {
                 warn!(
@@ -1229,7 +1249,7 @@ mod tests {
         commands::{RemoteSourceControl, RtcWorkerCommand},
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
-        relay_registry::{RelayPacketMailbox, RelayTargetId},
+        relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
         sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
     };
@@ -1536,6 +1556,59 @@ mod tests {
         assert_eq!(buffers.forwards.len(), 1);
         assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.snapshot().rtp_payload_bytes_egress, 0);
+        assert_eq!(metrics.snapshot().rtp_forwarded_packets_recording, 1);
+    }
+
+    #[test]
+    fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
+        let source_session = TransportSessionKey::new(118, 0, 119, SessionId::Integer(120));
+        let source_transport_media_id = TransportMediaId::new(121);
+        let mut state = RtcBootstrapState::default();
+        let sink = Arc::new(CountingSink::new());
+        let (relay_mailbox, mut intra_node_rx) = RelayPacketMailbox::channel_for_test();
+        let (inter_node_sender, mut inter_node_rx) = InterNodeRelaySender::channel_for_test();
+        let mut buffers = PacketLoopBuffers::new();
+        let metrics = RuntimeMetrics::default();
+        let packet = sample_forwarded_packet(source_session, "aud-up", b"payload")
+            .share_for_relay(source_transport_media_id);
+
+        buffers.pending_packets.push(packet);
+        buffers.forwards.push(PacketForward::from_recording_sink(
+            0,
+            source_transport_media_id,
+            into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        ));
+        buffers
+            .forwards
+            .push(PacketForward::from_intra_node_relay_sink(
+                0,
+                source_transport_media_id,
+                relay_mailbox,
+            ));
+        buffers
+            .forwards
+            .push(PacketForward::from_inter_node_relay_sink(
+                0,
+                source_transport_media_id,
+                inter_node_sender,
+            ));
+
+        flush_forward_routes(&mut state, &metrics, &mut buffers);
+
+        assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
+        assert!(intra_node_rx.try_recv().is_ok());
+        assert!(inter_node_rx.try_recv().is_ok());
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtp_forwarded_packets_local_rtc, 0);
+        assert_eq!(snapshot.rtp_forwarded_packets_recording, 1);
+        assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay, 1);
+        assert_eq!(snapshot.rtp_forwarded_packets_inter_node_relay, 1);
+        assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc, 0);
+        assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording, 7);
+        assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay, 7);
+        assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay, 7);
+        assert_eq!(snapshot.rtp_payload_bytes_egress, 0);
     }
 
     #[test]

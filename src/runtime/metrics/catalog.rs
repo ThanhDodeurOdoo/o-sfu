@@ -7,8 +7,9 @@ use super::counter::{Counter, CounterFamily, UpDownCounter};
 use super::labels::{
     HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
-    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+    RtpForwardDestinationKind, TransportHealthTransition, TransportIceState,
+    TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+    WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
 };
 
 #[derive(Debug, Default)]
@@ -38,6 +39,9 @@ pub(crate) struct RuntimeMetrics {
     pub(super) recording_captured_streams: Counter,
     pub(super) rtp_packets: CounterFamily<RtpFlowDirection>,
     pub(super) rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
+    pub(super) rtp_forwarded_packets: CounterFamily<RtpForwardDestinationKind>,
+    pub(super) rtp_forwarded_payload_bytes: CounterFamily<RtpForwardDestinationKind>,
+    pub(super) transport_health_transitions: CounterFamily<TransportHealthTransition>,
     pub(super) transport_ice_state_changes: CounterFamily<TransportIceState>,
     pub(super) transport_dtls_connected: Counter,
     pub(super) transport_session_lifetime_buckets: CounterFamily<TransportSessionLifetimeBucket>,
@@ -217,6 +221,38 @@ impl RuntimeMetrics {
         if previous == next {
             return;
         }
+        match (previous, next) {
+            (None, Some(TransportSessionHealth::Connected)) => self
+                .transport_health_transitions
+                .increment(TransportHealthTransition::UnsetToConnected),
+            (None, Some(TransportSessionHealth::Disconnected)) => self
+                .transport_health_transitions
+                .increment(TransportHealthTransition::UnsetToDisconnected),
+            (
+                Some(TransportSessionHealth::Connected),
+                Some(TransportSessionHealth::Disconnected),
+            ) => self
+                .transport_health_transitions
+                .increment(TransportHealthTransition::ConnectedToDisconnected),
+            (
+                Some(TransportSessionHealth::Disconnected),
+                Some(TransportSessionHealth::Connected),
+            ) => self
+                .transport_health_transitions
+                .increment(TransportHealthTransition::DisconnectedToConnected),
+            (Some(TransportSessionHealth::Connected), None) => self
+                .transport_health_transitions
+                .increment(TransportHealthTransition::ConnectedToUnset),
+            (Some(TransportSessionHealth::Disconnected), None) => self
+                .transport_health_transitions
+                .increment(TransportHealthTransition::DisconnectedToUnset),
+            (None, None)
+            | (Some(TransportSessionHealth::Connected), Some(TransportSessionHealth::Connected))
+            | (
+                Some(TransportSessionHealth::Disconnected),
+                Some(TransportSessionHealth::Disconnected),
+            ) => {}
+        }
         match previous {
             Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(-1),
             Some(TransportSessionHealth::Disconnected) => {
@@ -271,6 +307,16 @@ impl RuntimeMetrics {
         self.rtp_packets.increment(RtpFlowDirection::Egress);
         self.rtp_payload_bytes
             .add(RtpFlowDirection::Egress, payload_bytes);
+    }
+
+    pub(crate) fn record_rtp_forwarded(
+        &self,
+        destination: RtpForwardDestinationKind,
+        payload_bytes: usize,
+    ) {
+        self.rtp_forwarded_packets.increment(destination);
+        self.rtp_forwarded_payload_bytes
+            .add(destination, payload_bytes);
     }
 
     pub(crate) fn record_transport_ice_state_change(&self, state: TransportIceState) {

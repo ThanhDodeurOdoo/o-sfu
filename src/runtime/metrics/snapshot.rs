@@ -4,8 +4,9 @@ use super::catalog::RuntimeMetrics;
 use super::labels::{
     HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
-    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+    RtpForwardDestinationKind, TransportHealthTransition, TransportIceState,
+    TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+    WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +72,20 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtp_packets_egress: u64,
     pub rtp_payload_bytes_ingress: u64,
     pub rtp_payload_bytes_egress: u64,
+    pub rtp_forwarded_packets_local_rtc: u64,
+    pub rtp_forwarded_packets_recording: u64,
+    pub rtp_forwarded_packets_intra_node_relay: u64,
+    pub rtp_forwarded_packets_inter_node_relay: u64,
+    pub rtp_forwarded_payload_bytes_local_rtc: u64,
+    pub rtp_forwarded_payload_bytes_recording: u64,
+    pub rtp_forwarded_payload_bytes_intra_node_relay: u64,
+    pub rtp_forwarded_payload_bytes_inter_node_relay: u64,
+    pub transport_health_transitions_unset_to_connected: u64,
+    pub transport_health_transitions_unset_to_disconnected: u64,
+    pub transport_health_transitions_connected_to_disconnected: u64,
+    pub transport_health_transitions_disconnected_to_connected: u64,
+    pub transport_health_transitions_connected_to_unset: u64,
+    pub transport_health_transitions_disconnected_to_unset: u64,
     pub transport_ice_state_changes_new: u64,
     pub transport_ice_state_changes_checking: u64,
     pub transport_ice_state_changes_connected: u64,
@@ -168,9 +183,23 @@ struct RtpSnapshot {
     packets_egress: u64,
     payload_bytes_ingress: u64,
     payload_bytes_egress: u64,
+    forwarded_packets_local_rtc: u64,
+    forwarded_packets_recording: u64,
+    forwarded_packets_intra_node_relay: u64,
+    forwarded_packets_inter_node_relay: u64,
+    forwarded_payload_bytes_local_rtc: u64,
+    forwarded_payload_bytes_recording: u64,
+    forwarded_payload_bytes_intra_node_relay: u64,
+    forwarded_payload_bytes_inter_node_relay: u64,
 }
 
 struct TransportLifecycleSnapshot {
+    health_transitions_unset_to_connected: u64,
+    health_transitions_unset_to_disconnected: u64,
+    health_transitions_connected_to_disconnected: u64,
+    health_transitions_disconnected_to_connected: u64,
+    health_transitions_connected_to_unset: u64,
+    health_transitions_disconnected_to_unset: u64,
     ice_state_changes_new: u64,
     ice_state_changes_checking: u64,
     ice_state_changes_connected: u64,
@@ -285,6 +314,28 @@ impl RuntimeMetrics {
             rtp_packets_egress: rtp.packets_egress,
             rtp_payload_bytes_ingress: rtp.payload_bytes_ingress,
             rtp_payload_bytes_egress: rtp.payload_bytes_egress,
+            rtp_forwarded_packets_local_rtc: rtp.forwarded_packets_local_rtc,
+            rtp_forwarded_packets_recording: rtp.forwarded_packets_recording,
+            rtp_forwarded_packets_intra_node_relay: rtp.forwarded_packets_intra_node_relay,
+            rtp_forwarded_packets_inter_node_relay: rtp.forwarded_packets_inter_node_relay,
+            rtp_forwarded_payload_bytes_local_rtc: rtp.forwarded_payload_bytes_local_rtc,
+            rtp_forwarded_payload_bytes_recording: rtp.forwarded_payload_bytes_recording,
+            rtp_forwarded_payload_bytes_intra_node_relay: rtp
+                .forwarded_payload_bytes_intra_node_relay,
+            rtp_forwarded_payload_bytes_inter_node_relay: rtp
+                .forwarded_payload_bytes_inter_node_relay,
+            transport_health_transitions_unset_to_connected: transport_lifecycle
+                .health_transitions_unset_to_connected,
+            transport_health_transitions_unset_to_disconnected: transport_lifecycle
+                .health_transitions_unset_to_disconnected,
+            transport_health_transitions_connected_to_disconnected: transport_lifecycle
+                .health_transitions_connected_to_disconnected,
+            transport_health_transitions_disconnected_to_connected: transport_lifecycle
+                .health_transitions_disconnected_to_connected,
+            transport_health_transitions_connected_to_unset: transport_lifecycle
+                .health_transitions_connected_to_unset,
+            transport_health_transitions_disconnected_to_unset: transport_lifecycle
+                .health_transitions_disconnected_to_unset,
             transport_ice_state_changes_new: transport_lifecycle.ice_state_changes_new,
             transport_ice_state_changes_checking: transport_lifecycle.ice_state_changes_checking,
             transport_ice_state_changes_connected: transport_lifecycle.ice_state_changes_connected,
@@ -455,11 +506,53 @@ impl RuntimeMetrics {
             packets_egress: self.rtp_packets.load(RtpFlowDirection::Egress),
             payload_bytes_ingress: self.rtp_payload_bytes.load(RtpFlowDirection::Ingress),
             payload_bytes_egress: self.rtp_payload_bytes.load(RtpFlowDirection::Egress),
+            forwarded_packets_local_rtc: self
+                .rtp_forwarded_packets
+                .load(RtpForwardDestinationKind::LocalRtc),
+            forwarded_packets_recording: self
+                .rtp_forwarded_packets
+                .load(RtpForwardDestinationKind::Recording),
+            forwarded_packets_intra_node_relay: self
+                .rtp_forwarded_packets
+                .load(RtpForwardDestinationKind::IntraNodeRelay),
+            forwarded_packets_inter_node_relay: self
+                .rtp_forwarded_packets
+                .load(RtpForwardDestinationKind::InterNodeRelay),
+            forwarded_payload_bytes_local_rtc: self
+                .rtp_forwarded_payload_bytes
+                .load(RtpForwardDestinationKind::LocalRtc),
+            forwarded_payload_bytes_recording: self
+                .rtp_forwarded_payload_bytes
+                .load(RtpForwardDestinationKind::Recording),
+            forwarded_payload_bytes_intra_node_relay: self
+                .rtp_forwarded_payload_bytes
+                .load(RtpForwardDestinationKind::IntraNodeRelay),
+            forwarded_payload_bytes_inter_node_relay: self
+                .rtp_forwarded_payload_bytes
+                .load(RtpForwardDestinationKind::InterNodeRelay),
         }
     }
 
     fn snapshot_transport_lifecycle(&self) -> TransportLifecycleSnapshot {
         TransportLifecycleSnapshot {
+            health_transitions_unset_to_connected: self
+                .transport_health_transitions
+                .load(TransportHealthTransition::UnsetToConnected),
+            health_transitions_unset_to_disconnected: self
+                .transport_health_transitions
+                .load(TransportHealthTransition::UnsetToDisconnected),
+            health_transitions_connected_to_disconnected: self
+                .transport_health_transitions
+                .load(TransportHealthTransition::ConnectedToDisconnected),
+            health_transitions_disconnected_to_connected: self
+                .transport_health_transitions
+                .load(TransportHealthTransition::DisconnectedToConnected),
+            health_transitions_connected_to_unset: self
+                .transport_health_transitions
+                .load(TransportHealthTransition::ConnectedToUnset),
+            health_transitions_disconnected_to_unset: self
+                .transport_health_transitions
+                .load(TransportHealthTransition::DisconnectedToUnset),
             ice_state_changes_new: self
                 .transport_ice_state_changes
                 .load(TransportIceState::New),
