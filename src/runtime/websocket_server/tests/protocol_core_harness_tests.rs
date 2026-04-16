@@ -506,7 +506,7 @@ async fn recover_subscriber_and_replay_track(
     Some(replayed_track.clone())
 }
 
-async fn setup_stub_protocol_peers(
+async fn setup_fake_protocol_peers(
     adapter: Arc<FakeWebRtcAdapter>,
     channel_name: &str,
     alice_session_id: SessionId,
@@ -894,7 +894,7 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
     };
     let channel = create_channel(
         &server,
-        "issuer-native",
+        "issuer-protocol",
         None,
         CreateChannelQuery::default(),
     )
@@ -911,7 +911,7 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
         .await;
     assert!(
         connected.is_some(),
-        "protocol core should connect to native test server"
+        "protocol core should connect to the protocol test server"
     );
     assert!(
         peer.read_server_frame().await.is_some(),
@@ -919,7 +919,7 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
     );
     assert!(
         peer.read_server_frame().await.is_some(),
-        "protocol core should consume and answer the native offer"
+        "protocol core should consume and answer the protocol offer"
     );
 
     assert_eq!(peer.core.state(), BundleConnectionState::Connected);
@@ -927,7 +927,7 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
         peer.state_changes.iter().any(|change| {
             change.state == BundleConnectionState::Connected && change.cause.is_none()
         }),
-        "native offer handling should drive the protocol core into the connected state"
+        "protocol offer handling should drive the protocol core into the connected state"
     );
 }
 
@@ -940,7 +940,7 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
     };
     let channel = create_channel(
         &server,
-        "issuer-native-events",
+        "issuer-protocol-events",
         None,
         CreateChannelQuery::default(),
     )
@@ -970,7 +970,7 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
         consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(42))
             .await
             .is_some(),
-        "existing peers should consume the native peer-joined update after a new session joins"
+        "existing peers should consume the protocol peer-joined update after a new session joins"
     );
     bob.updates.clear();
 
@@ -1044,7 +1044,7 @@ async fn protocol_session_emits_peerjoined_message_for_existing_peers() {
     };
     let channel = create_channel(
         &server,
-        "issuer-native-peerjoined",
+        "issuer-protocol-peerjoined",
         None,
         CreateChannelQuery::default(),
     )
@@ -1113,7 +1113,7 @@ async fn protocol_session_replacement_emits_peerleft_then_peerjoined_for_existin
     };
     let channel = create_channel(
         &server,
-        "issuer-native-peer-replacement",
+        "issuer-protocol-peer-replacement",
         None,
         CreateChannelQuery::default(),
     )
@@ -1200,7 +1200,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     };
     let channel = create_channel(
         &server,
-        "issuer-native-tracks",
+        "issuer-protocol-tracks",
         None,
         CreateChannelQuery::default(),
     )
@@ -1241,7 +1241,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
             &server.state.transport_adapter,
         )
         .await;
-    assert!(producer_id.is_some(), "native publisher should be ready");
+    assert!(producer_id.is_some(), "protocol publisher should be ready");
 
     assert!(
         bob.read_server_frame().await.is_some(),
@@ -1299,7 +1299,7 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
     };
     let channel = create_channel(
         &server,
-        "issuer-native-publish",
+        "issuer-protocol-publish",
         None,
         CreateChannelQuery::default(),
     )
@@ -1366,7 +1366,7 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
                 media_kind,
             } if *session_id == SessionId::Integer(53) && *media_kind == MediaKind::Video
         )),
-        "native publish should declare producer media through the transport adapter"
+        "protocol publish should declare producer media through the transport adapter"
     );
 }
 
@@ -1379,7 +1379,7 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_session_proto
     };
     let channel = create_channel(
         &server,
-        "issuer-native-rtc-publish",
+        "issuer-protocol-rtc-publish",
         None,
         CreateChannelQuery::default(),
     )
@@ -1484,7 +1484,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
     };
     let channel = create_channel(
         &server,
-        "issuer-native-rtc-capabilities",
+        "issuer-protocol-rtc-capabilities",
         None,
         CreateChannelQuery::default(),
     )
@@ -1521,7 +1521,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
     .await;
     assert!(
         parsed_client_rtp_capabilities.is_ok(),
-        "native handshake should store parsed client RTP capabilities"
+        "protocol handshake should store parsed client RTP capabilities"
     );
     let Some(parsed_client_rtp_capabilities) = parsed_client_rtp_capabilities.ok() else {
         return;
@@ -1548,7 +1548,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
 #[tokio::test]
 async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-publish-queue",
+        "issuer-protocol-rtc-publish-queue",
         SessionId::Integer(73),
         SessionId::Integer(74),
         56_303,
@@ -1643,7 +1643,7 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
 #[tokio::test]
 async fn protocol_core_unpublish_cancels_pending_publish_before_commit() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-publish-cancel",
+        "issuer-protocol-rtc-publish-cancel",
         SessionId::Integer(75),
         SessionId::Integer(76),
         56_305,
@@ -1714,7 +1714,7 @@ async fn protocol_core_unpublish_cancels_pending_publish_before_commit() {
 #[tokio::test]
 async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_commit() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-unpublish",
+        "issuer-protocol-rtc-unpublish",
         SessionId::Integer(77),
         SessionId::Integer(78),
         56_307,
@@ -1803,7 +1803,7 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
 )]
 async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-unpublish-removal-queue",
+        "issuer-protocol-rtc-unpublish-removal-queue",
         SessionId::Integer(79),
         SessionId::Integer(80),
         56_309,
@@ -1975,7 +1975,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     };
     let channel = create_channel(
         &server,
-        "issuer-native-subscribe",
+        "issuer-protocol-subscribe",
         None,
         CreateChannelQuery::default(),
     )
@@ -2016,7 +2016,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
             &server.state.transport_adapter,
         )
         .await;
-    assert!(producer_id.is_some(), "native publisher should be ready");
+    assert!(producer_id.is_some(), "protocol publisher should be ready");
     assert!(bob.read_server_frame().await.is_some());
     assert!(bob.read_server_frame().await.is_some());
 
@@ -2059,7 +2059,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
 #[tokio::test]
 async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
     let Some((server, channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-subscribe",
+        "issuer-protocol-rtc-subscribe",
         SessionId::Integer(91),
         SessionId::Integer(92),
         56_311,
@@ -2075,7 +2075,7 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
             .publish(ProtocolStreamType::Camera, true)
             .await
             .is_some(),
-        "publisher should stage the initial native publish"
+        "publisher should stage the initial protocol publish"
     );
     assert!(
         alice.read_server_frame().await.is_some(),
@@ -2132,9 +2132,9 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let alice_session_id = SessionId::Integer(83);
     let bob_session_id = SessionId::Integer(84);
-    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_stub_protocol_peers(
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_fake_protocol_peers(
         Arc::clone(&adapter),
-        "issuer-native-subscribe-recovery",
+        "issuer-protocol-subscribe-recovery",
         alice_session_id.clone(),
         bob_session_id.clone(),
     ))
@@ -2148,7 +2148,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
             &mut alice,
             &mut bob,
             &alice_session_id,
-            "publisher should stage the initial native publish",
+            "publisher should stage the initial protocol publish",
             "publisher should consume the initial publish renegotiation and answer it",
             "subscriber should receive the initial translated track snapshot",
         )
@@ -2220,7 +2220,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     let alice_session_id = SessionId::Integer(93);
     let bob_session_id = SessionId::Integer(94);
     let Some((server, channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-subscribe-recovery",
+        "issuer-protocol-rtc-subscribe-recovery",
         alice_session_id.clone(),
         bob_session_id.clone(),
         56_391,
@@ -2235,7 +2235,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
         &mut alice,
         &mut bob,
         &alice_session_id,
-        "publisher should stage the initial native publish on the real rtc path",
+        "publisher should stage the initial protocol publish on the real rtc path",
         "publisher should consume the initial real-rtc publish renegotiation and answer it",
         "subscriber should receive the initial translated track snapshot on the real rtc path",
     )
@@ -2310,7 +2310,7 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     };
     let channel = create_channel(
         &server,
-        "issuer-native-recording",
+        "issuer-protocol-recording",
         None,
         CreateChannelQuery {
             recording_address: Some("https://record.example.com".to_owned()),
@@ -2447,7 +2447,7 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
         bob.publish(ProtocolStreamType::Camera, true)
             .await
             .is_some(),
-        "publisher should stage the initial native publish"
+        "publisher should stage the initial protocol publish"
     );
     assert!(
         bob.read_server_frame().await.is_some(),
@@ -2531,7 +2531,7 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
 #[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-native-rtc-recovery",
+        "issuer-protocol-rtc-recovery",
         SessionId::Integer(91),
         SessionId::Integer(92),
         55_091,
@@ -2546,7 +2546,7 @@ async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() {
         bob.publish(ProtocolStreamType::Camera, true)
             .await
             .is_some(),
-        "publisher should stage the initial native publish on the real rtc path"
+        "publisher should stage the initial protocol publish on the real rtc path"
     );
     assert!(
         bob.read_server_frame().await.is_some(),
@@ -2639,7 +2639,7 @@ async fn setup_protocol_recovery_peers(
     let server = spawn_protocol_test_server(1_000, 100).await?;
     let channel = create_channel(
         &server,
-        "issuer-native-recovery",
+        "issuer-protocol-recovery",
         None,
         CreateChannelQuery::default(),
     )

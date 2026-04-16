@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "the native full-stack harness is shared by multiple RTC integration scenarios"
+    reason = "the protocol full-stack harness is shared by multiple RTC integration scenarios"
 )]
 
 use std::{
@@ -29,18 +29,18 @@ use o_sfu::{
 use super::{
     TestWebSocket, connect_websocket, create_channel,
     fake_media::{FakeClock, FakeMediaSource},
-    fake_rtc_peer::{NativeFakeRtcPeer, ReceivedRtpPacket},
+    fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
     read_close_code, read_text_message, signed_connect_claims,
 };
 
 const RTC_NEGOTIATION_PORT_BASE: u16 = 57_000;
 static NEXT_RTC_NEGOTIATION_PORT: AtomicU16 = AtomicU16::new(RTC_NEGOTIATION_PORT_BASE);
 
-pub struct NativeLocalNetwork {
+pub struct ProtocolLocalNetwork {
     server: TestServer,
 }
 
-impl NativeLocalNetwork {
+impl ProtocolLocalNetwork {
     pub async fn start(config: Config) -> Option<Self> {
         Some(Self {
             server: spawn_test_server(config).await.ok()?,
@@ -78,7 +78,7 @@ impl NativeLocalNetwork {
         channel_uuid: &str,
         session_id: SessionId,
         key: &str,
-    ) -> Option<NativeFakePeer> {
+    ) -> Option<ProtocolFakePeer> {
         let token = signed_connect_claims(key, channel_uuid, session_id.clone())?;
         let mut websocket = connect_websocket(&self.server).await?;
         websocket
@@ -95,10 +95,10 @@ impl NativeLocalNetwork {
             .ok()?;
 
         let welcome = decode_protocol_welcome_batch(&read_text_message(&mut websocket).await?)?;
-        let mut rtc_peer = NativeFakeRtcPeer::bind(next_negotiation_port()).await?;
+        let mut rtc_peer = FakeRtcPeer::bind(next_negotiation_port()).await?;
         answer_next_server_request(&mut websocket, &mut rtc_peer).await?;
 
-        Some(NativeFakePeer {
+        Some(ProtocolFakePeer {
             session_id,
             websocket,
             welcome,
@@ -112,14 +112,14 @@ impl NativeLocalNetwork {
     }
 }
 
-pub struct NativeFakePeer {
+pub struct ProtocolFakePeer {
     session_id: SessionId,
     websocket: TestWebSocket,
     welcome: WelcomePayload,
-    rtc_peer: NativeFakeRtcPeer,
+    rtc_peer: FakeRtcPeer,
 }
 
-impl NativeFakePeer {
+impl ProtocolFakePeer {
     #[must_use]
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
@@ -284,7 +284,7 @@ impl NativeFakePeer {
 
 async fn answer_next_server_request(
     websocket: &mut TestWebSocket,
-    rtc_peer: &mut NativeFakeRtcPeer,
+    rtc_peer: &mut FakeRtcPeer,
 ) -> Option<()> {
     let batch = read_protocol_batch(websocket).await?;
     let envelope = batch.into_iter().next()?;

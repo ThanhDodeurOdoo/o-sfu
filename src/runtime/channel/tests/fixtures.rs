@@ -53,7 +53,7 @@ pub(super) fn test_sender() -> (
     mpsc::unbounded_channel()
 }
 
-pub(super) fn stub_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
+pub(super) fn fake_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     (
         RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
@@ -93,7 +93,7 @@ pub(super) async fn setup_two_ready_sessions() -> (
         )
         .await
         .unwrap();
-    let (adapter, _stub) = stub_adapter();
+    let (adapter, _fake) = fake_adapter();
     for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
         channel.set_publish_transport_ready(session_id).await;
         channel.set_consume_transport_ready(session_id).await;
@@ -104,7 +104,7 @@ pub(super) async fn setup_two_ready_sessions() -> (
     (channel, adapter, rx1, rx2)
 }
 
-pub(super) async fn setup_two_ready_sessions_with_stub() -> (
+pub(super) async fn setup_two_ready_sessions_with_fake() -> (
     Arc<super::super::Channel>,
     RuntimeTransportAdapter,
     Arc<FakeWebRtcAdapter>,
@@ -135,7 +135,7 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
         )
         .await
         .unwrap();
-    let (adapter, stub) = stub_adapter();
+    let (adapter, fake) = fake_adapter();
     for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
         channel.set_publish_transport_ready(session_id).await;
         channel.set_consume_transport_ready(session_id).await;
@@ -143,7 +143,7 @@ pub(super) async fn setup_two_ready_sessions_with_stub() -> (
             .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
             .await;
     }
-    (channel, adapter, stub, rx1, rx2)
+    (channel, adapter, fake, rx1, rx2)
 }
 
 pub(super) async fn setup_late_join_bootstrap_scenario() -> (
@@ -178,7 +178,7 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
         .await
         .unwrap();
 
-    let (transport_adapter, stub) = stub_adapter();
+    let (transport_adapter, fake) = fake_adapter();
     channel
         .set_publish_transport_ready(&SessionId::Integer(1))
         .await;
@@ -201,7 +201,7 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     (
         channel,
         transport_adapter,
-        stub,
+        fake,
         publisher_rx,
         subscriber_rx,
     )
@@ -217,7 +217,7 @@ pub(super) fn drain_outbound(
     msgs
 }
 
-pub(super) async fn wait_for_stub_event(
+pub(super) async fn wait_for_fake_event(
     adapter: &FakeWebRtcAdapter,
     predicate: impl Fn(&FakeWebRtcEvent) -> bool,
 ) {

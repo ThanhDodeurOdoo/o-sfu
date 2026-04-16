@@ -19,7 +19,7 @@ use o_sfu::{
 use crate::support::{
     TEST_CHANNEL_KEY,
     fake_media::{FakeClock, FakeMediaSource},
-    native_full_stack::{NativeFakePeer, NativeLocalNetwork},
+    protocol_full_stack::{ProtocolFakePeer, ProtocolLocalNetwork},
     test_config,
 };
 use tokio::time::{sleep, timeout};
@@ -48,7 +48,7 @@ async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries(
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -97,7 +97,7 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -119,7 +119,7 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
         true,
     )
     .await;
-    assert_no_server_message_native(&mut subscriber_b).await;
+    assert_no_server_message_protocol(&mut subscriber_b).await;
 
     assert!(publisher_b.publish_track(&source).await.is_some());
     assert!(publisher_b.complete_next_negotiation().await.is_some());
@@ -132,8 +132,8 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
     .await;
 
     assert!(publisher_a.close().await.is_some());
-    assert_departure_message_native(&mut subscriber_a, SessionId::Integer(90)).await;
-    assert_no_server_message_native(&mut subscriber_b).await;
+    assert_departure_message_protocol(&mut subscriber_a, SessionId::Integer(90)).await;
+    assert_no_server_message_protocol(&mut subscriber_b).await;
 }
 
 #[tokio::test]
@@ -141,7 +141,7 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -167,7 +167,7 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
             .is_some()
     );
 
-    assert_consumer_download_toggle_round_trip_native(&mut subscriber).await;
+    assert_consumer_download_toggle_round_trip_protocol(&mut subscriber).await;
     assert_camera_unpublish_updates_snapshot_and_info(&mut publisher, &mut subscriber).await;
 
     let late_subscriber = connect_late_subscriber(&network, &channel).await;
@@ -175,20 +175,20 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
     let Some(mut late_subscriber) = late_subscriber else {
         return;
     };
-    assert_peer_joined_message_native(&mut subscriber, SessionId::Integer(30)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(30)).await;
     assert_late_join_has_no_track_snapshot(&mut late_subscriber).await;
 
     assert!(publisher.close().await.is_some());
-    assert_departure_message_native(&mut subscriber, SessionId::Integer(10)).await;
-    assert_departure_message_native(&mut late_subscriber, SessionId::Integer(10)).await;
+    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(10)).await;
+    assert_departure_message_protocol(&mut late_subscriber, SessionId::Integer(10)).await;
 }
 
 #[tokio::test]
-async fn fake_peers_cover_session_replacement_and_republish_over_native_protocol() {
+async fn fake_peers_cover_session_replacement_and_republish_over_protocol_session_flow() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -229,8 +229,8 @@ async fn fake_peers_cover_session_replacement_and_republish_over_native_protocol
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_native(&mut subscriber, SessionId::Integer(40)).await;
-    assert_peer_joined_message_native(&mut subscriber, SessionId::Integer(40)).await;
+    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(40)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(40)).await;
 
     let source = FakeMediaSource::audio();
     assert!(replacement.publish_track(&source).await.is_some());
@@ -249,7 +249,7 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -323,7 +323,7 @@ async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -373,7 +373,7 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -467,7 +467,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -531,8 +531,8 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_native(&mut subscriber, SessionId::Integer(80)).await;
-    assert_peer_joined_message_native(&mut subscriber, SessionId::Integer(80)).await;
+    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(80)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(80)).await;
 
     assert_audio_packet_dropped(
         &mut initial_publisher,
@@ -566,7 +566,7 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -619,7 +619,7 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
             .await
             .is_some()
     );
-    drain_native_control_plane(&mut subscriber, Duration::from_millis(150)).await;
+    drain_protocol_control_plane(&mut subscriber, Duration::from_millis(150)).await;
 
     let replacement = network
         .connect_fake_peer(&channel, SessionId::Integer(83), TEST_CHANNEL_KEY)
@@ -633,8 +633,8 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
         subscriber.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_native(&mut publisher, SessionId::Integer(83)).await;
-    assert_peer_joined_message_native(&mut publisher, SessionId::Integer(83)).await;
+    assert_departure_message_protocol(&mut publisher, SessionId::Integer(83)).await;
+    assert_peer_joined_message_protocol(&mut publisher, SessionId::Integer(83)).await;
     assert!(
         replacement
             .wait_until_connected(Duration::from_secs(5))
@@ -649,7 +649,7 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
     )
     .await;
     assert!(replacement.complete_next_negotiation().await.is_some());
-    drain_native_control_plane(&mut replacement, Duration::from_millis(150)).await;
+    drain_protocol_control_plane(&mut replacement, Duration::from_millis(150)).await;
 
     assert_audio_packet_dropped(&mut publisher, &mut replacement, &mut source, &mut clock).await;
 }
@@ -659,7 +659,7 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -687,7 +687,7 @@ async fn fake_rtc_peers_cover_explicit_upload_unpublish_compatibility_semantics(
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 
-    let network = NativeLocalNetwork::start(config).await;
+    let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
     let Some(network) = network else {
         return;
@@ -712,9 +712,9 @@ async fn fake_rtc_peers_cover_explicit_upload_unpublish_compatibility_semantics(
 }
 
 async fn connect_audio_media_flow_peers(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     channel: &str,
-) -> Option<(NativeFakePeer, NativeFakePeer)> {
+) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
     Box::pin(connect_audio_media_flow_peers_for_sessions(
         network,
         channel,
@@ -725,11 +725,11 @@ async fn connect_audio_media_flow_peers(
 }
 
 async fn connect_audio_media_flow_peers_for_sessions(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     channel: &str,
     publisher_session_id: SessionId,
     subscriber_session_id: SessionId,
-) -> Option<(NativeFakePeer, NativeFakePeer)> {
+) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
     let publisher = network
         .connect_fake_peer(channel, publisher_session_id, TEST_CHANNEL_KEY)
         .await?;
@@ -750,8 +750,8 @@ async fn connect_audio_media_flow_peers_for_sessions(
 }
 
 async fn assert_audio_packet_forwarded(
-    publisher: &mut NativeFakePeer,
-    subscriber: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) -> u64 {
@@ -774,8 +774,8 @@ async fn assert_audio_packet_forwarded(
 }
 
 async fn assert_audio_packet_dropped(
-    publisher: &mut NativeFakePeer,
-    subscriber: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) {
@@ -789,12 +789,12 @@ async fn assert_audio_packet_dropped(
 }
 
 async fn connect_two_isolated_audio_flows(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
 ) -> Option<(
-    NativeFakePeer,
-    NativeFakePeer,
-    NativeFakePeer,
-    NativeFakePeer,
+    ProtocolFakePeer,
+    ProtocolFakePeer,
+    ProtocolFakePeer,
+    ProtocolFakePeer,
 )> {
     let channel_a = network
         .create_channel("issuer-topology-a", Some(TEST_CHANNEL_KEY))
@@ -838,8 +838,8 @@ async fn connect_two_isolated_audio_flows(
 }
 
 async fn assert_audio_media_arrives_and_download_mute_stops_flow(
-    publisher: &mut NativeFakePeer,
-    subscriber: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
     assert!(publisher.publish_track(&source).await.is_some());
@@ -878,7 +878,7 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
             .is_some()
     );
 
-    drain_native_control_plane(subscriber, Duration::from_millis(150)).await;
+    drain_protocol_control_plane(subscriber, Duration::from_millis(150)).await;
 
     let next_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
     assert!(next_payload.is_some());
@@ -891,8 +891,8 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
 }
 
 async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
-    publisher: &mut NativeFakePeer,
-    subscriber: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
     assert!(publisher.publish_track(&source).await.is_some());
@@ -919,7 +919,7 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     assert!(publisher.complete_next_negotiation().await.is_some());
     assert_empty_track_snapshot(subscriber).await;
 
-    drain_native_control_plane(subscriber, Duration::from_millis(150)).await;
+    drain_protocol_control_plane(subscriber, Duration::from_millis(150)).await;
 
     let _ = publisher.send_rtp_packet(&mut source, &mut clock).await;
     assert!(
@@ -931,9 +931,9 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
 }
 
 async fn connect_camera_flow_peers(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     channel: &str,
-) -> Option<(NativeFakePeer, NativeFakePeer)> {
+) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
     let publisher = network
         .connect_fake_peer(channel, SessionId::Integer(10), TEST_CHANNEL_KEY)
         .await?;
@@ -944,8 +944,8 @@ async fn connect_camera_flow_peers(
 }
 
 async fn publish_camera_track(
-    publisher: &mut NativeFakePeer,
-    subscriber: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
 ) -> Option<()> {
     let source = FakeMediaSource::camera();
     publisher.publish_track(&source).await?;
@@ -954,7 +954,7 @@ async fn publish_camera_track(
     Some(())
 }
 
-async fn assert_consumer_download_toggle_round_trip_native(subscriber: &mut NativeFakePeer) {
+async fn assert_consumer_download_toggle_round_trip_protocol(subscriber: &mut ProtocolFakePeer) {
     assert!(
         subscriber
             .update_subscription(
@@ -982,8 +982,8 @@ async fn assert_consumer_download_toggle_round_trip_native(subscriber: &mut Nati
 }
 
 async fn assert_camera_unpublish_updates_snapshot_and_info(
-    publisher: &mut NativeFakePeer,
-    subscriber: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
 ) {
     assert!(
         publisher
@@ -999,7 +999,7 @@ async fn assert_camera_unpublish_updates_snapshot_and_info(
     };
     assert!(
         track_snapshot.is_empty(),
-        "native unpublish should clear the authoritative camera track snapshot"
+        "protocol unpublish should clear the authoritative camera track snapshot"
     );
 
     let peer_info = subscriber.read_next_server_message().await;
@@ -1012,15 +1012,15 @@ async fn assert_camera_unpublish_updates_snapshot_and_info(
 }
 
 async fn connect_late_subscriber(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     channel: &str,
-) -> Option<NativeFakePeer> {
+) -> Option<ProtocolFakePeer> {
     network
         .connect_fake_peer(channel, SessionId::Integer(30), TEST_CHANNEL_KEY)
         .await
 }
 
-async fn assert_late_join_has_no_track_snapshot(late_subscriber: &mut NativeFakePeer) {
+async fn assert_late_join_has_no_track_snapshot(late_subscriber: &mut ProtocolFakePeer) {
     assert!(
         timeout(
             Duration::from_millis(200),
@@ -1031,26 +1031,32 @@ async fn assert_late_join_has_no_track_snapshot(late_subscriber: &mut NativeFake
     );
 }
 
-async fn assert_departure_message_native(subscriber: &mut NativeFakePeer, session_id: SessionId) {
+async fn assert_departure_message_protocol(
+    subscriber: &mut ProtocolFakePeer,
+    session_id: SessionId,
+) {
     let departure = subscriber.read_next_server_message().await;
     assert!(departure.is_some());
     let Some(ServerMessage::PeerLeft(departure)) = departure else {
-        panic!("expected native peer departure notification");
+        panic!("expected protocol peer departure notification");
     };
     assert_eq!(departure.session_id, session_id);
 }
 
-async fn assert_peer_joined_message_native(subscriber: &mut NativeFakePeer, session_id: SessionId) {
+async fn assert_peer_joined_message_protocol(
+    subscriber: &mut ProtocolFakePeer,
+    session_id: SessionId,
+) {
     let joined = subscriber.read_next_server_message().await;
     assert!(joined.is_some());
     let Some(ServerMessage::PeerJoined(joined)) = joined else {
-        panic!("expected native peer joined notification");
+        panic!("expected protocol peer joined notification");
     };
     assert_eq!(joined.session_id, session_id);
 }
 
 async fn assert_track_snapshot(
-    subscriber: &mut NativeFakePeer,
+    subscriber: &mut ProtocolFakePeer,
     session_id: SessionId,
     stream_type: StreamType,
     active: bool,
@@ -1058,27 +1064,27 @@ async fn assert_track_snapshot(
     let message = subscriber.read_next_server_message().await;
     assert!(message.is_some());
     let Some(ServerMessage::Tracks(track_bindings)) = message else {
-        panic!("expected native track snapshot");
+        panic!("expected protocol track snapshot");
     };
     assert_eq!(track_bindings.len(), 1);
     let Some(track_binding) = track_bindings.first() else {
-        panic!("expected one native track binding");
+        panic!("expected one protocol track binding");
     };
     assert_eq!(track_binding.session_id, session_id);
     assert_eq!(track_binding.stream_type, stream_type);
     assert_eq!(track_binding.active, active);
 }
 
-async fn assert_empty_track_snapshot(subscriber: &mut NativeFakePeer) {
+async fn assert_empty_track_snapshot(subscriber: &mut ProtocolFakePeer) {
     let message = subscriber.read_next_server_message().await;
     assert!(message.is_some());
     let Some(ServerMessage::Tracks(track_bindings)) = message else {
-        panic!("expected native track snapshot");
+        panic!("expected protocol track snapshot");
     };
     assert!(track_bindings.is_empty());
 }
 
-async fn drain_native_control_plane(subscriber: &mut NativeFakePeer, timeout_window: Duration) {
+async fn drain_protocol_control_plane(subscriber: &mut ProtocolFakePeer, timeout_window: Duration) {
     while subscriber
         .read_server_message_with_timeout(timeout_window)
         .await
@@ -1086,7 +1092,7 @@ async fn drain_native_control_plane(subscriber: &mut NativeFakePeer, timeout_win
     {}
 }
 
-async fn assert_no_server_message_native(subscriber: &mut NativeFakePeer) {
+async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {
     assert!(
         timeout(
             Duration::from_millis(200),
@@ -1098,9 +1104,9 @@ async fn assert_no_server_message_native(subscriber: &mut NativeFakePeer) {
 }
 
 async fn stream_until_audio_bitrate_is_observable(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     channel: &str,
-    publisher: &mut NativeFakePeer,
+    publisher: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) -> Option<IncomingBitRateStats> {
@@ -1147,7 +1153,7 @@ struct LiveRtcMetrics {
 }
 
 async fn wait_for_transport_lifetime_metrics(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     expected_count: u64,
 ) -> Option<TransportSessionLifetimeMetrics> {
     timeout(Duration::from_secs(3), async {
@@ -1165,7 +1171,7 @@ async fn wait_for_transport_lifetime_metrics(
 }
 
 async fn wait_for_live_rtc_metrics(
-    network: &NativeLocalNetwork,
+    network: &ProtocolLocalNetwork,
     expected_connected_sessions: i64,
 ) -> Option<LiveRtcMetrics> {
     timeout(Duration::from_secs(3), async {

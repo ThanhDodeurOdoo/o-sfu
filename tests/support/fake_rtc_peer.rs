@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "the str0m-backed fake RTP peer is shared across native integration scenarios"
+    reason = "the str0m-backed fake RTP peer is shared across protocol integration scenarios"
 )]
 
 use std::{
@@ -35,28 +35,28 @@ pub struct ReceivedRtpPacket {
     pub payload: Bytes,
 }
 
-pub struct NativeFakeRtcPeer {
+pub struct FakeRtcPeer {
     rtc: Rtc,
     socket: UdpSocket,
     local_addr: SocketAddr,
-    send_paths: BTreeMap<NativeMediaKey, NativeSendPath>,
+    send_paths: BTreeMap<ProtocolMediaKey, ProtocolSendPath>,
     connected: bool,
     start_wallclock: Instant,
 }
 
 #[derive(Clone, Copy)]
-struct NativeSendPath {
+struct ProtocolSendPath {
     mid: Mid,
     payload_type: Pt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum NativeMediaKey {
+enum ProtocolMediaKey {
     Audio,
     Video,
 }
 
-impl NativeFakeRtcPeer {
+impl FakeRtcPeer {
     pub async fn bind(port: u16) -> Option<Self> {
         let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port)))
             .await
@@ -76,7 +76,7 @@ impl NativeFakeRtcPeer {
 
     pub fn answer_offer(&mut self, offer_sdp: &str) -> Option<SessionDescriptionPayload> {
         let offer = SdpOffer::from_sdp_string(offer_sdp).ok()?;
-        self.send_paths = collect_native_send_paths(offer_sdp, &self.rtc);
+        self.send_paths = collect_protocol_send_paths(offer_sdp, &self.rtc);
         let answer = self.rtc.sdp_api().accept_offer(offer).ok()?;
         self.rtc.handle_input(Input::Timeout(Instant::now())).ok()?;
         Some(SessionDescriptionPayload {
@@ -156,7 +156,7 @@ impl NativeFakeRtcPeer {
     }
 
     fn write_rtp_packet(&mut self, media_kind: MediaKind, frame: FakeMediaFrame) -> Option<()> {
-        let send_path = *self.send_paths.get(&NativeMediaKey::from(media_kind))?;
+        let send_path = *self.send_paths.get(&ProtocolMediaKey::from(media_kind))?;
         self.rtc
             .direct_api()
             .stream_tx_by_mid(send_path.mid, None)?
@@ -335,17 +335,17 @@ async fn pump_until_rtp(
     None
 }
 
-fn collect_native_send_paths(
+fn collect_protocol_send_paths(
     offer_sdp: &str,
     rtc: &Rtc,
-) -> BTreeMap<NativeMediaKey, NativeSendPath> {
+) -> BTreeMap<ProtocolMediaKey, ProtocolSendPath> {
     let mut send_paths = BTreeMap::new();
-    let mut current_kind: Option<NativeMediaKey> = None;
+    let mut current_kind: Option<ProtocolMediaKey> = None;
     let mut current_mid: Option<Mid> = None;
-    let mut current_direction = NativeOfferDirection::Inactive;
+    let mut current_direction = OfferDirection::Inactive;
 
     let mut flush_section =
-        |kind: Option<NativeMediaKey>, mid: Option<Mid>, direction: NativeOfferDirection| {
+        |kind: Option<ProtocolMediaKey>, mid: Option<Mid>, direction: OfferDirection| {
             let Some(kind) = kind else {
                 return;
             };
@@ -358,7 +358,7 @@ fn collect_native_send_paths(
             let Some(payload_type) = payload_type_for_media_kind(rtc, kind) else {
                 return;
             };
-            send_paths.insert(kind, NativeSendPath { mid, payload_type });
+            send_paths.insert(kind, ProtocolSendPath { mid, payload_type });
         };
 
     for raw_line in offer_sdp.lines() {
@@ -367,21 +367,21 @@ fn collect_native_send_paths(
             flush_section(current_kind, current_mid, current_direction);
             current_kind = Some(kind);
             current_mid = None;
-            current_direction = NativeOfferDirection::Inactive;
+            current_direction = OfferDirection::Inactive;
             continue;
         }
         if line.starts_with("m=") {
             flush_section(current_kind, current_mid, current_direction);
             current_kind = None;
             current_mid = None;
-            current_direction = NativeOfferDirection::Inactive;
+            current_direction = OfferDirection::Inactive;
             continue;
         }
         if let Some(mid) = line.strip_prefix("a=mid:") {
             current_mid = Some(Mid::from(mid));
             continue;
         }
-        if let Some(direction) = NativeOfferDirection::parse(line) {
+        if let Some(direction) = OfferDirection::parse(line) {
             current_direction = direction;
         }
     }
@@ -389,27 +389,27 @@ fn collect_native_send_paths(
     send_paths
 }
 
-fn payload_type_for_media_kind(rtc: &Rtc, media_kind: NativeMediaKey) -> Option<Pt> {
+fn payload_type_for_media_kind(rtc: &Rtc, media_kind: ProtocolMediaKey) -> Option<Pt> {
     let codec = match media_kind {
-        NativeMediaKey::Audio => Codec::Opus,
-        NativeMediaKey::Video => Codec::Vp8,
+        ProtocolMediaKey::Audio => Codec::Opus,
+        ProtocolMediaKey::Video => Codec::Vp8,
     };
     rtc.codec_config()
         .find(|params| params.spec().codec == codec)
         .map(PayloadParams::pt)
 }
 
-fn parse_offer_media_kind(line: &str) -> Option<NativeMediaKey> {
+fn parse_offer_media_kind(line: &str) -> Option<ProtocolMediaKey> {
     if line.starts_with("m=audio ") {
-        Some(NativeMediaKey::Audio)
+        Some(ProtocolMediaKey::Audio)
     } else if line.starts_with("m=video ") {
-        Some(NativeMediaKey::Video)
+        Some(ProtocolMediaKey::Video)
     } else {
         None
     }
 }
 
-impl From<MediaKind> for NativeMediaKey {
+impl From<MediaKind> for ProtocolMediaKey {
     fn from(value: MediaKind) -> Self {
         match value {
             MediaKind::Audio => Self::Audio,
@@ -419,7 +419,7 @@ impl From<MediaKind> for NativeMediaKey {
 }
 
 #[derive(Clone, Copy, Default)]
-enum NativeOfferDirection {
+enum OfferDirection {
     SendRecv,
     SendOnly,
     RecvOnly,
@@ -427,7 +427,7 @@ enum NativeOfferDirection {
     Inactive,
 }
 
-impl NativeOfferDirection {
+impl OfferDirection {
     fn parse(line: &str) -> Option<Self> {
         match line {
             "a=sendrecv" => Some(Self::SendRecv),

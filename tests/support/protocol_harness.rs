@@ -19,17 +19,17 @@ use super::harness::{
     TestWebSocket, connect_websocket, read_close_code, read_text_message, test_config,
 };
 
-const STUB_NEGOTIATION_ANSWER_SDP: &str = "v=0\r\ns=integration-answer\r\n";
+const FAKE_NEGOTIATION_ANSWER_SDP: &str = "v=0\r\ns=integration-answer\r\n";
 
-pub fn native_test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
+pub fn protocol_test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
     test_config(authentication_timeout_ms, channel_size)
 }
 
-pub struct NativeWebSocketClient {
+pub struct ProtocolWebSocketClient {
     websocket: TestWebSocket,
 }
 
-impl NativeWebSocketClient {
+impl ProtocolWebSocketClient {
     pub async fn connect(server: &TestServer) -> Option<Self> {
         Some(Self {
             websocket: connect_websocket(server).await?,
@@ -68,7 +68,7 @@ impl NativeWebSocketClient {
     ) -> Option<(Self, WelcomePayload)> {
         let mut client = Self::authenticate_with_jwt(server, token).await?;
         let welcome = client.read_welcome().await?;
-        client.finish_initial_negotiation_with_stub_answer().await?;
+        client.finish_initial_negotiation_with_fake_answer().await?;
         Some((client, welcome))
     }
 
@@ -95,12 +95,12 @@ impl NativeWebSocketClient {
         }
     }
 
-    pub async fn finish_initial_negotiation_with_stub_answer(&mut self) -> Option<()> {
+    pub async fn finish_initial_negotiation_with_fake_answer(&mut self) -> Option<()> {
         let (request_id, request) = self.read_server_request().await?;
         let ServerRequest::Offer(_) = request else {
             return None;
         };
-        self.respond_to_negotiation_request(request_id, request, STUB_NEGOTIATION_ANSWER_SDP)
+        self.respond_to_negotiation_request(request_id, request, FAKE_NEGOTIATION_ANSWER_SDP)
             .await
     }
 
@@ -229,7 +229,7 @@ fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {
 }
 
 pub async fn read_until_server_message(
-    client: &mut NativeWebSocketClient,
+    client: &mut ProtocolWebSocketClient,
     timeout_duration: Duration,
     predicate: impl Fn(&ServerMessage) -> bool,
 ) -> Option<ServerMessage> {
@@ -243,16 +243,16 @@ pub async fn read_until_server_message(
     }
 }
 
-pub async fn connect_native_pair(
+pub async fn connect_protocol_pair(
     server: &TestServer,
     first_token: &str,
     second_token: &str,
     second_session_id: SessionId,
-) -> Option<(NativeWebSocketClient, NativeWebSocketClient)> {
+) -> Option<(ProtocolWebSocketClient, ProtocolWebSocketClient)> {
     let (mut first, _welcome) =
-        NativeWebSocketClient::authenticate_and_negotiate(server, first_token).await?;
+        ProtocolWebSocketClient::authenticate_and_negotiate(server, first_token).await?;
     let (second, _welcome) =
-        NativeWebSocketClient::authenticate_and_negotiate(server, second_token).await?;
+        ProtocolWebSocketClient::authenticate_and_negotiate(server, second_token).await?;
     read_until_server_message(&mut first, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == second_session_id)
     })

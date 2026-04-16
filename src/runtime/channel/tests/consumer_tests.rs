@@ -58,7 +58,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
 
 #[tokio::test]
 async fn consumption_change_updates_transport_route_activity() {
-    let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
 
     channel
         .publish_track(
@@ -85,7 +85,7 @@ async fn consumption_change_updates_transport_route_activity() {
         )
         .await;
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumerActivityUpdated {
@@ -122,7 +122,7 @@ async fn consumption_change_ignores_nonexistent_consumer() {
 
 #[tokio::test]
 async fn consumption_change_persists_preference_for_future_consumer_bootstrap() {
-    let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
 
     channel
         .update_subscription(
@@ -149,7 +149,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumerActivityUpdated {

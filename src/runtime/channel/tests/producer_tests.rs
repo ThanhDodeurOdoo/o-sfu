@@ -80,8 +80,8 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
 #[tokio::test]
 async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
-    let (channel, adapter, stub, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
 
     assert!(
         channel
@@ -150,7 +150,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             if snapshot.values().next().is_some_and(|info| info.is_camera_on.is_none())
     )));
 
-    let removed_media_events = stub
+    let removed_media_events = fake
         .snapshot_events()
         .into_iter()
         .filter(|event| matches!(event, FakeWebRtcEvent::MediaRemoved { .. }))
@@ -164,7 +164,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (adapter, stub) = stub_adapter();
+    let (adapter, fake) = fake_adapter();
     for raw_session_id in [1_i64, 2, 3] {
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
@@ -204,7 +204,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
         panic!("published camera should expose a transport media id");
     };
 
-    assert!(stub.snapshot_events().iter().any(|event| {
+    assert!(fake.snapshot_events().iter().any(|event| {
         matches!(
             event,
             FakeWebRtcEvent::SourcePacketGateUpdated {
@@ -220,8 +220,8 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
 
 #[tokio::test]
 async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() {
-    let (channel, adapter, stub, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
 
     assert!(
         channel
@@ -242,7 +242,7 @@ async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() 
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
     assert!(
-        !stub
+        !fake
             .snapshot_events()
             .iter()
             .any(|event| matches!(event, FakeWebRtcEvent::SourcePacketGateUpdated { .. })),
@@ -252,8 +252,8 @@ async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() 
 
 #[tokio::test]
 async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
-    let (channel, adapter, stub, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
 
     assert!(
         channel
@@ -294,7 +294,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
         .await
         .expect("third session should join");
 
-    assert!(stub.snapshot_events().iter().any(|event| {
+    assert!(fake.snapshot_events().iter().any(|event| {
         matches!(
             event,
             FakeWebRtcEvent::SourcePacketGateUpdated {
@@ -314,7 +314,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (adapter, stub) = stub_adapter();
+    let (adapter, fake) = fake_adapter();
     for raw_session_id in [1_i64, 2, 3] {
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
@@ -367,7 +367,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
             .await
     );
 
-    assert!(stub.snapshot_events().iter().any(|event| {
+    assert!(fake.snapshot_events().iter().any(|event| {
         matches!(
             event,
             FakeWebRtcEvent::SourcePacketGateUpdated {
@@ -380,7 +380,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     }));
 }
 
-async fn setup_ready_sessions_with_stub(
+async fn setup_ready_sessions_with_fake(
     session_ids: &[i64],
 ) -> (
     Arc<Channel>,
@@ -391,7 +391,7 @@ async fn setup_ready_sessions_with_stub(
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (adapter, stub) = stub_adapter();
+    let (adapter, fake) = fake_adapter();
     for &raw_session_id in session_ids {
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
@@ -412,15 +412,15 @@ async fn setup_ready_sessions_with_stub(
             .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
             .await;
     }
-    (channel, adapter, stub)
+    (channel, adapter, fake)
 }
 
-async fn setup_three_ready_sessions_with_stub() -> (
+async fn setup_three_ready_sessions_with_fake() -> (
     Arc<Channel>,
     RuntimeTransportAdapter,
     Arc<FakeWebRtcAdapter>,
 ) {
-    setup_ready_sessions_with_stub(&[1, 2, 3]).await
+    setup_ready_sessions_with_fake(&[1, 2, 3]).await
 }
 
 async fn publish_audio_and_camera(
@@ -509,7 +509,7 @@ fn assert_source_packet_selection_update(
 
 #[tokio::test]
 async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate() {
-    let (channel, adapter, stub) = setup_three_ready_sessions_with_stub().await;
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
     for session_id in [SessionId::Integer(1), SessionId::Integer(2)] {
         publish_audio_and_camera(&channel, &session_id, &adapter).await;
     }
@@ -519,8 +519,8 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
     let (second_audio_media_id, second_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(2)).await;
 
-    let baseline_event_count = stub.snapshot_events().len();
-    stub.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+    let baseline_event_count = fake.snapshot_events().len();
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
         second_audio_media_id,
         Instant::now(),
     )]);
@@ -533,7 +533,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         )
         .await;
 
-    let events = stub.snapshot_events();
+    let events = fake.snapshot_events();
     let speaker_two_events = &events[baseline_event_count..];
     assert_source_packet_selection_update(
         speaker_two_events,
@@ -554,7 +554,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
     }));
 
     let second_baseline_event_count = events.len();
-    stub.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
         first_audio_media_id,
         Instant::now(),
     )]);
@@ -567,7 +567,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         )
         .await;
 
-    let events = stub.snapshot_events();
+    let events = fake.snapshot_events();
     let speaker_one_events = &events[second_baseline_event_count..];
     assert_source_packet_selection_update(
         speaker_one_events,
@@ -585,7 +585,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
 
 #[tokio::test]
 async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates() {
-    let (channel, adapter, stub) = setup_ready_sessions_with_stub(&[1, 2, 3, 4, 5, 6, 7]).await;
+    let (channel, adapter, fake) = setup_ready_sessions_with_fake(&[1, 2, 3, 4, 5, 6, 7]).await;
     for raw_session_id in 1_i64..=6 {
         publish_audio_and_camera(&channel, &SessionId::Integer(raw_session_id), &adapter).await;
     }
@@ -599,8 +599,8 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
         ordered_camera_media_ids.push(camera_media_id);
     }
 
-    let baseline_event_count = stub.snapshot_events().len();
-    stub.set_active_speaker_source_snapshot(
+    let baseline_event_count = fake.snapshot_events().len();
+    fake.set_active_speaker_source_snapshot(
         ordered_audio_media_ids
             .iter()
             .rev()
@@ -617,7 +617,7 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
         )
         .await;
 
-    let events = stub.snapshot_events();
+    let events = fake.snapshot_events();
     let active_speaker_events = &events[baseline_event_count..];
     for (camera_idx, raw_session_id) in (2_i64..=6).enumerate() {
         assert_source_packet_selection_update(
@@ -921,15 +921,15 @@ async fn session_replacement_purges_all_published_stream_mappings() {
 #[tokio::test]
 async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
     let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
-    let (stub_adapter, _) = stub_adapter();
-    let RuntimeTransportAdapter::Fake(stub) = &stub_adapter else {
+    let (fake_transport_adapter, _) = fake_adapter();
+    let RuntimeTransportAdapter::Fake(fake) = &fake_transport_adapter else {
         panic!("expected fake transport adapter");
     };
-    stub.set_publish_media_delay(Some(Duration::from_millis(200)));
+    fake.set_publish_media_delay(Some(Duration::from_millis(200)));
 
     let publish_task = tokio::spawn({
         let channel = Arc::clone(&channel);
-        let adapter = stub_adapter.clone();
+        let adapter = fake_transport_adapter.clone();
         async move {
             channel
                 .publish_track(
@@ -943,7 +943,7 @@ async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter(
         }
     });
 
-    wait_for_stub_event(stub, |event| {
+    wait_for_fake_event(fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::PublishMediaRequested {
@@ -991,8 +991,8 @@ async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter(
 
 #[tokio::test]
 async fn publish_track_defers_producer_commit_until_transport_publish_succeeds() {
-    let (channel, adapter, stub, _rx1, _rx2) = setup_two_ready_sessions_with_stub().await;
-    stub.set_publish_media_delay(Some(Duration::from_millis(200)));
+    let (channel, adapter, fake, _rx1, _rx2) = setup_two_ready_sessions_with_fake().await;
+    fake.set_publish_media_delay(Some(Duration::from_millis(200)));
 
     let publish_task = tokio::spawn({
         let channel = Arc::clone(&channel);
@@ -1010,7 +1010,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
         }
     });
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::PublishMediaRequested {
@@ -1045,8 +1045,8 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
 
 #[tokio::test]
 async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish() {
-    let (channel, adapter, stub, _rx1, _rx2) = setup_two_ready_sessions_with_stub().await;
-    stub.set_publish_media_delay(Some(Duration::from_millis(200)));
+    let (channel, adapter, fake, _rx1, _rx2) = setup_two_ready_sessions_with_fake().await;
+    fake.set_publish_media_delay(Some(Duration::from_millis(200)));
 
     let publish_task = tokio::spawn({
         let channel = Arc::clone(&channel);
@@ -1064,7 +1064,7 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
         }
     });
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::PublishMediaRequested {
@@ -1078,7 +1078,7 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
     assert!(channel.leave_session(&SessionId::Integer(1), 0).await);
     assert!(publish_task.await.unwrap().is_none());
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved {
@@ -1124,7 +1124,7 @@ async fn production_change_updates_screen_sharing_info() {
 
 #[tokio::test]
 async fn production_change_updates_transport_route_activity() {
-    let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
 
     channel
         .publish_track(
@@ -1142,7 +1142,7 @@ async fn production_change_updates_transport_route_activity() {
         .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ProducerActivityUpdated {
@@ -1156,7 +1156,7 @@ async fn production_change_updates_transport_route_activity() {
 
 #[tokio::test]
 async fn production_change_commits_session_state_before_transport_update_finishes() {
-    let (channel, adapter, stub, mut rx1, mut rx2) = setup_two_ready_sessions_with_stub().await;
+    let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
 
     channel
         .publish_track(
@@ -1170,7 +1170,7 @@ async fn production_change_commits_session_state_before_transport_update_finishe
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    stub.set_producer_active_delay(Some(Duration::from_millis(200)));
+    fake.set_producer_active_delay(Some(Duration::from_millis(200)));
 
     let update_task = tokio::spawn({
         let channel = Arc::clone(&channel);
@@ -1182,7 +1182,7 @@ async fn production_change_commits_session_state_before_transport_update_finishe
         }
     });
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ProducerActivityUpdated {
@@ -1203,7 +1203,7 @@ async fn production_change_commits_session_state_before_transport_update_finishe
 
 #[tokio::test]
 async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_adapter() {
-    let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+    let (channel, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1214,7 +1214,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
-    stub.set_consume_media_delay(Some(Duration::from_millis(200)));
+    fake.set_consume_media_delay(Some(Duration::from_millis(200)));
 
     let bootstrap_task = tokio::spawn({
         let channel = Arc::clone(&channel);
@@ -1226,7 +1226,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
         }
     });
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -1278,7 +1278,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
 
 #[tokio::test]
 async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succeeds() {
-    let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+    let (channel, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1289,7 +1289,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
-    stub.set_consume_media_delay(Some(Duration::from_millis(200)));
+    fake.set_consume_media_delay(Some(Duration::from_millis(200)));
 
     let bootstrap_task = tokio::spawn({
         let channel = Arc::clone(&channel);
@@ -1301,7 +1301,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
         }
     });
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -1322,7 +1322,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
 
 #[tokio::test]
 async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_consume() {
-    let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+    let (channel, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1333,7 +1333,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
-    stub.set_consume_media_delay(Some(Duration::from_millis(200)));
+    fake.set_consume_media_delay(Some(Duration::from_millis(200)));
 
     let bootstrap_task = tokio::spawn({
         let channel = Arc::clone(&channel);
@@ -1345,7 +1345,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
         }
     });
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -1360,7 +1360,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     assert!(channel.leave_session(&SessionId::Integer(2), 1).await);
     bootstrap_task.await.unwrap();
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved {
@@ -1389,7 +1389,7 @@ async fn production_change_ignores_unknown_stream_type() {
 
 #[tokio::test]
 async fn client_capabilities_bootstrap_late_join_when_download_connected_first() {
-    let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+    let (channel, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1419,7 +1419,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
             .await
     );
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -1441,7 +1441,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
 
 #[tokio::test]
 async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() {
-    let (channel, transport_adapter, stub, mut publisher_rx, mut subscriber_rx) =
+    let (channel, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1470,7 +1470,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
             .await
     );
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -1626,12 +1626,12 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
             &o_sfu_router::RtpParameters::new(vec![], vec![], vec![]),
         )
         .await
-        .expect("native publish intent should stage a recv-only media line");
+        .expect("protocol publish intent should stage a recv-only media line");
     let publish_offer = scenario
         .transport_adapter
         .create_session_renegotiation_offer(&publisher_session_key)
         .await
-        .expect("native publish should stage a follow-up offer");
+        .expect("protocol publish should stage a follow-up offer");
     apply_offer_answer(
         &scenario.transport_adapter,
         &publisher_session_key,
@@ -1643,7 +1643,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         .transport_adapter
         .negotiated_producer_parameters(&publisher_session_key, transport_media_id)
         .await
-        .expect("answered native publish should expose negotiated producer parameters");
+        .expect("answered protocol publish should expose negotiated producer parameters");
 
     assert!(
         scenario

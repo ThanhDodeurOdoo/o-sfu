@@ -21,8 +21,8 @@ use o_sfu::{
     },
 };
 
-use crate::support::native_harness::{
-    NativeWebSocketClient, connect_native_pair, native_test_config, read_until_server_message,
+use crate::support::protocol_harness::{
+    ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config, read_until_server_message,
 };
 use crate::support::{
     TEST_AUTH_KEY, TEST_CHANNEL_KEY, create_channel, disconnect_sessions_via_http,
@@ -31,7 +31,7 @@ use crate::support::{
 
 #[tokio::test]
 async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -47,7 +47,8 @@ async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
         return;
     };
 
-    let client = NativeWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    let client =
+        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -70,7 +71,7 @@ async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
 
 #[tokio::test]
 async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details() {
-    let mut config = native_test_config(1_000, 10);
+    let mut config = protocol_test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
     let server = spawn_test_server(config).await;
     assert!(server.is_ok());
@@ -88,7 +89,8 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
         return;
     };
 
-    let client = NativeWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    let client =
+        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -136,7 +138,7 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
 
 #[tokio::test]
 async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
-    let mut config = native_test_config(1_000, 10);
+    let mut config = protocol_test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
     config.public_ip = "203.0.113.44".parse().unwrap_or(config.public_ip);
     config.rtc_port_range = RtcPortRange::new(45_000, 45_099);
@@ -156,7 +158,8 @@ async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
         return;
     };
 
-    let client = NativeWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    let client =
+        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -186,13 +189,13 @@ async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
 
 #[tokio::test]
 async fn websocket_timeout_is_reported_from_integration_test() {
-    let server = spawn_test_server(native_test_config(25, 10)).await;
+    let server = spawn_test_server(protocol_test_config(25, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
 
-    let client = NativeWebSocketClient::connect(&server).await;
+    let client = ProtocolWebSocketClient::connect(&server).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -206,13 +209,13 @@ async fn websocket_timeout_is_reported_from_integration_test() {
 
 #[tokio::test]
 async fn invalid_jwt_is_rejected_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
 
-    let client = NativeWebSocketClient::authenticate_with_jwt(&server, "not-a-jwt").await;
+    let client = ProtocolWebSocketClient::authenticate_with_jwt(&server, "not-a-jwt").await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -226,7 +229,7 @@ async fn invalid_jwt_is_rejected_from_integration_test() {
 
 #[tokio::test]
 async fn channel_creation_is_idempotent_by_issuer_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -248,7 +251,7 @@ async fn channel_creation_is_idempotent_by_issuer_from_integration_test() {
 
 #[tokio::test]
 async fn broadcast_reaches_other_session_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -266,7 +269,8 @@ async fn broadcast_reaches_other_session_from_integration_test() {
         return;
     };
 
-    let peers = connect_native_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -300,7 +304,7 @@ async fn broadcast_reaches_other_session_from_integration_test() {
 
 #[tokio::test]
 async fn session_info_change_reaches_other_session_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -318,7 +322,8 @@ async fn session_info_change_reaches_other_session_from_integration_test() {
         return;
     };
 
-    let peers = connect_native_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -346,7 +351,7 @@ async fn session_info_change_reaches_other_session_from_integration_test() {
 
 #[tokio::test]
 async fn stats_reports_live_session_aggregates_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -364,7 +369,8 @@ async fn stats_reports_live_session_aggregates_from_integration_test() {
         return;
     };
 
-    let peers = connect_native_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -414,7 +420,7 @@ async fn stats_reports_live_session_aggregates_from_integration_test() {
 
 #[tokio::test]
 async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 1)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 1)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -433,13 +439,14 @@ async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integratio
     };
 
     let first_client =
-        NativeWebSocketClient::authenticate_and_negotiate(&server, &first_token).await;
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &first_token).await;
     assert!(first_client.is_some());
     let Some((first_client, _welcome)) = first_client else {
         return;
     };
 
-    let second_client = NativeWebSocketClient::authenticate_with_jwt(&server, &second_token).await;
+    let second_client =
+        ProtocolWebSocketClient::authenticate_with_jwt(&server, &second_token).await;
     assert!(second_client.is_some());
     let Some(mut second_client) = second_client else {
         return;
@@ -465,13 +472,13 @@ async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integratio
         return;
     };
     let third_client =
-        NativeWebSocketClient::authenticate_and_negotiate(&server, &third_token).await;
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &third_token).await;
     assert!(third_client.is_some());
 }
 
 #[tokio::test]
 async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -489,7 +496,8 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
         return;
     };
 
-    let peers = connect_native_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -518,7 +526,7 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
 
 #[tokio::test]
 async fn mismatched_explicit_channel_uuid_is_rejected_from_integration_test() {
-    let server = spawn_test_server(native_test_config(1_000, 10)).await;
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
@@ -537,7 +545,7 @@ async fn mismatched_explicit_channel_uuid_is_rejected_from_integration_test() {
     };
 
     let client =
-        NativeWebSocketClient::authenticate_with_channel(&server, &token, &second_channel).await;
+        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &second_channel).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;

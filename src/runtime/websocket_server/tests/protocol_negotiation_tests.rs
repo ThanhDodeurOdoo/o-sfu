@@ -75,7 +75,7 @@ async fn setup_negotiated_protocol_pair()
     let server = spawn_protocol_test_server(1_000, 100).await?;
     let channel = create_channel(
         &server,
-        "issuer-native-negotiation",
+        "issuer-protocol-negotiation",
         None,
         CreateChannelQuery::default(),
     )

@@ -123,7 +123,7 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
 }
 
 #[tokio::test]
-async fn rtc_session_renegotiation_offer_stages_native_producer_additions() {
+async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 45, SessionId::Integer(45));
 
@@ -147,7 +147,7 @@ async fn rtc_session_renegotiation_offer_stages_native_producer_additions() {
             &sample_router_rtp_parameters("compat-producer-mid", 89_000),
         )
         .await
-        .expect("native producer media should stage a renegotiation offer");
+        .expect("protocol producer media should stage a renegotiation offer");
 
     let renegotiation_offer = adapter
         .create_session_renegotiation_offer(&session_key)
@@ -191,8 +191,8 @@ async fn rtc_session_renegotiation_offer_stages_native_producer_additions() {
 }
 
 #[tokio::test]
-async fn rtc_native_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
-{
+async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
+ {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 46, SessionId::Integer(46));
 
@@ -216,11 +216,11 @@ async fn rtc_native_publish_projects_recv_expectation_from_answer_when_publish_i
             &RouterRtpParameters::new(vec![], vec![], vec![]),
         )
         .await
-        .expect("native publish intent should stage a recv-only media line");
+        .expect("protocol publish intent should stage a recv-only media line");
     let renegotiation_offer = adapter
         .create_session_renegotiation_offer(&session_key)
         .await
-        .expect("native publish should stage a follow-up offer");
+        .expect("protocol publish should stage a follow-up offer");
     let renegotiation_sdp = renegotiation_offer.into_sdp();
     let negotiated_mid = adapter
         .debug_resolve_mid(transport_media_id)
@@ -234,20 +234,20 @@ async fn rtc_native_publish_projects_recv_expectation_from_answer_when_publish_i
             .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
             .await
             .is_some(),
-        "answered native publish should recover the recv expectation from the negotiated SDP"
+        "answered protocol publish should recover the recv expectation from the negotiated SDP"
     );
     let negotiated_parameters = adapter
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
-        .expect("native publish should project negotiated RTP parameters");
+        .expect("protocol publish should project negotiated RTP parameters");
     assert!(
         negotiated_parameters.bindings().next().is_some(),
-        "projected native publish parameters should expose at least one binding"
+        "projected protocol publish parameters should expose at least one binding"
     );
 }
 
 #[tokio::test]
-async fn rtc_session_renegotiation_offer_stages_native_consumer_additions() {
+async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let adapter = RtcTransportAdapter::default();
     let source_session_key = transport_key(1, 36, SessionId::Integer(36));
     let consumer_session_key = transport_key(1, 37, SessionId::Integer(37));
@@ -290,7 +290,7 @@ async fn rtc_session_renegotiation_offer_stages_native_consumer_additions() {
             &sample_router_rtp_parameters("compat-mid", 82_000),
         )
         .await
-        .expect("native consumer media should stage a renegotiation offer");
+        .expect("protocol consumer media should stage a renegotiation offer");
 
     let renegotiation_offer = adapter
         .create_session_renegotiation_offer(&consumer_session_key)
@@ -366,7 +366,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
             &sample_router_rtp_parameters("compat-mid-remove", 84_000),
         )
         .await
-        .expect("native consumer media should stage a renegotiation offer");
+        .expect("protocol consumer media should stage a renegotiation offer");
     let consumer_mid = adapter
         .debug_resolve_mid(consumer_media_id)
         .await
@@ -494,7 +494,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
             &sample_router_rtp_parameters("compat-producer-mid-cancel", 91_000),
         )
         .await
-        .expect("native producer media should stage an addition offer");
+        .expect("protocol producer media should stage an addition offer");
     let producer_mid = adapter
         .debug_resolve_mid(producer_media_id)
         .await
@@ -585,7 +585,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
             &sample_router_rtp_parameters("compat-mid-queued-remove-b", 88_000),
         )
         .await
-        .expect("second native consumer media should stage an addition offer");
+        .expect("second protocol consumer media should stage an addition offer");
     let second_addition_offer = adapter
         .create_session_renegotiation_offer(&consumer_session_key)
         .await
@@ -779,7 +779,7 @@ async fn add_negotiated_consumer_media(
             &sample_router_rtp_parameters(mid, ssrc),
         )
         .await
-        .expect("native consumer media should stage an addition offer");
+        .expect("protocol consumer media should stage an addition offer");
     let consumer_mid = adapter
         .debug_resolve_mid(consumer_media_id)
         .await
@@ -812,7 +812,7 @@ async fn add_negotiated_producer_media(
             &sample_router_rtp_parameters(mid, ssrc),
         )
         .await
-        .expect("native producer media should stage an addition offer");
+        .expect("protocol producer media should stage an addition offer");
     let producer_mid = adapter
         .debug_resolve_mid(producer_media_id)
         .await

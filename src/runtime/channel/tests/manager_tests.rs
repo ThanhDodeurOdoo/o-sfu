@@ -330,7 +330,7 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = ChannelManager::for_test();
     let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
-    let RuntimeTransportAdapter::Fake(stub) = &transport_adapter else {
+    let RuntimeTransportAdapter::Fake(fake) = &transport_adapter else {
         panic!("test expects the fake transport adapter");
     };
     let channel = manager
@@ -380,8 +380,8 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let (second_audio_media_id, second_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(2)).await;
 
-    let baseline_event_count = stub.snapshot_events().len();
-    stub.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+    let baseline_event_count = fake.snapshot_events().len();
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
         second_audio_media_id,
         Instant::now(),
     )]);
@@ -390,7 +390,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         .sync_source_packet_selection_policies(&transport_adapter)
         .await;
 
-    let events = stub.snapshot_events();
+    let events = fake.snapshot_events();
     let policy_events = &events[baseline_event_count..];
     let featured_messages = drain_outbound(&mut receivers[0]);
     assert_source_packet_selection_update(

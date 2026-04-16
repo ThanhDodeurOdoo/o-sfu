@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "deterministic media fixtures are shared across the native integration and fake-stream scenarios"
+    reason = "deterministic media fixtures are shared across the protocol integration and fake-stream scenarios"
 )]
 
 use std::time::Duration;

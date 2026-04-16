@@ -338,8 +338,8 @@ async fn publish_camera(
 
 #[tokio::test]
 async fn leave_session_runtime_removes_surviving_consumer_media() {
-    let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_sessions_with_stub().await;
+    let (channel, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
 
     assert!(
         channel
@@ -353,7 +353,7 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
             .await
             .is_some()
     );
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -380,7 +380,7 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
             .await
     );
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved { session_id, .. }
@@ -389,7 +389,7 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
     })
     .await;
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved { session_id, .. }
@@ -401,8 +401,8 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
 
 #[tokio::test]
 async fn leave_session_runtime_removes_departing_consumer_media() {
-    let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_sessions_with_stub().await;
+    let (channel, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
 
     assert!(
         channel
@@ -416,7 +416,7 @@ async fn leave_session_runtime_removes_departing_consumer_media() {
             .await
             .is_some()
     );
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -443,7 +443,7 @@ async fn leave_session_runtime_removes_departing_consumer_media() {
             .await
     );
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved {
@@ -457,8 +457,8 @@ async fn leave_session_runtime_removes_departing_consumer_media() {
 
 #[tokio::test]
 async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
-    let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_sessions_with_stub().await;
+    let (channel, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
 
     assert!(
         channel
@@ -472,7 +472,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
             .await
             .is_some()
     );
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::ConsumeMediaRequested {
@@ -500,7 +500,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
             .is_ok()
     );
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved { session_id, .. }
@@ -509,7 +509,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
     })
     .await;
 
-    wait_for_stub_event(&stub, |event| {
+    wait_for_fake_event(&fake, |event| {
         matches!(
             event,
             FakeWebRtcEvent::MediaRemoved { session_id, .. }
@@ -525,7 +525,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (transport_adapter, _stub) = stub_adapter();
+    let (transport_adapter, _fake) = fake_adapter();
     let (first_connection, second_connection) = join_same_session_twice(&channel).await;
 
     assert_ne!(first_connection, second_connection);
@@ -662,7 +662,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (transport_adapter, _stub) = stub_adapter();
+    let (transport_adapter, _fake) = fake_adapter();
     let (publisher_tx, mut publisher_rx) = test_sender();
     let (first_subscriber_tx, _first_subscriber_rx) = test_sender();
     let publisher_connection = channel

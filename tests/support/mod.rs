@@ -6,7 +6,7 @@
 pub mod fake_media;
 pub mod fake_rtc_peer;
 mod harness;
-pub mod native_full_stack;
-pub mod native_harness;
+pub mod protocol_full_stack;
+pub mod protocol_harness;
 
 pub use harness::*;

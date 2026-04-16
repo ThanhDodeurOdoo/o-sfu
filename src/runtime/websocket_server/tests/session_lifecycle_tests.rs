@@ -156,10 +156,10 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     };
     assert!(read_welcome(&mut websocket).await.is_some());
     let Some(offer_batch) = read_protocol_server_batch(&mut websocket).await else {
-        panic!("native session should receive an initial offer");
+        panic!("protocol session should receive an initial offer");
     };
     let Some((request_id, request)) = first_protocol_server_request(&offer_batch) else {
-        panic!("initial native frame should be an offer request");
+        panic!("initial protocol frame should be an offer request");
     };
     assert!(
         respond_to_protocol_negotiation_request(
@@ -194,7 +194,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
 }
 
 #[tokio::test]
-async fn websocket_closure_emits_stub_webrtc_session_closed_event() {
+async fn websocket_closure_emits_fake_webrtc_session_closed_event() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
@@ -213,7 +213,7 @@ async fn websocket_closure_emits_stub_webrtc_session_closed_event() {
     let close_result = websocket.close(None).await;
     assert!(close_result.is_ok());
 
-    let events = wait_for_stub_webrtc_events(&adapter, 1).await;
+    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
     assert!(events.is_some());
     let Some(events) = events else {
         return;
@@ -252,7 +252,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
         Some(CloseCode::Library(4003))
     );
 
-    let events = wait_for_stub_webrtc_events(&adapter, 1).await;
+    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
     assert!(events.is_some());
     let Some(events) = events else {
         return;
@@ -266,7 +266,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
 
     let close_result = second_socket.close(None).await;
     assert!(close_result.is_ok());
-    let events = wait_for_stub_webrtc_events(&adapter, 2).await;
+    let events = wait_for_fake_webrtc_events(&adapter, 2).await;
     assert!(events.is_some());
     let Some(events) = events else {
         return;
@@ -319,7 +319,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
         "remaining peer should receive session departure after disconnect: {peer_message:?}"
     );
 
-    let events = wait_for_stub_webrtc_events(&adapter, 1).await;
+    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
     assert!(events.is_some());
     let Some(events) = events else {
         return;

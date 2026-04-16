@@ -248,7 +248,7 @@ pub(super) async fn spawn_protocol_rtc_test_server(
     .await
 }
 
-pub(super) async fn wait_for_stub_webrtc_events(
+pub(super) async fn wait_for_fake_webrtc_events(
     adapter: &FakeWebRtcAdapter,
     event_count: usize,
 ) -> Option<Vec<FakeWebRtcEvent>> {
