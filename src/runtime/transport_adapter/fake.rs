@@ -180,7 +180,7 @@ impl FakeWebRtcAdapter {
         }
     }
 
-    pub(crate) fn compatibility_client_rtp_capabilities(
+    pub(crate) fn project_answered_client_rtp_capabilities(
         answer_sdp: &str,
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<o_sfu_router::RtpCapabilities, TransportAdapterError> {

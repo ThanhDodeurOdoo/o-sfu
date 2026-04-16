@@ -6,11 +6,11 @@
 //! - `media`: producer/consumer bootstrap plus upload/download activity transitions
 //! - `outbound`: shared outbound fan-out helpers for session handlers
 //! - `state`: channel-local mutable state and internal bootstrap bookkeeping
-//! - `router_state`: compatibility bridge from signaling session ids into the pure router
+//! - `router_state`: post-auth bridge from signaling session ids into the router core
 //! - `topology`: channel-local routing placement boundary
 //! - `rtp_capabilities`: default router RTP capability surface
-//! - signaling edges own any legacy RTP/ORTC wire mapping; the channel boundary consumes
-//!   router-native RTP capabilities, negotiated parameters, and track bootstrap data
+//! - signaling edges own the protocol wire mapping; the channel boundary consumes
+//!   browser codec baseline RTP capabilities, negotiated parameters, and track bootstrap data
 
 use std::fmt;
 use std::sync::Arc;

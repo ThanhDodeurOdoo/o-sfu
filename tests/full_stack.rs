@@ -688,7 +688,7 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
 }
 
 #[tokio::test]
-async fn fake_rtc_peers_cover_explicit_upload_unpublish_compatibility_semantics() {
+async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
     let mut config = test_config(1_000, 10);
     config.transport_backend = TransportBackend::Rtc;
 

@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -127,7 +127,11 @@ where
 
 /// # Errors
 ///
-/// Returns an error when the token format, signature, or registered claims are invalid.
+/// Returns an error when the token format, segment encoding, signature, or registered claims are
+/// invalid.
+///
+/// This verifier decodes JWT header, payload, and signature segments with the JOSE base64url
+/// alphabet without padding, as required by RFC 7515 / RFC 7519.
 pub fn verify<T>(token: &str, key_b64: &str) -> Result<T, AuthenticationError>
 where
     T: DeserializeOwned,
@@ -202,16 +206,12 @@ fn split_token(token: &str) -> Result<(&str, &str, &str), AuthenticationError> {
 fn decode_base64(input: &str) -> Result<Vec<u8>, AuthenticationError> {
     STANDARD
         .decode(pad_base64(input).as_bytes())
-        .or_else(|_error| URL_SAFE.decode(pad_base64(input).as_bytes()))
-        .or_else(|_error| URL_SAFE_NO_PAD.decode(input.as_bytes()))
         .map_err(|_error| AuthenticationError::InvalidBase64Encoding)
 }
 
 fn decode_jwt_segment(input: &str) -> Result<Vec<u8>, AuthenticationError> {
     URL_SAFE_NO_PAD
         .decode(input.as_bytes())
-        .or_else(|_error| URL_SAFE.decode(pad_base64(input).as_bytes()))
-        .or_else(|_error| STANDARD.decode(pad_base64(input).as_bytes()))
         .map_err(|_error| AuthenticationError::InvalidBase64Encoding)
 }
 
@@ -229,7 +229,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use base64::Engine as _;
-    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde::Serialize;
     use serde_json::json;
 
@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_emits_jose_base64url_segments_without_padding() {
+    fn sign_emits_jose_base64url_segments() {
         let claims = HttpChannelClaims {
             registered: RegisteredJwtClaims::default(),
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
@@ -386,20 +386,18 @@ mod tests {
         assert_eq!(segments.len(), 3);
         for segment in segments {
             assert!(!segment.contains('='));
-            assert!(!segment.contains('+'));
-            assert!(!segment.contains('/'));
+            assert!(URL_SAFE_NO_PAD.decode(segment.as_bytes()).is_ok());
         }
     }
 
     #[test]
-    fn verify_accepts_jose_token_without_typ_header() {
+    fn verify_accepts_jose_base64url_token_without_typ_header() {
         let claims = HttpChannelClaims {
             registered: RegisteredJwtClaims::default(),
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
         };
 
-        let token =
-            sign_token_for_test(&claims, TEST_AUTH_KEY, None, SegmentEncoding::UrlSafeNoPad);
+        let token = sign_token_for_test(&claims, TEST_AUTH_KEY, None, SegmentEncoding::Jose);
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -410,18 +408,13 @@ mod tests {
     }
 
     #[test]
-    fn verify_accepts_legacy_standard_base64_segments_for_compatibility() {
+    fn verify_accepts_jose_base64url_token_with_typ_header() {
         let claims = HttpChannelClaims {
             registered: RegisteredJwtClaims::default(),
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
         };
 
-        let token = sign_token_for_test(
-            &claims,
-            TEST_AUTH_KEY,
-            Some("JWT"),
-            SegmentEncoding::Standard,
-        );
+        let token = sign_token_for_test(&claims, TEST_AUTH_KEY, Some("JWT"), SegmentEncoding::Jose);
         assert!(token.is_some());
         let Some(token) = token else {
             return;
@@ -449,8 +442,7 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum SegmentEncoding {
-        UrlSafeNoPad,
-        Standard,
+        Jose,
     }
 
     fn sign_token_for_test<T: Serialize>(
@@ -476,8 +468,7 @@ mod tests {
 
     fn encode_segment(bytes: &[u8], encoding: SegmentEncoding) -> String {
         match encoding {
-            SegmentEncoding::UrlSafeNoPad => URL_SAFE_NO_PAD.encode(bytes),
-            SegmentEncoding::Standard => STANDARD.encode(bytes),
+            SegmentEncoding::Jose => URL_SAFE_NO_PAD.encode(bytes),
         }
     }
 }

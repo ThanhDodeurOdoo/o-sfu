@@ -610,7 +610,7 @@ impl RuntimeTransportAdapter {
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         match self {
-            Self::Fake(_adapter) => FakeWebRtcAdapter::compatibility_client_rtp_capabilities(
+            Self::Fake(_adapter) => FakeWebRtcAdapter::project_answered_client_rtp_capabilities(
                 answer_sdp,
                 offered_router_capabilities,
             ),

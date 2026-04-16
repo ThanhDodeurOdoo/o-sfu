@@ -40,8 +40,7 @@ docker run --rm \
   o-sfu:local
 ```
 
-The container defaults to `TRANSPORT_BACKEND=fake`. The legacy `stub` value is
-still accepted as a temporary compatibility alias.
+The container defaults to `TRANSPORT_BACKEND=fake`. (TODO: for tests, will change later)
 
 For real RTC traffic, also expose the UDP worker range and provide the advertised public IP:
 

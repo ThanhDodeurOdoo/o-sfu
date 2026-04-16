@@ -146,7 +146,7 @@ mod tests {
     use super::router_rtp_capabilities;
 
     #[test]
-    fn default_router_capabilities_remain_compatibility_shaped() {
+    fn default_router_capabilities_match_the_browser_codec_baseline() {
         let capabilities = router_rtp_capabilities(MediaCodecFlags::default());
         let codec_names = capabilities
             .codecs()

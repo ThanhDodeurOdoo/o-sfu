@@ -19,7 +19,6 @@ const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
 const DEFAULT_TRUST_PROXY_HEADERS: bool = false;
 const TRANSPORT_BACKEND_FAKE: &str = "fake";
-const TRANSPORT_BACKEND_FAKE_LEGACY_ALIAS: &str = "stub";
 const TRANSPORT_BACKEND_RTC: &str = "rtc";
 const FAKE_PUBLIC_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
@@ -223,7 +222,7 @@ impl FromStr for TransportBackend {
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
-            TRANSPORT_BACKEND_FAKE | TRANSPORT_BACKEND_FAKE_LEGACY_ALIAS => Ok(Self::Fake),
+            TRANSPORT_BACKEND_FAKE => Ok(Self::Fake),
             TRANSPORT_BACKEND_RTC => Ok(Self::Rtc),
             _ => Err(anyhow!(
                 "TRANSPORT_BACKEND must be either `{TRANSPORT_BACKEND_FAKE}` or `{TRANSPORT_BACKEND_RTC}`"
@@ -649,17 +648,13 @@ mod tests {
     }
 
     #[test]
-    fn config_accepts_legacy_stub_transport_backend_alias() {
+    fn config_rejects_removed_stub_transport_backend_alias() {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "TRANSPORT_BACKEND" => Some("stub".to_owned()),
             _ => None,
         });
-        assert!(config.is_ok());
-        let Some(config) = config.ok() else {
-            return;
-        };
-        assert_eq!(config.transport_backend, TransportBackend::Fake);
+        assert!(config.is_err());
     }
 
     #[test]

@@ -574,7 +574,7 @@ async fn consume_peer_joined_update(
             bundle_session_info_key(&session_id),
             ProtocolSessionInfo::default(),
         )]))),
-        "peer join should project into the compatibility session-info update surface"
+        "peer join should project into the post-auth session-info update surface"
     );
     Some(())
 }

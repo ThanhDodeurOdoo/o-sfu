@@ -80,6 +80,10 @@ async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
     )
 }
 
+/// Authorized channel-creation route.
+///
+/// The bearer token is decoded through `auth::verify`, so JWT header, payload, and signature
+/// segments must use the JOSE base64url alphabet without padding.
 async fn channel(
     State(state): State<RuntimeState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -131,6 +135,10 @@ async fn channel(
         .into_response()
 }
 
+/// Authorized bulk-disconnect route.
+///
+/// The request body is decoded through `auth::verify`, so JWT header, payload, and signature
+/// segments must use the JOSE base64url alphabet without padding.
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
     state.metrics.record_http_disconnect_request();
     let Ok(token) = str::from_utf8(&body) else {

@@ -181,7 +181,7 @@ fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> Runtim
 }
 
 #[test]
-fn fake_adapter_uses_explicit_compatibility_capability_projection() {
+fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
     let adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
     let offered = sample_router_capabilities();
