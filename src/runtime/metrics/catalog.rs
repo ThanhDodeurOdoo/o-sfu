@@ -1,0 +1,322 @@
+use std::time::Duration;
+
+use crate::runtime::rtc_adapter::TransportSessionHealth;
+use crate::signaling::protocol::WebSocketCloseCode;
+
+use super::counter::{Counter, CounterFamily, UpDownCounter};
+use super::labels::{
+    HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
+    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
+    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+};
+
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeMetrics {
+    pub(super) http_requests: CounterFamily<HttpRoute>,
+    pub(super) http_channel_responses: CounterFamily<HttpChannelResponseStatus>,
+    pub(super) http_disconnect_responses: CounterFamily<HttpDisconnectResponseStatus>,
+    pub(super) ws_connections: CounterFamily<WsConnectionStage>,
+    pub(super) ws_handshake_rejections: CounterFamily<WebSocketCloseCode>,
+    pub(super) ws_handshake_rejections_other: Counter,
+    pub(super) ws_startup_failures: CounterFamily<WsStartupFailureKind>,
+    pub(super) ws_session_loops_started: Counter,
+    pub(super) ws_session_loop_exits: CounterFamily<WsSessionLoopExitReason>,
+    pub(super) ws_bus_batches: CounterFamily<WsBusDirection>,
+    pub(super) ws_bus_envelopes: CounterFamily<WsBusDirection>,
+    pub(super) ws_bus_parse_failures: Counter,
+    pub(super) ws_bus_failures: CounterFamily<WsBusFailureKind>,
+    pub(super) ws_bus_client_frames: CounterFamily<WsBusClientFrameKind>,
+    pub(super) active_channels: UpDownCounter,
+    pub(super) active_sessions: UpDownCounter,
+    pub(super) active_recording_channels: UpDownCounter,
+    pub(super) active_transport_sessions: UpDownCounter,
+    pub(super) connected_transport_sessions: UpDownCounter,
+    pub(super) disconnected_transport_sessions: UpDownCounter,
+    pub(super) recording_actions: CounterFamily<RecordingActionOutcome>,
+    pub(super) recording_captured_packets: Counter,
+    pub(super) recording_captured_streams: Counter,
+    pub(super) rtp_packets: CounterFamily<RtpFlowDirection>,
+    pub(super) rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
+    pub(super) transport_ice_state_changes: CounterFamily<TransportIceState>,
+    pub(super) transport_dtls_connected: Counter,
+    pub(super) transport_session_lifetime_buckets: CounterFamily<TransportSessionLifetimeBucket>,
+    pub(super) transport_session_lifetime_count: Counter,
+    pub(super) transport_session_lifetime_sum_micros: Counter,
+    pub(super) rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
+    pub(super) rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
+    pub(super) rtc_datagram_fallback_scans: Counter,
+    pub(super) rtc_datagram_scan_sessions: Counter,
+    pub(super) rtc_route_control: CounterFamily<RtcRouteControlOutcome>,
+}
+
+impl RuntimeMetrics {
+    pub(crate) fn record_http_noop_request(&self) {
+        self.http_requests.increment(HttpRoute::Noop);
+    }
+
+    pub(crate) fn record_http_stats_request(&self) {
+        self.http_requests.increment(HttpRoute::Stats);
+    }
+
+    pub(crate) fn record_http_metrics_request(&self) {
+        self.http_requests.increment(HttpRoute::Metrics);
+    }
+
+    pub(crate) fn record_http_channel_request(&self) {
+        self.http_requests.increment(HttpRoute::Channel);
+    }
+
+    pub(crate) fn record_http_channel_success(&self) {
+        self.http_channel_responses
+            .increment(HttpChannelResponseStatus::Success);
+    }
+
+    pub(crate) fn record_http_channel_unauthorized(&self) {
+        self.http_channel_responses
+            .increment(HttpChannelResponseStatus::Unauthorized);
+    }
+
+    pub(crate) fn record_http_channel_forbidden(&self) {
+        self.http_channel_responses
+            .increment(HttpChannelResponseStatus::Forbidden);
+    }
+
+    pub(crate) fn record_http_channel_bad_request(&self) {
+        self.http_channel_responses
+            .increment(HttpChannelResponseStatus::BadRequest);
+    }
+
+    pub(crate) fn record_http_disconnect_request(&self) {
+        self.http_requests.increment(HttpRoute::Disconnect);
+    }
+
+    pub(crate) fn record_http_disconnect_success(&self) {
+        self.http_disconnect_responses
+            .increment(HttpDisconnectResponseStatus::Success);
+    }
+
+    pub(crate) fn record_http_disconnect_bad_request(&self) {
+        self.http_disconnect_responses
+            .increment(HttpDisconnectResponseStatus::BadRequest);
+    }
+
+    pub(crate) fn record_http_disconnect_unprocessable_entity(&self) {
+        self.http_disconnect_responses
+            .increment(HttpDisconnectResponseStatus::UnprocessableEntity);
+    }
+
+    pub(crate) fn record_ws_connection_accepted(&self) {
+        self.ws_connections.increment(WsConnectionStage::Accepted);
+    }
+
+    pub(crate) fn record_ws_handshake_credentials_received(&self) {
+        self.ws_connections
+            .increment(WsConnectionStage::CredentialsReceived);
+    }
+
+    pub(crate) fn record_ws_handshake_rejection(&self, close_code: Option<WebSocketCloseCode>) {
+        match close_code {
+            Some(
+                close_code @ (WebSocketCloseCode::AuthTimeout
+                | WebSocketCloseCode::AuthFailed
+                | WebSocketCloseCode::ProtocolError
+                | WebSocketCloseCode::ChannelFull),
+            ) => self.ws_handshake_rejections.increment(close_code),
+            Some(
+                WebSocketCloseCode::Error
+                | WebSocketCloseCode::Clean
+                | WebSocketCloseCode::Leaving
+                | WebSocketCloseCode::Kicked,
+            )
+            | None => self.ws_handshake_rejections_other.increment(),
+        }
+    }
+
+    pub(crate) fn record_ws_session_joined(&self) {
+        self.ws_connections.increment(WsConnectionStage::Joined);
+    }
+
+    pub(crate) fn record_ws_startup_send_failure(&self) {
+        self.ws_startup_failures
+            .increment(WsStartupFailureKind::StartupSend);
+    }
+
+    pub(crate) fn record_ws_session_initialize_failure(&self) {
+        self.ws_startup_failures
+            .increment(WsStartupFailureKind::SessionInitialize);
+    }
+
+    pub(crate) fn record_ws_session_loop_started(&self) {
+        self.ws_session_loops_started.increment();
+    }
+
+    pub(crate) fn record_ws_session_loop_exit(&self, reason: WsSessionLoopExitReason) {
+        self.ws_session_loop_exits.increment(reason);
+    }
+
+    pub(crate) fn record_ws_bus_batch_received(&self, envelope_count: usize) {
+        self.ws_bus_batches.increment(WsBusDirection::Received);
+        self.ws_bus_envelopes
+            .add(WsBusDirection::Received, envelope_count);
+    }
+
+    pub(crate) fn record_ws_bus_invalid_input_failure(&self) {
+        self.ws_bus_parse_failures.increment();
+        self.ws_bus_failures
+            .increment(WsBusFailureKind::InvalidInput);
+    }
+
+    pub(crate) fn record_ws_bus_unsupported_feature_failure(&self) {
+        self.ws_bus_parse_failures.increment();
+        self.ws_bus_failures
+            .increment(WsBusFailureKind::UnsupportedFeature);
+    }
+
+    pub(crate) fn record_ws_bus_client_request(&self) {
+        self.ws_bus_client_frames
+            .increment(WsBusClientFrameKind::Request);
+    }
+
+    pub(crate) fn record_ws_bus_client_message(&self) {
+        self.ws_bus_client_frames
+            .increment(WsBusClientFrameKind::Message);
+    }
+
+    pub(crate) fn record_ws_bus_batch_sent(&self, envelope_count: usize) {
+        self.ws_bus_batches.increment(WsBusDirection::Sent);
+        self.ws_bus_envelopes
+            .add(WsBusDirection::Sent, envelope_count);
+    }
+
+    pub(crate) fn record_ws_bus_send_failure(&self) {
+        self.ws_bus_failures.increment(WsBusFailureKind::Send);
+    }
+
+    pub(crate) fn add_active_channels(&self, delta: i64) {
+        self.active_channels.add(delta);
+    }
+
+    pub(crate) fn add_active_sessions(&self, delta: i64) {
+        self.active_sessions.add(delta);
+    }
+
+    pub(crate) fn add_active_recording_channels(&self, delta: i64) {
+        self.active_recording_channels.add(delta);
+    }
+
+    pub(crate) fn add_active_transport_sessions(&self, delta: i64) {
+        self.active_transport_sessions.add(delta);
+    }
+
+    pub(crate) fn record_transport_health_transition(
+        &self,
+        previous: Option<TransportSessionHealth>,
+        next: Option<TransportSessionHealth>,
+    ) {
+        if previous == next {
+            return;
+        }
+        match previous {
+            Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(-1),
+            Some(TransportSessionHealth::Disconnected) => {
+                self.disconnected_transport_sessions.add(-1);
+            }
+            None => {}
+        }
+        match next {
+            Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(1),
+            Some(TransportSessionHealth::Disconnected) => {
+                self.disconnected_transport_sessions.add(1);
+            }
+            None => {}
+        }
+    }
+
+    pub(crate) fn record_recording_start_accepted(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StartAccepted);
+    }
+
+    pub(crate) fn record_recording_start_rejected(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StartRejected);
+    }
+
+    pub(crate) fn record_recording_stop_accepted(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StopAccepted);
+    }
+
+    pub(crate) fn record_recording_stop_rejected(&self) {
+        self.recording_actions
+            .increment(RecordingActionOutcome::StopRejected);
+    }
+
+    pub(crate) fn record_recording_captured_packet(&self) {
+        self.recording_captured_packets.increment();
+    }
+
+    pub(crate) fn record_recording_captured_stream(&self) {
+        self.recording_captured_streams.increment();
+    }
+
+    pub(crate) fn record_rtp_ingress(&self, payload_bytes: usize) {
+        self.rtp_packets.increment(RtpFlowDirection::Ingress);
+        self.rtp_payload_bytes
+            .add(RtpFlowDirection::Ingress, payload_bytes);
+    }
+
+    pub(crate) fn record_rtp_egress(&self, payload_bytes: usize) {
+        self.rtp_packets.increment(RtpFlowDirection::Egress);
+        self.rtp_payload_bytes
+            .add(RtpFlowDirection::Egress, payload_bytes);
+    }
+
+    pub(crate) fn record_transport_ice_state_change(&self, state: TransportIceState) {
+        self.transport_ice_state_changes.increment(state);
+    }
+
+    pub(crate) fn record_transport_dtls_connected(&self) {
+        self.transport_dtls_connected.increment();
+    }
+
+    pub(crate) fn record_transport_session_lifetime(&self, duration: Duration) {
+        self.transport_session_lifetime_count.increment();
+        self.transport_session_lifetime_sum_micros
+            .add_u64(u64::try_from(duration.as_micros()).unwrap_or(u64::MAX));
+        if duration <= Duration::from_secs(1) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le1Second);
+        }
+        if duration <= Duration::from_secs(10) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le10Seconds);
+        }
+        if duration <= Duration::from_secs(60) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le60Seconds);
+        }
+        if duration <= Duration::from_secs(300) {
+            self.transport_session_lifetime_buckets
+                .increment(TransportSessionLifetimeBucket::Le300Seconds);
+        }
+    }
+
+    pub(crate) fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
+        self.rtc_datagram_routes.increment(path);
+    }
+
+    pub(crate) fn record_rtc_datagram_drop(&self, reason: RtcDatagramDropReason) {
+        self.rtc_datagram_drops.increment(reason);
+    }
+
+    pub(crate) fn record_rtc_datagram_fallback_scan(&self, examined_sessions: usize) {
+        self.rtc_datagram_fallback_scans.increment();
+        self.rtc_datagram_scan_sessions.add(examined_sessions);
+    }
+
+    pub(crate) fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
+        self.rtc_route_control.increment(outcome);
+    }
+}
