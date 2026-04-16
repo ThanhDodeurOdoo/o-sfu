@@ -88,6 +88,7 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
 pub(crate) struct RemoteTrackBootstrap {
     consumer_id: ConsumerRuntimeId,
     media_kind: RouterMediaKind,
+    mid: String,
     producer_id: ProducerRuntimeId,
     rtp_parameters: RouterRtpParameters,
     session_id: SessionId,
@@ -483,11 +484,16 @@ impl ChannelState {
         {
             return None;
         }
+        let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         Some(PendingConsumerBootstrap {
             sender: prepared.sender.clone(),
             bootstrap: RemoteTrackBootstrap {
-                consumer_id: ConsumerRuntimeId::allocate(&mut self.next_consumer_id),
+                consumer_id,
                 media_kind: prepared.producer_media_kind,
+                mid: prepared
+                    .consumer_rtp_parameters
+                    .mid()
+                    .map_or_else(|| consumer_id.into_wire_id(), ToOwned::to_owned),
                 producer_id: prepared.producer_id,
                 rtp_parameters: prepared.consumer_rtp_parameters.clone(),
                 session_id: prepared.producer_owner_session_id.clone(),
@@ -567,8 +573,9 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn commit_consumer_bootstrap(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
-        pending: PendingConsumerBootstrap,
+        mut pending: PendingConsumerBootstrap,
         consumer_transport_media_id: TransportMediaId,
+        consumer_mid: Option<String>,
     ) -> Option<(OutboundSender, RemoteTrackBootstrap, bool)> {
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
@@ -604,6 +611,9 @@ impl ChannelState {
                 return None;
             }
         };
+        if let Some(consumer_mid) = consumer_mid {
+            pending.bootstrap.mid = consumer_mid;
+        }
         if !pending.consumer_active
             && self
                 .topology
@@ -832,6 +842,10 @@ impl RemoteTrackBootstrap {
 
     pub(crate) const fn media_kind(&self) -> RouterMediaKind {
         self.media_kind
+    }
+
+    pub(crate) fn mid(&self) -> &str {
+        &self.mid
     }
 
     pub(crate) fn producer_id(&self) -> String {

@@ -165,8 +165,7 @@ impl NativeSessionProtocol {
     ) -> Result<usize, WebSocketCloseCode> {
         match request {
             ChannelEventRequest::BootstrapRemoteTrack(payload) => {
-                self.track_projection
-                    .apply_remote_track_bootstrap(&payload)?;
+                self.track_projection.apply_remote_track_bootstrap(&payload);
                 let mut batch_len = send_server_messages(
                     writer,
                     vec![ServerMessage::Tracks(self.track_projection.snapshot())],

@@ -4,7 +4,6 @@ use crate::runtime::channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBi
 use crate::signaling::{
     protocol::{
         PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, TrackBinding,
-        WebSocketCloseCode,
     },
     shared::{SessionId, SessionInfo, StreamType},
 };
@@ -69,11 +68,8 @@ impl RemoteTrackProjection {
     pub(super) fn apply_remote_track_bootstrap(
         &mut self,
         payload: &RemoteTrackBootstrap,
-    ) -> Result<(), WebSocketCloseCode> {
-        let Some(mid) = payload.rtp_parameters().mid() else {
-            return Err(WebSocketCloseCode::Error);
-        };
-        let mid = mid.to_owned();
+    ) {
+        let mid = payload.mid().to_owned();
         self.bindings_by_mid.insert(
             mid.clone(),
             TrackBinding {
@@ -83,7 +79,6 @@ impl RemoteTrackProjection {
                 active: payload.active(),
             },
         );
-        Ok(())
     }
 
     pub(super) fn snapshot(&self) -> Vec<TrackBinding> {

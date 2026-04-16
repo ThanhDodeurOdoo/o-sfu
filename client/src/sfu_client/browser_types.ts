@@ -38,8 +38,15 @@ export interface PeerConnectionSender {
     track?: MediaTrack | null;
 }
 
+export type PeerConnectionTransceiverDirection = "sendrecv" | "sendonly" | "recvonly" | "inactive";
+
 export interface PeerConnectionTransceiver {
     mid: string | null;
+    currentDirection?: PeerConnectionTransceiverDirection | null;
+    direction?: PeerConnectionTransceiverDirection;
+    receiver?: {
+        track?: MediaTrack | null;
+    };
     sender: PeerConnectionSender;
 }
 

@@ -362,6 +362,17 @@ impl RtcTransportAdapter {
         .await
     }
 
+    pub(crate) async fn transport_media_mid(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Result<Option<String>, TransportAdapterError> {
+        self.request_worker(|response| RtcWorkerCommand::ResolveMediaMid {
+            transport_media_id,
+            response,
+        })
+        .await
+    }
+
     #[allow(
         dead_code,
         reason = "Phase 6 introduces the server-owned source gate before the channel/runtime policy caller lands, so this adapter entry point is intentionally staged"
@@ -811,6 +822,20 @@ impl RtcTransportAdapter {
         self.request_debug_worker(|response| DebugRtcCommand::RouteEntry {
             source_session_key: source_session_key.clone(),
             source_mid,
+            response,
+        })
+        .await
+        .flatten()
+    }
+
+    pub(crate) async fn debug_route_entry_by_consumer_mid(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_mid: Mid,
+    ) -> Option<DebugRouteEntry> {
+        self.request_debug_worker(|response| DebugRtcCommand::RouteEntryByConsumerMid {
+            consumer_session_key: consumer_session_key.clone(),
+            consumer_mid,
             response,
         })
         .await

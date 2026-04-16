@@ -119,6 +119,11 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     subscribe(sessionId: SessionId, states: DownloadStates): void {
         validateDownloadStates(states);
+        this._runtime.enqueueLocalOperation(async () => {
+            this._remoteTracks.updateSubscriptionStates(sessionId, states, (update) => {
+                this._emitUpdate(update);
+            });
+        }, this._runtimeHooks());
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.subscribe(sessionId, states),
             this._runtimeHooks()

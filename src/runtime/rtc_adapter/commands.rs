@@ -213,6 +213,10 @@ pub(super) enum RtcWorkerCommand {
         transport_media_id: TransportMediaId,
         response: oneshot::Sender<Result<RouterRtpParameters, TransportAdapterError>>,
     },
+    ResolveMediaMid {
+        transport_media_id: TransportMediaId,
+        response: oneshot::Sender<Result<Option<String>, TransportAdapterError>>,
+    },
     AddRecvMedia {
         session_key: TransportSessionKey,
         media_kind: MediaKind,
@@ -316,6 +320,11 @@ pub(super) enum DebugRtcCommand {
     RouteEntry {
         source_session_key: TransportSessionKey,
         source_mid: Mid,
+        response: oneshot::Sender<Option<DebugRouteEntry>>,
+    },
+    RouteEntryByConsumerMid {
+        consumer_session_key: TransportSessionKey,
+        consumer_mid: Mid,
         response: oneshot::Sender<Option<DebugRouteEntry>>,
     },
     RouteEntryByMediaId {

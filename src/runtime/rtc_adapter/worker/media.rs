@@ -73,6 +73,17 @@ pub(super) fn respond_add_send_media(
     ));
 }
 
+pub(super) fn respond_resolve_media_mid(
+    state: &RtcBootstrapState,
+    transport_media_id: TransportMediaId,
+    response: oneshot::Sender<Result<Option<String>, TransportAdapterError>>,
+) {
+    let resolved_mid = state
+        .resolve_mid(transport_media_id)
+        .map(|mid| mid.to_string());
+    let _ = response.send(Ok(resolved_mid));
+}
+
 pub(super) fn respond_request_remote_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,

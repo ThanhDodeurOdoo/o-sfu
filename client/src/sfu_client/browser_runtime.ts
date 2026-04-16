@@ -134,6 +134,7 @@ export class BrowserRuntime {
                     command.requestId,
                     command.negotiationKind,
                     command.sdp,
+                    hooks.localUploads,
                     hooks.protocolCore
                 );
             case "attachTrack":
@@ -255,6 +256,7 @@ export class BrowserRuntime {
         requestId: string,
         negotiationKind: "offer" | "renegotiate",
         sdp: string,
+        localUploads: LocalUploads,
         protocolCore: ProtocolCoreBindings
     ): Promise<HostCommand[]> {
         if (!this._peerConnection) {
@@ -264,6 +266,9 @@ export class BrowserRuntime {
             sdp,
             type: "offer"
         });
+        if (negotiationKind === "renegotiate") {
+            await localUploads.attachPendingRenegotiationTracks(this._peerConnection);
+        }
         const answer = await this._peerConnection.createAnswer();
         await this._peerConnection.setLocalDescription(answer);
         const commands = protocolCore.submitNegotiationAnswer(

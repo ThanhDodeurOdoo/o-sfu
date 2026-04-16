@@ -61,6 +61,16 @@ pub(super) fn handle_debug_command(
             source_mid,
             response,
         } => respond_debug_route_entry(state, &source_session_key, source_mid, response),
+        DebugRtcCommand::RouteEntryByConsumerMid {
+            consumer_session_key,
+            consumer_mid,
+            response,
+        } => respond_debug_route_entry_by_consumer_mid(
+            state,
+            &consumer_session_key,
+            consumer_mid,
+            response,
+        ),
         DebugRtcCommand::RouteEntryByMediaId {
             source_transport_media_id,
             response,
@@ -203,6 +213,20 @@ fn respond_debug_route_entry(
 ) {
     let value = state
         .source_transport_media_id_for_mid(source_session_key, source_mid)
+        .and_then(|source_transport_media_id| {
+            build_debug_route_entry(state, source_transport_media_id)
+        });
+    let _ = response.send(value);
+}
+
+fn respond_debug_route_entry_by_consumer_mid(
+    state: &RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_mid: Mid,
+    response: oneshot::Sender<Option<DebugRouteEntry>>,
+) {
+    let value = state
+        .consumer_source_transport_media_id_for_mid(consumer_session_key, consumer_mid)
         .and_then(|source_transport_media_id| {
             build_debug_route_entry(state, source_transport_media_id)
         });

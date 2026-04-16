@@ -128,6 +128,10 @@ fn handle_core_worker_command(
             transport_media_id,
             response,
         ),
+        RtcWorkerCommand::ResolveMediaMid {
+            transport_media_id,
+            response,
+        } => media::respond_resolve_media_mid(state, transport_media_id, response),
         RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }

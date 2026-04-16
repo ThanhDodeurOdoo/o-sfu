@@ -56,6 +56,7 @@ class FakeSender {
 class FakePeerConnection {
     constructor(config, { autoConnect = true } = {}) {
         this.autoConnect = autoConnect;
+        this.answerSnapshots = [];
         this.connectionState = "new";
         this.config = config;
         this.localDescriptions = [];
@@ -63,17 +64,42 @@ class FakePeerConnection {
         this.ontrack = null;
         this.remoteDescriptions = [];
         this.transceivers = [
-            { mid: "0", sender: new FakeSender() },
-            { mid: "1", sender: new FakeSender() }
+            {
+                currentDirection: null,
+                direction: "recvonly",
+                mid: "0",
+                receiver: { track: { kind: "audio" } },
+                sender: new FakeSender()
+            },
+            {
+                currentDirection: null,
+                direction: "recvonly",
+                mid: "1",
+                receiver: { track: { kind: "video" } },
+                sender: new FakeSender()
+            }
         ];
     }
 
     async createAnswer() {
+        this.answerSnapshots.push(
+            this.transceivers.map((transceiver) => ({
+                mid: transceiver.mid,
+                senderTrack: transceiver.sender.track ?? null
+            }))
+        );
         return { sdp: "answer-sdp", type: "answer" };
     }
 
     async setLocalDescription(description) {
         this.localDescriptions.push(description);
+        this.transceivers.forEach((transceiver) => {
+            if (transceiver.sender.track) {
+                transceiver.currentDirection = transceiver.direction;
+            } else if (transceiver.direction === "recvonly") {
+                transceiver.currentDirection = "inactive";
+            }
+        });
         if (this.autoConnect) {
             this.emitConnectionState("connected");
         }
@@ -81,6 +107,18 @@ class FakePeerConnection {
 
     async setRemoteDescription(description) {
         this.remoteDescriptions.push(description);
+        if (
+            description.sdp === "renegotiate-camera-offer" &&
+            !this.transceivers.some((transceiver) => transceiver.mid === "2")
+        ) {
+            this.transceivers.push({
+                currentDirection: null,
+                direction: "recvonly",
+                mid: "2",
+                receiver: { track: { kind: "video" } },
+                sender: new FakeSender()
+            });
+        }
     }
 
     getTransceivers() {
@@ -102,6 +140,22 @@ class FakePeerConnection {
     emitConnectionState(state) {
         this.connectionState = state;
         this.onconnectionstatechange?.();
+    }
+}
+
+class FakeMediaTrack extends EventTarget {
+    constructor({ enabled = true, id, kind, muted = false, readyState = "live" }) {
+        super();
+        this.enabled = enabled;
+        this.id = id;
+        this.kind = kind;
+        this.muted = muted;
+        this.readyState = readyState;
+    }
+
+    setMuted(muted) {
+        this.muted = muted;
+        this.dispatchEvent(new Event(muted ? "mute" : "unmute"));
     }
 }
 
@@ -195,6 +249,15 @@ class FakeProtocolCore {
                         streamType: "camera"
                     },
                     ...this._replaceTrackBindings()
+                ];
+            case "renegotiate-with-unbound-camera":
+                return [
+                    {
+                        kind: "applyNegotiation",
+                        negotiationKind: "renegotiate",
+                        requestId: "9",
+                        sdp: "renegotiate-camera-offer"
+                    }
                 ];
             case "track-inactive":
                 this.trackBindings.set("0", {
@@ -709,6 +772,154 @@ test("track metadata updates re-emit track state for existing remote tracks", as
     assert.equal(client._consumers.get(42).camera.track, track);
 });
 
+test("subscribe overlays local download state onto existing remote tracks", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const track = {
+        enabled: true,
+        id: "track-1",
+        kind: "video",
+        muted: false
+    };
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    client.subscribe(42, { camera: false });
+    await tick();
+    await tick();
+    client.subscribe(42, { camera: true });
+    await tick();
+    await tick();
+
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        },
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: false,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        },
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        }
+    ]);
+});
+
+test("subscribe preferences apply to future remote track bindings", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    client.subscribe(42, { camera: false });
+    await tick();
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const track = {
+        enabled: true,
+        id: "track-1",
+        kind: "video",
+        muted: false
+    };
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: false,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.get(42).camera.track, track);
+});
+
 test("offer waits for peer connection transport readiness before emitting connected", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
@@ -994,6 +1205,67 @@ test("peer connection teardown clears stale remote consumer state", async () => 
     assert.equal(client._consumers.size, 0);
 });
 
+test("remote track lifecycle updates re-emit when the browser unmutes the track", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const updates = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.addEventListener("update", (event) => {
+        updates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const track = new FakeMediaTrack({
+        id: "track-1",
+        kind: "video",
+        muted: true
+    });
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    track.setMuted(false);
+    await tick();
+
+    assert.deepEqual(updates.at(-1), {
+        name: CLIENT_UPDATE.TRACK,
+        payload: {
+            active: true,
+            sessionId: 42,
+            track,
+            type: "camera"
+        }
+    });
+    assert.equal(client._consumers.get(42).camera.track, track);
+    assert.equal(client._consumers.get(42).camera.track.muted, false);
+});
+
 test("publish replaces an already attached local sender track without re-publishing", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
@@ -1096,6 +1368,57 @@ test("publish detaches the local sender before signaling unpublish", async () =>
         { active: true, type: "camera" },
         { active: false, type: "camera" }
     ]);
+});
+
+test("renegotiation binds a newly published local track before answering", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const track = {
+        enabled: true,
+        id: "camera-track-1",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    client.publish("camera", track);
+    await tick();
+    sockets[0].emitMessage("renegotiate-with-unbound-camera");
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[2].sender.track, track);
+    assert.equal(peerConnections[0].transceivers[2].direction, "sendonly");
+    assert.equal(
+        peerConnections[0].answerSnapshots.at(-1)[2].senderTrack,
+        track,
+        "the browser must bind the track before generating the renegotiation answer"
+    );
+    assert.deepEqual(core.submittedAnswers.at(-1), {
+        negotiationKind: "renegotiate",
+        requestId: "9",
+        sdp: "answer-sdp"
+    });
 });
 
 test("fatal runtime errors reset the public client surface", async () => {

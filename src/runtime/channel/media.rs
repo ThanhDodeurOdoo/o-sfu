@@ -210,8 +210,20 @@ impl Channel {
             }
         };
         let outbound = {
+            let consumer_session_key = self.transport_session_key(
+                target.consumer_session_id(),
+                target.consumer_connection_id(),
+            );
+            let consumer_mid = transport_adapter
+                .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
+                .await;
             let mut state = self.state.write().await;
-            state.commit_consumer_bootstrap(target, pending_bootstrap, consumer_transport_media_id)
+            state.commit_consumer_bootstrap(
+                target,
+                pending_bootstrap,
+                consumer_transport_media_id,
+                consumer_mid,
+            )
         };
         let Some((sender, bootstrap, consumer_active)) = outbound else {
             let _result = transport_adapter

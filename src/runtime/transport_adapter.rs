@@ -475,6 +475,10 @@ impl RtcTransportAdapterShardSet {
     }
 
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only route inspection stays available for targeted RTC adapter assertions even when one edit removes its current call sites"
+    )]
     async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -869,9 +873,25 @@ impl RuntimeTransportAdapter {
                         source_session_key,
                         source_transport_media_id,
                         active,
-                    )
-                    .await
+                )
+                .await
             }
+        }
+    }
+
+    pub(crate) async fn transport_media_mid(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Option<String> {
+        match self {
+            Self::Stub(_adapter) => None,
+            Self::Rtc(adapter) => adapter
+                .shard_for_session(session_key)
+                .transport_media_mid(transport_media_id)
+                .await
+                .ok()
+                .flatten(),
         }
     }
 
@@ -919,6 +939,10 @@ impl RuntimeTransportAdapter {
     }
 
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only route inspection stays available for targeted RTC adapter assertions even when one edit removes its current call sites"
+    )]
     pub(crate) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -930,6 +954,35 @@ impl RuntimeTransportAdapter {
                 adapter
                     .debug_route_entry(source_session_key, source_mid)
                     .await
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn debug_route_entry_by_consumer_mid(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_mid: Mid,
+    ) -> Option<DebugRouteEntry> {
+        match self {
+            Self::Stub(_) => None,
+            Self::Rtc(adapter) => {
+                if let Some(entry) = adapter
+                    .primary_shard
+                    .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
+                    .await
+                {
+                    return Some(entry);
+                }
+                for shard in &adapter.extra_shards {
+                    if let Some(entry) = shard
+                        .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
+                        .await
+                    {
+                        return Some(entry);
+                    }
+                }
+                None
             }
         }
     }

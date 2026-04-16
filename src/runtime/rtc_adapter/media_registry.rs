@@ -102,7 +102,6 @@ impl RtcBootstrapState {
         TransportMediaId::new(id)
     }
 
-    #[cfg(test)]
     pub(super) fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
         self.mid_registry
             .get(&transport_media_id.as_u64())

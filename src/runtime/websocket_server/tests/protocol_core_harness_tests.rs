@@ -380,16 +380,14 @@ async fn real_rtc_route_entry(
     consumer_session_id: SessionId,
     mid: &str,
 ) -> Option<(DebugRouteEntry, TransportSessionKey)> {
-    let source_connection_id = channel.session_connection_id(&source_session_id).await?;
+    let _source_connection_id = channel.session_connection_id(&source_session_id).await?;
     let consumer_connection_id = channel.session_connection_id(&consumer_session_id).await?;
-    let source_session_key =
-        channel.transport_session_key(&source_session_id, source_connection_id);
     let consumer_session_key =
         channel.transport_session_key(&consumer_session_id, consumer_connection_id);
     let route_entry = server
         .state
         .transport_adapter
-        .debug_route_entry(&source_session_key, Mid::from(mid))
+        .debug_route_entry_by_consumer_mid(&consumer_session_key, Mid::from(mid))
         .await?;
     Some((route_entry, consumer_session_key))
 }

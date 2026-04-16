@@ -14,7 +14,7 @@ import {
 const PUBLISHER_SESSION_ID = 41;
 const SUBSCRIBER_SESSION_ID = 42;
 
-test.skip("browser compatibility upload and download flows survive live-server replacement", async ({
+test("browser compatibility upload and download flows survive live-server replacement", async ({
     context
 }) => {
     const channelUuid = await createChannel();
