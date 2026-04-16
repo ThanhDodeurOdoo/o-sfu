@@ -70,6 +70,7 @@ pub(super) struct SharedRtcSocket {
 pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     pub(super) started_at: Instant,
+    pub(super) local_ice_ufrag: String,
     #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) local_ice_credentials: IceCreds,
     #[cfg(any(test, feature = "internal-benchmarks"))]
@@ -316,6 +317,10 @@ impl RtcSnapshotState {
         self.live_sessions.remove(session_key);
         self.remote_addr_demux
             .forget_session_remote_addrs(session_key);
+        self.remote_addr_demux
+            .forget_session_local_ice_ufrag(session_key);
+        self.remote_addr_demux
+            .forget_session_remote_candidate_addrs(session_key);
         self.incoming_bitrates_by_session.remove(session_key);
         self.transport_health_by_session.remove(session_key)
     }

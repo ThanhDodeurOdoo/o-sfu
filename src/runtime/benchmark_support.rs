@@ -14,7 +14,7 @@ use tokio::runtime::Builder;
 use super::{
     metrics::RuntimeMetrics,
     recording::MediaTap,
-    rtc_adapter::RtcTransportAdapter,
+    rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
     transport_adapter::{RtcTransportAdapterConfig, TransportAdapterError, TransportSessionKey},
 };
 use crate::{
@@ -118,6 +118,78 @@ impl RtcUdpDemuxBenchmarkFixture {
             if self
                 .adapter
                 .benchmark_linear_remote_addr_lookup(*remote_addr)
+            {
+                hits = hits.saturating_add(1);
+            }
+        }
+        black_box(hits)
+    }
+}
+
+/// Prepared benchmark fixture for unknown-source recovery after the cached
+/// remote-address demux misses.
+///
+/// The fixture compares the new candidate-address recovery index against the
+/// previous shape that linearly scanned every session's candidate list on each
+/// unknown-source datagram.
+#[derive(Debug)]
+pub struct RtcUnknownSourceRecoveryBenchmarkFixture {
+    candidate_index: RemoteAddrDemux,
+    probe_addrs: Vec<SocketAddr>,
+    session_candidate_addrs: Vec<(TransportSessionKey, Vec<SocketAddr>)>,
+}
+
+impl RtcUnknownSourceRecoveryBenchmarkFixture {
+    #[must_use]
+    pub fn new(session_count: usize) -> Option<Self> {
+        if session_count == 0 {
+            return None;
+        }
+        let mut candidate_index = RemoteAddrDemux::default();
+        let mut probe_addrs = Vec::with_capacity(session_count);
+        let mut session_candidate_addrs = Vec::with_capacity(session_count);
+        for idx in 0..session_count {
+            let session_key = benchmark_session_key(idx)?;
+            let remote_addr = benchmark_remote_addr(idx)?;
+            candidate_index.replace_session_remote_candidate_addrs(&session_key, [remote_addr]);
+            probe_addrs.push(remote_addr);
+            session_candidate_addrs.push((session_key, vec![remote_addr]));
+        }
+        Some(Self {
+            candidate_index,
+            probe_addrs,
+            session_candidate_addrs,
+        })
+    }
+
+    #[must_use]
+    pub fn lookup_count_u64(&self) -> u64 {
+        u64::try_from(self.probe_addrs.len()).unwrap_or(u64::MAX)
+    }
+
+    #[must_use]
+    pub fn indexed_lookup_cycle(&self) -> usize {
+        let mut hits = 0_usize;
+        for remote_addr in &self.probe_addrs {
+            if self
+                .candidate_index
+                .candidate_sessions_for_source_addr(*remote_addr)
+                .is_some_and(|session_keys| !session_keys.is_empty())
+            {
+                hits = hits.saturating_add(1);
+            }
+        }
+        black_box(hits)
+    }
+
+    #[must_use]
+    pub fn linear_scan_cycle(&self) -> usize {
+        let mut hits = 0_usize;
+        for remote_addr in &self.probe_addrs {
+            if self
+                .session_candidate_addrs
+                .iter()
+                .any(|(_session_key, candidate_addrs)| candidate_addrs.contains(remote_addr))
             {
                 hits = hits.saturating_add(1);
             }

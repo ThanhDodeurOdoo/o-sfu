@@ -66,6 +66,12 @@ fn worker_close_session(
     state
         .remote_addr_demux
         .forget_session_remote_addrs(session_key);
+    state
+        .remote_addr_demux
+        .forget_session_local_ice_ufrag(session_key);
+    state
+        .remote_addr_demux
+        .forget_session_remote_candidate_addrs(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
     let relay_cleanup = relay_cleanup_for_removed_media(state, &removed_media_handles);
     let removed_media_ids = removed_media_handles

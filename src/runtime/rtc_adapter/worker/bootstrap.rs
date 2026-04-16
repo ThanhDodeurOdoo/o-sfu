@@ -131,6 +131,11 @@ fn worker_build_bootstrap_payload(
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
     }
+    if let Some(session_state) = state.sessions.get(session_key) {
+        state
+            .remote_addr_demux
+            .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);
+    }
     if created_session {
         metrics.add_active_transport_sessions(1);
     }

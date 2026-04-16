@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     io::Error as IoError,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
@@ -7,6 +7,7 @@ use std::{
 };
 
 use str0m::IceConnectionState;
+use str0m::ice::StunMessage;
 use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
@@ -21,6 +22,7 @@ use super::{
     forwarding_planner::populate_forward_routes,
     relay_registry::RelayRegistry,
     route_control::{KeyframeRequestDecision, coalesce_keyframe_kind},
+    routing_miss::{PacketLoopRoutingMissKey, PacketLoopRoutingState},
     state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState, TransportSessionHealth},
     worker::{WorkerCommandContext, handle_worker_command, request_keyframe_for_source},
 };
@@ -34,7 +36,6 @@ use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 const RECEIVE_BUFFER_LEN: usize = 2000;
-const RECENT_MISS_CACHE_LIMIT: usize = 256;
 
 #[derive(Debug)]
 struct PendingTransmit {
@@ -166,130 +167,6 @@ impl CoalescedKeyframeRequest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct PacketLoopRoutingMissKey {
-    source_addr: SocketAddr,
-    candidate_addr: SocketAddr,
-    packet_len: usize,
-    packet_fingerprint: u64,
-}
-
-impl PacketLoopRoutingMissKey {
-    fn new(source_addr: SocketAddr, candidate_addr: SocketAddr, packet: &[u8]) -> Self {
-        Self {
-            source_addr,
-            candidate_addr,
-            packet_len: packet.len(),
-            packet_fingerprint: packet_fingerprint(packet),
-        }
-    }
-}
-
-fn packet_fingerprint(packet: &[u8]) -> u64 {
-    fn load_u64(bytes: &[u8]) -> u64 {
-        let mut buffer = [0_u8; 8];
-        for (slot, byte) in buffer.iter_mut().zip(bytes.iter().copied()) {
-            *slot = byte;
-        }
-        u64::from_le_bytes(buffer)
-    }
-
-    let len = u64::try_from(packet.len()).map_or(u64::MAX, |len| len);
-    let prefix = load_u64(packet);
-    let suffix = load_u64(
-        packet
-            .get(packet.len().saturating_sub(8)..)
-            .unwrap_or(packet),
-    );
-    len.rotate_left(17) ^ prefix.rotate_left(29) ^ suffix.rotate_left(43)
-}
-
-#[derive(Debug, Clone)]
-struct PacketLoopRoutingMissRecord {
-    key: PacketLoopRoutingMissKey,
-    packet: Box<[u8]>,
-}
-
-#[derive(Default)]
-struct PacketLoopRoutingMissCache {
-    entries: VecDeque<PacketLoopRoutingMissRecord>,
-}
-
-impl PacketLoopRoutingMissCache {
-    fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    fn contains(&self, key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
-        self.entries
-            .iter()
-            .any(|candidate| candidate.key == key && candidate.packet.as_ref() == packet)
-    }
-
-    fn record(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
-        if self.contains(key, packet) {
-            return;
-        }
-        self.entries.push_back(PacketLoopRoutingMissRecord {
-            key,
-            packet: packet.to_vec().into_boxed_slice(),
-        });
-        while self.entries.len() > RECENT_MISS_CACHE_LIMIT {
-            let Some(_) = self.entries.pop_front() else {
-                break;
-            };
-        }
-    }
-
-    fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
-        let Some(position) = self
-            .entries
-            .iter()
-            .position(|candidate| candidate.key == key && candidate.packet.as_ref() == packet)
-        else {
-            return;
-        };
-        let _ = self.entries.remove(position);
-    }
-}
-
-struct PacketLoopRoutingState {
-    miss_cache: PacketLoopRoutingMissCache,
-    #[cfg(test)]
-    scan_attempts: usize,
-}
-
-impl PacketLoopRoutingState {
-    fn new() -> Self {
-        Self {
-            miss_cache: PacketLoopRoutingMissCache::default(),
-            #[cfg(test)]
-            scan_attempts: 0,
-        }
-    }
-
-    fn clear_on_topology_change(&mut self) {
-        self.miss_cache.clear();
-    }
-
-    fn should_skip_scan(&self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
-        self.miss_cache.contains(miss_key, packet)
-    }
-
-    fn record_miss(&mut self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) {
-        self.miss_cache.record(miss_key, packet);
-    }
-
-    fn forget_miss(&mut self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) {
-        self.miss_cache.forget(miss_key, packet);
-    }
-
-    #[cfg(test)]
-    fn scan_attempts(&self) -> usize {
-        self.scan_attempts
-    }
-}
-
 enum NextLoopInput {
     Command(RtcWorkerCommand),
     Datagram {
@@ -305,7 +182,7 @@ enum CachedRouteOutcome {
     Malformed,
 }
 
-enum PacketScanOutcome {
+enum IndexedSessionRecoveryOutcome {
     Matched {
         session_key: TransportSessionKey,
         examined_sessions: usize,
@@ -314,6 +191,11 @@ enum PacketScanOutcome {
         examined_sessions: usize,
     },
     Malformed,
+}
+
+enum PacketIndexProbe {
+    LocalIceUfrag(String),
+    RemoteCandidateAddr(SocketAddr),
 }
 
 pub(super) struct PacketLoopConfig {
@@ -915,7 +797,7 @@ fn route_packet_to_matching_session(
     ) {
         CachedRouteOutcome::Routed => {
             metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
-            routing_state.forget_miss(miss_key, packet);
+            routing_state.record_route_success(miss_key, packet, source_addr);
             return;
         }
         CachedRouteOutcome::Malformed => {
@@ -932,19 +814,28 @@ fn route_packet_to_matching_session(
         );
         return;
     }
+    let now = Instant::now();
+    if routing_state.should_rate_limit_source(source_addr, now) {
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
+        trace!(
+            source = %source_addr,
+            "dropping UDP datagram because sustained unknown-source misses exhausted the rtc recovery budget for this source"
+        );
+        return;
+    }
     let route = PacketRouteContext {
         snapshot_state,
         metrics,
         source_addr,
         candidate_addr,
         packet,
-        now: Instant::now(),
+        now,
     };
     if state.sessions.len() == 1 {
         route_packet_by_single_session(state, routing_state, miss_key, &route);
         return;
     }
-    route_packet_by_scan(state, routing_state, miss_key, &route);
+    route_packet_by_recovery_index(state, routing_state, miss_key, &route);
 }
 
 fn route_packet_with_cached_session(
@@ -1006,27 +897,92 @@ fn route_packet_with_cached_session(
     CachedRouteOutcome::Routed
 }
 
-fn matching_session_key_for_packet(
-    state: &RtcBootstrapState,
+fn matching_indexed_session_key_for_packet(
+    state: &mut RtcBootstrapState,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
     now: Instant,
-) -> PacketScanOutcome {
+) -> IndexedSessionRecoveryOutcome {
+    let candidate_session_keys = match packet_index_probe(source_addr, packet) {
+        Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag)) => state
+            .remote_addr_demux
+            .session_key_for_local_ice_ufrag(&local_ice_ufrag)
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        Ok(PacketIndexProbe::RemoteCandidateAddr(remote_candidate_addr)) => state
+            .remote_addr_demux
+            .candidate_sessions_for_source_addr(remote_candidate_addr)
+            .map_or_else(Vec::new, <[TransportSessionKey]>::to_vec),
+        Err(
+            IndexedSessionRecoveryOutcome::Malformed
+            | IndexedSessionRecoveryOutcome::Matched { .. }
+            | IndexedSessionRecoveryOutcome::NoMatch { .. },
+        ) => {
+            return IndexedSessionRecoveryOutcome::Malformed;
+        }
+    };
     let Some(input) = receive_input(now, source_addr, candidate_addr, packet) else {
-        return PacketScanOutcome::Malformed;
+        return IndexedSessionRecoveryOutcome::Malformed;
     };
     let mut examined_sessions: usize = 0;
-    for (session_key, session_state) in &state.sessions {
+    let mut stale_session_keys = Vec::new();
+    for session_key in candidate_session_keys {
+        let Some(session_state) = state.sessions.get(&session_key) else {
+            stale_session_keys.push(session_key);
+            continue;
+        };
         examined_sessions = examined_sessions.saturating_add(1);
         if session_state.rtc.accepts(&input) {
-            return PacketScanOutcome::Matched {
-                session_key: session_key.clone(),
+            for stale_session_key in stale_session_keys {
+                state
+                    .remote_addr_demux
+                    .forget_session_remote_candidate_addrs(&stale_session_key);
+                state
+                    .remote_addr_demux
+                    .forget_session_local_ice_ufrag(&stale_session_key);
+            }
+            return IndexedSessionRecoveryOutcome::Matched {
+                session_key,
                 examined_sessions,
             };
         }
     }
-    PacketScanOutcome::NoMatch { examined_sessions }
+    for stale_session_key in stale_session_keys {
+        state
+            .remote_addr_demux
+            .forget_session_remote_candidate_addrs(&stale_session_key);
+        state
+            .remote_addr_demux
+            .forget_session_local_ice_ufrag(&stale_session_key);
+    }
+    IndexedSessionRecoveryOutcome::NoMatch { examined_sessions }
+}
+
+fn packet_index_probe(
+    source_addr: SocketAddr,
+    packet: &[u8],
+) -> Result<PacketIndexProbe, IndexedSessionRecoveryOutcome> {
+    let Some(byte0) = packet.first().copied() else {
+        return Err(IndexedSessionRecoveryOutcome::Malformed);
+    };
+    let packet_len = packet.len();
+    if byte0 < 2 && packet_len >= 20 {
+        let message = StunMessage::parse(packet)
+            .map_err(|_error| IndexedSessionRecoveryOutcome::Malformed)?;
+        if let Some((local_ice_ufrag, _remote_ice_ufrag)) = message.split_username() {
+            return Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag.to_owned()));
+        }
+        return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
+    }
+    if (20..64).contains(&byte0) {
+        return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
+    }
+    if (128..192).contains(&byte0) && packet_len > 2 {
+        return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
+    }
+    Err(IndexedSessionRecoveryOutcome::Malformed)
 }
 
 fn receive_input(
@@ -1105,9 +1061,7 @@ fn route_packet_by_single_session(
     route: &PacketRouteContext<'_>,
 ) {
     #[cfg(test)]
-    {
-        routing_state.scan_attempts = routing_state.scan_attempts.saturating_add(1);
-    }
+    routing_state.record_fallback_attempt();
     let Some(session_key) = state.sessions.keys().next().cloned() else {
         return;
     };
@@ -1132,7 +1086,7 @@ fn route_packet_by_single_session(
         route
             .metrics
             .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
-        routing_state.record_miss(miss_key, route.packet);
+        routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now);
         trace!(
             source = %route.source_addr,
             "dropping UDP datagram because no rtc session accepted it"
@@ -1140,28 +1094,26 @@ fn route_packet_by_single_session(
         return;
     }
     if route_packet_to_session(state, &session_key, route) {
-        routing_state.forget_miss(miss_key, route.packet);
+        routing_state.record_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
-fn route_packet_by_scan(
+fn route_packet_by_recovery_index(
     state: &mut RtcBootstrapState,
     routing_state: &mut PacketLoopRoutingState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
 ) {
     #[cfg(test)]
-    {
-        routing_state.scan_attempts = routing_state.scan_attempts.saturating_add(1);
-    }
-    let session_key = match matching_session_key_for_packet(
+    routing_state.record_fallback_attempt();
+    let session_key = match matching_indexed_session_key_for_packet(
         state,
         route.source_addr,
         route.candidate_addr,
         route.packet,
         route.now,
     ) {
-        PacketScanOutcome::Matched {
+        IndexedSessionRecoveryOutcome::Matched {
             session_key,
             examined_sessions,
         } => {
@@ -1170,21 +1122,21 @@ fn route_packet_by_scan(
                 .record_rtc_datagram_fallback_scan(examined_sessions);
             session_key
         }
-        PacketScanOutcome::NoMatch { examined_sessions } => {
+        IndexedSessionRecoveryOutcome::NoMatch { examined_sessions } => {
             route
                 .metrics
                 .record_rtc_datagram_fallback_scan(examined_sessions);
             route
                 .metrics
                 .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
-            routing_state.record_miss(miss_key, route.packet);
+            routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now);
             trace!(
                 source = %route.source_addr,
                 "dropping UDP datagram because no rtc session accepted it"
             );
             return;
         }
-        PacketScanOutcome::Malformed => {
+        IndexedSessionRecoveryOutcome::Malformed => {
             route
                 .metrics
                 .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
@@ -1193,7 +1145,7 @@ fn route_packet_by_scan(
         }
     };
     if route_packet_to_session(state, &session_key, route) {
-        routing_state.forget_miss(miss_key, route.packet);
+        routing_state.record_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
@@ -1295,7 +1247,7 @@ mod tests {
             &packet,
         );
 
-        assert_eq!(routing_state.scan_attempts(), 1);
+        assert_eq!(routing_state.fallback_attempts(), 1);
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
         assert_eq!(snapshot.rtc_datagram_drops_no_session, 1);
@@ -1333,7 +1285,7 @@ mod tests {
             &packet,
         );
 
-        assert_eq!(routing_state.scan_attempts(), 2);
+        assert_eq!(routing_state.fallback_attempts(), 2);
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.rtc_datagram_fallback_scans, 2);
         assert_eq!(snapshot.rtc_datagram_drops_no_session, 2);
@@ -1368,11 +1320,48 @@ mod tests {
             &valid_rtp_packet(4, 44),
         );
 
-        assert_eq!(routing_state.scan_attempts(), 2);
+        assert_eq!(routing_state.fallback_attempts(), 2);
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.rtc_datagram_fallback_scans, 2);
         assert_eq!(snapshot.rtc_datagram_drops_no_session, 2);
         assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 0);
+        assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 0);
+    }
+
+    #[test]
+    fn source_rate_limiter_bounds_varied_unknown_source_misses() {
+        let mut bootstrap_state = RtcBootstrapState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let mut routing_state = PacketLoopRoutingState::new();
+        let metrics = RuntimeMetrics::default();
+        let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_026));
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_025));
+
+        for (sequence, ssrc) in [
+            (5_u16, 55_u32),
+            (6, 66),
+            (7, 77),
+            (8, 88),
+            (9, 99),
+            (10, 110),
+        ] {
+            route_packet_to_matching_session(
+                &mut bootstrap_state,
+                &snapshot_state,
+                &mut routing_state,
+                &metrics,
+                source_addr,
+                candidate_addr,
+                &valid_rtp_packet(sequence, ssrc),
+            );
+        }
+
+        assert_eq!(routing_state.fallback_attempts(), 4);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_datagram_fallback_scans, 4);
+        assert_eq!(snapshot.rtc_datagram_drops_no_session, 4);
+        assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 0);
+        assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 2);
     }
 
     #[test]
@@ -1395,11 +1384,57 @@ mod tests {
         );
 
         let snapshot = metrics.snapshot();
-        assert_eq!(routing_state.scan_attempts(), 1);
+        assert_eq!(routing_state.fallback_attempts(), 1);
         assert_eq!(snapshot.rtc_datagram_fallback_scans, 0);
         assert_eq!(snapshot.rtc_datagram_scan_sessions, 0);
         assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
         assert_eq!(snapshot.rtc_datagram_drops_no_session, 0);
+        assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 0);
+    }
+
+    #[test]
+    fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_040));
+        let mut bootstrap_state = RtcBootstrapState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let mut routing_state = PacketLoopRoutingState::new();
+        let metrics = RuntimeMetrics::default();
+        let first_session = TransportSessionKey::new(51, 0, 52, SessionId::Integer(53));
+        let second_session = TransportSessionKey::new(51, 0, 54, SessionId::Integer(55));
+        let packet = [22, 0, 0, 0];
+        let unknown_source_addr = SocketAddr::from(([127, 0, 0, 1], 45_041));
+
+        let first_created = bootstrap::ensure_session_rtc_state(
+            &mut bootstrap_state.sessions,
+            &first_session,
+            candidate_addr,
+            MediaCodecFlags::default(),
+        );
+        let second_created = bootstrap::ensure_session_rtc_state(
+            &mut bootstrap_state.sessions,
+            &second_session,
+            candidate_addr,
+            MediaCodecFlags::default(),
+        );
+
+        assert_eq!(first_created, Ok(true));
+        assert_eq!(second_created, Ok(true));
+
+        route_packet_to_matching_session(
+            &mut bootstrap_state,
+            &snapshot_state,
+            &mut routing_state,
+            &metrics,
+            unknown_source_addr,
+            candidate_addr,
+            &packet,
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(routing_state.fallback_attempts(), 1);
+        assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
+        assert_eq!(snapshot.rtc_datagram_scan_sessions, 0);
+        assert_eq!(snapshot.rtc_datagram_drops_no_session, 1);
     }
 
     #[test]

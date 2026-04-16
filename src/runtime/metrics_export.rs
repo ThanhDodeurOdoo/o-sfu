@@ -376,6 +376,10 @@ fn append_rtc_datagram_metrics(output: &mut String, snapshot: &RuntimeMetricsSna
                 "recent_miss_cache",
                 snapshot.rtc_datagram_drops_recent_miss_cache,
             ),
+            LabeledValue::new(
+                "source_rate_limited",
+                snapshot.rtc_datagram_drops_source_rate_limited,
+            ),
             LabeledValue::new("no_session", snapshot.rtc_datagram_drops_no_session),
             LabeledValue::new("malformed", snapshot.rtc_datagram_drops_malformed),
         ],

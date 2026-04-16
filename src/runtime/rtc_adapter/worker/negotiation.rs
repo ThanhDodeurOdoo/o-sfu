@@ -1,5 +1,5 @@
 use std::{
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
 };
 
@@ -140,6 +140,7 @@ fn worker_apply_session_answer(
         .collect::<Vec<_>>();
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
+    let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
     let Some(session_state) = state.sessions.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -158,7 +159,22 @@ fn worker_apply_session_answer(
     stage_queued_removal_offer(session_state);
     session_state.dtls_started = true;
     state.mark_session_dirty(session_key);
+    state
+        .remote_addr_demux
+        .replace_session_remote_candidate_addrs(session_key, remote_candidate_addrs);
     Ok(())
+}
+
+fn answer_remote_candidate_addrs(answer: &SdpAnswer) -> Vec<SocketAddr> {
+    let mut addrs = answer
+        .session
+        .ice_candidates()
+        .map(str0m::Candidate::addr)
+        .collect::<Vec<_>>();
+    for media_line in &answer.media_lines {
+        addrs.extend(media_line.ice_candidates().map(str0m::Candidate::addr));
+    }
+    addrs
 }
 
 fn apply_pending_recv_streams(session_state: &mut super::super::state::RtcSessionState) {
@@ -258,6 +274,11 @@ fn ensure_session_ready_for_offer(
     )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
+    }
+    if let Some(session_state) = state.sessions.get(session_key) {
+        state
+            .remote_addr_demux
+            .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);
     }
     if created_session {
         config.metrics.add_active_transport_sessions(1);

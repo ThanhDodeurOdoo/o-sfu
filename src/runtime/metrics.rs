@@ -88,6 +88,7 @@ pub(super) enum RtcDatagramRoutePath {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RtcDatagramDropReason {
     RecentMissCache,
+    SourceRateLimited,
     NoSession,
     Malformed,
 }
@@ -362,13 +363,14 @@ impl MetricLabel for RtcDatagramRoutePath {
 }
 
 impl MetricLabel for RtcDatagramDropReason {
-    const COUNT: usize = 3;
+    const COUNT: usize = 4;
 
     fn as_index(self) -> usize {
         match self {
             Self::RecentMissCache => 0,
-            Self::NoSession => 1,
-            Self::Malformed => 2,
+            Self::SourceRateLimited => 1,
+            Self::NoSession => 2,
+            Self::Malformed => 3,
         }
     }
 }
@@ -544,6 +546,7 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtc_datagram_routes_indexed: u64,
     pub rtc_datagram_routes_scan: u64,
     pub rtc_datagram_drops_recent_miss_cache: u64,
+    pub rtc_datagram_drops_source_rate_limited: u64,
     pub rtc_datagram_drops_no_session: u64,
     pub rtc_datagram_drops_malformed: u64,
     pub rtc_datagram_fallback_scans: u64,
@@ -646,6 +649,7 @@ struct RtcDatagramSnapshot {
     routes_indexed: u64,
     routes_scan: u64,
     drops_recent_miss_cache: u64,
+    drops_source_rate_limited: u64,
     drops_no_session: u64,
     drops_malformed: u64,
     fallback_scans: u64,
@@ -761,6 +765,7 @@ impl RuntimeMetrics {
             rtc_datagram_routes_indexed: rtc_datagram.routes_indexed,
             rtc_datagram_routes_scan: rtc_datagram.routes_scan,
             rtc_datagram_drops_recent_miss_cache: rtc_datagram.drops_recent_miss_cache,
+            rtc_datagram_drops_source_rate_limited: rtc_datagram.drops_source_rate_limited,
             rtc_datagram_drops_no_session: rtc_datagram.drops_no_session,
             rtc_datagram_drops_malformed: rtc_datagram.drops_malformed,
             rtc_datagram_fallback_scans: rtc_datagram.fallback_scans,
@@ -955,6 +960,9 @@ impl RuntimeMetrics {
             drops_recent_miss_cache: self
                 .rtc_datagram_drops
                 .load(RtcDatagramDropReason::RecentMissCache),
+            drops_source_rate_limited: self
+                .rtc_datagram_drops
+                .load(RtcDatagramDropReason::SourceRateLimited),
             drops_no_session: self
                 .rtc_datagram_drops
                 .load(RtcDatagramDropReason::NoSession),
@@ -1305,6 +1313,7 @@ mod tests {
         assert_eq!(snapshot.rtc_datagram_routes_indexed, 1);
         assert_eq!(snapshot.rtc_datagram_routes_scan, 1);
         assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 1);
+        assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 1);
         assert_eq!(snapshot.rtc_datagram_drops_no_session, 1);
         assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
         assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
@@ -1386,6 +1395,7 @@ mod tests {
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
         metrics.record_rtc_datagram_fallback_scan(3);

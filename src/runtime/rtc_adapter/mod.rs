@@ -13,6 +13,7 @@
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
 //! - `relay_registry`: source-media-scoped relay targets for inter-worker mailboxes and future inter-node forwarding
 //! - `route_control`: transport-native control policy for keyed feedback absorption and gating
+//! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
 //! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
@@ -42,6 +43,7 @@ mod packet_loop;
 mod parse_diagnostic;
 mod relay_registry;
 mod route_control;
+mod routing_miss;
 #[cfg(test)]
 mod sdp;
 mod shared_payload;
@@ -56,6 +58,8 @@ pub(crate) use api::RtcTransportAdapter;
 #[cfg(test)]
 pub(crate) use commands::DebugRouteEntry;
 pub(crate) use commands::RelayCleanup;
+#[cfg(feature = "internal-benchmarks")]
+pub(crate) use demux::RemoteAddrDemux;
 pub(crate) use forwarded_packet::ForwardedPacket;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet;

@@ -99,6 +99,7 @@ pub(super) fn ensure_session_rtc_state(
     };
     #[cfg(any(test, feature = "internal-benchmarks"))]
     let local_ice_credentials = rtc.direct_api().local_ice_credentials();
+    let local_ice_ufrag = rtc.direct_api().local_ice_credentials().ufrag;
     #[cfg(any(test, feature = "internal-benchmarks"))]
     let local_dtls_fingerprint = rtc.direct_api().local_dtls_fingerprint().clone();
     sessions.insert(
@@ -106,6 +107,7 @@ pub(super) fn ensure_session_rtc_state(
         RtcSessionState {
             rtc,
             started_at,
+            local_ice_ufrag,
             #[cfg(any(test, feature = "internal-benchmarks"))]
             local_ice_credentials,
             #[cfg(any(test, feature = "internal-benchmarks"))]
