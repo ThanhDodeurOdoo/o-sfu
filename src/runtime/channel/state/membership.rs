@@ -12,6 +12,7 @@ use super::super::{
     ChannelEventMessage, ChannelJoinError,
     outbound::{MessageFanout, OutboundSender},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady},
+    topology::ChannelTopology,
 };
 use super::layout::SessionLayout;
 use super::presence::SessionPresence;
@@ -86,48 +87,15 @@ impl DisconnectSessionsOutcome {
 }
 
 impl ChannelState {
-    fn existing_session_permissions(
-        &self,
-        session_id: &SessionId,
-        is_new: bool,
-    ) -> Option<SessionPermissions> {
-        if is_new {
-            return None;
-        }
-        self.sessions
-            .get(session_id)
-            .map(|session| session.permissions.clone())
-    }
-
-    fn restore_join_permissions(
-        &mut self,
-        session_id: &SessionId,
-        connection_id: u64,
-        previous_permissions: Option<&SessionPermissions>,
-    ) {
-        if let Some(previous_permissions) = previous_permissions
-            && self
-                .topology
-                .ensure_session(session_id, connection_id, previous_permissions)
-                .is_err()
-        {
-            error!(
-                ?session_id,
-                "failed to restore session permissions after join reset failure"
-            );
-        }
-    }
-
     fn apply_join_topology(
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
         permissions: &SessionPermissions,
-        previous_permissions: Option<&SessionPermissions>,
         is_new: bool,
     ) -> Result<(), ChannelJoinError> {
-        if self
-            .topology
+        let mut topology = self.topology.clone();
+        if topology
             .apply_client_join(session_id, connection_id, permissions)
             .is_err()
         {
@@ -137,14 +105,18 @@ impl ChannelState {
             );
             return Err(ChannelJoinError::RouterState);
         }
-        if !is_new && self.reset_existing_session_routing(session_id).is_err() {
-            self.restore_join_permissions(session_id, connection_id, previous_permissions);
+        if !is_new
+            && self
+                .reset_existing_session_routing(&mut topology, session_id)
+                .is_err()
+        {
             error!(
                 ?session_id,
                 "failed to reset replaced session routing in channel router"
             );
             return Err(ChannelJoinError::RouterState);
         }
+        self.topology = topology;
         Ok(())
     }
 
@@ -208,15 +180,8 @@ impl ChannelState {
         if is_new && self.sessions.len() >= self.admission_policy.max_sessions {
             return Err(ChannelJoinError::ChannelFull);
         }
-        let previous_permissions = self.existing_session_permissions(session_id, is_new);
         let connection_id = self.next_connection_id;
-        self.apply_join_topology(
-            session_id,
-            connection_id,
-            &permissions,
-            previous_permissions.as_ref(),
-            is_new,
-        )?;
+        self.apply_join_topology(session_id, connection_id, &permissions, is_new)?;
         let transport_removals = self.join_transport_removals(session_id, is_new);
         self.next_connection_id = self.next_connection_id.saturating_add(1);
 
@@ -258,7 +223,8 @@ impl ChannelState {
     }
 
     fn reset_existing_session_routing(
-        &mut self,
+        &self,
+        topology: &mut ChannelTopology,
         session_id: &SessionId,
     ) -> Result<(), RouterError> {
         let routed_consumers = self
@@ -270,7 +236,7 @@ impl ChannelState {
             })
             .collect::<Vec<_>>();
         for routed_consumer_id in routed_consumers {
-            self.topology.remove_consumer(routed_consumer_id)?;
+            topology.remove_consumer(routed_consumer_id)?;
         }
 
         let routed_producers = self
@@ -281,7 +247,7 @@ impl ChannelState {
             })
             .collect::<Vec<_>>();
         for routed_producer_id in routed_producers {
-            self.topology.remove_producer(routed_producer_id)?;
+            topology.remove_producer(routed_producer_id)?;
         }
         Ok(())
     }
@@ -450,6 +416,40 @@ mod tests {
         )
     }
 
+    fn install_test_published_producer(
+        state: &mut ChannelState,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        routed_producer_id: RoutedProducerId,
+        transport_media_id: Option<TransportMediaId>,
+    ) {
+        let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+        state.producer_ids_by_owner_stream.insert(
+            super::super::shared::ProducerKey::new(session_id, stream_type),
+            producer_id,
+        );
+        state.producers.insert(
+            producer_id,
+            super::super::shared::PublishedProducer {
+                owner_session_id: session_id.clone(),
+                owner_connection_id: connection_id,
+                stream_type,
+                media_kind: MediaKind::Video,
+                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
+                routed_producer_id,
+                transport_media_id,
+                source_packet_selection: None,
+                active: true,
+            },
+        );
+        if let Some(transport_media_id) = transport_media_id {
+            state
+                .producer_stream_types_by_transport_media_id
+                .insert(transport_media_id, stream_type);
+        }
+    }
+
     #[test]
     fn replacement_join_keeps_existing_channel_state_when_router_reset_fails() {
         let mut state = test_state();
@@ -466,24 +466,33 @@ mod tests {
         assert!(first_join.is_ok());
         let original_connection_id = state.session_connection_id(&session_id);
 
-        let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
-        state.producer_ids_by_owner_stream.insert(
-            super::super::shared::ProducerKey::new(&session_id, StreamType::Camera),
-            producer_id,
+        let valid_routed_producer_id_result = state.topology.add_producer(
+            &session_id,
+            MediaKind::Video,
+            o_sfu_router::StreamType::Camera,
         );
-        state.producers.insert(
-            producer_id,
-            super::super::shared::PublishedProducer {
-                owner_session_id: session_id.clone(),
-                owner_connection_id: original_connection_id.unwrap_or(u64::MAX),
-                stream_type: StreamType::Camera,
-                media_kind: MediaKind::Video,
-                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
-                routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(999)),
-                transport_media_id: None,
-                source_packet_selection: None,
-                active: true,
-            },
+        assert!(
+            valid_routed_producer_id_result.is_ok(),
+            "valid producer route should be created: {valid_routed_producer_id_result:?}"
+        );
+        let Ok(valid_routed_producer_id) = valid_routed_producer_id_result else {
+            return;
+        };
+        install_test_published_producer(
+            &mut state,
+            &session_id,
+            original_connection_id.unwrap_or(u64::MAX),
+            StreamType::Camera,
+            valid_routed_producer_id,
+            Some(TransportMediaId::new(1)),
+        );
+        install_test_published_producer(
+            &mut state,
+            &session_id,
+            original_connection_id.unwrap_or(u64::MAX),
+            StreamType::Screen,
+            RoutedProducerId::new(RouterId(1), ProducerId(999)),
+            None,
         );
 
         let replacement = state.apply_join(
@@ -511,10 +520,16 @@ mod tests {
                 },
             ))
         );
-        assert_eq!(state.producer_count(), 1);
+        assert_eq!(state.producer_count(), 2);
         assert!(
             state
                 .producer_route_target_for_session(&session_id, StreamType::Camera)
+                .is_some(),
+            "the valid staged producer should remain installed when replacement fails"
+        );
+        assert!(
+            state
+                .producer_route_target_for_session(&session_id, StreamType::Screen)
                 .is_none(),
             "the invalid staged producer should stay untouched when replacement fails"
         );

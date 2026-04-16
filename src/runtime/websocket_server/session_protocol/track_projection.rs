@@ -65,10 +65,7 @@ impl RemoteTrackProjection {
         }
     }
 
-    pub(super) fn apply_remote_track_bootstrap(
-        &mut self,
-        payload: &RemoteTrackBootstrap,
-    ) {
+    pub(super) fn apply_remote_track_bootstrap(&mut self, payload: &RemoteTrackBootstrap) {
         let mid = payload.mid().to_owned();
         self.bindings_by_mid.insert(
             mid.clone(),

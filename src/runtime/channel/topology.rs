@@ -75,7 +75,7 @@ impl RoutedConsumerId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct ChannelTopology {
     primary_router: RouterId,
     routers: BTreeMap<RouterId, ChannelRouterState>,

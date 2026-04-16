@@ -400,6 +400,62 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
 }
 
 #[tokio::test]
+async fn leave_session_runtime_removes_departing_consumer_media() {
+    let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_stub().await;
+
+    assert!(
+        channel
+            .publish_track(
+                &SessionId::Integer(2),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::ConsumeMediaRequested {
+                consumer_session_id: SessionId::Integer(1),
+                source_session_id: SessionId::Integer(2),
+                ..
+            }
+        )
+    })
+    .await;
+    assert_eq!(channel.consumer_count().await, 1);
+
+    let Some(connection_id) = channel.session_connection_id(&SessionId::Integer(1)).await else {
+        panic!("consumer connection should exist");
+    };
+    assert!(
+        channel
+            .leave_session_runtime(
+                &SessionId::Integer(1),
+                connection_id,
+                &transport_adapter,
+                super::super::SessionCleanupPolicy::StateAndTransportMedia,
+            )
+            .await
+    );
+
+    wait_for_stub_event(&stub, |event| {
+        matches!(
+            event,
+            StubWebRtcEvent::MediaRemoved {
+                session_id: SessionId::Integer(1),
+                ..
+            }
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
     let (channel, transport_adapter, stub, _publisher_rx, _subscriber_rx) =
         setup_two_ready_sessions_with_stub().await;

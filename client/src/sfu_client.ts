@@ -11,8 +11,7 @@ import {
     type SessionId,
     type SessionInfo,
     type SfuClientSurface,
-    type StreamType,
-    type UpdateInfoOptions
+    type StreamType
 } from "./public_api.js";
 import {
     createProtocolCore,
@@ -144,7 +143,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this.subscribe(sessionId, states);
     }
 
-    updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
+    updateInfo(info: SessionInfo): void {
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.updateInfo(info),
             this._runtimeHooks()

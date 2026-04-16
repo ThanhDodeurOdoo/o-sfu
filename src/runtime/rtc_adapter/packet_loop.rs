@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     io::Error as IoError,
     net::{IpAddr, SocketAddr},
+    slice::Iter,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -18,7 +19,7 @@ use tracing::{debug, trace, warn};
 use super::{
     commands::RtcWorkerCommand,
     forwarded_packet::ForwardedPacket,
-    forwarding_destination::PacketForward,
+    forwarding_destination::{ForwardingDestination, PacketForward},
     forwarding_planner::populate_forward_routes,
     relay_registry::RelayRegistry,
     route_control::{KeyframeRequestDecision, coalesce_keyframe_kind},
@@ -36,6 +37,7 @@ use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 const RECEIVE_BUFFER_LEN: usize = 2000;
+const MAX_RELAY_PACKETS_PER_ITERATION: usize = 64;
 
 #[derive(Debug)]
 struct PendingTransmit {
@@ -196,6 +198,22 @@ enum IndexedSessionRecoveryOutcome {
 enum PacketIndexProbe {
     LocalIceUfrag(String),
     RemoteCandidateAddr(SocketAddr),
+}
+
+enum CandidateSessionKeys<'a> {
+    Single(Option<&'a TransportSessionKey>),
+    Slice(Iter<'a, TransportSessionKey>),
+}
+
+impl<'a> Iterator for CandidateSessionKeys<'a> {
+    type Item = &'a TransportSessionKey;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Single(session_key) => session_key.take(),
+            Self::Slice(iter) => iter.next(),
+        }
+    }
 }
 
 pub(super) struct PacketLoopConfig {
@@ -373,24 +391,24 @@ fn record_incoming_stats(
     metrics: &RuntimeMetrics,
     buffers: &PacketLoopBuffers,
 ) {
-    let Ok(mut snapshot) = snapshot_state.lock() else {
-        return;
-    };
     for packet in &buffers.pending_packets {
         if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
+            let payload_len = packet.payload_len();
             state.route_control.observe_audio_activity(
                 transport_media_id,
                 packet.route_control_voice_activity(),
                 packet.route_control_audio_level(),
                 packet.received_at(),
             );
-            snapshot.record_incoming_media(
-                packet.source_session_key(),
-                transport_media_id,
-                packet.received_at(),
-                packet.payload_len(),
-            );
-            metrics.record_rtp_ingress(packet.payload_len());
+            if let Ok(mut snapshot) = snapshot_state.lock() {
+                snapshot.record_incoming_media(
+                    packet.source_session_key(),
+                    transport_media_id,
+                    packet.received_at(),
+                    payload_len,
+                );
+            }
+            metrics.record_rtp_ingress(payload_len);
         }
     }
 }
@@ -450,7 +468,11 @@ fn snapshot_and_pump(
         state.update_session_timeout(&session_id, session_timeout);
     }
 
-    drain_relay_packets(relay_rx, &mut buffers.pending_packets);
+    drain_relay_packets(
+        relay_rx,
+        &mut buffers.pending_packets,
+        MAX_RELAY_PACKETS_PER_ITERATION,
+    );
     flush_pending_keyframe_requests(state, &config.metrics, buffers);
 
     // Two-pass: collect matching routes, then write to destination sessions
@@ -475,10 +497,21 @@ fn snapshot_and_pump(
 fn drain_relay_packets(
     relay_rx: &mut mpsc::UnboundedReceiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
-) {
-    while let Ok(packet) = relay_rx.try_recv() {
-        pending_packets.push(packet);
+    max_packets: usize,
+) -> usize {
+    let mut drained_packets = 0;
+    while drained_packets < max_packets {
+        match relay_rx.try_recv() {
+            Ok(packet) => {
+                pending_packets.push(packet);
+                drained_packets += 1;
+            }
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
     }
+    drained_packets
 }
 
 fn flush_pending_keyframe_requests(
@@ -553,14 +586,11 @@ fn resolve_keyframe_route(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
 ) -> Option<ResolvedKeyframeRoute> {
-    if let Some(handle) = state
-        .mid_registry
-        .get(&source_transport_media_id.as_u64())
-        .cloned()
-        && let RegisteredMediaHandle::Producer { session_key, .. } = handle
+    if let Some(RegisteredMediaHandle::Producer { session_key, .. }) =
+        state.mid_registry.get(&source_transport_media_id.as_u64())
     {
         return Some(ResolvedKeyframeRoute::Local {
-            source_session_key: session_key,
+            source_session_key: session_key.clone(),
         });
     }
     state
@@ -578,14 +608,35 @@ fn flush_forward_routes(
     buffers: &mut PacketLoopBuffers,
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
+    let mut relay_packets = Vec::with_capacity(pending_packets.len());
+    relay_packets.resize_with(pending_packets.len(), || None);
     for (forward_idx, forward) in forwards.iter().enumerate() {
         let is_last_destination = forwards
             .get(forward_idx + 1)
             .is_none_or(|next_forward| next_forward.packet_idx() != forward.packet_idx());
-        let Some(packet) = pending_packets.get_mut(forward.packet_idx()) else {
+        let packet_idx = forward.packet_idx();
+        let Some(packet) = pending_packets.get_mut(packet_idx) else {
             continue;
         };
         let destination = forward.destination();
+        let relay_packet = match destination {
+            ForwardingDestination::IntraNodeRelay(_) | ForwardingDestination::InterNodeRelay(_) => {
+                let Some(source_transport_media_id) =
+                    packet.resolve_source_transport_media_id(state)
+                else {
+                    continue;
+                };
+                let Some(shared_packet) = relay_packets.get_mut(packet_idx) else {
+                    continue;
+                };
+                Some(
+                    shared_packet
+                        .get_or_insert_with(|| packet.share_for_relay(source_transport_media_id)),
+                )
+            }
+            ForwardingDestination::LocalRtc(_) | ForwardingDestination::Recording(_) => None,
+        };
+        let packet = relay_packet.unwrap_or(packet);
         match destination.send(state, packet, is_last_destination) {
             Ok(Some(payload_len)) => metrics.record_rtp_egress(payload_len),
             Ok(None) => {}
@@ -905,16 +956,18 @@ fn matching_indexed_session_key_for_packet(
     now: Instant,
 ) -> IndexedSessionRecoveryOutcome {
     let candidate_session_keys = match packet_index_probe(source_addr, packet) {
-        Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag)) => state
-            .remote_addr_demux
-            .session_key_for_local_ice_ufrag(&local_ice_ufrag)
-            .cloned()
-            .into_iter()
-            .collect::<Vec<_>>(),
+        Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag)) => CandidateSessionKeys::Single(
+            state
+                .remote_addr_demux
+                .session_key_for_local_ice_ufrag(&local_ice_ufrag),
+        ),
         Ok(PacketIndexProbe::RemoteCandidateAddr(remote_candidate_addr)) => state
             .remote_addr_demux
             .candidate_sessions_for_source_addr(remote_candidate_addr)
-            .map_or_else(Vec::new, <[TransportSessionKey]>::to_vec),
+            .map_or(
+                CandidateSessionKeys::Single(None),
+                |candidate_session_keys| CandidateSessionKeys::Slice(candidate_session_keys.iter()),
+            ),
         Err(
             IndexedSessionRecoveryOutcome::Malformed
             | IndexedSessionRecoveryOutcome::Matched { .. }
@@ -928,26 +981,34 @@ fn matching_indexed_session_key_for_packet(
     };
     let mut examined_sessions: usize = 0;
     let mut stale_session_keys = Vec::new();
-    for session_key in candidate_session_keys {
-        let Some(session_state) = state.sessions.get(&session_key) else {
-            stale_session_keys.push(session_key);
-            continue;
-        };
-        examined_sessions = examined_sessions.saturating_add(1);
-        if session_state.rtc.accepts(&input) {
-            for stale_session_key in stale_session_keys {
-                state
-                    .remote_addr_demux
-                    .forget_session_remote_candidate_addrs(&stale_session_key);
-                state
-                    .remote_addr_demux
-                    .forget_session_local_ice_ufrag(&stale_session_key);
-            }
-            return IndexedSessionRecoveryOutcome::Matched {
-                session_key,
-                examined_sessions,
+    let matched_session_key = {
+        let mut matched_session_key = None;
+        for session_key in candidate_session_keys {
+            let Some(session_state) = state.sessions.get(session_key) else {
+                stale_session_keys.push(session_key.clone());
+                continue;
             };
+            examined_sessions = examined_sessions.saturating_add(1);
+            if session_state.rtc.accepts(&input) {
+                matched_session_key = Some(session_key.clone());
+                break;
+            }
         }
+        matched_session_key
+    };
+    if let Some(matched_session_key) = matched_session_key {
+        for stale_session_key in stale_session_keys {
+            state
+                .remote_addr_demux
+                .forget_session_remote_candidate_addrs(&stale_session_key);
+            state
+                .remote_addr_demux
+                .forget_session_local_ice_ufrag(&stale_session_key);
+        }
+        return IndexedSessionRecoveryOutcome::Matched {
+            session_key: matched_session_key,
+            examined_sessions,
+        };
     }
     for stale_session_key in stale_session_keys {
         state
@@ -1545,7 +1606,11 @@ mod tests {
         let mut pending_packets = Vec::new();
 
         mailbox.forward_packet(&packet, TransportMediaId::new(17));
-        drain_relay_packets(&mut relay_rx, &mut pending_packets);
+        drain_relay_packets(
+            &mut relay_rx,
+            &mut pending_packets,
+            MAX_RELAY_PACKETS_PER_ITERATION,
+        );
 
         assert_eq!(pending_packets.len(), 1);
         let forwarded = pending_packets.first();
@@ -1559,6 +1624,23 @@ mod tests {
             forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(TransportMediaId::new(17))
         );
+    }
+
+    #[test]
+    fn drain_relay_packets_stops_at_the_configured_cap() {
+        let source_session = TransportSessionKey::new(26, 0, 27, SessionId::Integer(28));
+        let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
+        let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
+        let mut pending_packets = Vec::new();
+
+        mailbox.forward_packet(&packet, TransportMediaId::new(18));
+        mailbox.forward_packet(&packet, TransportMediaId::new(18));
+
+        let drained = drain_relay_packets(&mut relay_rx, &mut pending_packets, 1);
+
+        assert_eq!(drained, 1);
+        assert_eq!(pending_packets.len(), 1);
+        assert!(relay_rx.try_recv().is_ok());
     }
 
     #[test]

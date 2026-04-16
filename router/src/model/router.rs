@@ -6,7 +6,7 @@ use super::{
     TransportDirection, TransportId,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
     pub(super) id: RouterId,
     pub(super) sessions: BTreeMap<SessionId, Session>,

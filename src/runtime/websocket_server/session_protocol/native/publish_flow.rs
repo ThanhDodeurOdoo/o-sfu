@@ -5,7 +5,7 @@ use o_sfu_router::MediaKind;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use crate::runtime::{channel::NegotiatedPublish, websocket_server::WsWriter};
-use crate::signaling::shared::StreamType;
+use crate::signaling::{protocol::WebSocketCloseCode, shared::StreamType};
 
 use super::super::controller::SessionProtocolOutcome;
 use super::{
@@ -120,9 +120,9 @@ impl NativeSessionProtocol {
         &mut self,
         stream_type: StreamType,
         writer: Option<&mut WsWriter>,
-    ) {
+    ) -> SessionProtocolOutcome {
         match self.state.clear_publish_transition(stream_type) {
-            Some(ClearedPublishTransition::Queued) => return,
+            Some(ClearedPublishTransition::Queued) => return SessionProtocolOutcome::Continue,
             Some(ClearedPublishTransition::Staged(staged_publish)) => {
                 let session_key = self
                     .channel
@@ -136,7 +136,7 @@ impl NativeSessionProtocol {
                     })
                     .await;
                 let _disposition = self.negotiation.request_renegotiation();
-                return;
+                return SessionProtocolOutcome::Continue;
             }
             None => {}
         }
@@ -150,12 +150,12 @@ impl NativeSessionProtocol {
             )
             .await
         {
-            return;
+            return SessionProtocolOutcome::Continue;
         }
         let Some(writer) = writer else {
-            return;
+            return SessionProtocolOutcome::Continue;
         };
-        let _result = self.request_renegotiation(writer).await;
+        handle_unpublish_renegotiation_result(self.request_renegotiation(writer).await)
     }
 
     async fn stage_publish_stream(&mut self, stream_type: StreamType) -> bool {
@@ -236,6 +236,15 @@ fn pending_publish_parameters() -> RouterRtpParameters {
     RouterRtpParameters::new(vec![], vec![], vec![])
 }
 
+fn handle_unpublish_renegotiation_result(
+    result: Result<bool, WebSocketCloseCode>,
+) -> SessionProtocolOutcome {
+    match result {
+        Ok(_sent) => SessionProtocolOutcome::Continue,
+        Err(code) => SessionProtocolOutcome::Close(code),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -247,8 +256,11 @@ mod tests {
 
     use super::{PublishTransactionGuard, StagedPublishTransaction};
     use crate::{
-        runtime::transport_adapter::{TransportAdapterError, TransportMediaId},
-        signaling::shared::StreamType,
+        runtime::{
+            transport_adapter::{TransportAdapterError, TransportMediaId},
+            websocket_server::session_protocol::controller::SessionProtocolOutcome,
+        },
+        signaling::{protocol::WebSocketCloseCode, shared::StreamType},
     };
     use o_sfu_router::{MediaKind, RtpParameters as RouterRtpParameters};
 
@@ -418,6 +430,18 @@ mod tests {
         assert_eq!(
             steps.lock().expect("steps lock").as_slice(),
             &[Step::Load(17), Step::Publish(17)]
+        );
+    }
+
+    #[test]
+    fn unpublish_renegotiation_failure_closes_the_session() {
+        assert_eq!(
+            super::handle_unpublish_renegotiation_result(Err(WebSocketCloseCode::Error)),
+            SessionProtocolOutcome::Close(WebSocketCloseCode::Error)
+        );
+        assert_eq!(
+            super::handle_unpublish_renegotiation_result(Ok(false)),
+            SessionProtocolOutcome::Continue
         );
     }
 

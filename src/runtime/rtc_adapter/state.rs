@@ -28,7 +28,7 @@ use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::media_registry::{
-    ProducerMidLookupKey, RegisteredMediaHandle, RemoteSourceRegistration,
+    ConsumerMidLookupKey, ProducerMidLookupKey, RegisteredMediaHandle, RemoteSourceRegistration,
 };
 use super::route_control::RouteControlState;
 
@@ -212,6 +212,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     pub(super) route_control: RouteControlState,
     pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
+    pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,

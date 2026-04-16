@@ -15,7 +15,7 @@ use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
 use crate::signaling::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct ChannelRouterState {
     router: Router<RecordingRouterObserver>,
     rtp_capabilities: RtpCapabilities,

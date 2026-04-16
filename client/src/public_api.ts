@@ -21,10 +21,6 @@ export interface DownloadStates {
     screen?: boolean;
 }
 
-export interface UpdateInfoOptions {
-    needRefresh?: boolean;
-}
-
 export interface SessionInfo {
     isTalking?: boolean;
     isFeatured?: boolean;
@@ -138,7 +134,7 @@ export interface SfuClientSurface extends EventTarget {
      * @deprecated Use `subscribe()` instead.
      */
     updateDownload(sessionId: SessionId, states: DownloadStates): void;
-    updateInfo(info: SessionInfo, options?: UpdateInfoOptions): void;
+    updateInfo(info: SessionInfo): void;
     broadcast(message: unknown): void;
     startRecording(options?: RecordingOptions): Promise<boolean>;
     stopRecording(): Promise<boolean>;

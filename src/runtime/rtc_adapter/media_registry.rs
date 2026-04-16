@@ -81,6 +81,18 @@ impl ProducerMidLookupKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ConsumerMidLookupKey {
+    session_key: TransportSessionKey,
+    mid: Mid,
+}
+
+impl ConsumerMidLookupKey {
+    fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
+        Self { session_key, mid }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Media registry methods on RtcBootstrapState
 // ---------------------------------------------------------------------------
@@ -96,6 +108,16 @@ impl RtcBootstrapState {
             self.producer_mid_registry.insert(
                 ProducerMidLookupKey::new(session_key.clone(), *mid),
                 TransportMediaId::new(id),
+            );
+        } else if let RegisteredMediaHandle::Consumer {
+            session_key,
+            mid,
+            source_transport_media_id,
+        } = &handle
+        {
+            self.consumer_mid_registry.insert(
+                ConsumerMidLookupKey::new(session_key.clone(), *mid),
+                *source_transport_media_id,
             );
         }
         self.mid_registry.insert(id, handle);
@@ -117,6 +139,12 @@ impl RtcBootstrapState {
             self.producer_mid_registry
                 .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
             self.route_control.forget_source(transport_media_id);
+        } else if let RegisteredMediaHandle::Consumer {
+            session_key, mid, ..
+        } = &handle
+        {
+            self.consumer_mid_registry
+                .remove(&ConsumerMidLookupKey::new(session_key.clone(), *mid));
         }
         Some(handle)
     }
@@ -218,16 +246,12 @@ impl RtcBootstrapState {
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<TransportMediaId> {
-        self.mid_registry.values().find_map(|handle| match handle {
-            RegisteredMediaHandle::Consumer {
-                session_key,
-                mid,
-                source_transport_media_id,
-            } if session_key == consumer_session_key && *mid == consumer_mid => {
-                Some(*source_transport_media_id)
-            }
-            RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => None,
-        })
+        self.consumer_mid_registry
+            .get(&ConsumerMidLookupKey::new(
+                consumer_session_key.clone(),
+                consumer_mid,
+            ))
+            .copied()
     }
 
     pub(super) fn remove_session_media_handles(
@@ -248,5 +272,68 @@ impl RtcBootstrapState {
             }
         }
         removed_handles
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::transport_adapter::TransportSessionKey;
+    use crate::signaling::shared::SessionId;
+
+    #[test]
+    fn consumer_media_lookup_uses_the_reverse_index() {
+        let mut state = RtcBootstrapState::default();
+        let source_transport_media_id = TransportMediaId::new(8);
+        let consumer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(14));
+        let consumer_mid = Mid::from("aud-down");
+
+        let _consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: consumer_mid,
+                source_transport_media_id,
+            });
+
+        assert_eq!(
+            state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
+            Some(source_transport_media_id)
+        );
+    }
+
+    #[test]
+    fn consumer_media_lookup_clears_when_the_handle_is_removed() {
+        let mut state = RtcBootstrapState::default();
+        let source_transport_media_id = TransportMediaId::new(9);
+        let consumer_session = TransportSessionKey::new(15, 0, 16, SessionId::Integer(17));
+        let consumer_mid = Mid::from("cam-down");
+
+        let consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: consumer_mid,
+                source_transport_media_id,
+            });
+        assert_eq!(
+            state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
+            Some(source_transport_media_id)
+        );
+
+        let removed_handle = state.remove_media_handle(consumer_transport_media_id);
+
+        assert!(matches!(
+            removed_handle,
+            Some(RegisteredMediaHandle::Consumer {
+                session_key,
+                mid,
+                source_transport_media_id: removed_source_transport_media_id,
+            }) if session_key == consumer_session
+                && mid == consumer_mid
+                && removed_source_transport_media_id == source_transport_media_id
+        ));
+        assert_eq!(
+            state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
+            None
+        );
     }
 }

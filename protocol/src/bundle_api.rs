@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::shared::{
     AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
@@ -69,24 +69,25 @@ pub struct BundleBroadcastCall {
     pub message: JsonPayload,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BundleUpdateInfoCall {
     pub info: SessionInfo,
-    #[serde(default, skip_serializing_if = "BundleUpdateInfoOptions::is_empty")]
-    pub options: BundleUpdateInfoOptions,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleUpdateInfoOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub need_refresh: Option<bool>,
-}
+impl<'de> Deserialize<'de> for BundleUpdateInfoCall {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct LegacyBundleUpdateInfoCall {
+            pub info: SessionInfo,
+            #[serde(default, rename = "options")]
+            pub _options: Option<serde_json::Value>,
+        }
 
-impl BundleUpdateInfoOptions {
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.need_refresh.is_none()
+        let legacy = LegacyBundleUpdateInfoCall::deserialize(deserializer)?;
+        Ok(Self { info: legacy.info })
     }
 }
 
@@ -260,8 +261,8 @@ mod tests {
         BundleBroadcastCall, BundleBroadcastUpdate, BundleConnectCall, BundleConnectOptions,
         BundleConnectionState, BundleMethodCall, BundleProtocolStrategy, BundlePublishCall,
         BundleRecordingOptions, BundleStartRecordingCall, BundleStateChange, BundleSubscribeCall,
-        BundleUpdate, BundleUpdateInfoCall, BundleUpdateInfoOptions, BundleUpdateKind,
-        FIRST_BUNDLE_PROTOCOL_STRATEGY, FIRST_BUNDLE_PROTOCOL_VERSION, bundle_session_info_key,
+        BundleUpdate, BundleUpdateInfoCall, BundleUpdateKind, FIRST_BUNDLE_PROTOCOL_STRATEGY,
+        FIRST_BUNDLE_PROTOCOL_VERSION, bundle_session_info_key,
     };
     use crate::shared::{
         DownloadStates, RecordingState, RecordingStateUpdate, SessionId, SessionInfo, StopCode,
@@ -373,9 +374,6 @@ mod tests {
                 is_deaf: None,
                 is_raising_hand: Some(true),
             },
-            options: BundleUpdateInfoOptions {
-                need_refresh: Some(true),
-            },
         });
         assert_round_trip(
             &update_info,
@@ -386,13 +384,25 @@ mod tests {
                         "isTalking": true,
                         "isCameraOn": false,
                         "isRaisingHand": true
-                    },
-                    "options": {
-                        "needRefresh": true
                     }
                 }
             }),
         )?;
+
+        let legacy_update_info = serde_json::from_value::<BundleMethodCall>(json!({
+            "method": "updateInfo",
+            "arguments": {
+                "info": {
+                    "isTalking": true,
+                    "isCameraOn": false,
+                    "isRaisingHand": true
+                },
+                "options": {
+                    "needRefresh": true
+                }
+            }
+        }))?;
+        assert_eq!(legacy_update_info, update_info);
 
         let subscribe_call = BundleMethodCall::Subscribe(BundleSubscribeCall {
             session_id: SessionId::Integer(7),

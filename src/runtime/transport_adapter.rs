@@ -873,8 +873,8 @@ impl RuntimeTransportAdapter {
                         source_session_key,
                         source_transport_media_id,
                         active,
-                )
-                .await
+                    )
+                    .await
             }
         }
     }

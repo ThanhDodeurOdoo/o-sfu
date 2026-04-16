@@ -169,7 +169,7 @@ impl ChannelState {
             .iter()
             .filter_map(|(key, consumer_state)| {
                 if !departing_session_ids.contains(&key.producer_session_id)
-                    || departing_session_ids.contains(&key.consumer_session_id)
+                    && !departing_session_ids.contains(&key.consumer_session_id)
                 {
                     return None;
                 }

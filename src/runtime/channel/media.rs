@@ -226,34 +226,83 @@ impl Channel {
             )
         };
         let Some((sender, bootstrap, consumer_active)) = outbound else {
-            let _result = transport_adapter
-                .remove_media(
-                    &self.transport_session_key(
-                        target.consumer_session_id(),
-                        target.consumer_connection_id(),
-                    ),
-                    consumer_transport_media_id,
-                )
-                .await;
+            self.cleanup_failed_consumer_bootstrap(
+                target,
+                consumer_transport_media_id,
+                transport_adapter,
+                origin,
+            )
+            .await;
             return;
         };
-        if !consumer_active
-            && transport_adapter
-                .set_consumer_active(
-                    &self.transport_session_key(
-                        target.consumer_session_id(),
-                        target.consumer_connection_id(),
-                    ),
-                    consumer_transport_media_id,
-                    &self.transport_session_key(
-                        target.producer_session_id(),
-                        target.producer_connection_id(),
-                    ),
-                    target.transport_media_id(),
-                    false,
-                )
-                .await
-                .is_err()
+        self.apply_initial_consumer_pause_state(
+            target,
+            consumer_transport_media_id,
+            consumer_active,
+            transport_adapter,
+            origin,
+        )
+        .await;
+        let _ = sender.send(super::SessionOutbound::Request(Box::new(
+            bootstrap.into_channel_event_request(),
+        )));
+    }
+
+    async fn cleanup_failed_consumer_bootstrap(
+        &self,
+        target: &PendingConsumerBootstrapTarget,
+        consumer_transport_media_id: TransportMediaId,
+        transport_adapter: &RuntimeTransportAdapter,
+        origin: ConsumerBootstrapOrigin,
+    ) {
+        if transport_adapter
+            .remove_media(
+                &self.transport_session_key(
+                    target.consumer_session_id(),
+                    target.consumer_connection_id(),
+                ),
+                consumer_transport_media_id,
+            )
+            .await
+            .is_err()
+        {
+            warn!(
+                consumer_session_id = ?target.consumer_session_id(),
+                producer_session_id = ?target.producer_session_id(),
+                consumer_transport_media_id = ?consumer_transport_media_id,
+                ?origin,
+                "transport adapter failed to remove consumer transport media after bootstrap state commit failed"
+            );
+        }
+    }
+
+    async fn apply_initial_consumer_pause_state(
+        &self,
+        target: &PendingConsumerBootstrapTarget,
+        consumer_transport_media_id: TransportMediaId,
+        consumer_active: bool,
+        transport_adapter: &RuntimeTransportAdapter,
+        origin: ConsumerBootstrapOrigin,
+    ) {
+        if consumer_active {
+            return;
+        }
+        if transport_adapter
+            .set_consumer_active(
+                &self.transport_session_key(
+                    target.consumer_session_id(),
+                    target.consumer_connection_id(),
+                ),
+                consumer_transport_media_id,
+                &self.transport_session_key(
+                    target.producer_session_id(),
+                    target.producer_connection_id(),
+                ),
+                target.transport_media_id(),
+                false,
+            )
+            .await
+            .is_err()
         {
             warn!(
                 consumer_session_id = ?target.consumer_session_id(),
@@ -262,9 +311,6 @@ impl Channel {
                 "transport adapter failed to apply the initial consumer pause state"
             );
         }
-        let _ = sender.send(super::SessionOutbound::Request(Box::new(
-            bootstrap.into_channel_event_request(),
-        )));
     }
 
     #[allow(
@@ -438,12 +484,21 @@ impl Channel {
             state.commit_published_track(pending_publish, transport_media_id)
         };
         let Some((producer_id, consumer_targets)) = consumer_targets else {
-            let _result = transport_adapter
+            if transport_adapter
                 .remove_media(
                     &self.transport_session_key(session_id, connection_id),
                     transport_media_id,
                 )
-                .await;
+                .await
+                .is_err()
+            {
+                warn!(
+                    ?session_id,
+                    connection_id,
+                    transport_media_id = ?transport_media_id,
+                    "transport adapter failed to remove published transport media after channel commit failed"
+                );
+            }
             return None;
         };
         self.sync_source_packet_selection_policy(Some(transport_adapter))
