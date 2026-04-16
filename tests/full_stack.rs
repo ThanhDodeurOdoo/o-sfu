@@ -413,9 +413,9 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
 
     let mut clock = FakeClock::default();
     let initial_forwarded_bytes =
-        assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
+        assert_audio_packet_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
             .await
-            + assert_audio_frame_forwarded(
+            + assert_audio_packet_forwarded(
                 &mut publisher,
                 &mut subscriber,
                 &mut source,
@@ -433,7 +433,7 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
     let mut additional_forwarded_bytes = 0;
     for _ in 0..4 {
         additional_forwarded_bytes +=
-            assert_audio_frame_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
+            assert_audio_packet_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock)
                 .await;
     }
 
@@ -511,7 +511,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     assert!(subscriber.complete_next_negotiation().await.is_some());
 
     let mut clock = FakeClock::default();
-    assert_audio_frame_forwarded(
+    assert_audio_packet_forwarded(
         &mut initial_publisher,
         &mut subscriber,
         &mut source,
@@ -534,7 +534,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     assert_departure_message_native(&mut subscriber, SessionId::Integer(80)).await;
     assert_peer_joined_message_native(&mut subscriber, SessionId::Integer(80)).await;
 
-    assert_audio_frame_dropped(
+    assert_audio_packet_dropped(
         &mut initial_publisher,
         &mut subscriber,
         &mut source,
@@ -558,7 +558,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     )
     .await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_audio_frame_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
+    assert_audio_packet_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
 }
 
 #[tokio::test]
@@ -656,37 +656,40 @@ async fn connect_audio_media_flow_peers_for_sessions(
     Some((publisher, subscriber))
 }
 
-async fn assert_audio_frame_forwarded(
+async fn assert_audio_packet_forwarded(
     publisher: &mut NativeFakePeer,
     subscriber: &mut NativeFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) -> u64 {
-    let expected_payload = publisher.send_frame(source, clock).await;
+    let expected_payload = publisher.send_rtp_packet(source, clock).await;
     assert!(expected_payload.is_some());
     let Some(expected_payload) = expected_payload else {
         return 0;
     };
 
-    let received_frame = subscriber.read_media_frame(Duration::from_secs(2)).await;
-    assert!(received_frame.is_some());
-    let Some(received_frame) = received_frame else {
+    let received_packet = subscriber.read_rtp_packet(Duration::from_secs(2)).await;
+    assert!(received_packet.is_some());
+    let Some(received_packet) = received_packet else {
         return 0;
     };
-    assert_eq!(received_frame.payload, expected_payload);
+    assert_eq!(
+        received_packet.payload.as_ref(),
+        expected_payload.as_slice()
+    );
     u64::try_from(expected_payload.len()).unwrap_or(u64::MAX)
 }
 
-async fn assert_audio_frame_dropped(
+async fn assert_audio_packet_dropped(
     publisher: &mut NativeFakePeer,
     subscriber: &mut NativeFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) {
-    let _ = publisher.send_frame(source, clock).await;
+    let _ = publisher.send_rtp_packet(source, clock).await;
     assert!(
         subscriber
-            .read_media_frame(Duration::from_millis(300))
+            .read_rtp_packet(Duration::from_millis(300))
             .await
             .is_none()
     );
@@ -752,19 +755,22 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     assert!(subscriber.complete_next_negotiation().await.is_some());
 
     let mut clock = FakeClock::default();
-    let expected_payload = publisher.send_frame(&mut source, &mut clock).await;
+    let expected_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
     assert!(expected_payload.is_some());
     let Some(expected_payload) = expected_payload else {
         return;
     };
 
-    let received_frame = subscriber.read_media_frame(Duration::from_secs(2)).await;
-    assert!(received_frame.is_some());
-    let Some(received_frame) = received_frame else {
+    let received_packet = subscriber.read_rtp_packet(Duration::from_secs(2)).await;
+    assert!(received_packet.is_some());
+    let Some(received_packet) = received_packet else {
         return;
     };
-    assert!(!received_frame.mid.is_empty());
-    assert_eq!(received_frame.payload, expected_payload);
+    assert!(!received_packet.mid.is_empty());
+    assert_eq!(
+        received_packet.payload.as_ref(),
+        expected_payload.as_slice()
+    );
 
     assert!(
         subscriber
@@ -781,11 +787,11 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
 
     drain_native_control_plane(subscriber, Duration::from_millis(150)).await;
 
-    let next_payload = publisher.send_frame(&mut source, &mut clock).await;
+    let next_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
     assert!(next_payload.is_some());
     assert!(
         subscriber
-            .read_media_frame(Duration::from_millis(300))
+            .read_rtp_packet(Duration::from_millis(300))
             .await
             .is_none()
     );
@@ -802,11 +808,11 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     assert!(subscriber.complete_next_negotiation().await.is_some());
 
     let mut clock = FakeClock::default();
-    let first_payload = publisher.send_frame(&mut source, &mut clock).await;
+    let first_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
     assert!(first_payload.is_some());
     assert!(
         subscriber
-            .read_media_frame(Duration::from_secs(2))
+            .read_rtp_packet(Duration::from_secs(2))
             .await
             .is_some()
     );
@@ -822,10 +828,10 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
 
     drain_native_control_plane(subscriber, Duration::from_millis(150)).await;
 
-    let _ = publisher.send_frame(&mut source, &mut clock).await;
+    let _ = publisher.send_rtp_packet(&mut source, &mut clock).await;
     assert!(
         subscriber
-            .read_media_frame(Duration::from_millis(300))
+            .read_rtp_packet(Duration::from_millis(300))
             .await
             .is_none()
     );
@@ -1006,7 +1012,7 @@ async fn stream_until_audio_bitrate_is_observable(
     clock: &mut FakeClock,
 ) -> Option<IncomingBitRateStats> {
     for _ in 0..20 {
-        publisher.send_frames(source, clock, 2).await?;
+        publisher.send_rtp_packets(source, clock, 2).await?;
         let stats = network.stats().await?;
         let channel_stats = stats.into_iter().find(|entry| entry.uuid == channel)?;
         if channel_stats.sessions_stats.incoming_bit_rate.audio > 0 {

@@ -29,7 +29,7 @@ use o_sfu::{
 use super::{
     TestWebSocket, connect_websocket, create_channel,
     fake_media::{FakeClock, FakeMediaSource},
-    fake_rtc_peer::{NativeFakeRtcPeer, ReceivedMediaFrame},
+    fake_rtc_peer::{NativeFakeRtcPeer, ReceivedRtpPacket},
     read_close_code, read_text_message, signed_connect_claims,
 };
 
@@ -217,28 +217,27 @@ impl NativeFakePeer {
         self.rtc_peer.wait_until_connected(timeout_window).await
     }
 
-    pub async fn send_frames(
+    pub async fn send_rtp_packets(
         &mut self,
         source: &mut FakeMediaSource,
         clock: &mut FakeClock,
         frame_count: usize,
     ) -> Option<()> {
-        self.rtc_peer.send_frames(source, clock, frame_count).await
+        self.rtc_peer
+            .send_rtp_packets(source, clock, frame_count)
+            .await
     }
 
-    pub async fn send_frame(
+    pub async fn send_rtp_packet(
         &mut self,
         source: &mut FakeMediaSource,
         clock: &mut FakeClock,
     ) -> Option<Vec<u8>> {
-        self.rtc_peer.send_frame(source, clock).await
+        self.rtc_peer.send_rtp_packet(source, clock).await
     }
 
-    pub async fn read_media_frame(
-        &mut self,
-        timeout_window: Duration,
-    ) -> Option<ReceivedMediaFrame> {
-        self.rtc_peer.read_media_frame(timeout_window).await
+    pub async fn read_rtp_packet(&mut self, timeout_window: Duration) -> Option<ReceivedRtpPacket> {
+        self.rtc_peer.read_rtp_packet(timeout_window).await
     }
 
     pub async fn read_close_code(&mut self) -> Option<CloseCode> {

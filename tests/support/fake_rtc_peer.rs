@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "the str0m-backed fake RTC peer is shared across native integration scenarios"
+    reason = "the str0m-backed fake RTP peer is shared across native integration scenarios"
 )]
 
 use std::{
@@ -10,6 +10,7 @@ use std::{
 };
 
 use tokio::{net::UdpSocket, time::timeout};
+use tokio_util::bytes::Bytes;
 
 use o_sfu::{
     signaling::protocol::SessionDescriptionPayload,
@@ -19,8 +20,9 @@ use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
     change::SdpOffer,
     format::{Codec, PayloadParams},
-    media::{MediaData, MediaKind as Str0mMediaKind, Mid, Pt},
+    media::{Mid, Pt},
     net::{Protocol, Receive},
+    rtp::{ExtensionValues, RtpPacket},
 };
 
 use super::fake_media::{FakeClock, FakeMediaFrame, FakeMediaSource};
@@ -30,9 +32,9 @@ const MAX_SOCKET_WAIT: Duration = Duration::from_millis(50);
 const IO_SLICE: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceivedMediaFrame {
+pub struct ReceivedRtpPacket {
     pub mid: String,
-    pub payload: Vec<u8>,
+    pub payload: Bytes,
 }
 
 pub struct NativeFakeRtcPeer {
@@ -62,7 +64,7 @@ impl NativeFakeRtcPeer {
             .await
             .ok()?;
         let local_addr = socket.local_addr().ok()?;
-        let mut rtc = Rtc::new(Instant::now());
+        let mut rtc = Rtc::builder().set_rtp_mode(true).build(Instant::now());
         rtc.add_local_candidate(Candidate::host(local_addr, "udp").ok()?)?;
         Some(Self {
             rtc,
@@ -102,7 +104,7 @@ impl NativeFakeRtcPeer {
         }
     }
 
-    pub async fn send_frames(
+    pub async fn send_rtp_packets(
         &mut self,
         source: &mut FakeMediaSource,
         clock: &mut FakeClock,
@@ -110,7 +112,7 @@ impl NativeFakeRtcPeer {
     ) -> Option<()> {
         for _ in 0..frame_count {
             let frame = source.next_frame(clock);
-            self.write_frame(source.media_kind(), frame)?;
+            self.write_rtp_packet(source.media_kind(), frame)?;
             pump_until(
                 &mut self.rtc,
                 &self.socket,
@@ -124,14 +126,14 @@ impl NativeFakeRtcPeer {
         Some(())
     }
 
-    pub async fn send_frame(
+    pub async fn send_rtp_packet(
         &mut self,
         source: &mut FakeMediaSource,
         clock: &mut FakeClock,
     ) -> Option<Vec<u8>> {
         let frame = source.next_frame(clock);
         let expected_payload = frame.payload.clone();
-        self.write_frame(source.media_kind(), frame)?;
+        self.write_rtp_packet(source.media_kind(), frame)?;
         pump_until(
             &mut self.rtc,
             &self.socket,
@@ -144,11 +146,8 @@ impl NativeFakeRtcPeer {
         Some(expected_payload)
     }
 
-    pub async fn read_media_frame(
-        &mut self,
-        timeout_window: Duration,
-    ) -> Option<ReceivedMediaFrame> {
-        pump_until_media(
+    pub async fn read_rtp_packet(&mut self, timeout_window: Duration) -> Option<ReceivedRtpPacket> {
+        pump_until_rtp(
             &mut self.rtc,
             &self.socket,
             self.local_addr,
@@ -158,14 +157,23 @@ impl NativeFakeRtcPeer {
         .await
     }
 
-    fn write_frame(&mut self, media_kind: SignalingMediaKind, frame: FakeMediaFrame) -> Option<()> {
+    fn write_rtp_packet(
+        &mut self,
+        media_kind: SignalingMediaKind,
+        frame: FakeMediaFrame,
+    ) -> Option<()> {
         let send_path = *self.send_paths.get(&NativeMediaKey::from(media_kind))?;
         self.rtc
-            .writer(send_path.mid)?
-            .write(
+            .direct_api()
+            .stream_tx_by_mid(send_path.mid, None)?
+            .write_rtp(
                 send_path.payload_type,
+                u64::from(frame.sequence_number).into(),
+                frame.rtp_timestamp,
                 self.start_wallclock + frame.emitted_at,
-                frame.emitted_at.into(),
+                false,
+                ExtensionValues::default(),
+                false,
                 frame.payload,
             )
             .ok()?;
@@ -173,18 +181,16 @@ impl NativeFakeRtcPeer {
     }
 }
 
-fn media_data_into_frame(data: MediaData) -> ReceivedMediaFrame {
-    ReceivedMediaFrame {
-        mid: data.mid.to_string(),
-        payload: data.data,
-    }
-}
-
-fn signaling_to_str0m_media_kind(kind: SignalingMediaKind) -> Str0mMediaKind {
-    match kind {
-        SignalingMediaKind::Audio => Str0mMediaKind::Audio,
-        SignalingMediaKind::Video => Str0mMediaKind::Video,
-    }
+fn into_received_rtp_packet(rtc: &mut Rtc, packet: RtpPacket) -> Option<ReceivedRtpPacket> {
+    let mid = rtc
+        .direct_api()
+        .stream_rx(&packet.header.ssrc)?
+        .mid()
+        .to_string();
+    Some(ReceivedRtpPacket {
+        mid,
+        payload: packet.payload.into(),
+    })
 }
 
 async fn pump_until(
@@ -263,13 +269,13 @@ async fn pump_until(
     Some(*connected)
 }
 
-async fn pump_until_media(
+async fn pump_until_rtp(
     rtc: &mut Rtc,
     socket: &UdpSocket,
     local_addr: SocketAddr,
     connected: &mut bool,
     deadline: Instant,
-) -> Option<ReceivedMediaFrame> {
+) -> Option<ReceivedRtpPacket> {
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     while Instant::now() < deadline {
         let now = Instant::now();
@@ -280,7 +286,9 @@ async fn pump_until_media(
                     .await
                     .ok()?;
             }
-            Output::Event(Event::MediaData(data)) => return Some(media_data_into_frame(data)),
+            Output::Event(Event::RtpPacket(packet)) => {
+                return into_received_rtp_packet(rtc, packet);
+            }
             Output::Event(Event::Connected) => {
                 *connected = true;
             }

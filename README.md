@@ -8,8 +8,8 @@
 # o-sfu
 
 > [!WARNING]  
-> Early phase of developments, the readme may not be up to date, or be incorrect.
-> Everything is up for massive refactor, some files are just testing prototypes
+> NOT PRODUCTION READY! This repo is mostly made for experimenting with ideas. The readme may not be up to date, or be incorrect.
+> Everything is up for refactor, some files are just testing prototypes.
 
 ## Development
 
@@ -22,8 +22,6 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 npm --prefix client run verify
 ```
-
-The primary Rust CI coverage now lives in `.github/workflows/tests.yml`, which runs formatting, the full workspace test suite, clippy, and a Docker image build for the server binary.
 
 ## Container image
 
@@ -54,8 +52,6 @@ docker run --rm \
   -e PUBLIC_IP=203.0.113.10 \
   o-sfu:local
 ```
-
-Production deployment is expected to keep `o-sfu` on plain HTTP behind a trusted NGINX reverse proxy. Terminate TLS in NGINX, keep `o-sfu` bound on its local HTTP listener, and enable `PROXY=true` only on that trusted proxied path.
 
 parser/auth fuzzing is in `fuzz/` crate.
  Install `cargo-fuzz` separately:
@@ -99,5 +95,8 @@ cargo kani -p o-sfu-router
 
 ## Recording:
 
-the o-sfu architecture helps a lot with recording compared to odoo/sfu, since we now have complete control over the rtp packet dispatch, don't have to pipe streams through a transport layer and use ports and ffmpeg (at the real time recording step). we can just write packet frames to the disk directly and bypass all that old boilerplate.
-another advantage is the router/recording topology, we have recording nodes that should just act as "opaque" media consuming "entities" and their locality shouldn't matter much
+the o-sfu architecture helps a lot with recording compared to the previous version, since we now have complete control over the rtp packet dispatch, don't have to pipe streams through a transport layer and use ports and ffmpeg (at the real time recording step). we can just write packet frames to the disk directly and bypass all that old boilerplate.
+another advantage is the router/recording topology, we have recording nodes that should just act as "opaque" media consuming "entities" and their locality shouldn't matter much so recording and forwarding could be physically separated.
+
+also the recording feature on the official repo is still in active development so the API may change, and this repo
+will adapt accordingly.

@@ -153,12 +153,7 @@ impl ForwardedPacket {
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 let seq_no = rtp_data.seq_no;
                 let header = &rtp_data.header;
-                LocalForwardedRtp::from_relay(
-                    seq_no,
-                    header,
-                    self.received_at,
-                    payload,
-                )
+                LocalForwardedRtp::from_relay(seq_no, header, self.received_at, payload)
             }
         }
     }

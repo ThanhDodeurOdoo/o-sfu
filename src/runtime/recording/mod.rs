@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "The recording step will be finalize later, just making the skeleton of the API so it's easier to design with it already in place"
+    reason = "recording capture surfaces are live, but deferred finalization and federation work still leave some helpers unused on the main runtime path"
 )]
 
 mod media_source;
