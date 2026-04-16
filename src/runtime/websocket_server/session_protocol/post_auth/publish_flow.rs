@@ -93,8 +93,9 @@ impl PostAuthSessionProtocol {
             .await
         {
             self.channel
-                .set_publication_active(
+                .set_publication_active_runtime(
                     &self.session_id,
+                    self.connection_id,
                     stream_type,
                     true,
                     &self.transport_adapter,

@@ -525,6 +525,134 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
 }
 
 #[tokio::test]
+async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test() {
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-replacement-guard", None).await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    assert!(peers.is_some());
+    let Some((mut alice, mut bob)) = peers else {
+        return;
+    };
+    let replacement =
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &bob_token).await;
+    assert!(replacement.is_some());
+    let Some((replacement, _welcome)) = replacement else {
+        return;
+    };
+
+    let departed = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(2))
+    })
+    .await;
+    assert!(departed.is_some());
+    let rejoined = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == SessionId::Integer(2))
+    })
+    .await;
+    assert!(rejoined.is_some());
+
+    let _ = bob
+        .send_broadcast(serde_json::json!({ "text": "stale" }))
+        .await;
+    assert_eq!(
+        alice
+            .read_server_message_with_timeout(Duration::from_millis(150))
+            .await,
+        None,
+        "stale replacement socket must not broadcast into the room"
+    );
+
+    let _ = bob
+        .send_info(SessionInfo {
+            is_talking: Some(true),
+            ..SessionInfo::default()
+        })
+        .await;
+    assert_eq!(
+        alice
+            .read_server_message_with_timeout(Duration::from_millis(150))
+            .await,
+        None,
+        "stale replacement socket must not overwrite presence"
+    );
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+    assert!(replacement.close().await.is_some());
+}
+
+#[tokio::test]
+async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-disconnect-guard", None).await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(21));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(22));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(22)).await;
+    assert!(peers.is_some());
+    let Some((mut alice, mut bob)) = peers else {
+        return;
+    };
+
+    let status = disconnect_sessions_via_http(
+        &server,
+        BTreeMap::from([(channel.clone(), vec![SessionId::Integer(22)])]),
+    )
+    .await;
+    assert_eq!(status, Some(StatusCode::OK));
+
+    let _ = bob
+        .send_broadcast(serde_json::json!({ "text": "post-kick" }))
+        .await;
+    let message = alice
+        .read_server_message_with_timeout(Duration::from_secs(1))
+        .await;
+    assert!(message.is_some());
+    if let Some(ServerMessage::PeerLeft(payload)) = message {
+        assert_eq!(payload.session_id, SessionId::Integer(22));
+    } else {
+        panic!("expected bulk disconnect to surface peerleft before any stale broadcast");
+    }
+    assert_eq!(
+        alice
+            .read_server_message_with_timeout(Duration::from_millis(150))
+            .await,
+        None,
+        "bulk-disconnected sockets must not squeeze extra broadcast traffic through after removal"
+    );
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+}
+
+#[tokio::test]
 async fn mismatched_explicit_channel_uuid_is_rejected_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());

@@ -317,16 +317,17 @@ impl Channel {
         clippy::cognitive_complexity,
         reason = "the production-change transition intentionally keeps router updates, session-info sync, broadcast, and transport activity in one explicit sequence"
     )]
-    pub async fn set_publication_active(
+    pub(crate) async fn set_publication_active_runtime(
         &self,
         session_id: &SessionId,
+        connection_id: u64,
         stream_type: StreamType,
         active: bool,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         let Some(producer_target) = ({
             let state = self.state.read().await;
-            state.producer_route_target_for_session(session_id, stream_type)
+            state.producer_route_target(session_id, connection_id, stream_type)
         }) else {
             return;
         };
@@ -357,21 +358,38 @@ impl Channel {
         outcome.fanout.emit();
     }
 
-    pub async fn update_subscription(
+    #[cfg(test)]
+    pub async fn set_publication_active(
         &self,
         session_id: &SessionId,
+        stream_type: StreamType,
+        active: bool,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let Some(connection_id) = self.session_connection_id(session_id).await else {
+            return;
+        };
+        self.set_publication_active_runtime(
+            session_id,
+            connection_id,
+            stream_type,
+            active,
+            transport_adapter,
+        )
+        .await;
+    }
+
+    pub(crate) async fn update_subscription_runtime(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
         target_session_id: &SessionId,
         states: &DownloadStates,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let route_updates = {
-            let mut state = self.state.write().await;
-            state.remember_download_states(session_id, target_session_id, states);
-            state.download_route_updates(session_id, target_session_id, states)
-        };
         let committed_updates = {
             let mut state = self.state.write().await;
-            state.commit_download_route_updates(session_id, target_session_id, route_updates)
+            state.apply_download_state_update(session_id, connection_id, target_session_id, states)
         };
         for route_update in committed_updates {
             if transport_adapter
@@ -397,6 +415,27 @@ impl Channel {
                 );
             }
         }
+    }
+
+    #[cfg(test)]
+    pub async fn update_subscription(
+        &self,
+        session_id: &SessionId,
+        target_session_id: &SessionId,
+        states: &DownloadStates,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let Some(connection_id) = self.session_connection_id(session_id).await else {
+            return;
+        };
+        self.update_subscription_runtime(
+            session_id,
+            connection_id,
+            target_session_id,
+            states,
+            transport_adapter,
+        )
+        .await;
     }
 
     pub(crate) async fn is_stream_published(

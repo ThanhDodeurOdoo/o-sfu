@@ -13,14 +13,15 @@ pub(in crate::runtime::channel) struct ConsumerRouteUpdate {
 }
 
 impl ChannelState {
-    pub(in crate::runtime::channel) fn remember_download_states(
+    pub(in crate::runtime::channel) fn apply_download_state_update(
         &mut self,
         session_id: &SessionId,
+        connection_id: u64,
         target_session_id: &SessionId,
         states: &DownloadStates,
-    ) {
-        let Some(session) = self.sessions.get_mut(session_id) else {
-            return;
+    ) -> Vec<ConsumerRouteUpdate> {
+        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
+            return Vec::new();
         };
         let existing_states = session
             .desired_download_states
@@ -30,60 +31,20 @@ impl ChannelState {
         if download_states_are_empty(existing_states) {
             session.desired_download_states.remove(target_session_id);
         }
-    }
-
-    pub(in crate::runtime::channel) fn download_route_updates(
-        &self,
-        session_id: &SessionId,
-        target_session_id: &SessionId,
-        states: &DownloadStates,
-    ) -> Vec<ConsumerRouteUpdate> {
-        let consumer_connection_id = self.session_connection_id(session_id);
-        let mut route_updates = Vec::new();
+        let mut accepted_updates = Vec::new();
         for (stream_type, active) in states.iter() {
             let key = ConsumerKey {
                 consumer_session_id: session_id.clone(),
                 producer_session_id: target_session_id.clone(),
                 stream_type,
             };
-            let Some(consumer_state) = self.consumer_index.get(&key).copied() else {
-                continue;
-            };
-            if Some(consumer_state.consumer_connection_id) != consumer_connection_id {
-                continue;
-            }
-            route_updates.push(ConsumerRouteUpdate {
-                consumer_state,
-                stream_type,
-                active,
-            });
-        }
-        route_updates
-    }
-
-    pub(in crate::runtime::channel) fn commit_download_route_updates(
-        &mut self,
-        session_id: &SessionId,
-        target_session_id: &SessionId,
-        committed_updates: impl IntoIterator<Item = ConsumerRouteUpdate>,
-    ) -> Vec<ConsumerRouteUpdate> {
-        let consumer_connection_id = self.session_connection_id(session_id);
-        let mut accepted_updates = Vec::new();
-        for route_update in committed_updates {
-            let key = ConsumerKey {
-                consumer_session_id: session_id.clone(),
-                producer_session_id: target_session_id.clone(),
-                stream_type: route_update.stream_type,
-            };
             let Some(current_consumer_state) = self.consumer_index.get(&key).copied() else {
                 continue;
             };
-            if current_consumer_state != route_update.consumer_state
-                || Some(current_consumer_state.consumer_connection_id) != consumer_connection_id
-            {
+            if current_consumer_state.consumer_connection_id != connection_id {
                 continue;
             }
-            let paused = !route_update.active;
+            let paused = !active;
             if self
                 .topology
                 .set_consumer_paused(current_consumer_state.routed_consumer_id, paused)
@@ -92,12 +53,16 @@ impl ChannelState {
                 error!(
                     ?session_id,
                     ?target_session_id,
-                    ?route_update.stream_type,
+                    ?stream_type,
                     "failed to set consumer pause state in channel router"
                 );
                 continue;
             }
-            accepted_updates.push(route_update);
+            accepted_updates.push(ConsumerRouteUpdate {
+                consumer_state: current_consumer_state,
+                stream_type,
+                active,
+            });
         }
         accepted_updates
     }

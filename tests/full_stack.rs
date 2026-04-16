@@ -12,7 +12,7 @@ use o_sfu::{
     signaling::{
         http::IncomingBitRateStats,
         protocol::ServerMessage,
-        shared::{DownloadStates, SessionId, StreamType},
+        shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     },
 };
 
@@ -657,6 +657,64 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
     drain_protocol_control_plane(&mut replacement, Duration::from_millis(150)).await;
 
     assert_audio_packet_dropped(&mut publisher, &mut replacement, &mut source, &mut clock).await;
+}
+
+#[tokio::test]
+async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
+    let mut config = test_config(1_000, 10);
+    config.transport_backend = TransportBackend::Rtc;
+
+    let network = ProtocolLocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel("issuer-replacement-rtc-info", Some(TEST_CHANNEL_KEY))
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let initial = network
+        .connect_fake_peer(&channel, SessionId::Integer(84), TEST_CHANNEL_KEY)
+        .await;
+    let observer = network
+        .connect_fake_peer(&channel, SessionId::Integer(85), TEST_CHANNEL_KEY)
+        .await;
+    assert!(initial.is_some());
+    assert!(observer.is_some());
+    let (Some(mut initial), Some(mut observer)) = (initial, observer) else {
+        return;
+    };
+
+    assert_peer_joined_message_protocol(&mut initial, SessionId::Integer(85)).await;
+
+    let replacement = network
+        .connect_fake_peer(&channel, SessionId::Integer(84), TEST_CHANNEL_KEY)
+        .await;
+    assert!(replacement.is_some());
+    let Some(replacement) = replacement else {
+        return;
+    };
+
+    let _ = initial
+        .send_info(SessionInfo {
+            is_talking: Some(true),
+            ..SessionInfo::default()
+        })
+        .await;
+
+    assert_eq!(
+        initial.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+    assert_departure_message_protocol(&mut observer, SessionId::Integer(84)).await;
+    assert_peer_joined_message_protocol(&mut observer, SessionId::Integer(84)).await;
+    assert_no_server_message_protocol(&mut observer).await;
+    assert!(replacement.close().await.is_some());
 }
 
 #[tokio::test]

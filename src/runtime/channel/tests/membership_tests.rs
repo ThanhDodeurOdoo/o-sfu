@@ -47,7 +47,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     assert!(first_connection.is_ok());
     assert_eq!(channel.router_session_count().await, 1);
 
-    let (tx2, mut rx2) = test_sender();
+    let (tx2, _rx2) = test_sender();
     let second_connection = channel
         .join_session(
             SessionId::Integer(1),
@@ -76,11 +76,11 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     assert_eq!(channel.session_count().await, 1);
     assert_eq!(channel.router_session_count().await, 1);
 
-    channel
-        .broadcast(&SessionId::Integer(99), serde_json::json!("hello"))
-        .await;
-    let msg = rx2.try_recv();
-    assert!(msg.is_ok(), "new sender should receive broadcast");
+    assert_eq!(
+        channel.session_connection_id(&SessionId::Integer(1)).await,
+        Some(second_connection),
+        "stale leave must not remove the replacement connection"
+    );
 
     channel
         .leave_session(&SessionId::Integer(1), second_connection)

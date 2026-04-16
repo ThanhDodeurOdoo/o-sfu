@@ -16,8 +16,9 @@ impl PostAuthSessionProtocol {
         match envelope {
             ClientEnvelope::Message(ClientMessage::Info(info)) => {
                 self.channel
-                    .update_session_info_runtime(
+                    .update_session_info_runtime_for_connection(
                         &self.session_id,
+                        self.connection_id,
                         info,
                         false,
                         &self.transport_adapter,
@@ -28,13 +29,16 @@ impl PostAuthSessionProtocol {
             ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload {
                 message,
             })) => {
-                self.channel.broadcast(&self.session_id, message).await;
+                self.channel
+                    .broadcast_runtime(&self.session_id, self.connection_id, message)
+                    .await;
                 SessionProtocolOutcome::Continue
             }
             ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
                 self.channel
-                    .update_subscription(
+                    .update_subscription_runtime(
                         &self.session_id,
+                        self.connection_id,
                         &payload.session_id,
                         &payload.states,
                         &self.transport_adapter,
@@ -69,7 +73,7 @@ impl PostAuthSessionProtocol {
             } => {
                 let ok = self
                     .channel
-                    .start_recording(&self.session_id, payload)
+                    .start_recording_runtime(&self.session_id, self.connection_id, payload)
                     .await;
                 match send_server_response(
                     writer,
@@ -86,7 +90,10 @@ impl PostAuthSessionProtocol {
                 request_id,
                 request: ClientRequest::StopRecording,
             } => {
-                let ok = self.channel.stop_recording(&self.session_id).await;
+                let ok = self
+                    .channel
+                    .stop_recording_runtime(&self.session_id, self.connection_id)
+                    .await;
                 match send_server_response(
                     writer,
                     request_id,

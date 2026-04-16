@@ -283,11 +283,12 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn apply_presence_update(
         &mut self,
         session_id: &SessionId,
+        connection_id: u64,
         info: &SessionInfo,
         need_refresh: bool,
     ) -> Option<SessionInfoUpdateOutcome> {
         {
-            let session = self.sessions.get_mut(session_id)?;
+            let session = self.session_mut_for_connection(session_id, connection_id)?;
             session.presence.apply_update(info);
         }
         let snapshot = if need_refresh {
@@ -340,6 +341,22 @@ impl ChannelState {
             departure_fanouts,
             transport_removals,
         }
+    }
+
+    pub(in crate::runtime::channel) fn broadcast_fanout(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        message: serde_json::Value,
+    ) -> Option<MessageFanout> {
+        self.session_for_connection(session_id, connection_id)?;
+        Some(self.fanout_all_except(
+            &ChannelEventMessage::Broadcast {
+                sender_id: session_id.clone(),
+                message,
+            },
+            Some(session_id),
+        ))
     }
 
     pub(in crate::runtime::channel) fn set_client_rtp_capabilities(
@@ -670,8 +687,11 @@ mod tests {
                 .is_ok()
         );
 
-        state.remember_download_states(
+        state.apply_download_state_update(
             &consumer_session_id,
+            state
+                .session_connection_id(&consumer_session_id)
+                .unwrap_or(u64::MAX),
             &producer_session_id,
             &DownloadStates {
                 audio: Some(false),

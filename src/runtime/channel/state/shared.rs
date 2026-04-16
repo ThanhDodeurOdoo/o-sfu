@@ -233,6 +233,18 @@ impl ChannelState {
         });
     }
 
+    pub(in crate::runtime::channel) fn session_for_connection(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> Option<&ActiveSession> {
+        let session = self.sessions.get(session_id)?;
+        if session.connection_id != connection_id {
+            return None;
+        }
+        Some(session)
+    }
+
     pub(in crate::runtime::channel) fn session_mut_for_connection(
         &mut self,
         session_id: &SessionId,

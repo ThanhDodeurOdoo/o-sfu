@@ -6,7 +6,7 @@ use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::signaling::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
-    Channel, ChannelEventMessage, ChannelJoinError, SessionOutbound,
+    Channel, ChannelJoinError, SessionOutbound,
     session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
     state::TransportMediaRemoval,
 };
@@ -152,39 +152,61 @@ impl Channel {
         true
     }
 
-    pub async fn broadcast(&self, sender_id: &SessionId, message: serde_json::Value) {
+    pub(crate) async fn broadcast_runtime(
+        &self,
+        sender_id: &SessionId,
+        connection_id: u64,
+        message: serde_json::Value,
+    ) {
         let fanout = {
             let state = self.state.read().await;
-            state.fanout_all_except(
-                &ChannelEventMessage::Broadcast {
-                    sender_id: sender_id.clone(),
-                    message,
-                },
-                Some(sender_id),
-            )
+            state.broadcast_fanout(sender_id, connection_id, message)
         };
-        fanout.emit();
+        if let Some(fanout) = fanout {
+            fanout.emit();
+        }
     }
 
+    #[cfg(test)]
+    pub async fn broadcast(&self, sender_id: &SessionId, message: serde_json::Value) {
+        let Some(connection_id) = self.session_connection_id(sender_id).await else {
+            return;
+        };
+        self.broadcast_runtime(sender_id, connection_id, message)
+            .await;
+    }
+
+    #[cfg(test)]
     pub async fn update_session_info(
         &self,
         session_id: &SessionId,
         info: SessionInfo,
         need_refresh: bool,
     ) {
-        self.update_session_info_with_transport(session_id, info, need_refresh, None)
-            .await;
+        let Some(connection_id) = self.session_connection_id(session_id).await else {
+            return;
+        };
+        self.update_session_info_with_transport(
+            session_id,
+            connection_id,
+            info,
+            need_refresh,
+            None,
+        )
+        .await;
     }
 
-    pub(crate) async fn update_session_info_runtime(
+    pub(crate) async fn update_session_info_runtime_for_connection(
         &self,
         session_id: &SessionId,
+        connection_id: u64,
         info: SessionInfo,
         need_refresh: bool,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         self.update_session_info_with_transport(
             session_id,
+            connection_id,
             info,
             need_refresh,
             Some(transport_adapter),
@@ -192,16 +214,38 @@ impl Channel {
         .await;
     }
 
+    #[cfg(test)]
+    pub(crate) async fn update_session_info_runtime(
+        &self,
+        session_id: &SessionId,
+        info: SessionInfo,
+        need_refresh: bool,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let Some(connection_id) = self.session_connection_id(session_id).await else {
+            return;
+        };
+        self.update_session_info_runtime_for_connection(
+            session_id,
+            connection_id,
+            info,
+            need_refresh,
+            transport_adapter,
+        )
+        .await;
+    }
+
     async fn update_session_info_with_transport(
         &self,
         session_id: &SessionId,
+        connection_id: u64,
         info: SessionInfo,
         need_refresh: bool,
         transport_adapter: Option<&RuntimeTransportAdapter>,
     ) {
         let outcome = {
             let mut state = self.state.write().await;
-            state.apply_presence_update(session_id, &info, need_refresh)
+            state.apply_presence_update(session_id, connection_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
             self.sync_source_packet_selection_policy(transport_adapter)

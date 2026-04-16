@@ -41,6 +41,68 @@ fn test_state() -> ChannelState {
     )
 }
 
+fn join_test_session(state: &mut ChannelState, session_id: &SessionId) {
+    let (sender, _rx) = mpsc::unbounded_channel();
+    assert!(
+        state
+            .apply_join(
+                session_id,
+                None,
+                SessionPermissions::default(),
+                sender,
+                false,
+            )
+            .is_ok()
+    );
+}
+
+fn install_test_consumer_route(
+    state: &mut ChannelState,
+    producer_session_id: &SessionId,
+    consumer_session_id: &SessionId,
+) -> (ConsumerKey, u64) {
+    let producer_connection_id = state
+        .session_connection_id(producer_session_id)
+        .expect("producer session should have a connection id");
+    let consumer_connection_id = state
+        .session_connection_id(consumer_session_id)
+        .expect("consumer session should have a connection id");
+    let routed_producer_id = state
+        .topology
+        .add_producer(
+            producer_session_id,
+            RouterMediaKind::Video,
+            RouterStreamType::Camera,
+        )
+        .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
+    let routed_consumer_id = state
+        .topology
+        .add_consumer(
+            consumer_session_id,
+            routed_producer_id,
+            RouterMediaKind::Video,
+            RouterStreamType::Camera,
+            ConsumerCapability::Compatible,
+        )
+        .unwrap_or_else(|error| panic!("failed to create test consumer route: {error:?}"));
+    let route_key = ConsumerKey {
+        consumer_session_id: consumer_session_id.clone(),
+        producer_session_id: producer_session_id.clone(),
+        stream_type: StreamType::Camera,
+    };
+    let consumer_state = ConsumerState {
+        routed_consumer_id,
+        consumer_connection_id,
+        source_connection_id: producer_connection_id,
+        source_media: TransportMediaId::new(1),
+        consumer_media: TransportMediaId::new(2),
+    };
+    state
+        .consumer_index
+        .insert(route_key.clone(), consumer_state);
+    (route_key, consumer_connection_id)
+}
+
 #[test]
 fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
     let mut state = test_state();
@@ -95,84 +157,32 @@ fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
 }
 
 #[test]
-#[allow(
-    clippy::panic,
-    reason = "test fixture wiring intentionally aborts on impossible setup failures"
-)]
-fn stale_download_route_updates_are_ignored_before_transport_commit() {
+fn stale_replaced_connection_cannot_update_download_state() {
     let mut state = test_state();
     let producer_session_id = SessionId::Integer(1);
     let consumer_session_id = SessionId::Integer(2);
-    let (producer_sender, _producer_rx) = mpsc::unbounded_channel();
-    let (consumer_sender, _consumer_rx) = mpsc::unbounded_channel();
+    let (replacement_sender, _replacement_rx) = mpsc::unbounded_channel();
 
-    assert!(
-        state
-            .apply_join(
-                &producer_session_id,
-                None,
-                SessionPermissions::default(),
-                producer_sender,
-                false,
-            )
-            .is_ok()
-    );
+    join_test_session(&mut state, &producer_session_id);
+    join_test_session(&mut state, &consumer_session_id);
+    let (route_key, stale_connection_id) =
+        install_test_consumer_route(&mut state, &producer_session_id, &consumer_session_id);
+
     assert!(
         state
             .apply_join(
                 &consumer_session_id,
-                None,
+                Some(String::from("replacement")),
                 SessionPermissions::default(),
-                consumer_sender,
+                replacement_sender,
                 false,
             )
             .is_ok()
     );
 
-    let Some(producer_connection_id) = state.session_connection_id(&producer_session_id) else {
-        panic!("producer session should have a connection id");
-    };
-    let Some(consumer_connection_id) = state.session_connection_id(&consumer_session_id) else {
-        panic!("consumer session should have a connection id");
-    };
-    let routed_producer_id = match state.topology.add_producer(
-        &producer_session_id,
-        RouterMediaKind::Video,
-        RouterStreamType::Camera,
-    ) {
-        Ok(routed_producer_id) => routed_producer_id,
-        Err(error) => panic!("failed to create test producer route: {error:?}"),
-    };
-    let routed_consumer_id = match state.topology.add_consumer(
+    let committed_updates = state.apply_download_state_update(
         &consumer_session_id,
-        routed_producer_id,
-        RouterMediaKind::Video,
-        RouterStreamType::Camera,
-        ConsumerCapability::Compatible,
-    ) {
-        Ok(routed_consumer_id) => routed_consumer_id,
-        Err(error) => panic!("failed to create test consumer route: {error:?}"),
-    };
-
-    let consumer_media = TransportMediaId::new(2);
-    let route_key = ConsumerKey {
-        consumer_session_id: consumer_session_id.clone(),
-        producer_session_id: producer_session_id.clone(),
-        stream_type: StreamType::Camera,
-    };
-    let consumer_state = ConsumerState {
-        routed_consumer_id,
-        consumer_connection_id,
-        source_connection_id: producer_connection_id,
-        source_media: TransportMediaId::new(1),
-        consumer_media,
-    };
-    state
-        .consumer_index
-        .insert(route_key.clone(), consumer_state);
-
-    let route_updates = state.download_route_updates(
-        &consumer_session_id,
+        stale_connection_id,
         &producer_session_id,
         &DownloadStates {
             camera: Some(false),
@@ -180,21 +190,19 @@ fn stale_download_route_updates_are_ignored_before_transport_commit() {
             screen: None,
         },
     );
-    assert_eq!(route_updates.len(), 1);
-
-    state.consumer_index.insert(
-        route_key,
-        ConsumerState {
-            consumer_connection_id: consumer_connection_id.saturating_add(1),
-            ..consumer_state
-        },
-    );
-
-    let committed_updates = state.commit_download_route_updates(
-        &consumer_session_id,
-        &producer_session_id,
-        route_updates,
-    );
 
     assert!(committed_updates.is_empty());
+    assert!(
+        state.desired_download_active(
+            &consumer_session_id,
+            &producer_session_id,
+            StreamType::Camera,
+        ),
+        "stale subscription updates must not overwrite the replacement session's stored preferences"
+    );
+    assert_eq!(
+        state.consumer_index.get(&route_key),
+        None,
+        "replacement join should clear stale consumer routes before the new connection reboots them"
+    );
 }

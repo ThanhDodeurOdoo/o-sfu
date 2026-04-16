@@ -203,3 +203,102 @@ async fn recording_allows_transcription_toggle_but_rejects_new_media_while_activ
     assert_eq!(metrics_snapshot.recording_start_rejected, 1);
     assert_eq!(metrics_snapshot.active_recording_channels, 1);
 }
+
+#[tokio::test]
+async fn stale_replaced_connection_cannot_start_or_stop_recording() {
+    let (channel, metrics, _publisher_rx, mut observer_rx) = build_recording_channel().await;
+    let stale_connection_id = channel
+        .session_connection_id(&SessionId::Integer(1))
+        .await
+        .expect("recording publisher should have a connection id");
+    let (replacement_tx, mut replacement_rx) = test_sender();
+    let replacement_connection_id = channel
+        .join_session(
+            SessionId::Integer(1),
+            Some(String::from("replacement")),
+            SessionPermissions {
+                transcription: Some(true),
+                audio_recording: Some(true),
+                video_recording: Some(true),
+            },
+            replacement_tx,
+        )
+        .await
+        .expect("replacement publisher should join");
+    drain_outbound(&mut replacement_rx);
+    drain_outbound(&mut observer_rx);
+
+    assert!(
+        !channel
+            .start_recording_runtime(
+                &SessionId::Integer(1),
+                stale_connection_id,
+                RecordingOptions {
+                    audio: Some(true),
+                    video: Some(false),
+                    transcription: Some(false),
+                },
+            )
+            .await
+    );
+    assert_eq!(
+        channel.recording_state().await,
+        RecordingState {
+            recording: Some(false),
+            audio: Some(false),
+            transcription: Some(false),
+            video: Some(false),
+        }
+    );
+    assert!(
+        replacement_rx.try_recv().is_err(),
+        "stale recording start must not fan out channel updates"
+    );
+    assert!(
+        observer_rx.try_recv().is_err(),
+        "stale recording start must not notify observers"
+    );
+
+    assert!(
+        channel
+            .start_recording_runtime(
+                &SessionId::Integer(1),
+                replacement_connection_id,
+                RecordingOptions {
+                    audio: Some(true),
+                    video: Some(false),
+                    transcription: Some(false),
+                },
+            )
+            .await
+    );
+    let _start_update = expect_recording_message(&mut replacement_rx).await;
+    let _observer_start = expect_recording_message(&mut observer_rx).await;
+
+    assert!(
+        !channel
+            .stop_recording_runtime(&SessionId::Integer(1), stale_connection_id)
+            .await
+    );
+    assert_eq!(channel.recording_state().await.recording, Some(true));
+    assert!(
+        replacement_rx.try_recv().is_err(),
+        "stale recording stop must not fan out channel updates"
+    );
+    assert!(
+        observer_rx.try_recv().is_err(),
+        "stale recording stop must not notify observers"
+    );
+
+    assert!(
+        channel
+            .stop_recording_runtime(&SessionId::Integer(1), replacement_connection_id)
+            .await
+    );
+    let _stop_update = expect_recording_message(&mut replacement_rx).await;
+    let _observer_stop = expect_recording_message(&mut observer_rx).await;
+
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
+    assert_eq!(metrics_snapshot.recording_stop_rejected, 1);
+}
