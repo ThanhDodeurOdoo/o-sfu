@@ -727,7 +727,7 @@ fn drain_single_session(
                     .push((session_key.clone(), PendingKeyframeRequest::new(request)));
                 trace!(
                     session_id = ?session_key.session_id(),
-                    channel_runtime_id = session_key.channel_runtime_id(),
+                    media_worker_id = session_key.media_worker_id(),
                     mid = %request.mid,
                     rid = ?request.rid,
                     kind = ?request.kind,
@@ -743,7 +743,7 @@ fn drain_single_session(
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(
                             session_id = ?session_key.session_id(),
-                            channel_runtime_id = session_key.channel_runtime_id(),
+                            media_worker_id = session_key.media_worker_id(),
                             "failed to apply immediate rtc packet-loop timeout input"
                         );
                         return None;
@@ -755,7 +755,7 @@ fn drain_single_session(
             Err(error) => {
                 warn!(
                     session_id = ?session_key.session_id(),
-                    channel_runtime_id = session_key.channel_runtime_id(),
+                    media_worker_id = session_key.media_worker_id(),
                     ?error,
                     "rtc packet loop failed while polling output"
                 );
@@ -770,7 +770,7 @@ fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
         Event::IceConnectionStateChange(state) => {
             debug!(
                 session_id = ?session_key.session_id(),
-                channel_runtime_id = session_key.channel_runtime_id(),
+                media_worker_id = session_key.media_worker_id(),
                 ?state,
                 "rtc ICE connection state transition"
             );
@@ -778,14 +778,14 @@ fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
         Event::Connected => {
             debug!(
                 session_id = ?session_key.session_id(),
-                channel_runtime_id = session_key.channel_runtime_id(),
+                media_worker_id = session_key.media_worker_id(),
                 "rtc DTLS transport reached connected state"
             );
         }
         _ => {
             trace!(
                 session_id = ?session_key.session_id(),
-                channel_runtime_id = session_key.channel_runtime_id(),
+                media_worker_id = session_key.media_worker_id(),
                 ?event,
                 "rtc packet loop event"
             );
@@ -963,7 +963,7 @@ fn route_packet_with_cached_session(
     if handle_result.is_err() {
         warn!(
             session_id = ?session_key.session_id(),
-            channel_runtime_id = session_key.channel_runtime_id(),
+            media_worker_id = session_key.media_worker_id(),
             "failed to feed indexed UDP datagram into rtc session state"
         );
     } else {
@@ -1073,7 +1073,7 @@ fn route_packet_by_scan(
     if handle_result.is_err() {
         warn!(
             session_id = ?session_key.session_id(),
-            channel_runtime_id = session_key.channel_runtime_id(),
+            media_worker_id = session_key.media_worker_id(),
             "failed to feed incoming UDP datagram into rtc session state"
         );
     } else {

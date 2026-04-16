@@ -8,7 +8,7 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::stub_bus::StubWebRtcEvent;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterShardSetConfig, SourcePacketSelection, TransportMediaId, TransportSessionKey,
+    RtcTransportAdapterShardSetConfig, SourcePacketGate, TransportMediaId, TransportSessionKey,
 };
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
@@ -205,10 +205,10 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
     assert!(stub.snapshot_events().iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id: updated_media_id,
-                selection: Some(SourcePacketSelection::Rid(rid)),
+                packet_gate: Some(SourcePacketGate::Rid(rid)),
             } if *session_id == SessionId::Integer(1)
                 && *updated_media_id == transport_media_id
                 && rid == "lo"
@@ -243,7 +243,7 @@ async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() 
         !stub
             .snapshot_events()
             .iter()
-            .any(|event| matches!(event, StubWebRtcEvent::SourcePacketSelectionUpdated { .. })),
+            .any(|event| matches!(event, StubWebRtcEvent::SourcePacketGateUpdated { .. })),
         "two-party camera publish should not force a shared source layer yet"
     );
 }
@@ -295,10 +295,10 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
     assert!(stub.snapshot_events().iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id: updated_media_id,
-                selection: Some(SourcePacketSelection::Rid(rid)),
+                packet_gate: Some(SourcePacketGate::Rid(rid)),
             } if *session_id == SessionId::Integer(1)
                 && *updated_media_id == transport_media_id
                 && rid == "lo"
@@ -368,10 +368,10 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     assert!(stub.snapshot_events().iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id: updated_media_id,
-                selection: None,
+                packet_gate: None,
             } if *session_id == SessionId::Integer(1)
                 && *updated_media_id == transport_media_id
         )
@@ -482,18 +482,18 @@ fn assert_source_packet_selection_update(
 ) {
     assert!(events.iter().any(|event| match (event, selection) {
         (
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
-                selection: None,
+                packet_gate: None,
             },
             None,
         ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
         (
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
-                selection: Some(SourcePacketSelection::Rid(rid)),
+                packet_gate: Some(SourcePacketGate::Rid(rid)),
             },
             Some(expected_rid),
         ) => {
@@ -542,10 +542,10 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
     assert!(!speaker_two_events.iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id,
-                selection: None,
+                packet_gate: None,
             } if *session_id == SessionId::Integer(1)
                 && *transport_media_id == first_camera_media_id
         )
@@ -628,10 +628,10 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
     assert!(!active_speaker_events.iter().any(|event| {
         matches!(
             event,
-            StubWebRtcEvent::SourcePacketSelectionUpdated {
+            StubWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id,
-                selection: None,
+                packet_gate: None,
             } if *session_id == SessionId::Integer(1)
                 && *transport_media_id == ordered_camera_media_ids[0]
         )

@@ -217,14 +217,12 @@ impl ActiveSpeakerSource {
     }
 }
 
-/// Channel-owned source-layer choice applied at the transport boundary.
+/// Generic transport-owned packet gate applied to one published source.
 ///
-/// The room runtime expresses intent in terms of transport-owned media ids and
-/// stable layer labels. The RTC adapter translates that intent into its
-/// packet-gating primitives without leaking `str0m`-specific control types
-/// back into channel orchestration.
+/// Higher layers may derive this from orchestration policy, but the transport
+/// boundary only accepts the generic gate it must enforce on packet routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SourcePacketSelection {
+pub(crate) enum SourcePacketGate {
     Rid(String),
 }
 
@@ -522,20 +520,10 @@ impl RtcTransportAdapterShardSet {
         snapshot
     }
 
-    async fn active_speaker_source_snapshot(
-        &self,
-        channel_runtime_id: u64,
-    ) -> Vec<ActiveSpeakerSource> {
-        let mut snapshot = self
-            .primary_shard
-            .active_speaker_source_snapshot(channel_runtime_id)
-            .await;
+    async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
+        let mut snapshot = self.primary_shard.active_speaker_source_snapshot().await;
         for shard in &self.extra_shards {
-            snapshot.extend(
-                shard
-                    .active_speaker_source_snapshot(channel_runtime_id)
-                    .await,
-            );
+            snapshot.extend(shard.active_speaker_source_snapshot().await);
         }
         snapshot.sort_by_key(|source| Reverse(source.observed_at()));
         snapshot.dedup_by_key(|source| source.transport_media_id());
@@ -770,11 +758,7 @@ impl RuntimeTransportAdapter {
                     })
                     .transpose()?;
                 if let Some((source_shard, consumer_shard)) = &relay_route {
-                    source_shard.activate_relay_route(
-                        source_session_key.channel_runtime_id(),
-                        source_media_id,
-                        consumer_shard,
-                    )?;
+                    source_shard.activate_relay_route(source_media_id, consumer_shard)?;
                 }
                 let consumer_shard = adapter.shard_for_session(consumer_session_key);
                 let add_result = consumer_shard
@@ -809,21 +793,10 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    pub(crate) async fn active_speaker_source_snapshot(
-        &self,
-        channel_runtime_id: u64,
-    ) -> Vec<ActiveSpeakerSource> {
+    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self {
-            Self::Stub(adapter) => {
-                adapter
-                    .active_speaker_source_snapshot(channel_runtime_id)
-                    .await
-            }
-            Self::Rtc(adapter) => {
-                adapter
-                    .active_speaker_source_snapshot(channel_runtime_id)
-                    .await
-            }
+            Self::Stub(adapter) => adapter.active_speaker_source_snapshot().await,
+            Self::Rtc(adapter) => adapter.active_speaker_source_snapshot().await,
         }
     }
 
@@ -902,30 +875,30 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    /// Apply a room-owned source-layer choice to one published media source.
-    pub(crate) async fn set_source_packet_selection(
+    /// Apply a generic packet-routing gate to one published media source.
+    pub(crate) async fn set_source_packet_gate(
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        selection: Option<SourcePacketSelection>,
+        packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
         match self {
             Self::Stub(adapter) => {
                 adapter
-                    .set_source_packet_selection(
+                    .set_source_packet_gate(
                         source_session_key,
                         source_transport_media_id,
-                        selection,
+                        packet_gate,
                     )
                     .await
             }
             Self::Rtc(adapter) => {
                 adapter
                     .shard_for_session(source_session_key)
-                    .set_source_packet_selection(
+                    .set_source_packet_gate(
                         source_session_key,
                         source_transport_media_id,
-                        selection,
+                        packet_gate,
                     )
                     .await
             }

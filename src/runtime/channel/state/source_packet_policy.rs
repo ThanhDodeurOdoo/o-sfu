@@ -1,12 +1,10 @@
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, SourcePacketSelection, TransportMediaId,
-};
+use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportMediaId};
 use crate::signaling::shared::{SessionId, StreamType};
 use std::collections::BTreeSet;
 
 use super::{
     ids::ProducerRuntimeId,
-    shared::{ChannelState, ProducerKey},
+    shared::{ChannelState, ProducerKey, SourcePacketSelection},
 };
 
 const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;

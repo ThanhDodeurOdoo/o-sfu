@@ -20,7 +20,7 @@ use super::super::{
 };
 
 enum RouteSourceKind {
-    Local { source_mid: Mid },
+    Local,
     Remote,
 }
 
@@ -362,7 +362,7 @@ fn worker_add_recv_media(
     });
     debug!(
         session_id = ?session_key.session_id(),
-        channel_runtime_id = session_key.channel_runtime_id(),
+        media_worker_id = session_key.media_worker_id(),
         ?transport_media_id,
         ?media_kind,
         "declared recv-only media on rtc session for incoming producer RTP"
@@ -456,11 +456,10 @@ fn worker_add_send_media(
     refresh_source_packet_gate(state, source_transport_media_id);
     debug!(
         consumer_session_id = ?consumer_session_key.session_id(),
-        consumer_channel_runtime_id = consumer_session_key.channel_runtime_id(),
+        consumer_media_worker_id = consumer_session_key.media_worker_id(),
         source_session_id = ?source_session_key.session_id(),
-        source_channel_runtime_id = source_session_key.channel_runtime_id(),
+        source_media_worker_id = source_session_key.media_worker_id(),
         ?source_transport_media_id,
-        source_mid = ?route_source.source_mid(),
         source_route_kind = route_source.label(),
         ?transport_media_id,
         ?media_kind,
@@ -690,16 +689,9 @@ fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ss
 }
 
 impl RouteSourceKind {
-    fn source_mid(&self) -> Option<Mid> {
-        match self {
-            Self::Local { source_mid } => Some(*source_mid),
-            Self::Remote => None,
-        }
-    }
-
     const fn label(&self) -> &'static str {
         match self {
-            Self::Local { .. } => "local",
+            Self::Local => "local",
             Self::Remote => "remote",
         }
     }
@@ -718,9 +710,7 @@ fn ensure_route_source_registered(
                 RegisteredMediaHandle::Producer {
                     session_key: owner_session_key,
                     mid,
-                } if owner_session_key == source_session_key => {
-                    Ok(RouteSourceKind::Local { source_mid: *mid })
-                }
+                } if owner_session_key == source_session_key => Ok(RouteSourceKind::Local),
                 RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => {
                     Err(TransportAdapterError::InvalidInput)
                 }
@@ -956,7 +946,6 @@ mod tests {
         let relay_target_id = RelayTargetId::new(8);
 
         relay_registry.activate_source_target(
-            source_session.channel_runtime_id(),
             source_transport_media_id,
             relay_target_id,
             mailbox.into(),

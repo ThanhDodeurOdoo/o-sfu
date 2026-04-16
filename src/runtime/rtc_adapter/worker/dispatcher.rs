@@ -167,10 +167,9 @@ fn handle_negotiation_command(
             &session_key,
             response,
         ),
-        RtcWorkerCommand::ActiveSpeakerSourceSnapshot {
-            channel_runtime_id,
-            response,
-        } => respond_active_speaker_source_snapshot(state, channel_runtime_id, response),
+        RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response } => {
+            respond_active_speaker_source_snapshot(state, response);
+        }
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,
@@ -186,10 +185,9 @@ fn handle_negotiation_command(
 
 fn respond_active_speaker_source_snapshot(
     state: &RtcBootstrapState,
-    channel_runtime_id: u64,
     response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
 ) {
-    let snapshot = state.active_speaker_source_snapshot(channel_runtime_id, Instant::now());
+    let snapshot = state.active_speaker_source_snapshot(Instant::now());
     let _ = response.send(Ok(snapshot));
 }
 

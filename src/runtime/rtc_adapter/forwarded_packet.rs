@@ -149,7 +149,7 @@ impl ForwardedPacket {
         self.payload().len()
     }
 
-    pub(super) const fn uses_channel_side_sinks(&self) -> bool {
+    pub(super) const fn visits_origin_sinks(&self) -> bool {
         self.source_transport_media_id.is_none()
     }
 

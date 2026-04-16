@@ -22,7 +22,7 @@ pub(super) enum KeyframeRequestDecision {
 
 #[allow(
     dead_code,
-    reason = "route-level packet gating is intentionally wired before its production policy caller lands, so only tests construct non-default gates in this slice"
+    reason = "route-level packet gating is intentionally wired before broader orchestration uses it, so only tests construct non-default gates in this slice"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) enum PacketLayerGate {

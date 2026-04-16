@@ -20,7 +20,7 @@ use crate::config::RtcPortRange;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, RtcTransportAdapterConfig, SessionOffer, SourcePacketSelection,
+    ActiveSpeakerSource, RtcTransportAdapterConfig, SessionOffer, SourcePacketGate,
     TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 #[cfg(test)]
@@ -180,7 +180,7 @@ impl RtcTransportAdapter {
         debug!(
             direction = ?request.direction(),
             session_id = ?session_key.session_id(),
-            channel_runtime_id = session_key.channel_runtime_id(),
+            media_worker_id = session_key.media_worker_id(),
             "validated DTLS parameters and transport lifecycle state before rtc transport connect"
         );
         self.request_worker(|response| RtcWorkerCommand::ConnectTransport {
@@ -366,7 +366,7 @@ impl RtcTransportAdapter {
         dead_code,
         reason = "Phase 6 introduces the server-owned source gate before the channel/runtime policy caller lands, so this adapter entry point is intentionally staged"
     )]
-    pub(super) async fn set_source_packet_gate(
+    pub(super) async fn set_route_control_source_packet_gate(
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
@@ -381,19 +381,23 @@ impl RtcTransportAdapter {
         .await
     }
 
-    pub(crate) async fn set_source_packet_selection(
+    pub(crate) async fn set_source_packet_gate(
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        selection: Option<SourcePacketSelection>,
+        packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
-        let packet_gate = selection.map(|selection| match selection {
-            SourcePacketSelection::Rid(rid) => {
+        let packet_gate = packet_gate.map(|packet_gate| match packet_gate {
+            SourcePacketGate::Rid(rid) => {
                 super::route_control::PacketLayerGate::Rid(rid.as_str().into())
             }
         });
-        self.set_source_packet_gate(source_session_key, source_transport_media_id, packet_gate)
-            .await
+        self.set_route_control_source_packet_gate(
+            source_session_key,
+            source_transport_media_id,
+            packet_gate,
+        )
+        .await
     }
 
     pub(crate) fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
@@ -576,18 +580,12 @@ impl RtcTransportAdapter {
         snapshot_state.transport_health(session_key)
     }
 
-    pub(crate) async fn active_speaker_source_snapshot(
-        &self,
-        channel_runtime_id: u64,
-    ) -> Vec<ActiveSpeakerSource> {
+    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return Vec::new();
         };
         self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::ActiveSpeakerSourceSnapshot {
-                channel_runtime_id,
-                response,
-            }
+            RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
         })
         .await
         .unwrap_or_default()
@@ -595,13 +593,11 @@ impl RtcTransportAdapter {
 
     pub(crate) fn activate_relay_route(
         &self,
-        channel_runtime_id: u64,
         source_transport_media_id: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
         self.relay_registry.activate_source_target(
-            channel_runtime_id,
             source_transport_media_id,
             target.relay_target_id,
             RelayTargetTransport::from(mailbox),
@@ -871,11 +867,10 @@ impl RtcTransportAdapter {
 
     pub(crate) fn debug_activate_relay_route(
         &self,
-        channel_runtime_id: u64,
         source_transport_media_id: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        self.activate_relay_route(channel_runtime_id, source_transport_media_id, target)
+        self.activate_relay_route(source_transport_media_id, target)
     }
 
     pub(crate) fn debug_deactivate_relay_route(
@@ -884,11 +879,6 @@ impl RtcTransportAdapter {
         target: &Self,
     ) {
         self.deactivate_relay_route(source_transport_media_id, target);
-    }
-
-    pub(crate) fn debug_has_relay_channel(&self, channel_runtime_id: u64) -> bool {
-        self.relay_registry
-            .has_any_source_for_channel(channel_runtime_id)
     }
 
     pub(crate) fn debug_relay_target_count_for_source(

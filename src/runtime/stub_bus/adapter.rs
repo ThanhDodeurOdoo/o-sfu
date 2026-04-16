@@ -7,8 +7,8 @@ use std::{
 #[cfg(test)]
 use super::bootstrap;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketSelection, TransportAdapterError,
-    TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
+    TransportSessionKey,
 };
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
@@ -51,10 +51,10 @@ pub(crate) enum StubWebRtcEvent {
         source_session_id: SessionId,
         active: bool,
     },
-    SourcePacketSelectionUpdated {
+    SourcePacketGateUpdated {
         session_id: SessionId,
         transport_media_id: TransportMediaId,
-        selection: Option<SourcePacketSelection>,
+        packet_gate: Option<SourcePacketGate>,
     },
 }
 
@@ -153,10 +153,7 @@ impl StubWebRtcAdapter {
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
-    pub(crate) async fn active_speaker_source_snapshot(
-        &self,
-        _channel_runtime_id: u64,
-    ) -> Vec<ActiveSpeakerSource> {
+    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self.active_speaker_sources.lock() {
             Ok(active_speaker_sources) => active_speaker_sources.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -384,16 +381,16 @@ impl StubWebRtcAdapter {
         clippy::unused_async,
         reason = "stub adapter keeps the same async boundary as the rtc adapter and runtime call sites"
     )]
-    pub(crate) async fn set_source_packet_selection(
+    pub(crate) async fn set_source_packet_gate(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-        selection: Option<SourcePacketSelection>,
+        packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(StubWebRtcEvent::SourcePacketSelectionUpdated {
+        self.record_event(StubWebRtcEvent::SourcePacketGateUpdated {
             session_id: session_key.session_id().clone(),
             transport_media_id,
-            selection,
+            packet_gate,
         });
         Ok(())
     }

@@ -1,6 +1,6 @@
 use tracing::warn;
 
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::runtime::transport_adapter::{RuntimeTransportAdapter, SourcePacketGate};
 
 use super::Channel;
 
@@ -12,9 +12,7 @@ impl Channel {
         let Some(transport_adapter) = transport_adapter else {
             return;
         };
-        let active_speaker_sources = transport_adapter
-            .active_speaker_source_snapshot(self.runtime_id)
-            .await;
+        let active_speaker_sources = transport_adapter.active_speaker_source_snapshot().await;
         let updates = {
             let state = self.state.read().await;
             state.source_packet_selection_updates(&active_speaker_sources)
@@ -25,13 +23,13 @@ impl Channel {
         let mut applied_updates = Vec::with_capacity(updates.len());
         for update in updates {
             if transport_adapter
-                .set_source_packet_selection(
+                .set_source_packet_gate(
                     &self.transport_session_key(
                         update.owner_session_id(),
                         update.owner_connection_id(),
                     ),
                     update.transport_media_id(),
-                    update.selection().cloned(),
+                    update.selection().map(SourcePacketGate::from),
                 )
                 .await
                 .is_err()

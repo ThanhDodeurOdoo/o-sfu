@@ -1,4 +1,5 @@
 use super::fixtures::*;
+use crate::runtime::transport_adapter::SourcePacketGate;
 
 #[tokio::test]
 async fn rtc_transport_bootstrap_starts_packet_loop() {
@@ -259,9 +260,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
             .set_source_packet_gate(
                 &producer_session_key,
                 source_media_id,
-                Some(super::super::route_control::PacketLayerGate::Rid(
-                    "hi".into()
-                )),
+                Some(SourcePacketGate::Rid("hi".into())),
             )
             .await
             .is_ok()
@@ -281,9 +280,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
             .set_source_packet_gate(
                 &producer_session_key,
                 source_media_id,
-                Some(super::super::route_control::PacketLayerGate::Rid(
-                    "lo".into()
-                )),
+                Some(SourcePacketGate::Rid("lo".into())),
             )
             .await
             .is_ok()
@@ -494,7 +491,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
         )
         .await;
 
-    let snapshot = adapter.active_speaker_source_snapshot(9).await;
+    let snapshot = adapter.active_speaker_source_snapshot().await;
     assert_eq!(
         snapshot
             .into_iter()
@@ -508,19 +505,13 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
 async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
     let source_adapter = RtcTransportAdapter::default();
     let target_adapter = RtcTransportAdapter::default();
-    let channel_runtime_id = 77;
     let source_transport_media_id = TransportMediaId::new(91);
 
     assert!(
         source_adapter
-            .debug_activate_relay_route(
-                channel_runtime_id,
-                source_transport_media_id,
-                &target_adapter,
-            )
+            .debug_activate_relay_route(source_transport_media_id, &target_adapter)
             .is_ok()
     );
-    assert!(source_adapter.debug_has_relay_channel(channel_runtime_id));
     assert_eq!(
         source_adapter.debug_relay_target_count_for_source(source_transport_media_id),
         1
@@ -537,6 +528,8 @@ async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
     );
 
     source_adapter.debug_deactivate_relay_route(source_transport_media_id, &target_adapter);
-
-    assert!(!source_adapter.debug_has_relay_channel(channel_runtime_id));
+    assert_eq!(
+        source_adapter.debug_relay_target_count_for_source(source_transport_media_id),
+        0
+    );
 }

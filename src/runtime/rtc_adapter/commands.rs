@@ -184,7 +184,6 @@ pub(super) enum RtcWorkerCommand {
         response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
     },
     ActiveSpeakerSourceSnapshot {
-        channel_runtime_id: u64,
         response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
     },
     ApplySessionAnswer {

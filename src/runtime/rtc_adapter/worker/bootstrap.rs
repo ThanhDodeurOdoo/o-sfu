@@ -220,7 +220,7 @@ fn worker_apply_transport_connect(
             debug!(
                 ?direction,
                 session_id = ?session_key.session_id(),
-                channel_runtime_id = session_key.channel_runtime_id(),
+                media_worker_id = session_key.media_worker_id(),
                 local_active_role,
                 "started rtc DTLS handshake after transport connect"
             );
@@ -228,7 +228,7 @@ fn worker_apply_transport_connect(
             debug!(
                 ?direction,
                 session_id = ?session_key.session_id(),
-                channel_runtime_id = session_key.channel_runtime_id(),
+                media_worker_id = session_key.media_worker_id(),
                 "rtc DTLS handshake already started for session"
             );
         }

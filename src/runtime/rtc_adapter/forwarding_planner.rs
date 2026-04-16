@@ -22,7 +22,7 @@ pub(super) fn populate_forward_routes(
         else {
             continue;
         };
-        if packet.uses_channel_side_sinks()
+        if packet.visits_origin_sinks()
             && let Some(sink) =
                 media_tap.sink_for_channel(packet.source_session_key().channel_runtime_id())
         {
@@ -32,7 +32,7 @@ pub(super) fn populate_forward_routes(
                 sink,
             ));
         }
-        let relay_targets = if packet.uses_channel_side_sinks() {
+        let relay_targets = if packet.visits_origin_sinks() {
             relay_registry.targets_for_source(source_transport_media_id)
         } else {
             None
@@ -313,7 +313,6 @@ mod tests {
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
         relay_registry.activate_source_target(
-            producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(1),
             first_relay_mailbox.into(),
@@ -324,7 +323,6 @@ mod tests {
             true,
         );
         relay_registry.activate_source_target(
-            producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(2),
             second_relay_mailbox.into(),
@@ -404,7 +402,6 @@ mod tests {
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
         relay_registry.activate_source_target(
-            producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(1),
             relay_mailbox.into(),
@@ -476,7 +473,6 @@ mod tests {
             },
         );
         relay_registry.activate_source_target(
-            first_producer_session.channel_runtime_id(),
             first_source_transport_media_id,
             RelayTargetId::new(1),
             relay_mailbox.into(),
@@ -533,7 +529,6 @@ mod tests {
             });
 
         relay_registry.activate_source_target(
-            producer_session.channel_runtime_id(),
             source_transport_media_id,
             RelayTargetId::new(9),
             inter_node_sender.into(),
@@ -640,7 +635,6 @@ mod tests {
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
         relay_registry.activate_source_target(
-            gated_producer_session.channel_runtime_id(),
             gated_source_transport_media_id,
             RelayTargetId::new(1),
             relay_mailbox.into(),

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, RouterId};
 
 use crate::runtime::recording::RecordingService;
-use crate::runtime::transport_adapter::{SourcePacketSelection, TransportMediaId};
+use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use crate::signaling::{
     shared::{RecordingState, SessionId, SessionPermissions, StreamType},
     webrtc::MediaKind as SignalingMediaKind,
@@ -95,6 +95,19 @@ pub(in crate::runtime::channel) struct PublishedProducer {
     pub(super) transport_media_id: Option<TransportMediaId>,
     pub(super) source_packet_selection: Option<SourcePacketSelection>,
     pub(super) active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::channel) enum SourcePacketSelection {
+    Rid(String),
+}
+
+impl From<&SourcePacketSelection> for SourcePacketGate {
+    fn from(value: &SourcePacketSelection) -> Self {
+        match value {
+            SourcePacketSelection::Rid(rid) => Self::Rid(rid.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
