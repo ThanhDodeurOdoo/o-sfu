@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  native-decode-fuzz:
+  protocol-decode-fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -30,5 +30,5 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Run native decode fuzz target
-        run: cargo +nightly fuzz run native_decode -- -max_total_time=300
+      - name: Run protocol decode fuzz target
+        run: cargo +nightly fuzz run protocol_decode -- -max_total_time=300

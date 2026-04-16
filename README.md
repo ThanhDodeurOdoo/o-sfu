@@ -40,6 +40,9 @@ docker run --rm \
   o-sfu:local
 ```
 
+The container defaults to `TRANSPORT_BACKEND=fake`. The legacy `stub` value is
+still accepted as a temporary compatibility alias.
+
 For real RTC traffic, also expose the UDP worker range and provide the advertised public IP:
 
 ```bash
@@ -64,7 +67,7 @@ cargo install cargo-fuzz
 Then run the current target from the repository root:
 
 ```bash
-cargo +nightly fuzz run native_decode
+cargo +nightly fuzz run protocol_decode
 ```
 
 If you only need to verify that the fuzz target still builds after changing the

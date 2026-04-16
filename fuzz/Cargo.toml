@@ -12,8 +12,8 @@ libfuzzer-sys = "0.4"
 o-sfu = { path = ".." }
 
 [[bin]]
-name = "native_decode"
-path = "fuzz_targets/native_decode.rs"
+name = "protocol_decode"
+path = "fuzz_targets/protocol_decode.rs"
 test = false
 doc = false
 bench = false
