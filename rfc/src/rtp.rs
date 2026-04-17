@@ -195,6 +195,11 @@ pub mod fmtp {
     /// Reference: RFC 6184 section 8.1
     pub const H264_PROFILE_LEVEL_ID: &str = "profile-level-id";
 
+    /// VP9 profile-id parameter.
+    ///
+    /// Reference: RFC 9628 section 4.2.
+    pub const VP9_PROFILE_ID: &str = "profile-id";
+
     /// Opus in-band FEC parameter
     ///
     /// Reference: RFC 7587 section 6.1.

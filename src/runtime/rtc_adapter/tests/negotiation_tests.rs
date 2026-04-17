@@ -93,11 +93,17 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
         vec![
             (RouterMediaKind::Audio, String::from("opus")),
             (RouterMediaKind::Video, String::from("VP8")),
+            (RouterMediaKind::Video, String::from("rtx")),
         ]
     );
     assert!(
-        projected.codecs().all(|codec| codec.codec_name() != "rtx"),
-        "the projected client capability set must not invent RTX support"
+        projected.codecs().any(|codec| {
+            codec.codec_name() == "rtx"
+                && codec
+                    .parameters()
+                    .any(|(key, value)| key == "apt" && value == "96")
+        }),
+        "the projected client capability set should preserve RTX support from the answered SDP"
     );
     assert!(
         projected.codecs().all(|codec| codec.codec_name() != "H264"),

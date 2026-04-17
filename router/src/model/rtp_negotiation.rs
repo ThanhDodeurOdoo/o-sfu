@@ -291,9 +291,19 @@ fn critical_codec_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
 ) -> bool {
-    if !matches!(format.codec(), MediaCodec::H264) {
-        return true;
+    match format.codec() {
+        MediaCodec::H264 => h264_critical_settings_match(format, capability_format),
+        MediaCodec::Other(codec_name) if codec_name.eq_ignore_ascii_case("VP9") => {
+            vp9_critical_settings_match(format, capability_format)
+        }
+        _ => true,
     }
+}
+
+fn h264_critical_settings_match(
+    format: &MediaFormat,
+    capability_format: &MediaCodecCapability,
+) -> bool {
     let format_packetization_mode = format
         .settings()
         .find_map(|setting| match setting {
@@ -327,6 +337,29 @@ fn critical_codec_settings_match(
     ) {
         (Some(format_profile_level_id), Some(capability_profile_level_id)) => {
             format_profile_level_id == capability_profile_level_id
+        }
+        _ => true,
+    }
+}
+
+fn vp9_critical_settings_match(
+    format: &MediaFormat,
+    capability_format: &MediaCodecCapability,
+) -> bool {
+    match (
+        format.settings().find_map(|setting| match setting {
+            CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
+            _ => None,
+        }),
+        capability_format
+            .settings()
+            .find_map(|setting| match setting {
+                CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
+                _ => None,
+            }),
+    ) {
+        (Some(format_profile_id), Some(capability_profile_id)) => {
+            format_profile_id == capability_profile_id
         }
         _ => true,
     }

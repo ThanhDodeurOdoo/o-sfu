@@ -1530,12 +1530,22 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
         .codecs()
         .map(|codec| codec.codec_name().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(codec_names, vec![String::from("opus"), String::from("VP8")]);
+    assert_eq!(
+        codec_names,
+        vec![
+            String::from("opus"),
+            String::from("VP8"),
+            String::from("rtx"),
+        ]
+    );
     assert!(
-        parsed_client_rtp_capabilities
-            .codecs()
-            .all(|codec| codec.codec_name() != "rtx"),
-        "the stored client RTP capabilities must not fall back to router RTX support"
+        parsed_client_rtp_capabilities.codecs().any(|codec| {
+            codec.codec_name() == "rtx"
+                && codec
+                    .parameters()
+                    .any(|(key, value)| key == "apt" && value == "96")
+        }),
+        "the stored client RTP capabilities should preserve RTX support from the real RTC answer"
     );
     assert!(
         parsed_client_rtp_capabilities

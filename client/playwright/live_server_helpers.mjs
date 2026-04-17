@@ -1,18 +1,24 @@
+import { spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const TEST_AUTH_KEY = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 const TEST_SFU_HTTP_BASE_URL = "http://127.0.0.1:18080";
 export const TEST_SFU_WS_URL = "ws://127.0.0.1:18080/";
 const HARNESS_URL = "/playwright/fixtures/harness.html";
 
-export async function createChannel() {
-    const response = await fetch(`${TEST_SFU_HTTP_BASE_URL}/v1/channel`, {
+export async function createChannel({
+    authKey = TEST_AUTH_KEY,
+    httpBaseUrl = TEST_SFU_HTTP_BASE_URL
+} = {}) {
+    const response = await fetch(`${httpBaseUrl}/v1/channel`, {
         headers: {
             Authorization: `Bearer ${signJwt(
                 {
                     iss: `playwright-${randomUUID()}`
                 },
-                TEST_AUTH_KEY
+                authKey
             )}`
         }
     });
@@ -23,13 +29,13 @@ export async function createChannel() {
     return payload.uuid;
 }
 
-export function createConnectToken(channelUuid, sessionId) {
+export function createConnectToken(channelUuid, sessionId, authKey = TEST_AUTH_KEY) {
     return signJwt(
         {
             sfu_channel_uuid: channelUuid,
             session_id: sessionId
         },
-        TEST_AUTH_KEY
+        authKey
     );
 }
 
@@ -213,6 +219,65 @@ export async function peerSnapshot(page) {
     });
 }
 
+export async function peerLocalDescriptionSdp(page) {
+    return page.evaluate(() => {
+        const peerConnection = globalThis.__liveHarness.client?._runtime?._peerConnection;
+        return peerConnection?.localDescription?.sdp ?? null;
+    });
+}
+
+export async function spawnLiveServer({
+    authKey = TEST_AUTH_KEY,
+    bindPort,
+    rtcMaxPort,
+    rtcMinPort,
+    codecFlags = {}
+}) {
+    const child = spawn(
+        "cargo",
+        ["run", "--quiet", "--manifest-path", "../Cargo.toml", "-p", "o-sfu"],
+        {
+            cwd: fileURLToPath(new URL("../", import.meta.url)),
+            env: {
+                ...process.env,
+                AUTH_KEY: authKey,
+                BIND_ADDRESS: `127.0.0.1:${bindPort}`,
+                PUBLIC_IP: "127.0.0.1",
+                RTC_MAX_PORT: String(rtcMaxPort),
+                RTC_MIN_PORT: String(rtcMinPort),
+                TRANSPORT_BACKEND: "rtc",
+                ENABLE_CODEC_H264: String(Boolean(codecFlags.h264)),
+                ENABLE_CODEC_VP9: String(Boolean(codecFlags.vp9))
+            },
+            stdio: "ignore"
+        }
+    );
+    const httpBaseUrl = `http://127.0.0.1:${bindPort}`;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+        try {
+            const response = await fetch(`${httpBaseUrl}/v1/noop`);
+            if (response.ok) {
+                return {
+                    authKey,
+                    child,
+                    httpBaseUrl,
+                    stop: async () => {
+                        child.kill("SIGTERM");
+                        await onceExit(child);
+                    },
+                    wsUrl: `ws://127.0.0.1:${bindPort}/`
+                };
+            }
+        } catch (_error) {
+            void _error;
+        }
+        await delay(500);
+    }
+    child.kill("SIGTERM");
+    await onceExit(child);
+    throw new Error(`o-sfu test server on port ${bindPort} did not become ready`);
+}
+
 function signJwt(payload, keyB64) {
     const encodedHeader = encodeJwtSegment({
         alg: "HS256",
@@ -228,4 +293,13 @@ function signJwt(payload, keyB64) {
 
 function encodeJwtSegment(value) {
     return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+async function onceExit(child) {
+    if (child.exitCode !== null) {
+        return;
+    }
+    await new Promise((resolve) => {
+        child.once("exit", resolve);
+    });
 }

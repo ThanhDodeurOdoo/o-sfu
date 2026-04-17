@@ -189,6 +189,7 @@ pub enum CodecSetting {
     RtxAssociation(PayloadType),
     H264PacketizationMode(u8),
     H264ProfileLevelId(String),
+    Vp9ProfileId(u8),
     UseInBandFec(bool),
     Other { key: String, value: String },
 }
@@ -200,6 +201,7 @@ impl CodecSetting {
             Self::RtxAssociation(_) => rfc_rtp::fmtp::RTX_ASSOCIATION,
             Self::H264PacketizationMode(_) => rfc_rtp::fmtp::H264_PACKETIZATION_MODE,
             Self::H264ProfileLevelId(_) => rfc_rtp::fmtp::H264_PROFILE_LEVEL_ID,
+            Self::Vp9ProfileId(_) => rfc_rtp::fmtp::VP9_PROFILE_ID,
             Self::UseInBandFec(_) => rfc_rtp::fmtp::OPUS_USE_IN_BAND_FEC,
             Self::Other { key, .. } => key.as_str(),
         }
@@ -211,6 +213,7 @@ impl CodecSetting {
             Self::RtxAssociation(payload_type) => Cow::Owned(payload_type.value().to_string()),
             Self::H264PacketizationMode(mode) => Cow::Owned(mode.to_string()),
             Self::H264ProfileLevelId(profile_level_id) => Cow::Borrowed(profile_level_id.as_str()),
+            Self::Vp9ProfileId(profile_id) => Cow::Owned(profile_id.to_string()),
             Self::UseInBandFec(enabled) => Cow::Borrowed(if *enabled {
                 rfc_rtp::fmtp::VALUE_ENABLED
             } else {
@@ -646,6 +649,10 @@ fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
             CodecSetting::H264PacketizationMode,
         ),
         rfc_rtp::fmtp::H264_PROFILE_LEVEL_ID => CodecSetting::H264ProfileLevelId(value),
+        rfc_rtp::fmtp::VP9_PROFILE_ID => value.parse::<u8>().map_or(
+            CodecSetting::Other { key, value },
+            CodecSetting::Vp9ProfileId,
+        ),
         rfc_rtp::fmtp::OPUS_USE_IN_BAND_FEC => match value.as_str() {
             rfc_rtp::fmtp::VALUE_ENABLED | rfc_rtp::fmtp::VALUE_TRUE => {
                 CodecSetting::UseInBandFec(true)

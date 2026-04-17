@@ -328,3 +328,38 @@ fn incompatible_consumer_codec_is_reported_as_unsupported_diagnostic() {
     assert_eq!(diagnostic.rfc_reference().document(), "RFC 3264");
     assert_eq!(diagnostic.rfc_reference().section(), "section 6");
 }
+
+#[test]
+fn consumer_negotiation_rejects_vp9_profile_mismatch() {
+    let consumable_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "VP9", 98, 90_000)
+                .with_parameter("profile-id", "2")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            RtpCodecParameters::new(MediaKind::Video, "rtx", 99, 90_000)
+                .with_parameter("apt", "98"),
+        ],
+        vec![],
+        vec![RtpEncoding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
+                .with_preferred_payload_type(100)
+                .with_parameter("profile-id", "0")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_preferred_payload_type(101)
+                .with_parameter("apt", "100"),
+        ],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
