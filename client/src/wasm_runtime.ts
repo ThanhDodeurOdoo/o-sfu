@@ -1,3 +1,4 @@
+import { configureDefaultProtocolCoreFactory } from "./default_protocol_core_factory.js";
 import type { ProtocolCoreBindings, ProtocolCoreFactory } from "./runtime_contract.js";
 
 type GeneratedProtocolModule = {
@@ -19,6 +20,8 @@ const generatedProtocolModule = await initializeGeneratedProtocolModule();
 
 export const defaultProtocolCoreFactory: ProtocolCoreFactory = () =>
     new generatedProtocolModule.ProtocolCoreWasm();
+
+configureDefaultProtocolCoreFactory(defaultProtocolCoreFactory);
 
 async function initializeGeneratedProtocolModule(): Promise<GeneratedProtocolModule> {
     const module = (await import(GENERATED_MODULE_URL.href)) as GeneratedProtocolModule;

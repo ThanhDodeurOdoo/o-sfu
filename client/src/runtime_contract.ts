@@ -10,8 +10,8 @@ import {
     type SessionInfo,
     type StreamType
 } from "./public_api.js";
+import { requireDefaultProtocolCoreFactory } from "./default_protocol_core_factory.js";
 import type { TrackBinding } from "./protocol.js";
-import { defaultProtocolCoreFactory } from "./wasm_runtime.js";
 
 export const NEGOTIATION_KIND = {
     OFFER: "offer",
@@ -170,7 +170,7 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
 }
 
 export function createProtocolCore(): ProtocolCoreBindings {
-    return wrapProtocolCoreBindings((protocolCoreFactory ?? defaultProtocolCoreFactory)());
+    return wrapProtocolCoreBindings((protocolCoreFactory ?? requireDefaultProtocolCoreFactory())());
 }
 
 function validateHostCommands(value: unknown, context: string): HostCommand[] {

@@ -6,17 +6,19 @@
   "description": "Browser shell groundwork for o-sfu",
   "scripts": {
     "build:wasm": "node ./scripts/build_wasm_runtime.mjs",
+    "build:odoo": "npm run build:wasm && npm run check:wasm-size && node ./scripts/build_odoo_bundle.mjs",
     "check:wasm-size": "node ./scripts/check_wasm_size.mjs",
     "build": "npm run build:wasm && tsc -p tsconfig.json && npm run check:wasm-size",
     "lint": "eslint src scripts test playwright eslint.config.mjs",
     "test": "npm run build && node --test ./test/**/*.mjs",
     "test:browser": "npm run build && playwright test",
     "typscript": "tsc --noEmit -p tsconfig.json",
-    "verify": "npm run lint && npm run typscript && npm run test && npm run test:browser"
+    "verify": "npm run lint && npm run typscript && npm run test && npm run build:odoo && npm run test:browser"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
+    "esbuild": "^0.25.12",
     "eslint": "^10.2.0",
     "eslint-config-prettier": "^10.1.0",
     "eslint-plugin-n": "^17.23.1",
