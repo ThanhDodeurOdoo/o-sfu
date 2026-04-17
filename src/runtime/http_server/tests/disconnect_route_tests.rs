@@ -40,6 +40,25 @@ async fn disconnect_requires_valid_jwt() {
 }
 
 #[tokio::test]
+async fn disconnect_rejects_oversized_body_before_auth_decode() {
+    let oversized_body = "x".repeat((16 * 1024) + 1);
+    let request = build_request(Request::post(DISCONNECT_PATH), Body::from(oversized_body));
+    assert!(request.is_some());
+    let Some(request) = request else {
+        return;
+    };
+    let response = app(test_state()).oneshot(request).await;
+    assert!(
+        response.is_ok(),
+        "oversized disconnect request should complete: {response:?}"
+    );
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn disconnect_accepts_valid_jwt() {
     let token = signed_disconnect_claims(BTreeMap::new());
     assert!(token.is_some());

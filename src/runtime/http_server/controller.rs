@@ -4,7 +4,7 @@ use anyhow::Result;
 use axum::{
     Extension, Router,
     body::Bytes,
-    extract::{ConnectInfo, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -29,6 +29,8 @@ use crate::{
     },
 };
 
+const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
+
 pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
     info!(
         bind_address = %state.config.bind_address,
@@ -50,7 +52,10 @@ pub(crate) fn app(state: RuntimeState) -> Router {
         .route(NOOP_PATH, get(noop))
         .route(STATS_PATH, get(stats))
         .route(CHANNEL_PATH, get(channel))
-        .route(DISCONNECT_PATH, post(disconnect))
+        .route(
+            DISCONNECT_PATH,
+            post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
+        )
         .with_state(state)
 }
 
