@@ -405,6 +405,34 @@ impl<
 
     /// # Errors
     ///
+    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    pub(crate) fn remove_producer(
+        &mut self,
+        producer_id: ProducerId,
+    ) -> Result<(), ProofRouterError> {
+        if !self.contains_producer(producer_id) {
+            return Err(RouterError::MissingProducer(producer_id).into());
+        }
+        self.detach_producer(producer_id);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
+    pub(crate) fn remove_consumer(
+        &mut self,
+        consumer_id: ConsumerId,
+    ) -> Result<(), ProofRouterError> {
+        if !self.contains_consumer(consumer_id) {
+            return Err(RouterError::MissingConsumer(consumer_id).into());
+        }
+        self.detach_consumer(consumer_id);
+        Ok(())
+    }
+
+    /// # Errors
+    ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
     pub(crate) fn remove_session(&mut self, session_id: SessionId) -> Result<(), ProofRouterError> {
         if !self.contains_session(session_id) {
@@ -477,7 +505,7 @@ impl<
         let mut consumer_index = 0;
         while let Some(consumer_id) = consumer_ids.get(consumer_index) {
             if let Some(consumer_id) = *consumer_id {
-                self.remove_consumer(consumer_id);
+                self.detach_consumer(consumer_id);
             }
             consumer_index += 1;
         }
@@ -486,13 +514,13 @@ impl<
         let mut producer_index = 0;
         while let Some(producer_id) = producer_ids.get(producer_index) {
             if let Some(producer_id) = *producer_id {
-                self.remove_producer(producer_id);
+                self.detach_producer(producer_id);
             }
             producer_index += 1;
         }
     }
 
-    fn remove_producer(&mut self, producer_id: ProducerId) {
+    fn detach_producer(&mut self, producer_id: ProducerId) {
         let Some(producer) = self.producer_by_id(producer_id) else {
             return;
         };
@@ -505,13 +533,13 @@ impl<
         let mut consumer_index = 0;
         while let Some(consumer_id) = consumer_ids.get(consumer_index) {
             if let Some(consumer_id) = *consumer_id {
-                self.remove_consumer(consumer_id);
+                self.detach_consumer(consumer_id);
             }
             consumer_index += 1;
         }
     }
 
-    fn remove_consumer(&mut self, consumer_id: ConsumerId) {
+    fn detach_consumer(&mut self, consumer_id: ConsumerId) {
         let Some(consumer) = self.consumer_by_id(consumer_id) else {
             return;
         };

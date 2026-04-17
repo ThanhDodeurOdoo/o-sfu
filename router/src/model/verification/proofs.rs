@@ -194,6 +194,176 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
 }
 
 #[kani::proof]
+fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
+    let mut router = TeardownProofRouter::new(RouterId(0));
+
+    let session_a = SessionId(1);
+    let session_b = SessionId(2);
+    let receive_transport = TransportId(10);
+    let same_session_send_transport = TransportId(11);
+    let remote_send_transport = TransportId(20);
+    let producer_id = ProducerId(30);
+    let same_session_consumer = ConsumerId(40);
+    let remote_consumer = ConsumerId(41);
+
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
+    let _ = router.open_transport(Transport::new(
+        receive_transport,
+        session_a,
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        same_session_send_transport,
+        session_a,
+        TransportDirection::Send,
+    ));
+    let _ = router.open_transport(Transport::new(
+        remote_send_transport,
+        session_b,
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        producer_id,
+        receive_transport,
+        MediaKind::Audio,
+        StreamType::Audio,
+    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            same_session_consumer,
+            producer_id,
+            same_session_send_transport,
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        ConsumerCapability::Compatible,
+    );
+    let _ = router.add_consumer(
+        Consumer::new(
+            remote_consumer,
+            producer_id,
+            remote_send_transport,
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        ConsumerCapability::Compatible,
+    );
+
+    let _ = router.remove_producer(producer_id);
+
+    assert!(router.contains_session(session_a));
+    assert!(router.contains_session(session_b));
+    assert!(router.contains_transport(receive_transport));
+    assert!(router.contains_transport(same_session_send_transport));
+    assert!(router.contains_transport(remote_send_transport));
+    assert!(!router.contains_producer(producer_id));
+    assert!(router.consumer_by_id(same_session_consumer).is_none());
+    assert!(router.consumer_by_id(remote_consumer).is_none());
+    assert!(!router.transport_producers.contains_key(receive_transport));
+    assert!(
+        !router
+            .transport_consumers
+            .contains_key(same_session_send_transport)
+    );
+    assert!(
+        !router
+            .transport_consumers
+            .contains_key(remote_send_transport)
+    );
+    assert!(!router.producer_consumers.contains_key(producer_id));
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn removing_a_consumer_preserves_other_routes_and_indices() {
+    let mut router = TeardownProofRouter::new(RouterId(0));
+
+    let session_a = SessionId(1);
+    let session_b = SessionId(2);
+    let receive_transport = TransportId(10);
+    let removed_consumer_transport = TransportId(11);
+    let surviving_consumer_transport = TransportId(20);
+    let producer_id = ProducerId(30);
+    let removed_consumer_id = ConsumerId(40);
+    let surviving_consumer_id = ConsumerId(41);
+
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
+    let _ = router.open_transport(Transport::new(
+        receive_transport,
+        session_a,
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        removed_consumer_transport,
+        session_a,
+        TransportDirection::Send,
+    ));
+    let _ = router.open_transport(Transport::new(
+        surviving_consumer_transport,
+        session_b,
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        producer_id,
+        receive_transport,
+        MediaKind::Audio,
+        StreamType::Audio,
+    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            removed_consumer_id,
+            producer_id,
+            removed_consumer_transport,
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        ConsumerCapability::Compatible,
+    );
+    let _ = router.add_consumer(
+        Consumer::new(
+            surviving_consumer_id,
+            producer_id,
+            surviving_consumer_transport,
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        ConsumerCapability::Compatible,
+    );
+
+    let _ = router.remove_consumer(removed_consumer_id);
+
+    assert!(router.contains_producer(producer_id));
+    assert!(router.contains_transport(receive_transport));
+    assert!(router.contains_transport(removed_consumer_transport));
+    assert!(router.contains_transport(surviving_consumer_transport));
+    assert!(router.consumer_by_id(removed_consumer_id).is_none());
+    assert!(router.consumer_by_id(surviving_consumer_id).is_some());
+    assert!(
+        !router
+            .transport_consumers
+            .contains_key(removed_consumer_transport)
+    );
+    assert!(
+        router
+            .transport_consumers
+            .contains_member(surviving_consumer_transport, surviving_consumer_id)
+    );
+    assert!(
+        router
+            .producer_consumers
+            .contains_member(producer_id, surviving_consumer_id)
+    );
+    assert!(
+        !router
+            .producer_consumers
+            .contains_member(producer_id, removed_consumer_id)
+    );
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
 fn producers_are_rejected_on_send_transports() {
     let mut router = ProofRouter::new(RouterId(0));
 
@@ -529,6 +699,68 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let _ = router.set_producer_paused(ProducerId(30), false);
 
     assert!(all_consumers_shadow_pause(&router, false));
+    assert!(router.satisfies_invariants());
+}
+
+#[kani::proof]
+fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
+    let mut router = PauseProofRouter::new(RouterId(0));
+
+    let _ = router.join_session(session(SessionId(1)));
+    let _ = router.join_session(session(SessionId(2)));
+    let _ = router.open_transport(Transport::new(
+        TransportId(10),
+        SessionId(1),
+        TransportDirection::Receive,
+    ));
+    let _ = router.open_transport(Transport::new(
+        TransportId(20),
+        SessionId(2),
+        TransportDirection::Send,
+    ));
+    let _ = router.add_producer(Producer::new(
+        ProducerId(30),
+        TransportId(10),
+        MediaKind::Audio,
+        StreamType::Audio,
+    ));
+    let _ = router.add_consumer(
+        Consumer::new(
+            ConsumerId(40),
+            ProducerId(30),
+            TransportId(20),
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        ConsumerCapability::Compatible,
+    );
+
+    let _ = router.set_consumer_paused(ConsumerId(40), true);
+    let consumer = router.consumer_by_id(ConsumerId(40));
+    assert!(consumer.is_some());
+    let Some(consumer) = consumer else {
+        return;
+    };
+    assert!(consumer.paused());
+    assert!(!consumer.producer_paused());
+
+    let _ = router.set_producer_paused(ProducerId(30), true);
+    let consumer = router.consumer_by_id(ConsumerId(40));
+    assert!(consumer.is_some());
+    let Some(consumer) = consumer else {
+        return;
+    };
+    assert!(consumer.paused());
+    assert!(consumer.producer_paused());
+
+    let _ = router.set_producer_paused(ProducerId(30), false);
+    let consumer = router.consumer_by_id(ConsumerId(40));
+    assert!(consumer.is_some());
+    let Some(consumer) = consumer else {
+        return;
+    };
+    assert!(consumer.paused());
+    assert!(!consumer.producer_paused());
     assert!(router.satisfies_invariants());
 }
 

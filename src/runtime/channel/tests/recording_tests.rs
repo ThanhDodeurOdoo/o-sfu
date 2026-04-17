@@ -16,17 +16,41 @@ async fn build_recording_channel() -> (
     mpsc::UnboundedReceiver<SessionOutbound>,
     mpsc::UnboundedReceiver<SessionOutbound>,
 ) {
+    build_recording_channel_with(
+        RuntimeFeatureFlags {
+            transcription: true,
+            audio_recording: true,
+            video_recording: true,
+        },
+        Some("https://record.example.com"),
+        SessionPermissions {
+            transcription: Some(true),
+            audio_recording: Some(true),
+            video_recording: Some(true),
+        },
+        SessionPermissions::default(),
+    )
+    .await
+}
+
+async fn build_recording_channel_with(
+    feature_flags: RuntimeFeatureFlags,
+    recording_address: Option<&str>,
+    publisher_permissions: SessionPermissions,
+    observer_permissions: SessionPermissions,
+) -> (
+    Arc<super::super::Channel>,
+    Arc<RuntimeMetrics>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+) {
     let metrics = Arc::new(RuntimeMetrics::default());
     let manager = ChannelManager::new(
         ChannelManagerConfig::new(
             1,
             ChannelRuntimePolicy::new(
                 ChannelAdmissionPolicy::new(100),
-                RuntimeFeatureFlags {
-                    transcription: true,
-                    audio_recording: true,
-                    video_recording: true,
-                },
+                feature_flags,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
@@ -38,7 +62,7 @@ async fn build_recording_channel() -> (
             "issuer-recording",
             None,
             &ChannelConfig {
-                recording_address: Some("https://record.example.com".to_owned()),
+                recording_address: recording_address.map(str::to_owned),
                 ..ChannelConfig::default()
             },
             None,
@@ -47,25 +71,11 @@ async fn build_recording_channel() -> (
     let (tx1, rx1) = test_sender();
     let (tx2, rx2) = test_sender();
     channel
-        .join_session(
-            SessionId::Integer(1),
-            None,
-            SessionPermissions {
-                transcription: Some(true),
-                audio_recording: Some(true),
-                video_recording: Some(true),
-            },
-            tx1,
-        )
+        .join_session(SessionId::Integer(1), None, publisher_permissions, tx1)
         .await
         .expect("recording publisher should join");
     channel
-        .join_session(
-            SessionId::Integer(2),
-            None,
-            SessionPermissions::default(),
-            tx2,
-        )
+        .join_session(SessionId::Integer(2), None, observer_permissions, tx2)
         .await
         .expect("recording observer should join");
     (channel, metrics, rx1, rx2)
@@ -83,6 +93,18 @@ async fn expect_recording_message(
         panic!("expected channel recording update, got {outbound:?}");
     };
     update
+}
+
+async fn assert_no_recording_message(
+    receiver: &mut mpsc::UnboundedReceiver<SessionOutbound>,
+    message: &str,
+) {
+    assert!(
+        timeout(Duration::from_millis(50), receiver.recv())
+            .await
+            .is_err(),
+        "{message}"
+    );
 }
 
 #[tokio::test]
@@ -301,4 +323,238 @@ async fn stale_replaced_connection_cannot_start_or_stop_recording() {
     let metrics_snapshot = metrics.snapshot();
     assert_eq!(metrics_snapshot.recording_start_rejected, 1);
     assert_eq!(metrics_snapshot.recording_stop_rejected, 1);
+}
+
+#[tokio::test]
+async fn recording_start_rejects_sessions_without_recording_permissions() {
+    let (channel, metrics, mut publisher_rx, mut observer_rx) = build_recording_channel_with(
+        RuntimeFeatureFlags {
+            transcription: true,
+            audio_recording: true,
+            video_recording: true,
+        },
+        Some("https://record.example.com"),
+        SessionPermissions::default(),
+        SessionPermissions::default(),
+    )
+    .await;
+
+    assert!(
+        !channel
+            .start_recording(
+                &SessionId::Integer(1),
+                RecordingOptions {
+                    audio: Some(true),
+                    video: Some(false),
+                    transcription: Some(false),
+                },
+            )
+            .await
+    );
+    assert_eq!(
+        channel.recording_state().await,
+        RecordingState {
+            recording: Some(false),
+            audio: Some(false),
+            transcription: Some(false),
+            video: Some(false),
+        }
+    );
+    assert_no_recording_message(
+        &mut publisher_rx,
+        "permission-denied recording start must not notify the requester",
+    )
+    .await;
+    assert_no_recording_message(
+        &mut observer_rx,
+        "permission-denied recording start must not notify observers",
+    )
+    .await;
+
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_start_accepted, 0);
+    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
+    assert_eq!(metrics_snapshot.active_recording_channels, 0);
+}
+
+#[tokio::test]
+async fn recording_start_rejects_requests_for_disabled_features() {
+    for (feature_name, feature_flags, options) in [
+        (
+            "audio",
+            RuntimeFeatureFlags {
+                transcription: true,
+                audio_recording: false,
+                video_recording: true,
+            },
+            RecordingOptions {
+                audio: Some(true),
+                video: Some(false),
+                transcription: Some(false),
+            },
+        ),
+        (
+            "video",
+            RuntimeFeatureFlags {
+                transcription: true,
+                audio_recording: true,
+                video_recording: false,
+            },
+            RecordingOptions {
+                audio: Some(false),
+                video: Some(true),
+                transcription: Some(false),
+            },
+        ),
+        (
+            "transcription",
+            RuntimeFeatureFlags {
+                transcription: false,
+                audio_recording: true,
+                video_recording: true,
+            },
+            RecordingOptions {
+                audio: Some(false),
+                video: Some(false),
+                transcription: Some(true),
+            },
+        ),
+    ] {
+        let (channel, metrics, mut publisher_rx, mut observer_rx) = build_recording_channel_with(
+            feature_flags,
+            Some("https://record.example.com"),
+            SessionPermissions {
+                transcription: Some(true),
+                audio_recording: Some(true),
+                video_recording: Some(true),
+            },
+            SessionPermissions::default(),
+        )
+        .await;
+
+        assert!(
+            !channel
+                .start_recording(&SessionId::Integer(1), options)
+                .await,
+            "{feature_name} recording should stay disabled at runtime"
+        );
+        assert_no_recording_message(
+            &mut publisher_rx,
+            "disabled-feature recording start must not notify the requester",
+        )
+        .await;
+        assert_no_recording_message(
+            &mut observer_rx,
+            "disabled-feature recording start must not notify observers",
+        )
+        .await;
+
+        let metrics_snapshot = metrics.snapshot();
+        assert_eq!(metrics_snapshot.recording_start_accepted, 0);
+        assert_eq!(metrics_snapshot.recording_start_rejected, 1);
+        assert_eq!(metrics_snapshot.active_recording_channels, 0);
+    }
+}
+
+#[tokio::test]
+async fn recording_start_rejects_channels_without_recording_address() {
+    let (channel, metrics, mut publisher_rx, mut observer_rx) = build_recording_channel_with(
+        RuntimeFeatureFlags {
+            transcription: true,
+            audio_recording: true,
+            video_recording: true,
+        },
+        None,
+        SessionPermissions {
+            transcription: Some(true),
+            audio_recording: Some(true),
+            video_recording: Some(true),
+        },
+        SessionPermissions::default(),
+    )
+    .await;
+
+    assert!(
+        !channel
+            .start_recording(
+                &SessionId::Integer(1),
+                RecordingOptions {
+                    audio: Some(true),
+                    video: Some(false),
+                    transcription: Some(false),
+                },
+            )
+            .await
+    );
+    assert_eq!(
+        channel.recording_state().await,
+        RecordingState {
+            recording: Some(false),
+            audio: Some(false),
+            transcription: Some(false),
+            video: Some(false),
+        }
+    );
+    assert_no_recording_message(
+        &mut publisher_rx,
+        "recording start without a recording address must not notify the requester",
+    )
+    .await;
+    assert_no_recording_message(
+        &mut observer_rx,
+        "recording start without a recording address must not notify observers",
+    )
+    .await;
+
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_start_accepted, 0);
+    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
+    assert_eq!(metrics_snapshot.active_recording_channels, 0);
+}
+
+#[tokio::test]
+async fn recording_stop_rejects_sessions_without_stop_authority() {
+    let (channel, metrics, mut publisher_rx, mut observer_rx) = build_recording_channel().await;
+
+    assert!(
+        channel
+            .start_recording(
+                &SessionId::Integer(1),
+                RecordingOptions {
+                    audio: Some(true),
+                    video: Some(false),
+                    transcription: Some(false),
+                },
+            )
+            .await
+    );
+    let _publisher_start = expect_recording_message(&mut publisher_rx).await;
+    let _observer_start = expect_recording_message(&mut observer_rx).await;
+
+    assert!(!channel.stop_recording(&SessionId::Integer(2)).await);
+    assert_eq!(
+        channel.recording_state().await,
+        RecordingState {
+            recording: Some(true),
+            audio: Some(true),
+            transcription: Some(false),
+            video: Some(false),
+        }
+    );
+    assert_no_recording_message(
+        &mut publisher_rx,
+        "unauthorized recording stop must not notify the active recorder",
+    )
+    .await;
+    assert_no_recording_message(
+        &mut observer_rx,
+        "unauthorized recording stop must not notify observers",
+    )
+    .await;
+
+    let metrics_snapshot = metrics.snapshot();
+    assert_eq!(metrics_snapshot.recording_start_accepted, 1);
+    assert_eq!(metrics_snapshot.recording_stop_accepted, 0);
+    assert_eq!(metrics_snapshot.recording_stop_rejected, 1);
+    assert_eq!(metrics_snapshot.active_recording_channels, 1);
 }
