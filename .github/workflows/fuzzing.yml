@@ -35,3 +35,6 @@ jobs:
 
       - name: Run protocol sequence fuzz target
         run: cargo +nightly fuzz run protocol_sequence -- -max_total_time=300
+
+      - name: Run HTTP disconnect auth fuzz target
+        run: cargo +nightly fuzz run http_disconnect_auth -- -max_total_time=300

@@ -21,6 +21,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "http_disconnect_auth"
+path = "fuzz_targets/http_disconnect_auth.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "protocol_sequence"
 path = "fuzz_targets/protocol_sequence.rs"
 test = false

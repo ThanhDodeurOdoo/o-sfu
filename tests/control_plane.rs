@@ -15,7 +15,7 @@ use o_sfu::{
     config::RtcPortRange,
     runtime::testing::spawn_test_server,
     signaling::{
-        http::{STATS_PATH, StatsResponse},
+        http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
         protocol::{ServerMessage, ServerRequest},
         shared::{SessionId, SessionInfo, StreamType},
     },
@@ -25,7 +25,7 @@ use crate::support::protocol_harness::{
     ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config, read_until_server_message,
 };
 use crate::support::{
-    TEST_AUTH_KEY, TEST_CHANNEL_KEY, create_channel, disconnect_sessions_via_http,
+    TEST_AUTH_KEY, TEST_CHANNEL_KEY, create_channel, disconnect_sessions_via_http, metrics_text,
     signed_connect_claims,
 };
 
@@ -245,6 +245,41 @@ async fn channel_creation_is_idempotent_by_issuer_from_integration_test() {
 
     assert_eq!(first, second);
     assert_ne!(first, third);
+}
+
+#[tokio::test]
+async fn oversized_disconnect_body_is_rejected_before_handler_metrics_from_integration_test() {
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+
+    let response = reqwest::Client::new()
+        .post(format!("{}{DISCONNECT_PATH}", server.http_base_url()))
+        .body("x".repeat((16 * 1024) + 1))
+        .send()
+        .await;
+    assert!(
+        response.is_ok(),
+        "oversized disconnect request should complete: {response:?}"
+    );
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let metrics = metrics_text(&server).await;
+    assert!(metrics.is_some());
+    let Some(metrics) = metrics else {
+        return;
+    };
+    assert!(metrics.contains("osfu_http_disconnect_requests_total 0"));
+    assert!(metrics.contains("osfu_http_disconnect_responses_total{status=\"success\"} 0"));
+    assert!(metrics.contains("osfu_http_disconnect_responses_total{status=\"bad_request\"} 0"));
+    assert!(
+        metrics.contains("osfu_http_disconnect_responses_total{status=\"unprocessable_entity\"} 0")
+    );
 }
 
 #[tokio::test]

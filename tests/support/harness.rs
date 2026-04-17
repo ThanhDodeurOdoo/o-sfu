@@ -22,7 +22,7 @@ use o_sfu::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
             sign,
         },
-        http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH},
+        http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH},
         shared::{SessionId, SessionPermissions},
     },
 };
@@ -128,6 +128,15 @@ pub async fn disconnect_sessions_via_http(
         .await
         .ok()?;
     Some(response.status())
+}
+
+pub async fn metrics_text(server: &TestServer) -> Option<String> {
+    let response = reqwest::Client::new()
+        .get(format!("{}{METRICS_PATH}", server.http_base_url()))
+        .send()
+        .await
+        .ok()?;
+    response.text().await.ok()
 }
 
 pub async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
