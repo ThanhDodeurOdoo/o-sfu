@@ -106,7 +106,10 @@ impl PostAuthSessionProtocol {
                     }
                 }
             }
-            Message::Close(_) => SessionProtocolOutcome::Break,
+            Message::Close(frame) => {
+                tracing::info!(?frame, "websocket peer sent close frame");
+                SessionProtocolOutcome::Break
+            }
             Message::Ping(_) | Message::Pong(_) => SessionProtocolOutcome::Continue,
         }
     }

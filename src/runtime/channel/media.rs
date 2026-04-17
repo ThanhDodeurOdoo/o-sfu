@@ -148,6 +148,8 @@ impl Channel {
             Err(_error) => {
                 warn!(
                     ?session_id,
+                    connection_id = publisher_connection_id,
+                    ?stream_type,
                     "transport adapter rejected publish media declaration"
                 );
                 return None;
@@ -202,7 +204,10 @@ impl Channel {
             Err(_error) => {
                 warn!(
                     consumer_session_id = ?target.consumer_session_id(),
+                    consumer_connection_id = target.consumer_connection_id(),
                     producer_session_id = ?target.producer_session_id(),
+                    producer_connection_id = target.producer_connection_id(),
+                    source_transport_media_id = ?target.transport_media_id(),
                     ?origin,
                     "transport adapter rejected consume media declaration"
                 );

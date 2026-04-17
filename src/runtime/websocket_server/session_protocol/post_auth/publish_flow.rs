@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use tracing::{info, warn};
+
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportMediaId};
 use o_sfu_router::MediaKind;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
@@ -170,8 +172,23 @@ impl PostAuthSessionProtocol {
             .await
         {
             Ok(transport_media_id) => transport_media_id,
-            Err(_error) => return false,
+            Err(_error) => {
+                warn!(
+                    session_id = ?self.session_id,
+                    connection_id = self.connection_id,
+                    ?stream_type,
+                    "failed to stage negotiated publish stream"
+                );
+                return false;
+            }
         };
+        info!(
+            session_id = ?self.session_id,
+            connection_id = self.connection_id,
+            ?stream_type,
+            ?transport_media_id,
+            "staged negotiated publish stream"
+        );
         self.state
             .stage_publish_transaction(StagedPublishTransaction {
                 stream_type,
@@ -202,7 +219,9 @@ impl PostAuthSessionProtocol {
         let session_id = &self.session_id;
         let session_key = &session_key;
         for staged_publish in staged_publishes {
-            PublishTransactionGuard::new(staged_publish)
+            let stream_type = staged_publish.stream_type;
+            let transport_media_id = staged_publish.transport_media_id;
+            let committed = PublishTransactionGuard::new(staged_publish)
                 .commit(
                     self.connection_id,
                     |transport_media_id| async move {
@@ -222,6 +241,23 @@ impl PostAuthSessionProtocol {
                     },
                 )
                 .await;
+            if committed {
+                info!(
+                    session_id = ?self.session_id,
+                    connection_id = self.connection_id,
+                    ?stream_type,
+                    ?transport_media_id,
+                    "committed negotiated publish stream"
+                );
+            } else {
+                warn!(
+                    session_id = ?self.session_id,
+                    connection_id = self.connection_id,
+                    ?stream_type,
+                    ?transport_media_id,
+                    "failed to commit negotiated publish stream"
+                );
+            }
         }
     }
 }

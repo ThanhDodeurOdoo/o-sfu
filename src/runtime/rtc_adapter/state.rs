@@ -141,11 +141,13 @@ impl SessionIncomingBitrates {
         transport_media_id: TransportMediaId,
         now: Instant,
         payload_bytes: usize,
-    ) {
+    ) -> bool {
+        let first_observation = !self.per_media.contains_key(&transport_media_id);
         self.per_media
             .entry(transport_media_id)
             .or_default()
             .record(now, payload_bytes);
+        first_observation
     }
 
     pub(super) fn snapshot(&self, now: Instant) -> Vec<(TransportMediaId, u64)> {
@@ -332,11 +334,11 @@ impl RtcSnapshotState {
         transport_media_id: TransportMediaId,
         now: Instant,
         payload_bytes: usize,
-    ) {
+    ) -> bool {
         self.incoming_bitrates_by_session
             .entry(session_key.clone())
             .or_default()
-            .record(transport_media_id, now, payload_bytes);
+            .record(transport_media_id, now, payload_bytes)
     }
 
     pub(crate) fn transport_bitrate_snapshot_at(

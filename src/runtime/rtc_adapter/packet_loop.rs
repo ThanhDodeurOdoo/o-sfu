@@ -14,7 +14,7 @@ use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::{
     commands::RtcWorkerCommand,
@@ -400,12 +400,21 @@ fn record_incoming_stats(
                 packet.route_control_audio_level(),
                 packet.received_at(),
             );
-            if let Ok(mut snapshot) = snapshot_state.lock() {
+            let first_ingress = snapshot_state.lock().is_ok_and(|mut snapshot| {
                 snapshot.record_incoming_media(
                     packet.source_session_key(),
                     transport_media_id,
                     packet.received_at(),
                     payload_len,
+                )
+            });
+            if first_ingress {
+                info!(
+                    session_id = ?packet.source_session_key().session_id(),
+                    media_worker_id = packet.source_session_key().media_worker_id(),
+                    ?transport_media_id,
+                    payload_bytes = payload_len,
+                    "observed first RTP ingress for published media"
                 );
             }
             metrics.record_rtp_ingress(payload_len);

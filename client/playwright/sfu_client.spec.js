@@ -125,6 +125,7 @@ test.beforeEach(async ({ page }) => {
         globalThis.__browserHarness = {
             client: null,
             events: [],
+            logs: [],
             stateChanges: [],
             state
         };
@@ -141,6 +142,9 @@ test("default browser runtime negotiates and emits remote track updates", async 
         globalThis.__browserHarness.client = client;
         client.addEventListener("stateChange", (event) => {
             globalThis.__browserHarness.stateChanges.push(structuredClone(event.detail));
+        });
+        client.addEventListener("log", (event) => {
+            globalThis.__browserHarness.logs.push(structuredClone(event.detail));
         });
         client.addEventListener("update", (event) => {
             globalThis.__browserHarness.events.push(structuredClone(event.detail));
@@ -249,6 +253,38 @@ test("default browser runtime negotiates and emits remote track updates", async 
                 }
             }
         ]);
+
+    await expect
+        .poll(async () => page.evaluate(() => globalThis.__browserHarness.logs))
+        .toEqual(
+            expect.arrayContaining([
+                {
+                    id: "sfu_client",
+                    level: "info",
+                    message: "connect requested for channel channel-a"
+                },
+                {
+                    id: "browser_runtime",
+                    level: "info",
+                    message: "opening websocket connection to wss://example.test/ws"
+                },
+                {
+                    id: "browser_runtime",
+                    level: "info",
+                    message: "created RTCPeerConnection"
+                },
+                {
+                    id: "browser_runtime",
+                    level: "info",
+                    message: "applying offer negotiation request 7"
+                },
+                {
+                    id: "browser_runtime",
+                    level: "info",
+                    message: "received remote track event for mid 0 (kind=video)"
+                }
+            ])
+        );
 });
 
 test("default browser runtime reconnects and replays sticky intents", async ({ page }) => {

@@ -60,7 +60,11 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         )
         .await;
         state.metrics.record_ws_session_loop_exit(exit_reason);
-        info!("closing websocket session");
+        info!(
+            connection_id = session.connection_id,
+            ?exit_reason,
+            "closing websocket session"
+        );
         let _ = state
             .channels
             .leave_session(

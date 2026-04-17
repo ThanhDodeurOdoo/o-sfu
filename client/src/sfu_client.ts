@@ -1,7 +1,9 @@
 import {
     CLIENT_UPDATE,
+    CLIENT_LOG_LEVEL,
     SFU_CLIENT_STATE,
     type AvailableFeatures,
+    type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectOptions,
     type ConnectionState,
@@ -41,6 +43,7 @@ import {
 export type { SfuClientDependencies } from "./sfu_client/browser_types.js";
 
 const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
+const CLIENT_LOG_SOURCE = "sfu_client";
 
 export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
@@ -75,6 +78,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         validateConnectOptions(options);
         this.errors = [];
         this._iceServers = cloneIceServers(options.iceServers);
+        this._emitLog(
+            CLIENT_LOG_LEVEL.INFO,
+            `connect requested for ${options.channelUUID ? `channel ${options.channelUUID}` : "implicit channel"}`
+        );
         this._runtime.enqueueProtocolCommands(
             () =>
                 this._protocolCore.connect(
@@ -88,6 +95,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     disconnect(): void {
         this.errors = [];
+        this._emitLog(CLIENT_LOG_LEVEL.INFO, "disconnect requested");
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.disconnect(),
             this._runtimeHooks()
@@ -98,6 +106,20 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         validateTrackForStreamType(type, track);
         const normalizedTrack = track ?? null;
         const transition = this._localUploads.setTrack(type, normalizedTrack);
+        const action =
+            transition.hadTrack && transition.hasTrack
+                ? "replacing"
+                : transition.hadTrack
+                  ? "removing"
+                  : transition.hasTrack
+                    ? "publishing"
+                    : "keeping";
+        this._emitLog(
+            transition.hadTrack && transition.hasTrack
+                ? CLIENT_LOG_LEVEL.DEBUG
+                : CLIENT_LOG_LEVEL.INFO,
+            `${action} ${type} track${transition.knownMid ? ` on mid ${transition.knownMid}` : ""}`
+        );
 
         if (transition.hadTrack && transition.hasTrack) {
             this._runtime.enqueueLocalOperation(async () => {
@@ -126,6 +148,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     subscribe(sessionId: SessionId, states: DownloadStates): void {
         validateDownloadStates(states);
+        this._emitLog(
+            CLIENT_LOG_LEVEL.INFO,
+            `updating download states for session ${sessionId}: ${JSON.stringify(states)}`
+        );
         this._runtime.enqueueLocalOperation(async () => {
             this._remoteTracks.updateSubscriptionStates(sessionId, states, (update) => {
                 this._emitUpdate(update);
@@ -152,6 +178,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
+        this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating session info: ${JSON.stringify(info)}`);
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.updateInfo(info),
             this._runtimeHooks()
@@ -163,6 +190,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     broadcast(message: unknown): void {
+        this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `broadcast requested: ${JSON.stringify(message)}`);
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.broadcast(message),
             this._runtimeHooks()
@@ -197,6 +225,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     private _emitStateChange(state: ConnectionState, cause?: string): void {
         this._state = state;
+        this._emitLog(
+            CLIENT_LOG_LEVEL.INFO,
+            cause ? `state changed to ${state} (cause: ${cause})` : `state changed to ${state}`
+        );
         this.dispatchEvent(
             new CustomEvent("stateChange", {
                 detail: {
@@ -209,6 +241,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     private _emitUpdate(update: ClientUpdateDetail): void {
         this._applyCompatUpdate(update);
+        this._logUpdate(update);
         this.dispatchEvent(
             new CustomEvent("update", {
                 detail: update
@@ -231,6 +264,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private _handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
         this.errors.push(resolvedError);
+        this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${resolvedError.message}`);
         this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
         this._runtime.teardown(this._runtimeHooks(), CLIENT_RECOVERABLE_CLOSE_CODE);
@@ -248,6 +282,9 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         return {
             iceServers: this._iceServers,
             localUploads: this._localUploads,
+            onLog: (detail) => {
+                this._emitRuntimeLog(detail);
+            },
             onRuntimeError: (error) => {
                 this._handleRuntimeError(error);
             },
@@ -264,5 +301,46 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 this._syncPublicState();
             }
         };
+    }
+
+    private _emitRuntimeLog(detail: ClientLogDetail): void {
+        this.dispatchEvent(new CustomEvent("log", { detail }));
+    }
+
+    private _emitLog(level: ClientLogDetail["level"], message: string): void {
+        this._emitRuntimeLog({
+            id: CLIENT_LOG_SOURCE,
+            level,
+            message
+        });
+    }
+
+    private _logUpdate(update: ClientUpdateDetail): void {
+        switch (update.name) {
+            case CLIENT_UPDATE.TRACK:
+                this._emitLog(
+                    CLIENT_LOG_LEVEL.INFO,
+                    `remote ${update.payload.type} track update for session ${update.payload.sessionId}: active=${update.payload.active}, muted=${update.payload.track.muted}, readyState=${update.payload.track.readyState}`
+                );
+                break;
+            case CLIENT_UPDATE.DISCONNECT:
+                this._emitLog(
+                    CLIENT_LOG_LEVEL.INFO,
+                    `session ${update.payload.sessionId} disconnected`
+                );
+                break;
+            case CLIENT_UPDATE.INFO_CHANGE:
+                this._emitLog(CLIENT_LOG_LEVEL.DEBUG, "received remote session info update");
+                break;
+            case CLIENT_UPDATE.BROADCAST:
+                this._emitLog(
+                    CLIENT_LOG_LEVEL.DEBUG,
+                    `received broadcast from session ${update.payload.senderId}`
+                );
+                break;
+            case CLIENT_UPDATE.CHANNEL_INFO_CHANGE:
+                this._emitLog(CLIENT_LOG_LEVEL.DEBUG, "received channel info update");
+                break;
+        }
     }
 }

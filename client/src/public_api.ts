@@ -59,6 +59,21 @@ export interface RecordingOptions {
     transcription?: boolean;
 }
 
+export const CLIENT_LOG_LEVEL = {
+    DEBUG: "debug",
+    INFO: "info",
+    WARN: "warn",
+    ERROR: "error"
+} as const;
+
+export type ClientLogLevel = (typeof CLIENT_LOG_LEVEL)[keyof typeof CLIENT_LOG_LEVEL];
+
+export interface ClientLogDetail {
+    id: string;
+    level: ClientLogLevel;
+    message: string;
+}
+
 export interface SfuStats {
     uploadStats?: RTCStatsReport;
     downloadStats?: RTCStatsReport;

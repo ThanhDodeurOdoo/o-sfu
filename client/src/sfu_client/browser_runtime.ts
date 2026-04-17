@@ -1,4 +1,11 @@
-import type { ClientUpdateDetail, ConnectionState, SfuStats, StreamType } from "../public_api.js";
+import {
+    CLIENT_LOG_LEVEL,
+    type ClientLogDetail,
+    type ClientUpdateDetail,
+    type ConnectionState,
+    type SfuStats,
+    type StreamType
+} from "../public_api.js";
 import type { HostCommand, ProtocolCoreBindings } from "../runtime_contract.js";
 import type {
     ClientPeerConnection,
@@ -13,6 +20,7 @@ import type { RemoteTracks } from "./remote_tracks.js";
 export type BrowserRuntimeHooks = {
     iceServers?: RTCIceServer[];
     localUploads: LocalUploads;
+    onLog: (detail: ClientLogDetail) => void;
     onRuntimeError: (error: unknown) => void;
     onStateChange: (state: ConnectionState, cause?: string) => void;
     onUpdate: (update: ClientUpdateDetail) => void;
@@ -23,6 +31,7 @@ export type BrowserRuntimeHooks = {
 };
 
 const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
+const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
@@ -158,12 +167,23 @@ export class BrowserRuntime {
                     command.negotiationKind,
                     command.sdp,
                     hooks.localUploads,
-                    hooks.protocolCore
+                    hooks.protocolCore,
+                    hooks
                 );
             case "attachTrack":
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.INFO,
+                    `attaching ${command.streamType} track to mid ${command.mid}`
+                );
                 await this.attachTrack(command.mid, command.streamType, hooks.localUploads);
                 return [];
             case "detachTrack":
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.INFO,
+                    `detaching ${command.streamType} track from the peer connection`
+                );
                 await this.detachTrack(command.streamType, hooks.localUploads);
                 return [];
             case "createPeerConnection":
@@ -174,6 +194,11 @@ export class BrowserRuntime {
                 return [];
             case "closeWebSocket":
                 if (this._webSocket && this._webSocket.readyState < 2) {
+                    emitRuntimeLog(
+                        hooks,
+                        CLIENT_LOG_LEVEL.INFO,
+                        `closing websocket with code ${command.code}`
+                    );
                     this._webSocket.close(command.code);
                 }
                 return [];
@@ -181,9 +206,19 @@ export class BrowserRuntime {
                 hooks.onStateChange(command.state, command.cause);
                 return [];
             case "replaceTrackBindings":
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.INFO,
+                    `received ${command.bindings.length} remote track bindings`
+                );
                 hooks.remoteTracks.replaceTrackBindings(command.bindings, hooks.onUpdate);
                 return [];
             case "removeSessionTracks":
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.INFO,
+                    `removing remote tracks for session ${command.sessionId}`
+                );
                 hooks.remoteTracks.removeSessionTracks(command.sessionId);
                 return [];
             case "emitUpdate":
@@ -220,12 +255,19 @@ export class BrowserRuntime {
         if (this._webSocket && this._webSocket.readyState < 2) {
             this._webSocket.close(1000);
         }
+        emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, `opening websocket connection to ${url}`);
         const socket = this._createWebSocket(url);
         socket.onopen = () => {
+            emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, "websocket opened");
             this.enqueueProtocolCommands(() => hooks.protocolCore.onWsOpen(), hooks);
         };
         socket.onmessage = (event) => {
             if (typeof event.data !== "string") {
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.WARN,
+                    "received non-text websocket frame; closing with protocol error"
+                );
                 socket.close(1002);
                 return;
             }
@@ -236,6 +278,11 @@ export class BrowserRuntime {
             if (this._webSocket === socket) {
                 this._webSocket = null;
             }
+            emitRuntimeLog(
+                hooks,
+                CLIENT_LOG_LEVEL.INFO,
+                `websocket closed with code ${event.code}`
+            );
             this.enqueueProtocolCommands(() => hooks.protocolCore.onWsClose(event.code), hooks);
         };
         socket.onerror = () => undefined;
@@ -247,20 +294,31 @@ export class BrowserRuntime {
         const peerConnection = this._createPeerConnection({
             iceServers: hooks.iceServers
         });
+        emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, "created RTCPeerConnection");
         peerConnection.onconnectionstatechange = () => {
             if (this._peerConnection !== peerConnection) {
                 return;
             }
             const state = peerConnection.connectionState;
+            emitRuntimeLog(
+                hooks,
+                state === "failed" ? CLIENT_LOG_LEVEL.WARN : CLIENT_LOG_LEVEL.INFO,
+                `peer connection state changed to ${state}`
+            );
             if (state === "connected") {
                 this.enqueueProtocolCommands(() => hooks.protocolCore.onTransportReady(), hooks);
                 return;
             }
             if (state === "failed") {
-                this.closeWebSocketForTransportFailure();
+                this.closeWebSocketForTransportFailure(hooks);
             }
         };
         peerConnection.ontrack = (event) => {
+            emitRuntimeLog(
+                hooks,
+                CLIENT_LOG_LEVEL.INFO,
+                `received remote track event for mid ${event.transceiver.mid ?? "unknown"} (kind=${event.track.kind})`
+            );
             hooks.remoteTracks.handleTrackEvent(event, hooks.onUpdate);
         };
         this._peerConnection = peerConnection;
@@ -269,6 +327,7 @@ export class BrowserRuntime {
     private closePeerConnection(hooks: BrowserRuntimeHooks): void {
         if (this._peerConnection) {
             this._peerConnection.close();
+            emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, "closed RTCPeerConnection");
         }
         hooks.remoteTracks.clearPeerConnectionState();
         hooks.localUploads.clearPeerConnectionState();
@@ -298,11 +357,17 @@ export class BrowserRuntime {
         negotiationKind: "offer" | "renegotiate",
         sdp: string,
         localUploads: LocalUploads,
-        protocolCore: ProtocolCoreBindings
+        protocolCore: ProtocolCoreBindings,
+        hooks: BrowserRuntimeHooks
     ): Promise<HostCommand[]> {
         if (!this._peerConnection) {
             throw new Error("received negotiation command without an active peer connection");
         }
+        emitRuntimeLog(
+            hooks,
+            CLIENT_LOG_LEVEL.INFO,
+            `applying ${negotiationKind} negotiation request ${requestId}`
+        );
         await this._peerConnection.setRemoteDescription({
             sdp,
             type: "offer"
@@ -318,11 +383,21 @@ export class BrowserRuntime {
             negotiationKind,
             answerSdp
         );
+        emitRuntimeLog(
+            hooks,
+            CLIENT_LOG_LEVEL.INFO,
+            `answered ${negotiationKind} negotiation request ${requestId}`
+        );
         if (
             negotiationKind === "offer" &&
             (this.shouldFallbackToImmediateTransportReady() ||
                 this.localDescriptionHasOnlyInactiveMedia(answerSdp))
         ) {
+            emitRuntimeLog(
+                hooks,
+                CLIENT_LOG_LEVEL.WARN,
+                "falling back to immediate transport-ready because the initial answer stayed inactive"
+            );
             commands.push(...protocolCore.onTransportReady());
         }
         return commands;
@@ -398,10 +473,15 @@ export class BrowserRuntime {
         return typeof this._peerConnection?.connectionState !== "string";
     }
 
-    private closeWebSocketForTransportFailure(): void {
+    private closeWebSocketForTransportFailure(hooks: BrowserRuntimeHooks): void {
         if (!this._webSocket || this._webSocket.readyState >= 2) {
             return;
         }
+        emitRuntimeLog(
+            hooks,
+            CLIENT_LOG_LEVEL.WARN,
+            "closing websocket because the peer connection transport failed"
+        );
         this._webSocket.close(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
@@ -417,4 +497,16 @@ export class BrowserRuntime {
 
 function orderedStreamTypes(): StreamType[] {
     return ["audio", "camera", "screen"];
+}
+
+function emitRuntimeLog(
+    hooks: Pick<BrowserRuntimeHooks, "onLog">,
+    level: ClientLogDetail["level"],
+    message: string
+): void {
+    hooks.onLog({
+        id: BROWSER_RUNTIME_LOG_SOURCE,
+        level,
+        message
+    });
 }
