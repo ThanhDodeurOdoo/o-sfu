@@ -9,6 +9,7 @@ use str0m::{
     rtp::Ssrc,
 };
 use tokio::sync::oneshot;
+use tracing::debug;
 
 use crate::{
     config::MediaCodecFlags,
@@ -158,10 +159,22 @@ fn worker_apply_session_answer(
     refresh_negotiated_producer_parameters(session_state, &producer_mids, answer_sdp);
     stage_queued_removal_offer(session_state);
     session_state.dtls_started = true;
+    let local_ice_ufrag = session_state.local_ice_ufrag.clone();
     state.mark_session_dirty(session_key);
     state
         .remote_addr_demux
-        .replace_session_remote_candidate_addrs(session_key, remote_candidate_addrs);
+        .replace_session_remote_candidate_addrs(
+            session_key,
+            remote_candidate_addrs.iter().copied(),
+        );
+    debug!(
+        session_id = ?session_key.session_id(),
+        media_worker_id = session_key.media_worker_id(),
+        %local_ice_ufrag,
+        remote_candidate_addr_count = remote_candidate_addrs.len(),
+        remote_candidate_addrs = ?remote_candidate_addrs,
+        "registered answered remote candidate addresses for rtc session"
+    );
     Ok(())
 }
 
@@ -276,9 +289,19 @@ fn ensure_session_ready_for_offer(
         snapshot.add_session(session_key);
     }
     if let Some(session_state) = state.sessions.get(session_key) {
-        state
+        let registered_local_ice_ufrag = state
             .remote_addr_demux
             .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);
+        if created_session || registered_local_ice_ufrag {
+            debug!(
+                session_id = ?session_key.session_id(),
+                media_worker_id = session_key.media_worker_id(),
+                %candidate_addr,
+                local_ice_ufrag = %session_state.local_ice_ufrag,
+                created_session,
+                "prepared rtc session for offer generation"
+            );
+        }
     }
     if created_session {
         config.metrics.add_active_transport_sessions(1);

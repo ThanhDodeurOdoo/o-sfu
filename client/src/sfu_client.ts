@@ -319,7 +319,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         switch (update.name) {
             case CLIENT_UPDATE.TRACK:
                 this._emitLog(
-                    CLIENT_LOG_LEVEL.INFO,
+                    CLIENT_LOG_LEVEL.DEBUG,
                     `remote ${update.payload.type} track update for session ${update.payload.sessionId}: active=${update.payload.active}, muted=${update.payload.track.muted}, readyState=${update.payload.track.readyState}`
                 );
                 break;

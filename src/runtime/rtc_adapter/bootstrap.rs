@@ -11,6 +11,7 @@ use str0m::IceCreds;
 use str0m::config::Fingerprint;
 use str0m::{Candidate, Rtc};
 use tokio::net::UdpSocket;
+use tracing::debug;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::state::SessionTransportIds;
@@ -50,9 +51,15 @@ pub(super) fn bind_shared_rtc_socket(
                 let Ok(socket) = UdpSocket::from_std(socket) else {
                     continue;
                 };
+                let candidate_addr = SocketAddr::new(public_ip, port);
+                debug!(
+                    %bind_addr,
+                    %candidate_addr,
+                    "bound shared rtc UDP socket"
+                );
                 return Ok(SharedRtcSocket {
                     socket: Arc::new(socket),
-                    candidate_addr: SocketAddr::new(public_ip, port),
+                    candidate_addr,
                 });
             }
             Err(_error) => {}

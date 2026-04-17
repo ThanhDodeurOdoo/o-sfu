@@ -248,13 +248,6 @@ impl Channel {
             state.apply_presence_update(session_id, connection_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
-            tracing::info!(
-                ?session_id,
-                connection_id,
-                ?info,
-                need_refresh,
-                "session info update accepted by channel state"
-            );
             self.sync_source_packet_selection_policy(transport_adapter)
                 .await;
             outcome.emit();

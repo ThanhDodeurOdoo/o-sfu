@@ -14,7 +14,7 @@ use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use super::{
     commands::RtcWorkerCommand,
@@ -198,6 +198,19 @@ enum IndexedSessionRecoveryOutcome {
 enum PacketIndexProbe {
     LocalIceUfrag(String),
     RemoteCandidateAddr(SocketAddr),
+}
+
+impl PacketIndexProbe {
+    fn describe(&self) -> String {
+        match self {
+            Self::LocalIceUfrag(local_ice_ufrag) => {
+                format!("local-ice-ufrag:{local_ice_ufrag}")
+            }
+            Self::RemoteCandidateAddr(remote_candidate_addr) => {
+                format!("remote-candidate-addr:{remote_candidate_addr}")
+            }
+        }
+    }
 }
 
 enum CandidateSessionKeys<'a> {
@@ -409,7 +422,7 @@ fn record_incoming_stats(
                 )
             });
             if first_ingress {
-                info!(
+                debug!(
                     session_id = ?packet.source_session_key().session_id(),
                     media_worker_id = packet.source_session_key().media_worker_id(),
                     ?transport_media_id,
@@ -751,7 +764,7 @@ fn drain_single_session(
 fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     match event {
         Event::IceConnectionStateChange(state) => {
-            info!(
+            debug!(
                 session_id = ?session_key.session_id(),
                 media_worker_id = session_key.media_worker_id(),
                 ?state,
@@ -759,7 +772,7 @@ fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
             );
         }
         Event::Connected => {
-            info!(
+            debug!(
                 session_id = ?session_key.session_id(),
                 media_worker_id = session_key.media_worker_id(),
                 "rtc DTLS transport reached connected state"
@@ -948,6 +961,13 @@ fn route_packet_with_cached_session(
     let accepts_input = session_state.rtc.accepts(&input);
     if !accepts_input {
         let _ = session_state;
+        debug!(
+            source_addr = %source_addr,
+            candidate_addr = %candidate_addr,
+            session_id = ?session_key.session_id(),
+            media_worker_id = session_key.media_worker_id(),
+            "indexed rtc source address no longer matched the cached session; clearing source-address pin"
+        );
         state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
             snapshot.remote_addr_demux.forget_remote_addr(source_addr);
@@ -984,19 +1004,8 @@ fn matching_indexed_session_key_for_packet(
     packet: &[u8],
     now: Instant,
 ) -> IndexedSessionRecoveryOutcome {
-    let candidate_session_keys = match packet_index_probe(source_addr, packet) {
-        Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag)) => CandidateSessionKeys::Single(
-            state
-                .remote_addr_demux
-                .session_key_for_local_ice_ufrag(&local_ice_ufrag),
-        ),
-        Ok(PacketIndexProbe::RemoteCandidateAddr(remote_candidate_addr)) => state
-            .remote_addr_demux
-            .candidate_sessions_for_source_addr(remote_candidate_addr)
-            .map_or(
-                CandidateSessionKeys::Single(None),
-                |candidate_session_keys| CandidateSessionKeys::Slice(candidate_session_keys.iter()),
-            ),
+    let packet_index_probe = match packet_index_probe(source_addr, packet) {
+        Ok(packet_index_probe) => packet_index_probe,
         Err(
             IndexedSessionRecoveryOutcome::Malformed
             | IndexedSessionRecoveryOutcome::Matched { .. }
@@ -1004,6 +1013,21 @@ fn matching_indexed_session_key_for_packet(
         ) => {
             return IndexedSessionRecoveryOutcome::Malformed;
         }
+    };
+    let packet_index_probe_description = packet_index_probe.describe();
+    let candidate_session_keys = match packet_index_probe {
+        PacketIndexProbe::LocalIceUfrag(local_ice_ufrag) => CandidateSessionKeys::Single(
+            state
+                .remote_addr_demux
+                .session_key_for_local_ice_ufrag(&local_ice_ufrag),
+        ),
+        PacketIndexProbe::RemoteCandidateAddr(remote_candidate_addr) => state
+            .remote_addr_demux
+            .candidate_sessions_for_source_addr(remote_candidate_addr)
+            .map_or(
+                CandidateSessionKeys::Single(None),
+                |candidate_session_keys| CandidateSessionKeys::Slice(candidate_session_keys.iter()),
+            ),
     };
     let Some(input) = receive_input(now, source_addr, candidate_addr, packet) else {
         return IndexedSessionRecoveryOutcome::Malformed;
@@ -1034,6 +1058,15 @@ fn matching_indexed_session_key_for_packet(
                 .remote_addr_demux
                 .forget_session_local_ice_ufrag(&stale_session_key);
         }
+        debug!(
+            source_addr = %source_addr,
+            candidate_addr = %candidate_addr,
+            probe = %packet_index_probe_description,
+            session_id = ?matched_session_key.session_id(),
+            media_worker_id = matched_session_key.media_worker_id(),
+            examined_sessions,
+            "recovered rtc session routing from packet probe"
+        );
         return IndexedSessionRecoveryOutcome::Matched {
             session_key: matched_session_key,
             examined_sessions,
@@ -1047,6 +1080,13 @@ fn matching_indexed_session_key_for_packet(
             .remote_addr_demux
             .forget_session_local_ice_ufrag(&stale_session_key);
     }
+    debug!(
+        source_addr = %source_addr,
+        candidate_addr = %candidate_addr,
+        probe = %packet_index_probe_description,
+        examined_sessions,
+        "packet probe did not match any rtc session"
+    );
     IndexedSessionRecoveryOutcome::NoMatch { examined_sessions }
 }
 
@@ -1105,6 +1145,7 @@ fn route_packet_to_session(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
     route: &PacketRouteContext<'_>,
+    route_resolution: &'static str,
 ) -> bool {
     let Some(session_state) = state.sessions.get_mut(session_key) else {
         return false;
@@ -1129,6 +1170,10 @@ fn route_packet_to_session(
     } else {
         state.mark_session_dirty(session_key);
     }
+    let previous_session_key = state
+        .remote_addr_demux
+        .session_key_for_remote_addr(route.source_addr)
+        .cloned();
     if state
         .remote_addr_demux
         .remember_remote_addr(route.source_addr, session_key)
@@ -1137,6 +1182,30 @@ fn route_packet_to_session(
         snapshot
             .remote_addr_demux
             .remember_remote_addr(route.source_addr, session_key);
+        match previous_session_key {
+            Some(previous_session_key) => {
+                debug!(
+                    source_addr = %route.source_addr,
+                    candidate_addr = %route.candidate_addr,
+                    route_resolution,
+                    previous_session_id = ?previous_session_key.session_id(),
+                    previous_media_worker_id = previous_session_key.media_worker_id(),
+                    session_id = ?session_key.session_id(),
+                    media_worker_id = session_key.media_worker_id(),
+                    "remapped rtc source address to a different session"
+                );
+            }
+            None => {
+                debug!(
+                    source_addr = %route.source_addr,
+                    candidate_addr = %route.candidate_addr,
+                    route_resolution,
+                    session_id = ?session_key.session_id(),
+                    media_worker_id = session_key.media_worker_id(),
+                    "pinned rtc source address to session"
+                );
+            }
+        }
     }
     route
         .metrics
@@ -1183,7 +1252,7 @@ fn route_packet_by_single_session(
         );
         return;
     }
-    if route_packet_to_session(state, &session_key, route) {
+    if route_packet_to_session(state, &session_key, route, "single-session-scan") {
         routing_state.record_route_success(miss_key, route.packet, route.source_addr);
     }
 }
@@ -1234,7 +1303,7 @@ fn route_packet_by_recovery_index(
             return;
         }
     };
-    if route_packet_to_session(state, &session_key, route) {
+    if route_packet_to_session(state, &session_key, route, "recovery-index") {
         routing_state.record_route_success(miss_key, route.packet, route.source_addr);
     }
 }

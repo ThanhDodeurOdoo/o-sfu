@@ -208,7 +208,7 @@ export class BrowserRuntime {
             case "replaceTrackBindings":
                 emitRuntimeLog(
                     hooks,
-                    CLIENT_LOG_LEVEL.INFO,
+                    CLIENT_LOG_LEVEL.DEBUG,
                     `received ${command.bindings.length} remote track bindings`
                 );
                 hooks.remoteTracks.replaceTrackBindings(command.bindings, hooks.onUpdate);
@@ -294,7 +294,7 @@ export class BrowserRuntime {
         const peerConnection = this._createPeerConnection({
             iceServers: hooks.iceServers
         });
-        emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, "created RTCPeerConnection");
+        emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.DEBUG, "created RTCPeerConnection");
         peerConnection.onconnectionstatechange = () => {
             if (this._peerConnection !== peerConnection) {
                 return;
@@ -302,7 +302,7 @@ export class BrowserRuntime {
             const state = peerConnection.connectionState;
             emitRuntimeLog(
                 hooks,
-                state === "failed" ? CLIENT_LOG_LEVEL.WARN : CLIENT_LOG_LEVEL.INFO,
+                state === "failed" ? CLIENT_LOG_LEVEL.WARN : CLIENT_LOG_LEVEL.DEBUG,
                 `peer connection state changed to ${state}`
             );
             if (state === "connected") {
@@ -325,7 +325,7 @@ export class BrowserRuntime {
                 hooks,
                 state === "failed" || state === "disconnected"
                     ? CLIENT_LOG_LEVEL.WARN
-                    : CLIENT_LOG_LEVEL.INFO,
+                    : CLIENT_LOG_LEVEL.DEBUG,
                 `ICE connection state changed to ${state}`
             );
         };
@@ -337,12 +337,16 @@ export class BrowserRuntime {
             if (!state) {
                 return;
             }
-            emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, `ICE gathering state changed to ${state}`);
+            emitRuntimeLog(
+                hooks,
+                CLIENT_LOG_LEVEL.DEBUG,
+                `ICE gathering state changed to ${state}`
+            );
         };
         peerConnection.ontrack = (event) => {
             emitRuntimeLog(
                 hooks,
-                CLIENT_LOG_LEVEL.INFO,
+                CLIENT_LOG_LEVEL.DEBUG,
                 `received remote track event for mid ${event.transceiver.mid ?? "unknown"} (kind=${event.track.kind})`
             );
             hooks.remoteTracks.handleTrackEvent(event, hooks.onUpdate);
@@ -391,7 +395,7 @@ export class BrowserRuntime {
         }
         emitRuntimeLog(
             hooks,
-            CLIENT_LOG_LEVEL.INFO,
+            CLIENT_LOG_LEVEL.DEBUG,
             `applying ${negotiationKind} negotiation request ${requestId}`
         );
         await this._peerConnection.setRemoteDescription({
@@ -406,7 +410,7 @@ export class BrowserRuntime {
             for (const attachment of pendingAttachment.attached) {
                 emitRuntimeLog(
                     hooks,
-                    CLIENT_LOG_LEVEL.INFO,
+                    CLIENT_LOG_LEVEL.DEBUG,
                     `attached pending ${attachment.streamType} track to renegotiation mid ${attachment.mid}`
                 );
             }
@@ -428,7 +432,7 @@ export class BrowserRuntime {
         );
         emitRuntimeLog(
             hooks,
-            CLIENT_LOG_LEVEL.INFO,
+            CLIENT_LOG_LEVEL.DEBUG,
             `answered ${negotiationKind} negotiation request ${requestId}`
         );
         if (

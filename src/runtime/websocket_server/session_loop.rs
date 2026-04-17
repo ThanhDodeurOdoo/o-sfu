@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until};
-use tracing::{debug, info};
+use tracing::debug;
 
 use super::{close_writer, controller::WsReader};
 use crate::runtime::{
@@ -63,7 +63,7 @@ pub(super) async fn run(
                     sleep_until(deadline).await;
                 }
             }, if ping_response_deadline.is_some() => {
-                info!("timed out waiting for websocket bus ping response");
+                debug!("timed out waiting for websocket bus ping response");
                 close_writer(writer, WebSocketCloseCode::Error).await;
                 return WsSessionLoopExitReason::PingTimeout;
             }
@@ -93,7 +93,7 @@ async fn handle_ping_tick(
     ping_response_deadline: &mut Option<Instant>,
 ) -> Option<WsSessionLoopExitReason> {
     if session_protocol.send_ping(writer).await.is_err() {
-        info!("failed to send websocket bus ping request");
+        debug!("failed to send websocket bus ping request");
         return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
     }
     let now = Instant::now();
@@ -107,7 +107,7 @@ async fn handle_transport_state_tick(
     session_protocol: &SessionProtocol,
 ) -> Option<WsSessionLoopExitReason> {
     let close_code = session_protocol.transport_close_code()?;
-    info!(
+    debug!(
         close_code = u16::from(close_code),
         "closing websocket because the underlying RTC transport disconnected"
     );
@@ -123,11 +123,11 @@ async fn handle_incoming_socket_event(
     match message {
         Some(Ok(message)) => handle_incoming_frame(writer, session_protocol, message).await,
         Some(Err(_error)) => {
-            info!("websocket reader returned an error");
+            debug!("websocket reader returned an error");
             Some(WsSessionLoopExitReason::ReaderError)
         }
         None => {
-            info!("websocket peer closed the socket");
+            debug!("websocket peer closed the socket");
             Some(WsSessionLoopExitReason::PeerClosed)
         }
     }
@@ -143,7 +143,7 @@ async fn handle_incoming_frame(
         SessionProtocolOutcome::Continue => None,
         SessionProtocolOutcome::Break => Some(WsSessionLoopExitReason::BusBreak),
         SessionProtocolOutcome::Close(code) => {
-            info!(
+            debug!(
                 close_code = u16::from(code),
                 "closing websocket from session loop"
             );
@@ -162,7 +162,7 @@ async fn handle_outbound_event(
     if let Some(outbound) = outbound {
         handle_outbound_payload(writer, outbound, session_protocol, metrics).await
     } else {
-        info!("session outbound channel closed");
+        debug!("session outbound channel closed");
         Some(WsSessionLoopExitReason::OutboundChannelClosed)
     }
 }
@@ -184,13 +184,13 @@ async fn handle_outbound_payload(
             None
         }
         Err(WebSocketCloseCode::Kicked) => {
-            info!(close_code = 4003, "closing websocket from outbound signal");
+            debug!(close_code = 4003, "closing websocket from outbound signal");
             close_writer(writer, WebSocketCloseCode::Kicked).await;
             Some(WsSessionLoopExitReason::OutboundCloseSignal)
         }
         Err(code) => {
             metrics.record_ws_bus_send_failure();
-            info!(
+            debug!(
                 close_code = u16::from(code),
                 "failed to send outbound session event"
             );

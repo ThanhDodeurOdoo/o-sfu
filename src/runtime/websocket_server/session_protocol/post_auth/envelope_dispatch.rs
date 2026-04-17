@@ -4,14 +4,14 @@ use crate::signaling::protocol::{
     RecordingActionResult, ServerResponse, WebSocketCloseCode,
 };
 use crate::signaling::shared::SessionInfo;
-use tracing::info;
+use tracing::debug;
 
 use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_response};
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
     async fn handle_info_message(&self, info: SessionInfo) {
-        info!(
+        debug!(
             session_id = ?self.session_id,
             connection_id = self.connection_id,
             ?info,

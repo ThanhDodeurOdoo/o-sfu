@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{MediaCapabilities, RouterError};
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::signaling::{
     protocol::WebSocketCloseCode,
@@ -317,7 +317,7 @@ impl ChannelState {
         } else {
             BTreeMap::from([self.session_info_snapshot(session_id)?])
         };
-        info!(
+        debug!(
             ?session_id,
             connection_id,
             ?info,

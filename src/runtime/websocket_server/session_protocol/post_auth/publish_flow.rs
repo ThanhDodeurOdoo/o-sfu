@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportMediaId};
 use o_sfu_router::MediaKind;
@@ -188,7 +188,7 @@ impl PostAuthSessionProtocol {
                 return false;
             }
         };
-        info!(
+        debug!(
             session_id = ?self.session_id,
             connection_id = self.connection_id,
             ?stream_type,
@@ -248,7 +248,7 @@ impl PostAuthSessionProtocol {
                 )
                 .await;
             match commit_outcome {
-                PublishCommitOutcome::Committed => info!(
+                PublishCommitOutcome::Committed => debug!(
                     session_id = ?self.session_id,
                     connection_id = self.connection_id,
                     ?stream_type,

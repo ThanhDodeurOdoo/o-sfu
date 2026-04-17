@@ -10,7 +10,7 @@ use axum::{
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tracing::{Instrument, field, info, info_span};
+use tracing::{Instrument, debug, field, info, info_span};
 
 use crate::runtime::{
     RuntimeState,
@@ -48,7 +48,6 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
             return;
         };
         state.metrics.record_ws_session_loop_started();
-        info!("entering websocket session loop");
         let exit_reason = super::session_loop::run(
             &mut ws_writer,
             &mut ws_reader,
@@ -85,7 +84,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
             .await
             .is_err()
         {
-            info!("failed to cleanup transport-adapter session state");
+            debug!("failed to cleanup transport-adapter session state");
         }
     }
     .instrument(info_span!(

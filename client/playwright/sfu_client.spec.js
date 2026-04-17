@@ -270,17 +270,17 @@ test("default browser runtime negotiates and emits remote track updates", async 
                 },
                 {
                     id: "browser_runtime",
-                    level: "info",
+                    level: "debug",
                     message: "created RTCPeerConnection"
                 },
                 {
                     id: "browser_runtime",
-                    level: "info",
+                    level: "debug",
                     message: "applying offer negotiation request 7"
                 },
                 {
                     id: "browser_runtime",
-                    level: "info",
+                    level: "debug",
                     message: "received remote track event for mid 0 (kind=video)"
                 }
             ])
