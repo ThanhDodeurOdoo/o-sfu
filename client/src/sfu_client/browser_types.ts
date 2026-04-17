@@ -57,6 +57,8 @@ export interface PeerConnectionTrackEvent {
     };
 }
 
+export type ClientIceGatheringState = "new" | "gathering" | "complete";
+
 export type ClientPeerConnectionState =
     | "new"
     | "connecting"
@@ -70,6 +72,10 @@ export interface ClientPeerConnection {
     connectionState?: ClientPeerConnectionState;
     createAnswer(): Promise<{ sdp: string; type: "answer" }>;
     getTransceivers(): PeerConnectionTransceiver[];
+    iceGatheringState?: ClientIceGatheringState;
+    localDescription?: { sdp: string; type: "answer" } | null;
+    onicecandidate: ((event: { candidate: { candidate: string } | null }) => void) | null;
+    onicegatheringstatechange: (() => void) | null;
     onconnectionstatechange: (() => void) | null;
     ontrack: ((event: PeerConnectionTrackEvent) => void) | null;
     setLocalDescription(description: { sdp: string; type: "answer" }): Promise<void>;

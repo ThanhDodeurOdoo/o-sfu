@@ -78,7 +78,11 @@ test.beforeEach(async ({ page }) => {
             constructor(config) {
                 this.closed = false;
                 this.config = config;
+                this.iceGatheringState = "new";
+                this.localDescription = null;
                 this.localDescriptions = [];
+                this.onicecandidate = null;
+                this.onicegatheringstatechange = null;
                 this.ontrack = null;
                 this.remoteDescriptions = [];
                 this.transceivers = [
@@ -108,6 +112,8 @@ test.beforeEach(async ({ page }) => {
             }
 
             async setLocalDescription(description) {
+                this.localDescription = description;
+                this.iceGatheringState = "complete";
                 this.localDescriptions.push(description);
             }
 

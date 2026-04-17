@@ -271,15 +271,86 @@ export class BrowserRuntime {
         }
         const answer = await this._peerConnection.createAnswer();
         await this._peerConnection.setLocalDescription(answer);
+        const answerSdp = await this.awaitStableLocalDescription(this._peerConnection);
         const commands = protocolCore.submitNegotiationAnswer(
             requestId,
             negotiationKind,
-            answer.sdp
+            answerSdp
         );
-        if (negotiationKind === "offer" && this.shouldFallbackToImmediateTransportReady()) {
+        if (
+            negotiationKind === "offer" &&
+            (this.shouldFallbackToImmediateTransportReady() ||
+                this.localDescriptionHasOnlyInactiveMedia(answerSdp))
+        ) {
             commands.push(...protocolCore.onTransportReady());
         }
         return commands;
+    }
+
+    private async awaitStableLocalDescription(
+        peerConnection: ClientPeerConnection
+    ): Promise<string> {
+        const initialSdp = peerConnection.localDescription?.sdp;
+        if (!initialSdp) {
+            throw new Error("peer connection local description is missing after createAnswer");
+        }
+        if (
+            this.localDescriptionHasCandidate(initialSdp) ||
+            peerConnection.iceGatheringState === "complete"
+        ) {
+            return initialSdp;
+        }
+
+        return new Promise((resolve) => {
+            const previousIceCandidate = peerConnection.onicecandidate;
+            const previousIceGatheringStateChange = peerConnection.onicegatheringstatechange;
+
+            const finalizeIfReady = () => {
+                const sdp = peerConnection.localDescription?.sdp;
+                if (!sdp) {
+                    return;
+                }
+                if (
+                    !this.localDescriptionHasCandidate(sdp) &&
+                    peerConnection.iceGatheringState !== "complete"
+                ) {
+                    return;
+                }
+                peerConnection.onicecandidate = previousIceCandidate;
+                peerConnection.onicegatheringstatechange = previousIceGatheringStateChange;
+                resolve(sdp);
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                previousIceCandidate?.(event);
+                finalizeIfReady();
+            };
+            peerConnection.onicegatheringstatechange = () => {
+                previousIceGatheringStateChange?.();
+                finalizeIfReady();
+            };
+            finalizeIfReady();
+        });
+    }
+
+    private localDescriptionHasCandidate(sdp: string): boolean {
+        return /(?:^|\r\n)a=candidate:/.test(sdp);
+    }
+
+    private localDescriptionHasOnlyInactiveMedia(sdp: string): boolean {
+        const mediaSections = sdp
+            .split(/\r?\nm=/)
+            .map((section, index) => (index === 0 ? section : `m=${section}`))
+            .filter((section) => section.startsWith("m="));
+        if (mediaSections.length === 0) {
+            return false;
+        }
+        return mediaSections.every((section) => {
+            const direction = section.match(
+                /(?:^|\r\n)a=(sendrecv|sendonly|recvonly|inactive)(?:\r?\n|$)/
+            )?.[1];
+            return direction === "inactive";
+        });
     }
 
     private shouldFallbackToImmediateTransportReady(): boolean {

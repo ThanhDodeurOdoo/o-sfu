@@ -54,13 +54,22 @@ class FakeSender {
 }
 
 class FakePeerConnection {
-    constructor(config, { autoConnect = true } = {}) {
+    constructor(
+        config,
+        { answerSdp = "answer-sdp", autoConnect = true, gatheredAnswerSdp = null } = {}
+    ) {
+        this.answerSdp = answerSdp;
         this.autoConnect = autoConnect;
         this.answerSnapshots = [];
         this.connectionState = "new";
         this.config = config;
+        this.gatheredAnswerSdp = gatheredAnswerSdp;
+        this.iceGatheringState = "new";
         this.localDescriptions = [];
+        this.localDescription = null;
         this.onconnectionstatechange = null;
+        this.onicecandidate = null;
+        this.onicegatheringstatechange = null;
         this.ontrack = null;
         this.remoteDescriptions = [];
         this.transceivers = [
@@ -88,10 +97,11 @@ class FakePeerConnection {
                 senderTrack: transceiver.sender.track ?? null
             }))
         );
-        return { sdp: "answer-sdp", type: "answer" };
+        return { sdp: this.answerSdp, type: "answer" };
     }
 
     async setLocalDescription(description) {
+        this.localDescription = description;
         this.localDescriptions.push(description);
         this.transceivers.forEach((transceiver) => {
             if (transceiver.sender.track) {
@@ -100,6 +110,25 @@ class FakePeerConnection {
                 transceiver.currentDirection = "inactive";
             }
         });
+        if (this.gatheredAnswerSdp) {
+            this.iceGatheringState = "gathering";
+            queueMicrotask(() => {
+                this.localDescription = {
+                    ...description,
+                    sdp: this.gatheredAnswerSdp
+                };
+                this.iceGatheringState = "complete";
+                this.onicecandidate?.({
+                    candidate: {
+                        candidate: "candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
+                    }
+                });
+                this.onicegatheringstatechange?.();
+                this.onicecandidate?.({ candidate: null });
+            });
+        } else {
+            this.iceGatheringState = "complete";
+        }
         if (this.autoConnect) {
             this.emitConnectionState("connected");
         }
@@ -700,6 +729,45 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
     assert.equal(client._consumers.get(42).camera.track, track);
 });
 
+test("offer waits for candidate-bearing local description before replying", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config, {
+                answerSdp: "answer-sdp",
+                gatheredAnswerSdp:
+                    "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
+            });
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    assert.equal(peerConnections.length, 1);
+    assert.deepEqual(core.submittedAnswers, [
+        {
+            negotiationKind: "offer",
+            requestId: "7",
+            sdp: "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
+        }
+    ]);
+});
+
 test("track metadata updates re-emit track state for existing remote tracks", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
@@ -960,6 +1028,50 @@ test("offer waits for peer connection transport readiness before emitting connec
     peerConnections[0].emitConnectionState("connected");
     await tick();
 
+    assert.equal(core.transportReadyCalls, 1);
+    assert.equal(client.state, "connected");
+});
+
+test("initial offer with only inactive media enters connected without waiting for rtc transport", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config, {
+                answerSdp: [
+                    "v=0",
+                    "o=- 1 1 IN IP4 0.0.0.0",
+                    "s=-",
+                    "t=0 0",
+                    "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+                    "a=inactive",
+                    "a=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host",
+                    "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                    "a=inactive"
+                ].join("\r\n"),
+                autoConnect: false
+            });
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    assert.equal(peerConnections.length, 1);
     assert.equal(core.transportReadyCalls, 1);
     assert.equal(client.state, "connected");
 });

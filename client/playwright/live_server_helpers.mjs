@@ -228,7 +228,10 @@ export async function peerLocalDescriptionSdp(page) {
 
 export async function spawnLiveServer({
     authKey = TEST_AUTH_KEY,
+    bindHost = "127.0.0.1",
     bindPort,
+    host = "127.0.0.1",
+    publicIp = host,
     rtcMaxPort,
     rtcMinPort,
     codecFlags = {}
@@ -241,8 +244,8 @@ export async function spawnLiveServer({
             env: {
                 ...process.env,
                 AUTH_KEY: authKey,
-                BIND_ADDRESS: `127.0.0.1:${bindPort}`,
-                PUBLIC_IP: "127.0.0.1",
+                BIND_ADDRESS: `${bindHost}:${bindPort}`,
+                PUBLIC_IP: publicIp,
                 RTC_MAX_PORT: String(rtcMaxPort),
                 RTC_MIN_PORT: String(rtcMinPort),
                 TRANSPORT_BACKEND: "rtc",
@@ -252,7 +255,7 @@ export async function spawnLiveServer({
             stdio: "ignore"
         }
     );
-    const httpBaseUrl = `http://127.0.0.1:${bindPort}`;
+    const httpBaseUrl = `http://${host}:${bindPort}`;
     for (let attempt = 0; attempt < 60; attempt += 1) {
         try {
             const response = await fetch(`${httpBaseUrl}/v1/noop`);
@@ -265,7 +268,7 @@ export async function spawnLiveServer({
                         child.kill("SIGTERM");
                         await onceExit(child);
                     },
-                    wsUrl: `ws://127.0.0.1:${bindPort}/`
+                    wsUrl: `ws://${host}:${bindPort}/`
                 };
             }
         } catch (_error) {
