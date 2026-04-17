@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  KANI_VERSION: 0.67.0
+
 jobs:
   kani:
     runs-on: ubuntu-latest
@@ -19,7 +22,54 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Run Kani proofs
-        uses: model-checking/kani-github-action@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          args: -p o-sfu-router
+          toolchain: 1.92.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache Kani installation
+        uses: actions/cache@v4
+        with:
+          path: ~/.kani
+          key: ${{ runner.os }}-${{ runner.arch }}-kani-${{ env.KANI_VERSION }}
+
+      - name: Install Kani CLI
+        run: cargo install --locked --version "$KANI_VERSION" kani-verifier
+
+      - name: Bootstrap Kani release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kani_dir="$HOME/.kani/kani-${KANI_VERSION}"
+          if [[ -f "$kani_dir/rust-toolchain-version" ]]; then
+            exit 0
+          fi
+
+          case "$(uname -m)" in
+            x86_64)
+              target="x86_64-unknown-linux-gnu"
+              ;;
+            aarch64 | arm64)
+              target="aarch64-unknown-linux-gnu"
+              ;;
+            *)
+              echo "Unsupported runner architecture for Kani: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          bundle="kani-${KANI_VERSION}-${target}.tar.gz"
+          url="https://github.com/model-checking/kani/releases/download/kani-${KANI_VERSION}/${bundle}"
+
+          rm -rf "$kani_dir"
+          curl --retry 5 --retry-delay 5 --retry-all-errors -sSLf \
+            -o "$RUNNER_TEMP/$bundle" \
+            "$url"
+          cargo-kani setup --use-local-bundle "$RUNNER_TEMP/$bundle"
+
+      - name: Run Kani proofs
+        run: cargo kani -p o-sfu-router

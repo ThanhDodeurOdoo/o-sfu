@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use str0m::media::Mid;
+use str0m::rtp::Ssrc;
 
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
@@ -241,6 +242,37 @@ impl RtcBootstrapState {
             .copied()
     }
 
+    pub(super) fn source_transport_media_id_for_ssrc(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_ssrc: Ssrc,
+    ) -> Option<TransportMediaId> {
+        let producer_entries = self
+            .producer_mid_registry
+            .iter()
+            .filter_map(|(lookup_key, transport_media_id)| {
+                (lookup_key.session_key == *source_session_key)
+                    .then_some((lookup_key.mid, *transport_media_id))
+            })
+            .collect::<Vec<_>>();
+        let session_state = self.sessions.get(source_session_key)?;
+        for (producer_mid, transport_media_id) in producer_entries {
+            if session_state
+                .sdp_negotiation
+                .negotiated_producer_parameters
+                .get(&producer_mid)
+                .is_some_and(|parameters| {
+                    parameters
+                        .bindings()
+                        .any(|binding| binding.ssrc().map(Ssrc::from) == Some(source_ssrc))
+                })
+            {
+                return Some(transport_media_id);
+            }
+        }
+        None
+    }
+
     pub(super) fn consumer_source_transport_media_id_for_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -278,6 +310,12 @@ impl RtcBootstrapState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
+
+    use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
+
+    use crate::config::MediaCodecFlags;
+    use crate::runtime::rtc_adapter::bootstrap::ensure_session_rtc_state;
     use crate::runtime::transport_adapter::TransportSessionKey;
     use crate::signaling::shared::SessionId;
 
@@ -334,6 +372,49 @@ mod tests {
         assert_eq!(
             state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
             None
+        );
+    }
+
+    #[test]
+    fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_070));
+        let producer_session = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
+        let producer_mid = Mid::from("cam-up");
+        let producer_ssrc = 55_555_u32;
+        let mut state = RtcBootstrapState::default();
+
+        assert!(
+            ensure_session_rtc_state(
+                &mut state.sessions,
+                &producer_session,
+                candidate_addr,
+                MediaCodecFlags::default(),
+            )
+            .is_ok()
+        );
+        let Some(session_state) = state.sessions.get_mut(&producer_session) else {
+            return;
+        };
+        session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .insert(
+                producer_mid,
+                RouterRtpParameters::new(
+                    vec![],
+                    vec![],
+                    vec![StreamBinding::new().with_ssrc(producer_ssrc)],
+                )
+                .with_mid(producer_mid.to_string()),
+            );
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: producer_session.clone(),
+            mid: producer_mid,
+        });
+
+        assert_eq!(
+            state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
+            Some(transport_media_id)
         );
     }
 }

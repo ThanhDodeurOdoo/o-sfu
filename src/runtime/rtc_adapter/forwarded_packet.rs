@@ -134,12 +134,24 @@ impl ForwardedPacket {
         }
         match &self.data {
             ForwardedPacketData::Str0mRtp(rtp_data) => {
-                let source_mid = rtp_data.rtp_packet.header.ext_vals.mid?;
-                state.source_transport_media_id_for_mid(&self.source_session_key, source_mid)
+                if let Some(source_mid) = rtp_data.rtp_packet.header.ext_vals.mid
+                    && let Some(source_transport_media_id) = state
+                        .source_transport_media_id_for_mid(&self.source_session_key, source_mid)
+                {
+                    return Some(source_transport_media_id);
+                }
+                let source_ssrc = rtp_data.rtp_packet.header.ssrc;
+                state.source_transport_media_id_for_ssrc(&self.source_session_key, source_ssrc)
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
-                let source_mid = rtp_data.header.ext_vals.mid?;
-                state.source_transport_media_id_for_mid(&self.source_session_key, source_mid)
+                if let Some(source_mid) = rtp_data.header.ext_vals.mid
+                    && let Some(source_transport_media_id) = state
+                        .source_transport_media_id_for_mid(&self.source_session_key, source_mid)
+                {
+                    return Some(source_transport_media_id);
+                }
+                let source_ssrc = rtp_data.header.ssrc;
+                state.source_transport_media_id_for_ssrc(&self.source_session_key, source_ssrc)
             }
         }
     }
@@ -251,8 +263,46 @@ fn sample_forwarded_packet_with_extensions(
 }
 
 #[cfg(test)]
+fn sample_forwarded_packet_without_mid(
+    source_session_key: TransportSessionKey,
+    ssrc: u32,
+    payload: &[u8],
+) -> ForwardedPacket {
+    let received_at = Instant::now();
+    ForwardedPacket {
+        source_session_key,
+        source_transport_media_id: None,
+        received_at,
+        payload: SharedPayload::from_vec(payload.to_vec()),
+        data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+            seq_no: SeqNo::from(1),
+            header: RtpHeader {
+                version: 2,
+                has_padding: false,
+                has_extension: false,
+                csrc_count: 0,
+                marker: false,
+                payload_type: Pt::from(111),
+                sequence_number: 1,
+                timestamp: 1234,
+                ssrc: Ssrc::from(ssrc),
+                csrc: [0; 15],
+                ext_vals: ExtensionValues::default(),
+                header_len: 12,
+            },
+        }),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
+
+    use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
+
+    use crate::config::MediaCodecFlags;
+    use crate::runtime::rtc_adapter::bootstrap::ensure_session_rtc_state;
     use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
     use crate::signaling::shared::SessionId;
 
@@ -294,6 +344,50 @@ mod tests {
         assert_eq!(
             relay_packet.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(TransportMediaId::new(18))
+        );
+    }
+
+    #[test]
+    fn forwarded_packet_falls_back_to_ssrc_when_mid_is_missing() {
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_071));
+        let session_key = TransportSessionKey::new(44, 0, 12, SessionId::Integer(10));
+        let producer_mid = Mid::from("cam-up");
+        let producer_ssrc = 65_432_u32;
+        let mut state = RtcBootstrapState::default();
+
+        assert!(
+            ensure_session_rtc_state(
+                &mut state.sessions,
+                &session_key,
+                candidate_addr,
+                MediaCodecFlags::default(),
+            )
+            .is_ok()
+        );
+        let Some(session_state) = state.sessions.get_mut(&session_key) else {
+            return;
+        };
+        session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .insert(
+                producer_mid,
+                RouterRtpParameters::new(
+                    vec![],
+                    vec![],
+                    vec![StreamBinding::new().with_ssrc(producer_ssrc)],
+                )
+                .with_mid(producer_mid.to_string()),
+            );
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: session_key.clone(),
+            mid: producer_mid,
+        });
+        let packet = sample_forwarded_packet_without_mid(session_key, producer_ssrc, b"payload");
+
+        assert_eq!(
+            packet.resolve_source_transport_media_id(&state),
+            Some(transport_media_id)
         );
     }
 }
