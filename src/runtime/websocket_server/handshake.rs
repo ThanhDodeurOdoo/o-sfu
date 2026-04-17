@@ -351,7 +351,7 @@ async fn cleanup_failed_session(
 ) {
     let _ = state
         .channels
-        .leave_session(
+        .close_session(
             channel.uuid(),
             session_id,
             connection_id,
@@ -359,18 +359,6 @@ async fn cleanup_failed_session(
             RuntimeState::session_cleanup_policy(),
         )
         .await;
-    if let Err(error) = state
-        .transport_adapter
-        .close_session(&channel.transport_session_key(session_id, connection_id))
-        .await
-    {
-        warn!(
-            ?session_id,
-            connection_id,
-            ?error,
-            "failed to cleanup transport session after websocket startup failure"
-        );
-    }
 }
 
 async fn reject_handshake<T>(

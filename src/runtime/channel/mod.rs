@@ -19,6 +19,7 @@ mod controller;
 mod events;
 mod manager;
 mod media;
+mod media_transaction;
 mod membership;
 mod outbound;
 mod recording;

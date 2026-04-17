@@ -24,6 +24,7 @@ mod source_packet_policy;
 
 pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
-    ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
+    ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
+    PreparedConsumerBootstrap, PreparedPublishedTrack,
 };
 pub(in crate::runtime::channel) use self::shared::{ChannelState, TransportMediaRemoval};

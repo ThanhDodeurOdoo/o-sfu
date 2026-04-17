@@ -18,6 +18,7 @@ mod tests;
 
 pub(crate) use self::bootstrap::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::bootstrap::{
-    ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget,
+    ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
+    PreparedConsumerBootstrap,
 };
 pub(in crate::runtime::channel) use self::producer::PreparedPublishedTrack;

@@ -126,6 +126,26 @@ impl Channel {
         .await
     }
 
+    pub(crate) async fn close_session_runtime(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+        cleanup_policy: SessionCleanupPolicy,
+    ) -> bool {
+        let removed_active_session = self
+            .leave_session_with_cleanup(
+                session_id,
+                connection_id,
+                Some(transport_adapter),
+                cleanup_policy,
+            )
+            .await;
+        self.close_transport_session(session_id, connection_id, transport_adapter)
+            .await;
+        removed_active_session
+    }
+
     async fn leave_session_with_cleanup(
         &self,
         session_id: &SessionId,
@@ -331,6 +351,24 @@ impl Channel {
                     "transport adapter failed to remove transport media during channel cleanup"
                 );
             }
+        }
+    }
+
+    async fn close_transport_session(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        if transport_adapter
+            .close_session(&self.transport_session_key(session_id, connection_id))
+            .await
+            .is_err()
+        {
+            warn!(
+                ?session_id,
+                connection_id, "transport adapter failed to close session during channel cleanup"
+            );
         }
     }
 

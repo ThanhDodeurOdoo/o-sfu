@@ -314,6 +314,34 @@ impl ChannelManager {
         did_remove_active_session
     }
 
+    pub async fn close_session(
+        &self,
+        channel_uuid: &str,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+        cleanup_policy: SessionCleanupPolicy,
+    ) -> bool {
+        let Some(entry) = self.entry(channel_uuid).await else {
+            return false;
+        };
+        let _op_guard = entry.op_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+            return false;
+        }
+        let session_count_before = entry.channel.session_count().await;
+        let did_remove_active_session = entry
+            .channel
+            .close_session_runtime(session_id, connection_id, transport_adapter, cleanup_policy)
+            .await;
+        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
+        if did_remove_active_session && entry.channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, &entry.channel)
+                .await;
+        }
+        did_remove_active_session
+    }
+
     pub async fn disconnect_sessions(
         &self,
         channel_uuid: &str,

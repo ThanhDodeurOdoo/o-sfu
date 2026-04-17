@@ -8,10 +8,8 @@ use crate::signaling::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
     Channel,
-    state::{
-        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
-        TransportMediaRemoval,
-    },
+    media_transaction::{PublishTransaction, UnpublishTransaction},
+    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget},
 };
 
 #[derive(Debug, Clone)]
@@ -40,14 +38,9 @@ impl Channel {
                 publish.consumable_rtp_parameters,
             )?
         };
-        self.commit_published_track(
-            session_id,
-            publish.connection_id,
-            pending_publish,
-            publish.transport_media_id,
-            transport_adapter,
-        )
-        .await
+        PublishTransaction::new(session_id.clone(), publish.connection_id, pending_publish)
+            .commit(self, publish.transport_media_id, transport_adapter)
+            .await
     }
 
     #[cfg(test)]
@@ -96,7 +89,7 @@ impl Channel {
         origin: ConsumerBootstrapOrigin,
     ) {
         for target in targets {
-            self.bootstrap_consumer_target(&target, transport_adapter, origin)
+            self.execute_consumer_bootstrap(target, transport_adapter, origin)
                 .await;
         }
     }
@@ -156,174 +149,9 @@ impl Channel {
             }
         };
 
-        self.commit_published_track(
-            session_id,
-            publisher_connection_id,
-            pending_publish,
-            transport_media_id,
-            transport_adapter,
-        )
-        .await
-    }
-
-    async fn bootstrap_consumer_target(
-        &self,
-        target: &PendingConsumerBootstrapTarget,
-        transport_adapter: &RuntimeTransportAdapter,
-        origin: ConsumerBootstrapOrigin,
-    ) {
-        let Some(prepared) = ({
-            let state = self.state.read().await;
-            state.prepare_consumer_bootstrap(target)
-        }) else {
-            return;
-        };
-        let Some(pending_bootstrap) = ({
-            let mut state = self.state.write().await;
-            state.prepare_consumer_bootstrap_transaction(target, &prepared)
-        }) else {
-            return;
-        };
-        let consumer_transport_media_id = match transport_adapter
-            .consume_media(
-                &self.transport_session_key(
-                    target.consumer_session_id(),
-                    target.consumer_connection_id(),
-                ),
-                target.media_kind(),
-                &self.transport_session_key(
-                    target.producer_session_id(),
-                    target.producer_connection_id(),
-                ),
-                target.transport_media_id(),
-                prepared.consumer_rtp_parameters(),
-            )
+        PublishTransaction::new(session_id.clone(), publisher_connection_id, pending_publish)
+            .commit(self, transport_media_id, transport_adapter)
             .await
-        {
-            Ok(transport_media_id) => transport_media_id,
-            Err(error) => {
-                self.release_pending_consumer_bootstrap(target).await;
-                warn!(
-                    consumer_session_id = ?target.consumer_session_id(),
-                    consumer_connection_id = target.consumer_connection_id(),
-                    producer_session_id = ?target.producer_session_id(),
-                    producer_connection_id = target.producer_connection_id(),
-                    source_transport_media_id = ?target.transport_media_id(),
-                    error = ?error,
-                    consumer_mid = prepared.consumer_rtp_parameters().mid(),
-                    ?origin,
-                    "transport adapter rejected consume media declaration"
-                );
-                return;
-            }
-        };
-        let outbound = {
-            let consumer_session_key = self.transport_session_key(
-                target.consumer_session_id(),
-                target.consumer_connection_id(),
-            );
-            let consumer_mid = transport_adapter
-                .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
-                .await;
-            let mut state = self.state.write().await;
-            state.commit_consumer_bootstrap(
-                target,
-                pending_bootstrap,
-                consumer_transport_media_id,
-                consumer_mid,
-            )
-        };
-        let Some((sender, bootstrap, consumer_active)) = outbound else {
-            self.cleanup_failed_consumer_bootstrap(
-                target,
-                consumer_transport_media_id,
-                transport_adapter,
-                origin,
-            )
-            .await;
-            return;
-        };
-        self.apply_initial_consumer_pause_state(
-            target,
-            consumer_transport_media_id,
-            consumer_active,
-            transport_adapter,
-            origin,
-        )
-        .await;
-        let _ = sender.send(super::SessionOutbound::Request(Box::new(
-            bootstrap.into_channel_event_request(),
-        )));
-    }
-
-    async fn cleanup_failed_consumer_bootstrap(
-        &self,
-        target: &PendingConsumerBootstrapTarget,
-        consumer_transport_media_id: TransportMediaId,
-        transport_adapter: &RuntimeTransportAdapter,
-        origin: ConsumerBootstrapOrigin,
-    ) {
-        if transport_adapter
-            .remove_media(
-                &self.transport_session_key(
-                    target.consumer_session_id(),
-                    target.consumer_connection_id(),
-                ),
-                consumer_transport_media_id,
-            )
-            .await
-            .is_err()
-        {
-            warn!(
-                consumer_session_id = ?target.consumer_session_id(),
-                producer_session_id = ?target.producer_session_id(),
-                consumer_transport_media_id = ?consumer_transport_media_id,
-                ?origin,
-                "transport adapter failed to remove consumer transport media after bootstrap state commit failed"
-            );
-        }
-    }
-
-    async fn release_pending_consumer_bootstrap(&self, target: &PendingConsumerBootstrapTarget) {
-        let mut state = self.state.write().await;
-        state.release_pending_consumer_bootstrap(target);
-    }
-
-    async fn apply_initial_consumer_pause_state(
-        &self,
-        target: &PendingConsumerBootstrapTarget,
-        consumer_transport_media_id: TransportMediaId,
-        consumer_active: bool,
-        transport_adapter: &RuntimeTransportAdapter,
-        origin: ConsumerBootstrapOrigin,
-    ) {
-        if consumer_active {
-            return;
-        }
-        if transport_adapter
-            .set_consumer_active(
-                &self.transport_session_key(
-                    target.consumer_session_id(),
-                    target.consumer_connection_id(),
-                ),
-                consumer_transport_media_id,
-                &self.transport_session_key(
-                    target.producer_session_id(),
-                    target.producer_connection_id(),
-                ),
-                target.transport_media_id(),
-                false,
-            )
-            .await
-            .is_err()
-        {
-            warn!(
-                consumer_session_id = ?target.consumer_session_id(),
-                producer_session_id = ?target.producer_session_id(),
-                ?origin,
-                "transport adapter failed to apply the initial consumer pause state"
-            );
-        }
     }
 
     #[allow(
@@ -476,94 +304,13 @@ impl Channel {
         }) else {
             return false;
         };
-        if !self
-            .cleanup_transport_removals_strict(transport_adapter, &transport_removals)
-            .await
-        {
-            return false;
-        }
-        let Some(outcome) = ({
-            let mut state = self.state.write().await;
-            state.unpublish_track(session_id, connection_id, stream_type, transport_removals)
-        }) else {
-            warn!(
-                ?session_id,
-                ?stream_type,
-                "transport cleanup succeeded but channel state commit failed"
-            );
-            return false;
-        };
-        outcome.emit(session_id, stream_type);
-        true
-    }
-
-    async fn cleanup_transport_removals_strict(
-        &self,
-        transport_adapter: &RuntimeTransportAdapter,
-        removals: &[TransportMediaRemoval],
-    ) -> bool {
-        for removal in removals {
-            if transport_adapter
-                .remove_media(
-                    &self.transport_session_key(removal.session(), removal.connection()),
-                    removal.transport_media(),
-                )
-                .await
-                .is_err()
-            {
-                warn!(
-                    session_id = ?removal.session(),
-                    connection_id = removal.connection(),
-                    transport_media_id = ?removal.transport_media(),
-                    "transport adapter failed to remove transport media during channel cleanup"
-                );
-                return false;
-            }
-        }
-        true
-    }
-
-    async fn commit_published_track(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        pending_publish: PreparedPublishedTrack,
-        transport_media_id: TransportMediaId,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> Option<String> {
-        let consumer_targets = {
-            let mut state = self.state.write().await;
-            state.commit_published_track(pending_publish, transport_media_id)
-        };
-        let Some((producer_id, consumer_targets)) = consumer_targets else {
-            if transport_adapter
-                .remove_media(
-                    &self.transport_session_key(session_id, connection_id),
-                    transport_media_id,
-                )
-                .await
-                .is_err()
-            {
-                warn!(
-                    ?session_id,
-                    connection_id,
-                    transport_media_id = ?transport_media_id,
-                    "transport adapter failed to remove published transport media after channel commit failed"
-                );
-            }
-            return None;
-        };
-        self.sync_source_packet_selection_policy(Some(transport_adapter))
-            .await;
-
-        for target in consumer_targets {
-            self.bootstrap_consumer_target(
-                &target,
-                transport_adapter,
-                ConsumerBootstrapOrigin::Publish,
-            )
-            .await;
-        }
-        Some(producer_id.into_wire_id())
+        UnpublishTransaction::new(
+            session_id.clone(),
+            connection_id,
+            stream_type,
+            transport_removals,
+        )
+        .commit(self, transport_adapter)
+        .await
     }
 }

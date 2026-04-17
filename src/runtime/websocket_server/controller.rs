@@ -10,7 +10,7 @@ use axum::{
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tracing::{Instrument, debug, field, info, info_span};
+use tracing::{Instrument, field, info, info_span};
 
 use crate::runtime::{
     RuntimeState,
@@ -66,7 +66,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         );
         let _ = state
             .channels
-            .leave_session(
+            .close_session(
                 session.channel.uuid(),
                 &session.session_id,
                 session.connection_id,
@@ -74,18 +74,6 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 RuntimeState::session_cleanup_policy(),
             )
             .await;
-        if state
-            .transport_adapter
-            .close_session(
-                &session
-                    .channel
-                    .transport_session_key(&session.session_id, session.connection_id),
-            )
-            .await
-            .is_err()
-        {
-            debug!("failed to cleanup transport-adapter session state");
-        }
     }
     .instrument(info_span!(
         "ws.connection",
