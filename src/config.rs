@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fmt,
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
@@ -236,6 +236,14 @@ impl Config {
         Self::from_var_lookup(|key| env::var(key).ok())
     }
 
+    #[must_use]
+    pub(crate) const fn log_view(&self, process_id: u32) -> ConfigLogView<'_> {
+        ConfigLogView {
+            config: self,
+            process_id,
+        }
+    }
+
     fn from_var_lookup(mut get_var: impl FnMut(&str) -> Option<String>) -> Result<Self> {
         let bind_address = get_var("BIND_ADDRESS")
             .unwrap_or_else(|| "0.0.0.0:8080".to_owned())
@@ -299,6 +307,45 @@ impl Config {
             rtc_port_range,
             rtc_media_worker_count,
         })
+    }
+}
+
+pub(crate) struct ConfigLogView<'a> {
+    config: &'a Config,
+    process_id: u32,
+}
+
+impl fmt::Display for ConfigLogView<'_> {
+    #[rustfmt::skip] // would look ugly if we let the lines wrap
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let config = self.config;
+        writeln!(formatter, "booted runtime systems:")?;
+        writeln!(formatter, "  - pid={}", self.process_id)?;
+        writeln!(formatter, "  - bind_address={}", config.bind_address)?;
+        writeln!(formatter, "  - public_ip={}", config.public_ip)?;
+        writeln!(formatter, "  - timing_and_admission:")?;
+        writeln!(formatter, "    - authentication_timeout_ms={}", config.authentication_timeout_ms)?;
+        writeln!(formatter, "    - session_timeout_ms={}", config.session_timeout_ms)?;
+        writeln!(formatter, "    - ping_interval_ms={}", config.ping_interval_ms)?;
+        writeln!(formatter, "    - channel_size={}", config.channel_size)?;
+        writeln!(formatter, "    - trust_proxy_headers={}", config.trust_proxy_headers)?;
+        writeln!(formatter, "  - rtc_transport:")?;
+        writeln!(formatter, "    - rtc_port_range_min={}", config.rtc_port_range.min())?;
+        writeln!(formatter, "    - rtc_port_range_max={}", config.rtc_port_range.max())?;
+        writeln!(formatter, "    - rtc_media_worker_count={}", config.rtc_media_worker_count)?;
+        writeln!(formatter, "  - feature_flags:")?;
+        writeln!(formatter, "    - transcription={}", config.feature_flags.transcription)?;
+        writeln!(formatter, "    - audio_recording={}", config.feature_flags.audio_recording)?;
+        writeln!(formatter, "    - video_recording={}", config.feature_flags.video_recording)?;
+        writeln!(formatter, "  - codec_flags:")?;
+        writeln!(formatter, "    - opus={}", config.codec_flags.opus_enabled())?;
+        writeln!(formatter, "    - pcmu={}", config.codec_flags.pcmu_enabled())?;
+        writeln!(formatter, "    - pcma={}", config.codec_flags.pcma_enabled())?;
+        writeln!(formatter, "    - vp8={}", config.codec_flags.vp8_enabled())?;
+        writeln!(formatter, "    - h264={}", config.codec_flags.h264_enabled())?;
+        writeln!(formatter, "    - h265={}", config.codec_flags.h265_enabled())?;
+        writeln!(formatter, "    - vp9={}", config.codec_flags.vp9_enabled())?;
+        write!(formatter, "    - av1={}", config.codec_flags.av1_enabled())
     }
 }
 

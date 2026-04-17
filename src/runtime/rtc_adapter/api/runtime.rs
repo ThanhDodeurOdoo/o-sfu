@@ -12,6 +12,7 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use super::super::{
     commands::{RemoteSourceControl, RtcWorkerCommand},
@@ -63,6 +64,13 @@ impl RtcTransportAdapter {
             };
             *worker_slot = Some(worker_handle.clone());
         }
+        info!(
+            relay_target_id = ?self.relay_target_id,
+            public_ip = %self.public_ip,
+            rtc_port_range_min = self.rtc_port_range.min(),
+            rtc_port_range_max = self.rtc_port_range.max(),
+            "booted rtc packet loop shard"
+        );
         current_runtime.spawn(packet_loop::run_packet_loop(
             PacketLoopConfig {
                 public_ip: self.public_ip,

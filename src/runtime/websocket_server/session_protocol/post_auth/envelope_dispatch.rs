@@ -27,12 +27,6 @@ impl PostAuthSessionProtocol {
     }
 
     async fn handle_info_message(&self, info: SessionInfo) {
-        debug!(
-            session_id = ?self.session_id,
-            connection_id = self.connection_id,
-            ?info,
-            "received client session info update over websocket"
-        );
         self.channel
             .update_session_info_runtime_for_connection(
                 &self.session_id,

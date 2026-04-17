@@ -138,7 +138,6 @@ async fn handle_incoming_frame(
     session_protocol: &mut SessionProtocol,
     message: Message,
 ) -> Option<WsSessionLoopExitReason> {
-    debug!("received websocket frame");
     match session_protocol.handle_frame(writer, message).await {
         SessionProtocolOutcome::Continue => None,
         SessionProtocolOutcome::Break => Some(WsSessionLoopExitReason::BusBreak),
@@ -177,7 +176,6 @@ async fn handle_outbound_payload(
     session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
-    debug!(?outbound, "sending outbound session event");
     match session_protocol.send_outbound(writer, outbound).await {
         Ok(batch_len) => {
             metrics.record_ws_bus_batch_sent(batch_len);

@@ -32,11 +32,14 @@ use crate::{
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
 
 pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
+    let listener = TcpListener::bind(state.config.bind_address).await?;
+    let local_address = listener.local_addr()?;
     info!(
         bind_address = %state.config.bind_address,
-        "starting HTTP and WebSocket listener"
+        local_address = %local_address,
+        trust_proxy_headers = state.config.trust_proxy_headers,
+        "booted HTTP and WebSocket listener"
     );
-    let listener = TcpListener::bind(state.config.bind_address).await?;
     axum::serve(
         listener,
         app(state).into_make_service_with_connect_info::<SocketAddr>(),

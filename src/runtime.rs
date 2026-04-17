@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{process, sync::Arc};
 
 use anyhow::Result;
 use anyhow::anyhow;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration, MissedTickBehavior};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
@@ -84,6 +85,7 @@ impl Runtime {
             config.feature_flags,
             channel::rtp_capabilities::router_rtp_capabilities(config.codec_flags),
         );
+        info!("{}", config.log_view(process::id()));
         Self {
             config,
             channels: Arc::new(ChannelManager::new(
@@ -118,6 +120,10 @@ fn spawn_source_packet_policy_sync_task(
     channels: Arc<ChannelManager>,
     transport_adapter: RuntimeTransportAdapter,
 ) -> JoinHandle<()> {
+    info!(
+        interval_ms = SOURCE_PACKET_POLICY_SYNC_INTERVAL.as_millis(),
+        "booted source packet policy sync loop"
+    );
     tokio::spawn(async move {
         let mut interval = time::interval(SOURCE_PACKET_POLICY_SYNC_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
