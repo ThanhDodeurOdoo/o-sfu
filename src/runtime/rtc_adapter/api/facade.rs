@@ -41,7 +41,7 @@ use super::super::{
         RtcWorkerCommand,
     },
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
-    state::RtcSnapshotState,
+    state::{RtcBitrateState, RtcSnapshotState},
 };
 
 static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
@@ -50,6 +50,7 @@ static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 pub(crate) struct RtcWorkerHandle {
     pub(super) command_tx: mpsc::Sender<RtcWorkerCommand>,
     pub(super) relay_mailbox: RelayPacketMailbox,
+    pub(crate) bitrate_state: Arc<Mutex<RtcBitrateState>>,
     pub(crate) snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     pub(super) shutdown_token: CancellationToken,
 }

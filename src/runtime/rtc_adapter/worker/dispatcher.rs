@@ -17,7 +17,7 @@ use super::{
     super::{
         commands::RtcWorkerCommand,
         relay_registry::RelayRegistry,
-        state::{RtcBootstrapState, RtcSnapshotState},
+        state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
     },
     media,
     negotiation::{self, OfferBootstrapConfig},
@@ -25,6 +25,7 @@ use super::{
 };
 
 pub(crate) struct WorkerCommandContext<'a> {
+    pub(crate) bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
     pub(crate) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub(crate) relay_registry: &'a RelayRegistry,
     pub(crate) public_ip: IpAddr,
@@ -41,7 +42,12 @@ pub(crate) fn handle_worker_command(
     match command {
         #[cfg(test)]
         RtcWorkerCommand::Debug(command) => {
-            debug::handle_debug_command(state, context.snapshot_state, command);
+            debug::handle_debug_command(
+                state,
+                context.bitrate_state,
+                context.snapshot_state,
+                command,
+            );
         }
         #[cfg(feature = "internal-benchmarks")]
         RtcWorkerCommand::RememberRemoteAddr {
@@ -113,6 +119,7 @@ fn handle_core_worker_command(
             response,
         } => session::respond_close_session(
             state,
+            context.bitrate_state,
             context.snapshot_state,
             &session_key,
             context.metrics,

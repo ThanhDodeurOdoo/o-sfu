@@ -14,10 +14,10 @@ pub(super) fn populate_forward_routes(
     media_tap: &MediaTap,
     relay_registry: &RelayRegistry,
     metrics: &RuntimeMetrics,
-    pending_packets: &[ForwardedPacket],
+    pending_packets: &mut [ForwardedPacket],
     forwards: &mut Vec<PacketForward>,
 ) {
-    for (packet_idx, packet) in pending_packets.iter().enumerate() {
+    for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
         let Some(source_transport_media_id) = packet.resolve_source_transport_media_id(state)
         else {
             continue;
@@ -190,13 +190,14 @@ mod tests {
             b"payload",
         )];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 
@@ -252,13 +253,14 @@ mod tests {
             b"payload",
         )];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 
@@ -338,13 +340,14 @@ mod tests {
             b"payload",
         )];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 
@@ -416,13 +419,14 @@ mod tests {
                 .share_for_relay(source_transport_media_id),
         ];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 
@@ -487,13 +491,14 @@ mod tests {
             sample_forwarded_packet(second_producer_session, "aud-up-2", b"payload-2"),
         ];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 
@@ -508,7 +513,7 @@ mod tests {
         ));
         assert_eq!(
             pending_packets
-                .get(1)
+                .get_mut(1)
                 .and_then(|packet| packet.resolve_source_transport_media_id(&state)),
             Some(second_source_transport_media_id)
         );
@@ -545,13 +550,14 @@ mod tests {
             b"payload",
         )];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 
@@ -654,13 +660,14 @@ mod tests {
             sample_forwarded_packet(open_producer_session, "screen-up", b"screen-packet"),
         ];
         let mut forwards = Vec::new();
+        let mut pending_packets = pending_packets;
 
         populate_forward_routes(
             &state,
             &media_tap,
             &relay_registry,
             &metrics,
-            &pending_packets,
+            &mut pending_packets,
             &mut forwards,
         );
 

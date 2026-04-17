@@ -25,7 +25,7 @@ use crate::runtime::rtc_adapter::{
     relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId},
     route_control::{KeyframeRequestDecision, PacketLayerGate},
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
-    state::{RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
 };
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 use crate::signaling::shared::SessionId;
@@ -321,7 +321,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
         &media_tap,
         &relay_registry,
         &metrics,
-        &buffers.pending_packets,
+        &mut buffers.pending_packets,
         &mut buffers.forwards,
     );
     flush_forward_routes(&mut state, &metrics, &mut buffers);
@@ -391,7 +391,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let producer_session = TransportSessionKey::new(28, 0, 29, SessionId::Integer(30));
     let consumer_session = TransportSessionKey::new(28, 0, 31, SessionId::Integer(32));
     let mut state = RtcBootstrapState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+    let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
     let media_tap = MediaTap::default();
     let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
@@ -429,13 +429,13 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
             b"payload",
         ));
 
-    record_incoming_stats(&mut state, &snapshot_state, &metrics, &buffers);
+    record_incoming_stats(&mut state, &bitrate_state, &metrics, &mut buffers);
     super::super::forwarding_planner::populate_forward_routes(
         &state,
         &media_tap,
         &relay_registry,
         &metrics,
-        &buffers.pending_packets,
+        &mut buffers.pending_packets,
         &mut buffers.forwards,
     );
 
@@ -460,7 +460,7 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
     );
 
     assert_eq!(pending_packets.len(), 1);
-    let forwarded = pending_packets.first();
+    let forwarded = pending_packets.first_mut();
     assert!(forwarded.is_some());
     let Some(forwarded) = forwarded else {
         return;
@@ -488,6 +488,41 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
     assert_eq!(drained, 1);
     assert_eq!(pending_packets.len(), 1);
     assert!(relay_rx.try_recv().is_ok());
+}
+
+#[test]
+fn flush_forward_routes_records_relay_overload_drops() {
+    let source_session = TransportSessionKey::new(29, 0, 30, SessionId::Integer(31));
+    let source_transport_media_id = TransportMediaId::new(32);
+    let mut state = RtcBootstrapState::default();
+    let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
+    let mut buffers = PacketLoopBuffers::new();
+    let metrics = RuntimeMetrics::default();
+    let packet = sample_forwarded_packet(source_session, "aud-up", b"payload")
+        .share_for_relay(source_transport_media_id);
+
+    relay_mailbox.forward_packet(
+        &sample_forwarded_packet(
+            TransportSessionKey::new(29, 0, 30, SessionId::Integer(31)),
+            "aud-up",
+            b"prefill",
+        ),
+        source_transport_media_id,
+    );
+    buffers.pending_packets.push(packet);
+    buffers.forwards.push(
+        super::super::forwarding_destination::PacketForward::from_intra_node_relay_sink(
+            0,
+            source_transport_media_id,
+            relay_mailbox,
+        ),
+    );
+
+    flush_forward_routes(&mut state, &metrics, &mut buffers);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay, 0);
+    assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay, 1);
 }
 
 #[test]

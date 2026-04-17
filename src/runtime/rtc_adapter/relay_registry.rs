@@ -12,13 +12,22 @@ use crate::runtime::transport_adapter::TransportMediaId;
 
 use super::forwarded_packet::ForwardedPacket;
 
+pub(super) const RELAY_MAILBOX_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RelayEnqueueOutcome {
+    Enqueued,
+    Overloaded,
+    Closed,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct RelayPacketMailbox {
-    tx: mpsc::UnboundedSender<ForwardedPacket>,
+    tx: mpsc::Sender<ForwardedPacket>,
 }
 
 impl RelayPacketMailbox {
-    pub(super) fn new(tx: mpsc::UnboundedSender<ForwardedPacket>) -> Self {
+    pub(super) fn new(tx: mpsc::Sender<ForwardedPacket>) -> Self {
         Self { tx }
     }
 
@@ -26,20 +35,27 @@ impl RelayPacketMailbox {
         &self,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) {
-        forward_packet_to_target(&self.tx, packet, source_transport_media_id);
+    ) -> RelayEnqueueOutcome {
+        forward_packet_to_target(&self.tx, packet, source_transport_media_id)
     }
 
     #[cfg(test)]
-    pub(super) fn channel_for_test() -> (Self, mpsc::UnboundedReceiver<ForwardedPacket>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+    pub(super) fn channel_for_test() -> (Self, mpsc::Receiver<ForwardedPacket>) {
+        Self::channel_for_test_with_capacity(RELAY_MAILBOX_CAPACITY)
+    }
+
+    #[cfg(test)]
+    pub(super) fn channel_for_test_with_capacity(
+        capacity: usize,
+    ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
+        let (tx, rx) = mpsc::channel(capacity);
         (Self::new(tx), rx)
     }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct InterNodeRelaySender {
-    tx: mpsc::UnboundedSender<ForwardedPacket>,
+    tx: mpsc::Sender<ForwardedPacket>,
 }
 
 impl InterNodeRelaySender {
@@ -47,13 +63,20 @@ impl InterNodeRelaySender {
         &self,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) {
-        forward_packet_to_target(&self.tx, packet, source_transport_media_id);
+    ) -> RelayEnqueueOutcome {
+        forward_packet_to_target(&self.tx, packet, source_transport_media_id)
     }
 
     #[cfg(test)]
-    pub(super) fn channel_for_test() -> (Self, mpsc::UnboundedReceiver<ForwardedPacket>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+    pub(super) fn channel_for_test() -> (Self, mpsc::Receiver<ForwardedPacket>) {
+        Self::channel_for_test_with_capacity(RELAY_MAILBOX_CAPACITY)
+    }
+
+    #[cfg(test)]
+    pub(super) fn channel_for_test_with_capacity(
+        capacity: usize,
+    ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
+        let (tx, rx) = mpsc::channel(capacity);
         (Self { tx }, rx)
     }
 }
@@ -70,13 +93,13 @@ impl RelayTargetTransport {
         &self,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) {
+    ) -> RelayEnqueueOutcome {
         match self {
             Self::IntraNodeMailbox(mailbox) => {
-                mailbox.forward_packet(packet, source_transport_media_id);
+                mailbox.forward_packet(packet, source_transport_media_id)
             }
             Self::InterNodeSender(sender) => {
-                sender.forward_packet(packet, source_transport_media_id);
+                sender.forward_packet(packet, source_transport_media_id)
             }
         }
     }
@@ -95,11 +118,15 @@ impl From<InterNodeRelaySender> for RelayTargetTransport {
 }
 
 fn forward_packet_to_target(
-    tx: &mpsc::UnboundedSender<ForwardedPacket>,
+    tx: &mpsc::Sender<ForwardedPacket>,
     packet: &ForwardedPacket,
     source_transport_media_id: TransportMediaId,
-) {
-    let _ = tx.send(packet.share_for_relay(source_transport_media_id));
+) -> RelayEnqueueOutcome {
+    match tx.try_send(packet.share_for_relay(source_transport_media_id)) {
+        Ok(()) => RelayEnqueueOutcome::Enqueued,
+        Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,
+        Err(mpsc::error::TrySendError::Closed(_packet)) => RelayEnqueueOutcome::Closed,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -420,7 +447,7 @@ mod tests {
 
         let forwarded = relay_rx.try_recv().ok();
         assert!(forwarded.is_some());
-        if let Some(forwarded) = forwarded {
+        if let Some(mut forwarded) = forwarded {
             assert_eq!(forwarded.payload().as_slice(), b"payload");
             assert_eq!(
                 forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
@@ -627,13 +654,30 @@ mod tests {
 
         let forwarded = relay_rx.try_recv().ok();
         assert!(forwarded.is_some());
-        let Some(forwarded) = forwarded else {
+        let Some(mut forwarded) = forwarded else {
             return;
         };
         assert_eq!(forwarded.payload().as_slice(), b"payload");
         assert_eq!(
             forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(source_transport_media_id)
+        );
+    }
+
+    #[test]
+    fn relay_registry_reports_overload_when_a_bounded_mailbox_is_full() {
+        let (mailbox, _rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
+        let source_transport_media_id = TransportMediaId::new(42);
+        let session_key = TransportSessionKey::new(36, 0, 37, SessionId::Integer(38));
+        let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
+
+        assert_eq!(
+            mailbox.forward_packet(&packet, source_transport_media_id),
+            RelayEnqueueOutcome::Enqueued
+        );
+        assert_eq!(
+            mailbox.forward_packet(&packet, source_transport_media_id),
+            RelayEnqueueOutcome::Overloaded
         );
     }
 }

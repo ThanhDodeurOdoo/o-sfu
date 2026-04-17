@@ -11,11 +11,12 @@ use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::super::{
     commands::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcCommand},
-    state::{RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
 };
 
 pub(super) fn handle_debug_command(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     command: DebugRtcCommand,
 ) {
@@ -82,6 +83,7 @@ pub(super) fn handle_debug_command(
             now,
             response,
         } => respond_debug_record_incoming_media(
+            bitrate_state,
             snapshot_state,
             &session_key,
             transport_media_id,
@@ -282,6 +284,7 @@ fn into_debug_packet_gate(
 }
 
 fn respond_debug_record_incoming_media(
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
@@ -289,8 +292,9 @@ fn respond_debug_record_incoming_media(
     now: Instant,
     response: oneshot::Sender<()>,
 ) {
-    if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.record_incoming_media(session_key, transport_media_id, now, payload_bytes);
+    let _ = snapshot_state;
+    if let Ok(mut bitrate) = bitrate_state.lock() {
+        bitrate.record_incoming_media(session_key, transport_media_id, now, payload_bytes);
     }
     let _ = response.send(());
 }

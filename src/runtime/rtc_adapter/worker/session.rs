@@ -15,18 +15,20 @@ use crate::runtime::transport_adapter::{
 use super::super::{
     commands::{CloseSessionOutcome, CloseSessionState, RelayCleanup},
     media_registry::RegisteredMediaHandle,
-    state::{RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
 };
 use super::media::refresh_source_packet_gate;
 
 pub(super) fn respond_close_session(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
     response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
 ) {
-    let close_outcome = worker_close_session(state, snapshot_state, session_key, metrics);
+    let close_outcome =
+        worker_close_session(state, bitrate_state, snapshot_state, session_key, metrics);
     let _ = response.send(Ok(close_outcome));
 }
 
@@ -57,6 +59,7 @@ pub(super) fn respond_remember_remote_addr(
 
 fn worker_close_session(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
@@ -106,6 +109,9 @@ fn worker_close_session(
     if let Ok(mut snapshot) = snapshot_state.lock() {
         let previous = snapshot.remove_session(session_key);
         metrics.record_transport_health_transition(previous, None);
+    }
+    if let Ok(mut bitrate) = bitrate_state.lock() {
+        bitrate.remove_session(session_key);
     }
     if let Some(removed_session) = removed_session {
         metrics.record_transport_session_lifetime(

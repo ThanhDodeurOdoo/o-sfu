@@ -83,6 +83,18 @@ impl ProducerMidLookupKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ProducerSsrcLookupKey {
+    session_key: TransportSessionKey,
+    ssrc: Ssrc,
+}
+
+impl ProducerSsrcLookupKey {
+    fn new(session_key: TransportSessionKey, ssrc: Ssrc) -> Self {
+        Self { session_key, ssrc }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ConsumerMidLookupKey {
     session_key: TransportSessionKey,
     mid: Mid,
@@ -110,6 +122,8 @@ impl RtcBootstrapState {
                 ProducerMidLookupKey::new(session_key.clone(), *mid),
                 TransportMediaId::new(id),
             );
+            self.producer_ssrcs_by_media
+                .insert(TransportMediaId::new(id), Vec::new());
         } else if let RegisteredMediaHandle::Consumer {
             session_key,
             mid,
@@ -139,6 +153,7 @@ impl RtcBootstrapState {
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
             self.producer_mid_registry
                 .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
+            self.clear_producer_ssrc_bindings(transport_media_id, session_key);
             self.route_control.forget_source(transport_media_id);
         } else if let RegisteredMediaHandle::Consumer {
             session_key, mid, ..
@@ -247,30 +262,12 @@ impl RtcBootstrapState {
         source_session_key: &TransportSessionKey,
         source_ssrc: Ssrc,
     ) -> Option<TransportMediaId> {
-        let producer_entries = self
-            .producer_mid_registry
-            .iter()
-            .filter_map(|(lookup_key, transport_media_id)| {
-                (lookup_key.session_key == *source_session_key)
-                    .then_some((lookup_key.mid, *transport_media_id))
-            })
-            .collect::<Vec<_>>();
-        let session_state = self.sessions.get(source_session_key)?;
-        for (producer_mid, transport_media_id) in producer_entries {
-            if session_state
-                .sdp_negotiation
-                .negotiated_producer_parameters
-                .get(&producer_mid)
-                .is_some_and(|parameters| {
-                    parameters
-                        .bindings()
-                        .any(|binding| binding.ssrc().map(Ssrc::from) == Some(source_ssrc))
-                })
-            {
-                return Some(transport_media_id);
-            }
-        }
-        None
+        self.producer_ssrc_registry
+            .get(&ProducerSsrcLookupKey::new(
+                source_session_key.clone(),
+                source_ssrc,
+            ))
+            .copied()
     }
 
     pub(super) fn consumer_source_transport_media_id_for_mid(
@@ -305,17 +302,79 @@ impl RtcBootstrapState {
         }
         removed_handles
     }
+
+    pub(super) fn refresh_producer_ssrc_bindings(
+        &mut self,
+        session_key: &TransportSessionKey,
+        mid: Mid,
+        parameters: &o_sfu_router::RtpParameters,
+    ) {
+        let Some(transport_media_id) = self
+            .producer_mid_registry
+            .get(&ProducerMidLookupKey::new(session_key.clone(), mid))
+            .copied()
+        else {
+            return;
+        };
+        self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+        let ssrcs = parameters
+            .bindings()
+            .filter_map(|binding| binding.ssrc().map(Ssrc::from))
+            .collect::<Vec<_>>();
+        if ssrcs.is_empty() {
+            self.producer_ssrcs_by_media
+                .entry(transport_media_id)
+                .or_default();
+            return;
+        }
+        for ssrc in &ssrcs {
+            self.producer_ssrc_registry.insert(
+                ProducerSsrcLookupKey::new(session_key.clone(), *ssrc),
+                transport_media_id,
+            );
+        }
+        self.producer_ssrcs_by_media
+            .insert(transport_media_id, ssrcs);
+    }
+
+    pub(super) fn clear_producer_ssrc_bindings_for_mid(
+        &mut self,
+        session_key: &TransportSessionKey,
+        mid: Mid,
+    ) {
+        let Some(transport_media_id) = self
+            .producer_mid_registry
+            .get(&ProducerMidLookupKey::new(session_key.clone(), mid))
+            .copied()
+        else {
+            return;
+        };
+        self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+        self.producer_ssrcs_by_media
+            .entry(transport_media_id)
+            .or_default();
+    }
+
+    fn clear_producer_ssrc_bindings(
+        &mut self,
+        transport_media_id: TransportMediaId,
+        session_key: &TransportSessionKey,
+    ) {
+        if let Some(ssrcs) = self.producer_ssrcs_by_media.remove(&transport_media_id) {
+            for ssrc in ssrcs {
+                self.producer_ssrc_registry
+                    .remove(&ProducerSsrcLookupKey::new(session_key.clone(), ssrc));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::SocketAddr;
 
     use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
 
-    use crate::config::MediaCodecFlags;
-    use crate::runtime::rtc_adapter::bootstrap::ensure_session_rtc_state;
     use crate::runtime::transport_adapter::TransportSessionKey;
     use crate::signaling::shared::SessionId;
 
@@ -377,43 +436,75 @@ mod tests {
 
     #[test]
     fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
-        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_070));
         let producer_session = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 55_555_u32;
         let mut state = RtcBootstrapState::default();
-
-        assert!(
-            ensure_session_rtc_state(
-                &mut state.sessions,
-                &producer_session,
-                candidate_addr,
-                MediaCodecFlags::default(),
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: producer_session.clone(),
+            mid: producer_mid,
+        });
+        state.refresh_producer_ssrc_bindings(
+            &producer_session,
+            producer_mid,
+            &RouterRtpParameters::new(
+                vec![],
+                vec![],
+                vec![StreamBinding::new().with_ssrc(producer_ssrc)],
             )
-            .is_ok()
+            .with_mid(producer_mid.to_string()),
         );
-        let Some(session_state) = state.sessions.get_mut(&producer_session) else {
-            return;
-        };
-        session_state
-            .sdp_negotiation
-            .negotiated_producer_parameters
-            .insert(
-                producer_mid,
-                RouterRtpParameters::new(
-                    vec![],
-                    vec![],
-                    vec![StreamBinding::new().with_ssrc(producer_ssrc)],
-                )
-                .with_mid(producer_mid.to_string()),
-            );
+
+        assert_eq!(
+            state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
+            Some(transport_media_id)
+        );
+    }
+
+    #[test]
+    fn producer_ssrc_lookup_refresh_replaces_stale_bindings() {
+        let producer_session = TransportSessionKey::new(21, 0, 22, SessionId::Integer(23));
+        let producer_mid = Mid::from("cam-up");
+        let first_ssrc = 77_777_u32;
+        let second_ssrc = 88_888_u32;
+        let mut state = RtcBootstrapState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: producer_session.clone(),
             mid: producer_mid,
         });
 
+        state.refresh_producer_ssrc_bindings(
+            &producer_session,
+            producer_mid,
+            &RouterRtpParameters::new(
+                vec![],
+                vec![],
+                vec![StreamBinding::new().with_ssrc(first_ssrc)],
+            )
+            .with_mid(producer_mid.to_string()),
+        );
         assert_eq!(
-            state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
+            state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
+            Some(transport_media_id)
+        );
+
+        state.refresh_producer_ssrc_bindings(
+            &producer_session,
+            producer_mid,
+            &RouterRtpParameters::new(
+                vec![],
+                vec![],
+                vec![StreamBinding::new().with_ssrc(second_ssrc)],
+            )
+            .with_mid(producer_mid.to_string()),
+        );
+
+        assert_eq!(
+            state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
+            None
+        );
+        assert_eq!(
+            state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(second_ssrc)),
             Some(transport_media_id)
         );
     }

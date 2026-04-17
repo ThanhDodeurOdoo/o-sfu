@@ -85,6 +85,12 @@ pub(crate) enum RtpForwardDestinationKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RtpRelayDropKind {
+    IntraNodeRelay,
+    InterNodeRelay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RtcDatagramRoutePath {
     Indexed,
     Scan,
@@ -292,6 +298,17 @@ impl MetricLabel for RtpForwardDestinationKind {
             Self::Recording => 1,
             Self::IntraNodeRelay => 2,
             Self::InterNodeRelay => 3,
+        }
+    }
+}
+
+impl MetricLabel for RtpRelayDropKind {
+    const COUNT: usize = 2;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::IntraNodeRelay => 0,
+            Self::InterNodeRelay => 1,
         }
     }
 }

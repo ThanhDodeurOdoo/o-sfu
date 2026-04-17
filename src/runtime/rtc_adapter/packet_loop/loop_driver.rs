@@ -14,7 +14,7 @@ use super::super::{
     forwarding_planner::populate_forward_routes,
     relay_registry::RelayRegistry,
     routing_miss::PacketLoopRoutingState,
-    state::{RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
     worker::{WorkerCommandContext, handle_worker_command},
 };
 use super::{
@@ -53,9 +53,10 @@ enum NextLoopInput {
 
 pub(crate) async fn run_packet_loop(
     config: PacketLoopConfig,
+    bitrate_state: Arc<Mutex<RtcBitrateState>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
-    mut relay_rx: mpsc::UnboundedReceiver<super::super::forwarded_packet::ForwardedPacket>,
+    mut relay_rx: mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
     shutdown_token: CancellationToken,
 ) {
     let mut bootstrap_state = RtcBootstrapState::default();
@@ -67,6 +68,7 @@ pub(crate) async fn run_packet_loop(
         while let Ok(command) = command_rx.try_recv() {
             handle_worker_command_and_clear_routing_cache(
                 &mut bootstrap_state,
+                &bitrate_state,
                 &snapshot_state,
                 &config,
                 command,
@@ -76,6 +78,7 @@ pub(crate) async fn run_packet_loop(
 
         let snapshot = snapshot_and_pump(
             &mut bootstrap_state,
+            &bitrate_state,
             &snapshot_state,
             &config,
             &mut relay_rx,
@@ -116,6 +119,7 @@ pub(crate) async fn run_packet_loop(
             NextLoopInput::Command(command) => {
                 handle_worker_command_and_clear_routing_cache(
                     &mut bootstrap_state,
+                    &bitrate_state,
                     &snapshot_state,
                     &config,
                     command,
@@ -149,6 +153,7 @@ pub(crate) async fn run_packet_loop(
 
 fn handle_worker_command_and_clear_routing_cache(
     bootstrap_state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     command: RtcWorkerCommand,
@@ -157,6 +162,7 @@ fn handle_worker_command_and_clear_routing_cache(
     handle_worker_command(
         bootstrap_state,
         &WorkerCommandContext {
+            bitrate_state,
             snapshot_state,
             relay_registry: &config.relay_registry,
             public_ip: config.public_ip,
@@ -171,9 +177,10 @@ fn handle_worker_command_and_clear_routing_cache(
 
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
-    relay_rx: &mut mpsc::UnboundedReceiver<super::super::forwarded_packet::ForwardedPacket>,
+    relay_rx: &mut mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<SnapshotInfo> {
     buffers.clear();
@@ -192,13 +199,13 @@ fn snapshot_and_pump(
         MAX_RELAY_PACKETS_PER_ITERATION,
     );
     flush_pending_keyframe_requests(state, &config.metrics, buffers);
-    record_incoming_stats(state, snapshot_state, &config.metrics, buffers);
+    record_incoming_stats(state, bitrate_state, &config.metrics, buffers);
     populate_forward_routes(
         state,
         &config.media_tap,
         &config.relay_registry,
         &config.metrics,
-        &buffers.pending_packets,
+        &mut buffers.pending_packets,
         &mut buffers.forwards,
     );
     flush_forward_routes(state, &config.metrics, buffers);

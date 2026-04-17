@@ -156,10 +156,13 @@ fn worker_apply_session_answer(
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
     apply_pending_recv_streams(session_state);
-    refresh_negotiated_producer_parameters(session_state, &producer_mids, answer_sdp);
-    stage_queued_removal_offer(session_state);
-    session_state.dtls_started = true;
     let local_ice_ufrag = session_state.local_ice_ufrag.clone();
+    session_state.dtls_started = true;
+    let _ = session_state;
+    refresh_negotiated_producer_parameters(state, session_key, &producer_mids, answer_sdp);
+    if let Some(session_state) = state.sessions.get_mut(session_key) {
+        stage_queued_removal_offer(session_state);
+    }
     state.mark_session_dirty(session_key);
     state
         .remote_addr_demux

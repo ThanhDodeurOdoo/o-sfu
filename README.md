@@ -83,7 +83,7 @@ cargo kani -p o-sfu-router
 
 ## TODO cleanup later
 
-- The router and rfc sections may be split into separate crates later (but too annoying for now)
+-  write good comments, will do when code is a bit more stable
 
 ## random thoughts
 

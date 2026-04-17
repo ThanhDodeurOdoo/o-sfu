@@ -11,7 +11,7 @@ use super::{
     demux::MediaRouteDestination,
     forwarded_packet::ForwardedPacket,
     local_forwarding::LocalPacketDestination,
-    relay_registry::{InterNodeRelaySender, RelayPacketMailbox},
+    relay_registry::{InterNodeRelaySender, RelayEnqueueOutcome, RelayPacketMailbox},
     state::RtcBootstrapState,
 };
 
@@ -27,6 +27,13 @@ pub(super) enum ForwardingDestination {
     Recording(RecordingPacketDestination),
     IntraNodeRelay(IntraNodeRelayPacketDestination),
     InterNodeRelay(InterNodeRelayPacketDestination),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ForwardSendOutcome {
+    LocalRtc { payload_bytes: Option<usize> },
+    SideEffect,
+    OverloadedRelay,
 }
 
 #[derive(Debug, Clone)]
@@ -132,7 +139,7 @@ impl ForwardingDestination {
         state: &mut RtcBootstrapState,
         packet: &mut ForwardedPacket,
         is_last_destination: bool,
-    ) -> Result<Option<usize>, RtcError> {
+    ) -> Result<ForwardSendOutcome, RtcError> {
         match self {
             Self::LocalRtc(destination) => destination.send(state, packet, is_last_destination),
             Self::Recording(destination) => Ok(destination.send(packet)),
@@ -160,41 +167,52 @@ impl LocalRtcPacketDestination {
         state: &mut RtcBootstrapState,
         packet: &mut ForwardedPacket,
         is_last_destination: bool,
-    ) -> Result<Option<usize>, RtcError> {
+    ) -> Result<ForwardSendOutcome, RtcError> {
         let Some(session_state) = state.sessions.get_mut(&self.session_key) else {
-            return Ok(None);
+            return Ok(ForwardSendOutcome::LocalRtc {
+                payload_bytes: None,
+            });
         };
-        self.sender.send(
+        let payload_bytes = self.sender.send(
             session_state,
             packet.local_send_packet(),
             is_last_destination,
-        )
+        )?;
+        Ok(ForwardSendOutcome::LocalRtc { payload_bytes })
     }
 }
 
 impl RecordingPacketDestination {
-    fn send(&self, packet: &ForwardedPacket) -> Option<usize> {
+    fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
         self.sink.record_packet(
             packet.source_session_key(),
             self.transport_media_id,
             packet.received_at(),
             packet.payload().as_slice(),
         );
-        None
+        ForwardSendOutcome::SideEffect
     }
 }
 
 impl IntraNodeRelayPacketDestination {
-    fn send(&self, packet: &ForwardedPacket) -> Option<usize> {
-        self.mailbox.forward_packet(packet, self.transport_media_id);
-        None
+    fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
+        match self.mailbox.forward_packet(packet, self.transport_media_id) {
+            RelayEnqueueOutcome::Overloaded => ForwardSendOutcome::OverloadedRelay,
+            RelayEnqueueOutcome::Enqueued | RelayEnqueueOutcome::Closed => {
+                ForwardSendOutcome::SideEffect
+            }
+        }
     }
 }
 
 impl InterNodeRelayPacketDestination {
-    fn send(&self, packet: &ForwardedPacket) -> Option<usize> {
-        self.sender.forward_packet(packet, self.transport_media_id);
-        None
+    fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
+        match self.sender.forward_packet(packet, self.transport_media_id) {
+            RelayEnqueueOutcome::Overloaded => ForwardSendOutcome::OverloadedRelay,
+            RelayEnqueueOutcome::Enqueued | RelayEnqueueOutcome::Closed => {
+                ForwardSendOutcome::SideEffect
+            }
+        }
     }
 }
 

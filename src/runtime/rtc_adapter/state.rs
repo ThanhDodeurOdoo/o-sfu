@@ -28,7 +28,8 @@ use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::media_registry::{
-    ConsumerMidLookupKey, ProducerMidLookupKey, RegisteredMediaHandle, RemoteSourceRegistration,
+    ConsumerMidLookupKey, ProducerMidLookupKey, ProducerSsrcLookupKey, RegisteredMediaHandle,
+    RemoteSourceRegistration,
 };
 use super::route_control::RouteControlState;
 
@@ -214,6 +215,8 @@ pub(super) struct RtcBootstrapState {
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     pub(super) route_control: RouteControlState,
     pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
+    pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
+    pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
@@ -302,10 +305,14 @@ impl RtcBootstrapState {
 
 #[derive(Debug, Default)]
 pub(crate) struct RtcSnapshotState {
-    pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RtcBitrateState {
+    pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
 }
 
 impl RtcSnapshotState {
@@ -324,37 +331,7 @@ impl RtcSnapshotState {
             .forget_session_local_ice_ufrag(session_key);
         self.remote_addr_demux
             .forget_session_remote_candidate_addrs(session_key);
-        self.incoming_bitrates_by_session.remove(session_key);
         self.transport_health_by_session.remove(session_key)
-    }
-
-    pub(super) fn record_incoming_media(
-        &mut self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        now: Instant,
-        payload_bytes: usize,
-    ) -> bool {
-        self.incoming_bitrates_by_session
-            .entry(session_key.clone())
-            .or_default()
-            .record(transport_media_id, now, payload_bytes)
-    }
-
-    pub(crate) fn transport_bitrate_snapshot_at(
-        &self,
-        session_keys: &[TransportSessionKey],
-        now: Instant,
-    ) -> TransportBitrateSnapshot {
-        let mut snapshot = TransportBitrateSnapshot::default();
-        for session_key in session_keys {
-            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_key) else {
-                continue;
-            };
-            snapshot.total = snapshot.total.saturating_add(session_bitrates.total(now));
-            snapshot.per_media.extend(session_bitrates.snapshot(now));
-        }
-        snapshot
     }
 
     pub(super) fn set_transport_health(
@@ -371,5 +348,40 @@ impl RtcSnapshotState {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         self.transport_health_by_session.get(session_key).copied()
+    }
+}
+
+impl RtcBitrateState {
+    pub(super) fn record_incoming_media(
+        &mut self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        now: Instant,
+        payload_bytes: usize,
+    ) -> bool {
+        self.incoming_bitrates_by_session
+            .entry(session_key.clone())
+            .or_default()
+            .record(transport_media_id, now, payload_bytes)
+    }
+
+    pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) {
+        self.incoming_bitrates_by_session.remove(session_key);
+    }
+
+    pub(crate) fn transport_bitrate_snapshot_at(
+        &self,
+        session_keys: &[TransportSessionKey],
+        now: Instant,
+    ) -> TransportBitrateSnapshot {
+        let mut snapshot = TransportBitrateSnapshot::default();
+        for session_key in session_keys {
+            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_key) else {
+                continue;
+            };
+            snapshot.total = snapshot.total.saturating_add(session_bitrates.total(now));
+            snapshot.per_media.extend(session_bitrates.snapshot(now));
+        }
+        snapshot
     }
 }

@@ -5,19 +5,19 @@ use tracing::{debug, warn};
 
 use super::super::{
     forwarded_packet::ForwardedPacket,
-    forwarding_destination::ForwardingDestination,
-    state::{RtcBootstrapState, RtcSnapshotState},
+    forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
+    state::{RtcBitrateState, RtcBootstrapState},
 };
 use super::buffers::PacketLoopBuffers;
-use crate::runtime::metrics::{RtpForwardDestinationKind, RuntimeMetrics};
+use crate::runtime::metrics::{RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics};
 
 pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     metrics: &RuntimeMetrics,
-    buffers: &PacketLoopBuffers,
+    buffers: &mut PacketLoopBuffers,
 ) {
-    for packet in &buffers.pending_packets {
+    for packet in &mut buffers.pending_packets {
         if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
             let payload_len = packet.payload_len();
             state.route_control.observe_audio_activity(
@@ -26,7 +26,7 @@ pub(super) fn record_incoming_stats(
                 packet.route_control_audio_level(),
                 packet.received_at(),
             );
-            let first_ingress = snapshot_state.lock().is_ok_and(|mut snapshot| {
+            let first_ingress = bitrate_state.lock().is_ok_and(|mut snapshot| {
                 snapshot.record_incoming_media(
                     packet.source_session_key(),
                     transport_media_id,
@@ -49,7 +49,7 @@ pub(super) fn record_incoming_stats(
 }
 
 pub(super) fn drain_relay_packets(
-    relay_rx: &mut mpsc::UnboundedReceiver<ForwardedPacket>,
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
     max_packets: usize,
 ) -> usize {
@@ -74,8 +74,11 @@ pub(super) fn flush_forward_routes(
     buffers: &mut PacketLoopBuffers,
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
-    let mut relay_packets = Vec::with_capacity(pending_packets.len());
-    relay_packets.resize_with(pending_packets.len(), || None);
+    buffers.relay_packets.clear();
+    buffers
+        .relay_packets
+        .resize_with(pending_packets.len(), || None);
+    let relay_packets = &mut buffers.relay_packets;
     for (forward_idx, forward) in forwards.iter().enumerate() {
         let is_last_destination = forwards
             .get(forward_idx + 1)
@@ -111,11 +114,13 @@ pub(super) fn flush_forward_routes(
         };
         let packet = relay_packet.unwrap_or(packet);
         match destination.send(state, packet, is_last_destination) {
-            Ok(Some(payload_len)) => {
+            Ok(ForwardSendOutcome::LocalRtc {
+                payload_bytes: Some(payload_len),
+            }) => {
                 metrics.record_rtp_egress(payload_len);
                 metrics.record_rtp_forwarded(destination_kind, payload_len);
             }
-            Ok(None)
+            Ok(ForwardSendOutcome::SideEffect)
                 if matches!(
                     destination,
                     ForwardingDestination::Recording(_)
@@ -125,7 +130,21 @@ pub(super) fn flush_forward_routes(
             {
                 metrics.record_rtp_forwarded(destination_kind, payload_len);
             }
-            Ok(None) => {}
+            Ok(ForwardSendOutcome::OverloadedRelay) => match destination {
+                ForwardingDestination::IntraNodeRelay(_) => {
+                    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::IntraNodeRelay);
+                }
+                ForwardingDestination::InterNodeRelay(_) => {
+                    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::InterNodeRelay);
+                }
+                ForwardingDestination::LocalRtc(_) | ForwardingDestination::Recording(_) => {}
+            },
+            Ok(
+                ForwardSendOutcome::SideEffect
+                | ForwardSendOutcome::LocalRtc {
+                    payload_bytes: None,
+                },
+            ) => {}
             Err(error) => {
                 warn!(
                     ?destination,

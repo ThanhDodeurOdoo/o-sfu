@@ -6,7 +6,8 @@ use crate::{
 
 use super::{
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind,
-    RuntimeMetrics, RuntimeMetricsSnapshot, TransportIceState, WsSessionLoopExitReason,
+    RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot, TransportIceState,
+    WsSessionLoopExitReason,
 };
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
@@ -73,6 +74,8 @@ fn assert_forwarding_volume_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording, 700);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay, 500);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay, 300);
+    assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay, 1);
+    assert_eq!(snapshot.rtp_relay_overload_drops_inter_node_relay, 1);
 }
 
 fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -158,6 +161,8 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::InterNodeRelay, 300);
+    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::IntraNodeRelay);
+    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::InterNodeRelay);
     metrics.record_transport_ice_state_change(TransportIceState::Checking);
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();

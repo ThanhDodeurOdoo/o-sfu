@@ -396,6 +396,22 @@ fn append_rtp_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
             ),
         ],
     );
+    append_labeled_counter_family(
+        output,
+        "osfu_rtp_relay_overload_drops_total",
+        "Total RTP relay packets dropped because the bounded relay mailbox was full.",
+        "destination",
+        &[
+            LabeledValue::new(
+                "intra_node_relay",
+                snapshot.rtp_relay_overload_drops_intra_node_relay,
+            ),
+            LabeledValue::new(
+                "inter_node_relay",
+                snapshot.rtp_relay_overload_drops_inter_node_relay,
+            ),
+        ],
+    );
 }
 
 fn append_transport_lifecycle_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {

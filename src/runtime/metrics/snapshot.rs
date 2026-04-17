@@ -4,7 +4,7 @@ use super::catalog::RuntimeMetrics;
 use super::labels::{
     HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
-    RtpForwardDestinationKind, TransportHealthTransition, TransportIceState,
+    RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition, TransportIceState,
     TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
     WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
 };
@@ -80,6 +80,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtp_forwarded_payload_bytes_recording: u64,
     pub rtp_forwarded_payload_bytes_intra_node_relay: u64,
     pub rtp_forwarded_payload_bytes_inter_node_relay: u64,
+    pub rtp_relay_overload_drops_intra_node_relay: u64,
+    pub rtp_relay_overload_drops_inter_node_relay: u64,
     pub transport_health_transitions_unset_to_connected: u64,
     pub transport_health_transitions_unset_to_disconnected: u64,
     pub transport_health_transitions_connected_to_disconnected: u64,
@@ -191,6 +193,8 @@ struct RtpSnapshot {
     forwarded_payload_bytes_recording: u64,
     forwarded_payload_bytes_intra_node_relay: u64,
     forwarded_payload_bytes_inter_node_relay: u64,
+    relay_overload_drops_intra_node_relay: u64,
+    relay_overload_drops_inter_node_relay: u64,
 }
 
 struct TransportLifecycleSnapshot {
@@ -324,6 +328,8 @@ impl RuntimeMetrics {
                 .forwarded_payload_bytes_intra_node_relay,
             rtp_forwarded_payload_bytes_inter_node_relay: rtp
                 .forwarded_payload_bytes_inter_node_relay,
+            rtp_relay_overload_drops_intra_node_relay: rtp.relay_overload_drops_intra_node_relay,
+            rtp_relay_overload_drops_inter_node_relay: rtp.relay_overload_drops_inter_node_relay,
             transport_health_transitions_unset_to_connected: transport_lifecycle
                 .health_transitions_unset_to_connected,
             transport_health_transitions_unset_to_disconnected: transport_lifecycle
@@ -530,6 +536,12 @@ impl RuntimeMetrics {
             forwarded_payload_bytes_inter_node_relay: self
                 .rtp_forwarded_payload_bytes
                 .load(RtpForwardDestinationKind::InterNodeRelay),
+            relay_overload_drops_intra_node_relay: self
+                .rtp_relay_overload_drops
+                .load(RtpRelayDropKind::IntraNodeRelay),
+            relay_overload_drops_inter_node_relay: self
+                .rtp_relay_overload_drops
+                .load(RtpRelayDropKind::InterNodeRelay),
         }
     }
 

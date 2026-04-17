@@ -7,7 +7,7 @@ use super::counter::{Counter, CounterFamily, UpDownCounter};
 use super::labels::{
     HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
-    RtpForwardDestinationKind, TransportHealthTransition, TransportIceState,
+    RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition, TransportIceState,
     TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
     WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
 };
@@ -41,6 +41,7 @@ pub(crate) struct RuntimeMetrics {
     pub(super) rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
     pub(super) rtp_forwarded_packets: CounterFamily<RtpForwardDestinationKind>,
     pub(super) rtp_forwarded_payload_bytes: CounterFamily<RtpForwardDestinationKind>,
+    pub(super) rtp_relay_overload_drops: CounterFamily<RtpRelayDropKind>,
     pub(super) transport_health_transitions: CounterFamily<TransportHealthTransition>,
     pub(super) transport_ice_state_changes: CounterFamily<TransportIceState>,
     pub(super) transport_dtls_connected: Counter,
@@ -317,6 +318,10 @@ impl RuntimeMetrics {
         self.rtp_forwarded_packets.increment(destination);
         self.rtp_forwarded_payload_bytes
             .add(destination, payload_bytes);
+    }
+
+    pub(crate) fn record_rtp_relay_overload_drop(&self, destination: RtpRelayDropKind) {
+        self.rtp_relay_overload_drops.increment(destination);
     }
 
     pub(crate) fn record_transport_ice_state_change(&self, state: TransportIceState) {

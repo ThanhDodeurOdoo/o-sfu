@@ -34,6 +34,7 @@ pub(super) struct PacketLoopBuffers {
     pub(super) pending_transmits: Vec<PendingTransmit>,
     pub(super) pending_transmit_count: usize,
     pub(super) pending_packets: Vec<ForwardedPacket>,
+    pub(super) relay_packets: Vec<Option<ForwardedPacket>>,
     pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     pub(super) forwards: Vec<PacketForward>,
 }
@@ -44,6 +45,7 @@ impl PacketLoopBuffers {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
             pending_packets: Vec::with_capacity(32),
+            relay_packets: Vec::with_capacity(32),
             pending_keyframe_requests: Vec::with_capacity(8),
             forwards: Vec::with_capacity(64),
         }
@@ -52,6 +54,7 @@ impl PacketLoopBuffers {
     pub(super) fn clear(&mut self) {
         self.pending_transmit_count = 0;
         self.pending_packets.clear();
+        self.relay_packets.clear();
         self.pending_keyframe_requests.clear();
         self.forwards.clear();
     }

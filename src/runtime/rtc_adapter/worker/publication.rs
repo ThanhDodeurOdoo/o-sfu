@@ -37,88 +37,100 @@ pub(super) fn respond_resolve_negotiated_producer_parameters(
 }
 
 pub(super) fn refresh_negotiated_producer_parameters(
-    session_state: &mut RtcSessionState,
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
     producer_mids: &[Mid],
     answer_sdp: &str,
 ) {
+    let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
-    session_state
-        .sdp_negotiation
-        .negotiated_producer_parameters
-        .retain(|mid, _parameters| !producer_mid_set.contains(mid));
-    let Ok(answer) = SdpAnswer::from_sdp_string(answer_sdp) else {
-        return;
-    };
-    for media_line in answer
-        .media_lines
-        .iter()
-        .filter(|media_line| producer_mid_set.contains(&media_line.mid()))
     {
-        if !matches!(
-            media_line.direction(),
-            Direction::SendOnly | Direction::SendRecv
-        ) {
-            continue;
-        }
-        let mid = media_line.mid();
-        let Some(media_kind) = session_state
-            .rtc
-            .media(mid)
-            .map(|media| to_router_media_kind(media.kind()))
-        else {
-            continue;
+        let Some(session_state) = state.sessions.get_mut(session_key) else {
+            return;
         };
-        let payload_params = media_line.rtp_params();
-        if payload_params.is_empty() {
-            continue;
-        }
-        let primary_payload_type = payload_params.first().map(|params| *params.pt());
-        let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
-        for params in &payload_params {
-            formats.push(project_media_format(media_kind, params));
-            if let Some(resend_payload_type) = params.resend() {
-                formats.push(
-                    RouterMediaFormat::new(
-                        media_kind,
-                        "rtx",
-                        *resend_payload_type,
-                        params.spec().clock_rate.get(),
-                    )
-                    .with_parameter("apt", params.pt().to_string()),
-                );
-            }
-        }
-        let header_extensions = media_line
-            .extmaps()
-            .into_iter()
-            .map(project_header_extension)
-            .collect::<Vec<_>>();
-        let rids = media_line.rids();
-        let primary_ssrcs = media_line
-            .ssrc_info()
-            .into_iter()
-            .filter(|info| info.repairs.is_none())
-            .map(|info| *info.ssrc)
-            .collect::<Vec<_>>();
-        let bindings = project_bindings(
-            session_state,
-            mid,
-            primary_payload_type,
-            rids,
-            primary_ssrcs,
-        );
-        if bindings.is_empty() {
-            continue;
-        }
-        apply_projected_recv_streams(session_state, mid, &bindings);
         session_state
             .sdp_negotiation
             .negotiated_producer_parameters
-            .insert(
+            .retain(|mid, _parameters| !producer_mid_set.contains(mid));
+        let Ok(answer) = SdpAnswer::from_sdp_string(answer_sdp) else {
+            return;
+        };
+        for media_line in answer
+            .media_lines
+            .iter()
+            .filter(|media_line| producer_mid_set.contains(&media_line.mid()))
+        {
+            if !matches!(
+                media_line.direction(),
+                Direction::SendOnly | Direction::SendRecv
+            ) {
+                continue;
+            }
+            let mid = media_line.mid();
+            let Some(media_kind) = session_state
+                .rtc
+                .media(mid)
+                .map(|media| to_router_media_kind(media.kind()))
+            else {
+                continue;
+            };
+            let payload_params = media_line.rtp_params();
+            if payload_params.is_empty() {
+                continue;
+            }
+            let primary_payload_type = payload_params.first().map(|params| *params.pt());
+            let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
+            for params in &payload_params {
+                formats.push(project_media_format(media_kind, params));
+                if let Some(resend_payload_type) = params.resend() {
+                    formats.push(
+                        RouterMediaFormat::new(
+                            media_kind,
+                            "rtx",
+                            *resend_payload_type,
+                            params.spec().clock_rate.get(),
+                        )
+                        .with_parameter("apt", params.pt().to_string()),
+                    );
+                }
+            }
+            let header_extensions = media_line
+                .extmaps()
+                .into_iter()
+                .map(project_header_extension)
+                .collect::<Vec<_>>();
+            let rids = media_line.rids();
+            let primary_ssrcs = media_line
+                .ssrc_info()
+                .into_iter()
+                .filter(|info| info.repairs.is_none())
+                .map(|info| *info.ssrc)
+                .collect::<Vec<_>>();
+            let bindings = project_bindings(
+                session_state,
                 mid,
-                RouterRtpParameters::new(formats, header_extensions, bindings)
-                    .with_mid(mid.to_string()),
+                primary_payload_type,
+                rids,
+                primary_ssrcs,
             );
+            if bindings.is_empty() {
+                continue;
+            }
+            apply_projected_recv_streams(session_state, mid, &bindings);
+            let parameters = RouterRtpParameters::new(formats, header_extensions, bindings)
+                .with_mid(mid.to_string());
+            session_state
+                .sdp_negotiation
+                .negotiated_producer_parameters
+                .insert(mid, parameters.clone());
+            refreshed_parameters.push((mid, parameters));
+        }
+    }
+    for producer_mid in producer_mids {
+        state.clear_producer_ssrc_bindings_for_mid(session_key, *producer_mid);
+    }
+    for (mid, parameters) in refreshed_parameters {
+        state.refresh_producer_ssrc_bindings(session_key, mid, &parameters);
     }
 }
 

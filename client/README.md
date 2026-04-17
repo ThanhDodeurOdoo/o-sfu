@@ -17,3 +17,7 @@ cargo install wasm-pack
 ```bash
 npm exec playwright install chromium
 ```
+
+## notes
+
+still heavily logging the sfu_client.ts, maybe need to cleanup at some point

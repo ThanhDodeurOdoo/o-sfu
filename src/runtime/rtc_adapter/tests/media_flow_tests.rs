@@ -432,10 +432,10 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
         return;
     };
     let snapshot = {
-        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+        let Ok(bitrate_state) = worker_handle.bitrate_state.lock() else {
             return;
         };
-        snapshot_state.transport_bitrate_snapshot_at(
+        bitrate_state.transport_bitrate_snapshot_at(
             slice::from_ref(&session_key),
             now + Duration::from_secs(2),
         )
