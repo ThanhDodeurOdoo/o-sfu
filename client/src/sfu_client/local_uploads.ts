@@ -7,6 +7,16 @@ type UploadTransition = {
     knownMid?: string;
 };
 
+export type PendingRenegotiationAttachment = {
+    mid: string;
+    streamType: StreamType;
+};
+
+export type PendingRenegotiationAttachmentResult = {
+    attached: PendingRenegotiationAttachment[];
+    skipped: StreamType[];
+};
+
 export class LocalUploads {
     private _localTracks = new Map<StreamType, MediaTrack | null>();
     private _senderMidByType = new Map<StreamType, string>();
@@ -72,10 +82,11 @@ export class LocalUploads {
     }
 
     async attachPendingRenegotiationTracks(
-        peerConnection: ClientPeerConnection | null
-    ): Promise<void> {
+        peerConnection: ClientPeerConnection | null,
+        eligibleMids: Set<string>
+    ): Promise<PendingRenegotiationAttachmentResult> {
         if (!peerConnection) {
-            return;
+            return { attached: [], skipped: [] };
         }
         const pendingTracks = orderedStreamTypes().filter(
             (streamType) =>
@@ -83,7 +94,7 @@ export class LocalUploads {
                 !this._senderMidByType.has(streamType)
         );
         if (pendingTracks.length === 0) {
-            return;
+            return { attached: [], skipped: [] };
         }
         const knownMids = new Set(this._senderMidByType.values());
         const candidateTransceivers = peerConnection.getTransceivers().filter((transceiver) => {
@@ -91,25 +102,32 @@ export class LocalUploads {
             return (
                 typeof mid === "string" &&
                 mid.length > 0 &&
+                eligibleMids.has(mid) &&
                 !knownMids.has(mid) &&
                 transceiver.direction === "recvonly" &&
                 transceiver.currentDirection === null &&
                 transceiver.sender.track == null
             );
         });
+        const attached: PendingRenegotiationAttachment[] = [];
+        const skipped: StreamType[] = [];
         for (const streamType of pendingTracks) {
             const transceiverIndex = candidateTransceivers.findIndex(
                 (transceiver) => transceiver.receiver?.track?.kind === STREAM_KIND[streamType]
             );
             if (transceiverIndex < 0) {
+                skipped.push(streamType);
                 continue;
             }
             const [transceiver] = candidateTransceivers.splice(transceiverIndex, 1);
             if (!transceiver || !transceiver.mid) {
+                skipped.push(streamType);
                 continue;
             }
             await this.attachTrack(peerConnection, transceiver.mid, streamType);
+            attached.push({ mid: transceiver.mid, streamType });
         }
+        return { attached, skipped };
     }
 }
 

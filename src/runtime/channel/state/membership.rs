@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{MediaCapabilities, RouterError};
-use tracing::error;
+use tracing::{error, info, warn};
 
 use crate::signaling::{
     protocol::WebSocketCloseCode,
@@ -287,6 +287,27 @@ impl ChannelState {
         info: &SessionInfo,
         need_refresh: bool,
     ) -> Option<SessionInfoUpdateOutcome> {
+        let Some(current_session) = self.sessions.get(session_id) else {
+            warn!(
+                ?session_id,
+                connection_id,
+                ?info,
+                need_refresh,
+                "discarding session presence update because the session is missing"
+            );
+            return None;
+        };
+        if current_session.connection_id != connection_id {
+            warn!(
+                ?session_id,
+                connection_id,
+                current_connection_id = current_session.connection_id,
+                ?info,
+                need_refresh,
+                "discarding session presence update because the connection is stale"
+            );
+            return None;
+        }
         {
             let session = self.session_mut_for_connection(session_id, connection_id)?;
             session.presence.apply_update(info);
@@ -296,6 +317,14 @@ impl ChannelState {
         } else {
             BTreeMap::from([self.session_info_snapshot(session_id)?])
         };
+        info!(
+            ?session_id,
+            connection_id,
+            ?info,
+            need_refresh,
+            snapshot_len = snapshot.len(),
+            "applied session presence update and staged session info fanout"
+        );
         Some(SessionInfoUpdateOutcome {
             fanout: self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)),
         })

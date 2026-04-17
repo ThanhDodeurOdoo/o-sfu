@@ -330,7 +330,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 );
                 break;
             case CLIENT_UPDATE.INFO_CHANGE:
-                this._emitLog(CLIENT_LOG_LEVEL.DEBUG, "received remote session info update");
+                this._emitLog(
+                    CLIENT_LOG_LEVEL.DEBUG,
+                    `received remote session info update: ${JSON.stringify(update.payload)}`
+                );
                 break;
             case CLIENT_UPDATE.BROADCAST:
                 this._emitLog(

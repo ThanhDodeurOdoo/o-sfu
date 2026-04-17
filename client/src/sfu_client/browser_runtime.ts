@@ -373,7 +373,24 @@ export class BrowserRuntime {
             type: "offer"
         });
         if (negotiationKind === "renegotiate") {
-            await localUploads.attachPendingRenegotiationTracks(this._peerConnection);
+            const pendingAttachment = await localUploads.attachPendingRenegotiationTracks(
+                this._peerConnection,
+                uploadEligibleMidsFromOfferSdp(sdp)
+            );
+            for (const attachment of pendingAttachment.attached) {
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.INFO,
+                    `attached pending ${attachment.streamType} track to renegotiation mid ${attachment.mid}`
+                );
+            }
+            for (const streamType of pendingAttachment.skipped) {
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.WARN,
+                    `no eligible renegotiation mid was available for pending ${streamType} track`
+                );
+            }
         }
         const answer = await this._peerConnection.createAnswer();
         await this._peerConnection.setLocalDescription(answer);
@@ -497,6 +514,27 @@ export class BrowserRuntime {
 
 function orderedStreamTypes(): StreamType[] {
     return ["audio", "camera", "screen"];
+}
+
+function uploadEligibleMidsFromOfferSdp(sdp: string): Set<string> {
+    const eligibleMids = new Set<string>();
+    const mediaSections = sdp
+        .split(/\r?\nm=/)
+        .map((section, index) => (index === 0 ? section : `m=${section}`))
+        .filter((section) => section.startsWith("m="));
+    for (const section of mediaSections) {
+        const direction = section.match(
+            /(?:^|\r\n)a=(sendrecv|sendonly|recvonly|inactive)(?:\r?\n|$)/
+        )?.[1];
+        if (direction !== "recvonly") {
+            continue;
+        }
+        const mid = section.match(/(?:^|\r\n)a=mid:([^\r\n]+)(?:\r?\n|$)/)?.[1];
+        if (mid) {
+            eligibleMids.add(mid);
+        }
+    }
+    return eligibleMids;
 }
 
 function emitRuntimeLog(

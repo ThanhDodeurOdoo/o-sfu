@@ -3,11 +3,31 @@ use crate::signaling::protocol::{
     ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
     RecordingActionResult, ServerResponse, WebSocketCloseCode,
 };
+use crate::signaling::shared::SessionInfo;
+use tracing::info;
 
 use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_response};
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
+    async fn handle_info_message(&self, info: SessionInfo) {
+        info!(
+            session_id = ?self.session_id,
+            connection_id = self.connection_id,
+            ?info,
+            "received client session info update over websocket"
+        );
+        self.channel
+            .update_session_info_runtime_for_connection(
+                &self.session_id,
+                self.connection_id,
+                info,
+                false,
+                &self.transport_adapter,
+            )
+            .await;
+    }
+
     pub(super) async fn dispatch_client_envelope(
         &mut self,
         writer: &mut WsWriter,
@@ -15,15 +35,7 @@ impl PostAuthSessionProtocol {
     ) -> SessionProtocolOutcome {
         match envelope {
             ClientEnvelope::Message(ClientMessage::Info(info)) => {
-                self.channel
-                    .update_session_info_runtime_for_connection(
-                        &self.session_id,
-                        self.connection_id,
-                        info,
-                        false,
-                        &self.transport_adapter,
-                    )
-                    .await;
+                self.handle_info_message(info).await;
                 SessionProtocolOutcome::Continue
             }
             ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload {

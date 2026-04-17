@@ -150,7 +150,7 @@ class FakePeerConnection {
     async setRemoteDescription(description) {
         this.remoteDescriptions.push(description);
         if (
-            description.sdp === "renegotiate-camera-offer" &&
+            description.sdp.includes("a=mid:2") &&
             !this.transceivers.some((transceiver) => transceiver.mid === "2")
         ) {
             this.transceivers.push({
@@ -160,6 +160,27 @@ class FakePeerConnection {
                 receiver: { track: { kind: "video" } },
                 sender: new FakeSender()
             });
+        }
+        if (
+            description.sdp.includes("a=mid:producer-audio") &&
+            !this.transceivers.some((transceiver) => transceiver.mid === "producer-audio")
+        ) {
+            this.transceivers.push(
+                {
+                    currentDirection: null,
+                    direction: "recvonly",
+                    mid: "consumer-audio",
+                    receiver: { track: { kind: "audio" } },
+                    sender: new FakeSender()
+                },
+                {
+                    currentDirection: null,
+                    direction: "recvonly",
+                    mid: "producer-audio",
+                    receiver: { track: { kind: "audio" } },
+                    sender: new FakeSender()
+                }
+            );
         }
     }
 
@@ -303,7 +324,45 @@ class FakeProtocolCore {
                         kind: "applyNegotiation",
                         negotiationKind: "renegotiate",
                         requestId: "9",
-                        sdp: "renegotiate-camera-offer"
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                            "a=mid:2",
+                            "a=recvonly"
+                        ].join("\r\n")
+                    }
+                ];
+            case "renegotiate-with-pending-audio":
+                return [
+                    {
+                        kind: "applyNegotiation",
+                        negotiationKind: "renegotiate",
+                        requestId: "10",
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+                            "a=mid:consumer-audio",
+                            "a=sendonly",
+                            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+                            "a=mid:producer-audio",
+                            "a=recvonly"
+                        ].join("\r\n")
+                    }
+                ];
+            case "info-change-map":
+                return [
+                    {
+                        kind: "emitUpdate",
+                        update: {
+                            name: CLIENT_UPDATE.INFO_CHANGE,
+                            payload: new Map([["31", { isRaisingHand: true }]])
+                        }
                     }
                 ];
             case "track-inactive":
@@ -785,6 +844,92 @@ test("offer waits for candidate-bearing local description before replying", asyn
             sdp: "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
         }
     ]);
+});
+
+test("info_change map payloads are normalized into plain objects", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const client = new SfuClient({
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("info-change-map");
+    await tick();
+
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.INFO_CHANGE,
+            payload: {
+                31: {
+                    isRaisingHand: true
+                }
+            }
+        }
+    ]);
+});
+
+test("renegotiation attaches pending audio only to upload-eligible mids", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    const localAudioTrack = new FakeMediaTrack({
+        id: "local-audio",
+        kind: "audio"
+    });
+    client.publish("audio", localAudioTrack);
+    await tick();
+
+    sockets[0].emitMessage("renegotiate-with-pending-audio");
+    await tick();
+
+    const producerTransceiver = peerConnections[0].transceivers.find(
+        (transceiver) => transceiver.mid === "producer-audio"
+    );
+    const consumerTransceiver = peerConnections[0].transceivers.find(
+        (transceiver) => transceiver.mid === "consumer-audio"
+    );
+    assert.ok(producerTransceiver);
+    assert.ok(consumerTransceiver);
+    assert.equal(producerTransceiver.sender.track, localAudioTrack);
+    assert.equal(consumerTransceiver.sender.track, null);
+    assert.deepEqual(core.submittedAnswers.at(-1), {
+        negotiationKind: "renegotiate",
+        requestId: "10",
+        sdp: "answer-sdp"
+    });
 });
 
 test("track metadata updates re-emit track state for existing remote tracks", async () => {

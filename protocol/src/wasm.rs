@@ -151,7 +151,9 @@ fn parse_negotiation_kind(value: &str) -> Result<NegotiationKind, JsValue> {
 }
 
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(value).map_err(|error| js_error(error.to_string()))
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(|error| js_error(error.to_string()))
 }
 
 fn from_js<T: DeserializeOwned>(value: JsValue) -> Result<T, JsValue> {

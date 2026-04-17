@@ -2443,6 +2443,35 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
 }
 
 #[tokio::test]
+async fn protocol_core_propagates_raise_hand_info_over_real_server_session_flow() {
+    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
+        SessionId::Integer(91),
+        SessionId::Integer(92),
+    ))
+    .await
+    else {
+        return;
+    };
+
+    let latest_info = ProtocolSessionInfo {
+        is_raising_hand: Some(true),
+        ..ProtocolSessionInfo::default()
+    };
+    assert!(
+        bob_update_info_and_deliver(&mut bob, &mut alice, latest_info.clone())
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        alice.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&ProtocolSessionId::Integer(92)),
+            latest_info,
+        )])))
+    );
+}
+
+#[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
         SessionId::Integer(81),

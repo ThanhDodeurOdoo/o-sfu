@@ -4,6 +4,7 @@ import {
     type ClientUpdateDetail,
     type ConnectionState,
     type DownloadStates,
+    type InfoChangeUpdateDetail,
     type RecordingOptions,
     type RecordingState,
     type SessionId,
@@ -177,41 +178,40 @@ function validateHostCommands(value: unknown, context: string): HostCommand[] {
     if (!Array.isArray(value)) {
         throw new Error(`${context} must return an array of host commands`);
     }
-    value.forEach((command, index) => {
-        validateHostCommand(command, `${context} command #${index}`);
-    });
-    return value as HostCommand[];
+    return value.map((command, index) =>
+        validateHostCommand(command, `${context} command #${index}`)
+    );
 }
 
-function validateHostCommand(value: unknown, context: string): void {
+function validateHostCommand(value: unknown, context: string): HostCommand {
     const command = asRecord(value, context);
     const kind = requireString(command.kind, `${context}.kind`);
     switch (kind) {
         case "sendWebSocket":
             requireString(command.frame, `${context}.frame`);
-            return;
+            return command as HostCommand;
         case "applyNegotiation":
             requireString(command.requestId, `${context}.requestId`);
             validateNegotiationKind(command.negotiationKind, `${context}.negotiationKind`);
             requireString(command.sdp, `${context}.sdp`);
-            return;
+            return command as HostCommand;
         case "attachTrack":
             requireString(command.mid, `${context}.mid`);
             validateStreamType(command.streamType, `${context}.streamType`);
-            return;
+            return command as HostCommand;
         case "detachTrack":
             validateStreamType(command.streamType, `${context}.streamType`);
-            return;
+            return command as HostCommand;
         case "createPeerConnection":
         case "closePeerConnection":
-            return;
+            return command as HostCommand;
         case "closeWebSocket":
             requireInteger(command.code, `${context}.code`);
-            return;
+            return command as HostCommand;
         case "emitStateChange":
             validateConnectionState(command.state, `${context}.state`);
             requireOptionalString(command.cause, `${context}.cause`);
-            return;
+            return command as HostCommand;
         case "replaceTrackBindings":
             if (!Array.isArray(command.bindings)) {
                 throw new Error(`${context}.bindings must be an array`);
@@ -225,31 +225,33 @@ function validateHostCommand(value: unknown, context: string): void {
                     throw new Error(`${context}.bindings[${index}] must be a track binding`);
                 }
             });
-            return;
+            return command as HostCommand;
         case "removeSessionTracks":
             validateSessionId(command.sessionId, `${context}.sessionId`);
-            return;
+            return command as HostCommand;
         case "emitUpdate":
-            validateClientUpdate(command.update, `${context}.update`);
-            return;
+            return {
+                kind,
+                update: validateClientUpdate(command.update, `${context}.update`)
+            };
         case "registerPendingRequest":
             requireString(command.requestId, `${context}.requestId`);
             validatePendingRequestKind(command.requestKind, `${context}.requestKind`);
-            return;
+            return command as HostCommand;
         case "resolvePendingRequest":
             requireString(command.requestId, `${context}.requestId`);
             requireBoolean(command.ok, `${context}.ok`);
-            return;
+            return command as HostCommand;
         case "scheduleTimer":
             requireInteger(command.id, `${context}.id`);
             requireInteger(command.ms, `${context}.ms`);
-            return;
+            return command as HostCommand;
         case "cancelTimer":
             requireInteger(command.id, `${context}.id`);
-            return;
+            return command as HostCommand;
         case "connect":
             requireString(command.url, `${context}.url`);
-            return;
+            return command as HostCommand;
         default:
             throw new Error(`${context}.kind is invalid: ${String(kind)}`);
     }
@@ -275,11 +277,14 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
             return update as ClientUpdateDetail;
         }
         case CLIENT_UPDATE.INFO_CHANGE: {
-            const payload = asRecord(update.payload, `${context}.payload`);
+            const payload = asStringKeyedRecord(update.payload, `${context}.payload`);
             for (const [sessionId, info] of Object.entries(payload)) {
                 validateSessionInfo(info, `${context}.payload.${sessionId}`);
             }
-            return update as ClientUpdateDetail;
+            return {
+                name: CLIENT_UPDATE.INFO_CHANGE,
+                payload: payload as InfoChangeUpdateDetail
+            };
         }
         case CLIENT_UPDATE.BROADCAST: {
             const payload = asRecord(update.payload, `${context}.payload`);
@@ -406,6 +411,18 @@ function asRecord(value: unknown, context: string): Record<string, unknown> {
         throw new Error(`${context} must be an object`);
     }
     return value as Record<string, unknown>;
+}
+
+function asStringKeyedRecord(value: unknown, context: string): Record<string, unknown> {
+    if (value instanceof Map) {
+        return Object.fromEntries(
+            [...value.entries()].map(([key, entryValue]) => [
+                requireString(key, `${context} map key`),
+                entryValue
+            ])
+        );
+    }
+    return asRecord(value, context);
 }
 
 function requireString(value: unknown, context: string): string {
