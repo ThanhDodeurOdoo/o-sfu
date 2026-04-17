@@ -138,6 +138,92 @@ fn removing_a_session_cleans_dependent_resources() {
 }
 
 #[test]
+fn removing_a_session_clears_cross_session_reverse_indices() {
+    let mut router = Router::new(RouterId(1));
+
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(101),
+            SessionId(10),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(200),
+            SessionId(20),
+            TransportDirection::Send,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Audio,
+            StreamType::Audio,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(400),
+                ProducerId(300),
+                TransportId(101),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            ConsumerCapability::Compatible,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_consumer(
+            Consumer::new(
+                ConsumerId(401),
+                ProducerId(300),
+                TransportId(200),
+                MediaKind::Audio,
+                StreamType::Audio,
+            ),
+            ConsumerCapability::Compatible,
+        ),
+        Ok(())
+    );
+
+    assert_eq!(router.remove_session(SessionId(10)), Ok(()));
+    assert!(router.sessions.contains_key(&SessionId(20)));
+    assert!(router.transports.contains_key(&TransportId(200)));
+    assert!(!router.transports.contains_key(&TransportId(100)));
+    assert!(!router.transports.contains_key(&TransportId(101)));
+    assert!(!router.producers.contains_key(&ProducerId(300)));
+    assert!(!router.consumers.contains_key(&ConsumerId(400)));
+    assert!(!router.consumers.contains_key(&ConsumerId(401)));
+    assert!(!router.session_transports.contains_key(&SessionId(10)));
+    assert!(
+        router
+            .session_transports
+            .get(&SessionId(20))
+            .is_some_and(|transport_ids| { transport_ids.contains(&TransportId(200)) })
+    );
+    assert!(!router.transport_consumers.contains_key(&TransportId(200)));
+    assert!(!router.producer_consumers.contains_key(&ProducerId(300)));
+    assert_router_is_consistent(&router);
+}
+
+#[test]
 fn producers_must_use_receive_transports() {
     let mut router = Router::new(RouterId(1));
 

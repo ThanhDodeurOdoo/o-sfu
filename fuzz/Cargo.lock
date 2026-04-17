@@ -922,6 +922,8 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "o-sfu",
+ "o-sfu-protocol",
+ "serde_json",
 ]
 
 [[package]]

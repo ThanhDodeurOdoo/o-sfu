@@ -10,10 +10,19 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 o-sfu = { path = ".." }
+o-sfu-protocol = { path = "../protocol" }
+serde_json = "1.0"
 
 [[bin]]
 name = "protocol_decode"
 path = "fuzz_targets/protocol_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protocol_sequence"
+path = "fuzz_targets/protocol_sequence.rs"
 test = false
 doc = false
 bench = false

@@ -7,9 +7,31 @@ use crate::{
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
 type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;
+type TeardownProofRouter = ProofRouterModel<2, 3, 1, 2>;
 
 fn session(id: SessionId) -> Session {
     Session::new(id, SessionPermissions::default())
+}
+
+fn all_consumers_shadow_pause<
+    const MAX_SESSIONS: usize,
+    const MAX_TRANSPORTS: usize,
+    const MAX_PRODUCERS: usize,
+    const MAX_CONSUMERS: usize,
+>(
+    router: &ProofRouterModel<MAX_SESSIONS, MAX_TRANSPORTS, MAX_PRODUCERS, MAX_CONSUMERS>,
+    paused: bool,
+) -> bool {
+    let mut consumer_index = 0;
+    while let Some(consumer_slot) = router.consumers.get(consumer_index) {
+        if let Some(consumer) = consumer_slot
+            && consumer.producer_paused() != paused
+        {
+            return false;
+        }
+        consumer_index += 1;
+    }
+    true
 }
 
 #[kani::proof]
@@ -82,40 +104,92 @@ fn routing_flow_preserves_invariants() {
 }
 
 #[kani::proof]
-fn session_teardown_preserves_invariants() {
-    let mut router = ProofRouter::new(RouterId(0));
+fn session_teardown_clears_reverse_indices_and_dependents() {
+    let mut router = TeardownProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(session(SessionId(1)));
-    let _ = router.join_session(session(SessionId(2)));
+    let session_a = SessionId(1);
+    let session_b = SessionId(2);
+    let receive_transport = TransportId(10);
+    let shared_send_transport = TransportId(11);
+    let survivor_send_transport = TransportId(20);
+    let producer_id = ProducerId(30);
+    let removed_consumer_id = ConsumerId(40);
+    let surviving_consumer_id = ConsumerId(41);
+
+    let _ = router.join_session(session(session_a));
+    let _ = router.join_session(session(session_b));
     let _ = router.open_transport(Transport::new(
-        TransportId(10),
-        SessionId(1),
+        receive_transport,
+        session_a,
         TransportDirection::Receive,
     ));
     let _ = router.open_transport(Transport::new(
-        TransportId(20),
-        SessionId(2),
+        shared_send_transport,
+        session_a,
+        TransportDirection::Send,
+    ));
+    let _ = router.open_transport(Transport::new(
+        survivor_send_transport,
+        session_b,
         TransportDirection::Send,
     ));
     let _ = router.add_producer(Producer::new(
-        ProducerId(30),
-        TransportId(10),
+        producer_id,
+        receive_transport,
         MediaKind::Audio,
         StreamType::Audio,
     ));
     let _ = router.add_consumer(
         Consumer::new(
-            ConsumerId(40),
-            ProducerId(30),
-            TransportId(20),
+            removed_consumer_id,
+            producer_id,
+            shared_send_transport,
+            MediaKind::Audio,
+            StreamType::Audio,
+        ),
+        ConsumerCapability::Compatible,
+    );
+    let _ = router.add_consumer(
+        Consumer::new(
+            surviving_consumer_id,
+            producer_id,
+            survivor_send_transport,
             MediaKind::Audio,
             StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
 
-    let _ = router.remove_session(SessionId(1));
+    let _ = router.remove_session(session_a);
 
+    assert!(!router.contains_session(session_a));
+    assert!(router.contains_session(session_b));
+    assert!(!router.contains_transport(receive_transport));
+    assert!(!router.contains_transport(shared_send_transport));
+    assert!(router.contains_transport(survivor_send_transport));
+    assert!(!router.contains_producer(producer_id));
+    assert!(router.consumer_by_id(removed_consumer_id).is_none());
+    assert!(router.consumer_by_id(surviving_consumer_id).is_none());
+    assert!(!router.session_transports.contains_key(session_a));
+    assert!(router.session_transports.contains_key(session_b));
+    assert_eq!(router.session_transports.member_count(session_b), 1);
+    assert!(
+        router
+            .session_transports
+            .contains_member(session_b, survivor_send_transport)
+    );
+    assert!(!router.transport_producers.contains_key(receive_transport));
+    assert!(
+        !router
+            .transport_consumers
+            .contains_key(shared_send_transport)
+    );
+    assert!(
+        !router
+            .transport_consumers
+            .contains_key(survivor_send_transport)
+    );
+    assert!(!router.producer_consumers.contains_key(producer_id));
     assert!(router.satisfies_invariants());
 }
 
@@ -343,13 +417,7 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
         ConsumerCapability::Compatible,
     );
 
-    assert!(
-        router
-            .consumers
-            .iter()
-            .flatten()
-            .all(|consumer| consumer.producer_paused())
-    );
+    assert!(all_consumers_shadow_pause(&router, true));
     assert!(router.satisfies_invariants());
 }
 
@@ -404,13 +472,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
 
     let _ = router.set_producer_paused(ProducerId(30), true);
 
-    assert!(
-        router
-            .consumers
-            .iter()
-            .flatten()
-            .all(|consumer| consumer.producer_paused())
-    );
+    assert!(all_consumers_shadow_pause(&router, true));
     assert!(router.satisfies_invariants());
 }
 
@@ -466,13 +528,7 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
 
     let _ = router.set_producer_paused(ProducerId(30), false);
 
-    assert!(
-        router
-            .consumers
-            .iter()
-            .flatten()
-            .all(|consumer| !consumer.producer_paused())
-    );
+    assert!(all_consumers_shadow_pause(&router, false));
     assert!(router.satisfies_invariants());
 }
 

@@ -5,6 +5,7 @@ import {
     createChannel,
     createConnectToken,
     createPeerPage,
+    latestTrackUpdate,
     peerLocalDescriptionSdp,
     peerSnapshot,
     publishSyntheticCamera,
@@ -179,6 +180,55 @@ test("browser compatibility upload and download flows survive live-server replac
     await expect
         .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.camera ?? null)
         .toBeNull();
+});
+
+test("late-joining subscriber receives the already-live publication", async ({ context }) => {
+    const channelUuid = await createChannel();
+    const publisher = await createPeerPage(context);
+    await connectPeer(publisher, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID)
+    });
+
+    await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+    await publishSyntheticCamera(publisher, "live-before-join");
+
+    const subscriber = await createPeerPage(context);
+    await connectPeer(subscriber, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID)
+    });
+
+    await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
+    await expect
+        .poll(async () => latestTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "camera"))
+        .toMatchObject({
+            name: "track",
+            payload: {
+                active: true,
+                sessionId: PUBLISHER_SESSION_ID,
+                track: {
+                    enabled: true,
+                    kind: "video",
+                    muted: false,
+                    readyState: "live"
+                },
+                type: "camera"
+            }
+        });
+    await expect
+        .poll(async () => {
+            return (
+                (await peerSnapshot(subscriber)).consumers[String(PUBLISHER_SESSION_ID)]?.camera ??
+                null
+            );
+        })
+        .toMatchObject({
+            enabled: true,
+            kind: "video",
+            muted: false,
+            readyState: "live"
+        });
 });
 
 test("live browser negotiation exposes optional H264 and VP9 RTX pairs when enabled", async ({

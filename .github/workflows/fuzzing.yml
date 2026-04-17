@@ -32,3 +32,6 @@ jobs:
 
       - name: Run protocol decode fuzz target
         run: cargo +nightly fuzz run protocol_decode -- -max_total_time=300
+
+      - name: Run protocol sequence fuzz target
+        run: cargo +nightly fuzz run protocol_sequence -- -max_total_time=300

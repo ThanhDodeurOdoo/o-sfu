@@ -651,6 +651,106 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
 }
 
 #[tokio::test]
+async fn bulk_disconnect_scopes_each_channel_independently_from_integration_test() {
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel_a = create_channel(&server, "issuer-a", None).await;
+    let channel_b = create_channel(&server, "issuer-b", None).await;
+    assert!(channel_a.is_some());
+    assert!(channel_b.is_some());
+    let (Some(channel_a), Some(channel_b)) = (channel_a, channel_b) else {
+        return;
+    };
+
+    let a_keep_token = signed_connect_claims(TEST_AUTH_KEY, &channel_a, SessionId::Integer(1));
+    let a_drop_token = signed_connect_claims(TEST_AUTH_KEY, &channel_a, SessionId::Integer(2));
+    let b_drop_token = signed_connect_claims(TEST_AUTH_KEY, &channel_b, SessionId::Integer(1));
+    let b_keep_token = signed_connect_claims(TEST_AUTH_KEY, &channel_b, SessionId::Integer(2));
+    assert!(a_keep_token.is_some());
+    assert!(a_drop_token.is_some());
+    assert!(b_drop_token.is_some());
+    assert!(b_keep_token.is_some());
+    let (Some(a_keep_token), Some(a_drop_token), Some(b_drop_token), Some(b_keep_token)) =
+        (a_keep_token, a_drop_token, b_drop_token, b_keep_token)
+    else {
+        return;
+    };
+
+    let peers_in_channel_a =
+        connect_protocol_pair(&server, &a_keep_token, &a_drop_token, SessionId::Integer(2)).await;
+    assert!(peers_in_channel_a.is_some());
+    let Some((mut a_keep, mut a_drop)) = peers_in_channel_a else {
+        return;
+    };
+
+    let peers_in_channel_b =
+        connect_protocol_pair(&server, &b_drop_token, &b_keep_token, SessionId::Integer(2)).await;
+    assert!(peers_in_channel_b.is_some());
+    let Some((mut b_drop, mut b_keep)) = peers_in_channel_b else {
+        return;
+    };
+
+    let status = disconnect_sessions_via_http(
+        &server,
+        BTreeMap::from([
+            (channel_a.clone(), vec![SessionId::Integer(2)]),
+            (channel_b.clone(), vec![SessionId::Integer(1)]),
+        ]),
+    )
+    .await;
+    assert_eq!(status, Some(StatusCode::OK));
+
+    assert_eq!(
+        a_drop.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+    assert_eq!(
+        b_drop.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+
+    let a_departure = read_until_server_message(&mut a_keep, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(2))
+    })
+    .await;
+    assert!(a_departure.is_some());
+    if let Some(ServerMessage::PeerLeft(payload)) = a_departure {
+        assert_eq!(payload.session_id, SessionId::Integer(2));
+    } else {
+        panic!("expected channel A to receive the disconnected peerleft notification");
+    }
+
+    let b_departure = read_until_server_message(&mut b_keep, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(1))
+    })
+    .await;
+    assert!(b_departure.is_some());
+    if let Some(ServerMessage::PeerLeft(payload)) = b_departure {
+        assert_eq!(payload.session_id, SessionId::Integer(1));
+    } else {
+        panic!("expected channel B to receive the disconnected peerleft notification");
+    }
+
+    assert_eq!(
+        a_keep
+            .read_server_message_with_timeout(Duration::from_millis(150))
+            .await,
+        None,
+        "channel A survivor must not receive cross-room traffic after the bulk disconnect"
+    );
+    assert_eq!(
+        b_keep
+            .read_server_message_with_timeout(Duration::from_millis(150))
+            .await,
+        None,
+        "channel B survivor must not receive cross-room traffic after the bulk disconnect"
+    );
+}
+
+#[tokio::test]
 async fn mismatched_explicit_channel_uuid_is_rejected_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());

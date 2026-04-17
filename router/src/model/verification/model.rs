@@ -23,6 +23,162 @@ impl From<RouterError> for ProofRouterError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProofMembershipEntry<K, V, const MAX_VALUES: usize> {
+    pub(super) key: K,
+    pub(super) values: [Option<V>; MAX_VALUES],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProofMembershipIndex<K, V, const MAX_KEYS: usize, const MAX_VALUES: usize> {
+    pub(super) entries: [Option<ProofMembershipEntry<K, V, MAX_VALUES>>; MAX_KEYS],
+}
+
+impl<K: Copy + Eq, V: Copy + Eq, const MAX_KEYS: usize, const MAX_VALUES: usize>
+    ProofMembershipIndex<K, V, MAX_KEYS, MAX_VALUES>
+{
+    fn new() -> Self {
+        Self {
+            entries: [None; MAX_KEYS],
+        }
+    }
+
+    fn insert(
+        &mut self,
+        key: K,
+        value: V,
+        value_kind: ResourceKind,
+    ) -> Result<(), ProofRouterError> {
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get_mut(entry_index) {
+            if let Some(entry) = slot.as_mut()
+                && entry.key == key
+            {
+                let mut value_index = 0;
+                while let Some(value_slot) = entry.values.get_mut(value_index) {
+                    match *value_slot {
+                        Some(current) if current == value => return Ok(()),
+                        None => {
+                            *value_slot = Some(value);
+                            return Ok(());
+                        }
+                        Some(_) => {}
+                    }
+                    value_index += 1;
+                }
+                return Err(ProofRouterError::CapacityExceeded(value_kind));
+            }
+            entry_index += 1;
+        }
+
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get_mut(entry_index) {
+            if slot.is_none() {
+                let mut values = [None; MAX_VALUES];
+                values[0] = Some(value);
+                *slot = Some(ProofMembershipEntry { key, values });
+                return Ok(());
+            }
+            entry_index += 1;
+        }
+
+        Err(ProofRouterError::CapacityExceeded(value_kind))
+    }
+
+    pub(super) fn contains_key(&self, key: K) -> bool {
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get(entry_index) {
+            if slot.is_some_and(|entry| entry.key == key) {
+                return true;
+            }
+            entry_index += 1;
+        }
+        false
+    }
+
+    pub(super) fn contains_member(&self, key: K, value: V) -> bool {
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get(entry_index) {
+            if let Some(entry) = *slot
+                && entry.key == key
+            {
+                let mut value_index = 0;
+                while let Some(value_slot) = entry.values.get(value_index) {
+                    if value_slot.is_some_and(|current| current == value) {
+                        return true;
+                    }
+                    value_index += 1;
+                }
+                return false;
+            }
+            entry_index += 1;
+        }
+        false
+    }
+
+    pub(super) fn member_count(&self, key: K) -> usize {
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get(entry_index) {
+            if let Some(entry) = *slot
+                && entry.key == key
+            {
+                let mut count = 0;
+                let mut value_index = 0;
+                while let Some(value_slot) = entry.values.get(value_index) {
+                    if value_slot.is_some() {
+                        count += 1;
+                    }
+                    value_index += 1;
+                }
+                return count;
+            }
+            entry_index += 1;
+        }
+        0
+    }
+
+    fn remove_member(&mut self, key: K, value: V) {
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get_mut(entry_index) {
+            if let Some(entry) = slot.as_mut()
+                && entry.key == key
+            {
+                let mut has_live_member = false;
+                let mut value_index = 0;
+                while let Some(value_slot) = entry.values.get_mut(value_index) {
+                    if value_slot.is_some_and(|current| current == value) {
+                        *value_slot = None;
+                    }
+                    if value_slot.is_some() {
+                        has_live_member = true;
+                    }
+                    value_index += 1;
+                }
+                if !has_live_member {
+                    *slot = None;
+                }
+                return;
+            }
+            entry_index += 1;
+        }
+    }
+
+    fn take_members(&mut self, key: K) -> [Option<V>; MAX_VALUES] {
+        let mut entry_index = 0;
+        while let Some(slot) = self.entries.get_mut(entry_index) {
+            if slot.is_some_and(|entry| entry.key == key) {
+                let values = slot
+                    .as_ref()
+                    .map_or([None; MAX_VALUES], |entry| entry.values);
+                *slot = None;
+                return values;
+            }
+            entry_index += 1;
+        }
+        [None; MAX_VALUES]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProofRouterModel<
     const MAX_SESSIONS: usize,
@@ -35,6 +191,14 @@ pub(crate) struct ProofRouterModel<
     pub(super) transports: [Option<Transport>; MAX_TRANSPORTS],
     pub(super) producers: [Option<Producer>; MAX_PRODUCERS],
     pub(super) consumers: [Option<Consumer>; MAX_CONSUMERS],
+    pub(super) session_transports:
+        ProofMembershipIndex<SessionId, TransportId, MAX_SESSIONS, MAX_TRANSPORTS>,
+    pub(super) transport_producers:
+        ProofMembershipIndex<TransportId, ProducerId, MAX_TRANSPORTS, MAX_PRODUCERS>,
+    pub(super) transport_consumers:
+        ProofMembershipIndex<TransportId, ConsumerId, MAX_TRANSPORTS, MAX_CONSUMERS>,
+    pub(super) producer_consumers:
+        ProofMembershipIndex<ProducerId, ConsumerId, MAX_PRODUCERS, MAX_CONSUMERS>,
 }
 
 impl<
@@ -52,6 +216,10 @@ impl<
             transports: [None; MAX_TRANSPORTS],
             producers: [None; MAX_PRODUCERS],
             consumers: [None; MAX_CONSUMERS],
+            session_transports: ProofMembershipIndex::new(),
+            transport_producers: ProofMembershipIndex::new(),
+            transport_consumers: ProofMembershipIndex::new(),
+            producer_consumers: ProofMembershipIndex::new(),
         }
     }
 
@@ -93,7 +261,12 @@ impl<
         if self.contains_transport(transport.id()) {
             return Err(RouterError::DuplicateTransport(transport.id()).into());
         }
-        self.insert_transport(transport)
+        self.insert_transport(transport)?;
+        self.session_transports.insert(
+            transport.session_id(),
+            transport.id(),
+            ResourceKind::Transport,
+        )
     }
 
     /// # Errors
@@ -114,7 +287,12 @@ impl<
         if self.contains_producer(producer.id()) {
             return Err(RouterError::DuplicateProducer(producer.id()).into());
         }
-        self.insert_producer(producer)
+        self.insert_producer(producer)?;
+        self.transport_producers.insert(
+            producer.transport_id(),
+            producer.id(),
+            ResourceKind::Producer,
+        )
     }
 
     /// The `capability` parameter abstracts the external capability negotiation as a semantic
@@ -173,7 +351,17 @@ impl<
             return Err(RouterError::DuplicateConsumer(consumer.id()).into());
         }
         consumer.set_producer_paused(producer.paused());
-        self.insert_consumer(consumer)
+        self.insert_consumer(consumer)?;
+        self.transport_consumers.insert(
+            consumer.transport_id(),
+            consumer.id(),
+            ResourceKind::Consumer,
+        )?;
+        self.producer_consumers.insert(
+            consumer.producer_id(),
+            consumer.id(),
+            ResourceKind::Consumer,
+        )
     }
 
     /// # Errors
@@ -224,9 +412,14 @@ impl<
         }
 
         self.clear_session(session_id);
-        let removed_transport_ids = self.clear_transports_for_session(session_id);
-        let removed_producer_ids = self.clear_producers_for_transports(&removed_transport_ids);
-        self.clear_consumers_for_dependencies(&removed_transport_ids, &removed_producer_ids);
+        let transport_ids = self.session_transports.take_members(session_id);
+        let mut transport_index = 0;
+        while let Some(transport_id) = transport_ids.get(transport_index) {
+            if let Some(transport_id) = *transport_id {
+                self.remove_transport(transport_id);
+            }
+            transport_index += 1;
+        }
 
         Ok(())
     }
@@ -271,6 +464,65 @@ impl<
         Err(ProofRouterError::CapacityExceeded(ResourceKind::Consumer))
     }
 
+    fn remove_transport(&mut self, transport_id: TransportId) {
+        let Some(transport) = self.transport_by_id(transport_id) else {
+            return;
+        };
+
+        self.clear_transport(transport_id);
+        self.session_transports
+            .remove_member(transport.session_id(), transport_id);
+
+        let consumer_ids = self.transport_consumers.take_members(transport_id);
+        let mut consumer_index = 0;
+        while let Some(consumer_id) = consumer_ids.get(consumer_index) {
+            if let Some(consumer_id) = *consumer_id {
+                self.remove_consumer(consumer_id);
+            }
+            consumer_index += 1;
+        }
+
+        let producer_ids = self.transport_producers.take_members(transport_id);
+        let mut producer_index = 0;
+        while let Some(producer_id) = producer_ids.get(producer_index) {
+            if let Some(producer_id) = *producer_id {
+                self.remove_producer(producer_id);
+            }
+            producer_index += 1;
+        }
+    }
+
+    fn remove_producer(&mut self, producer_id: ProducerId) {
+        let Some(producer) = self.producer_by_id(producer_id) else {
+            return;
+        };
+
+        self.clear_producer(producer_id);
+        self.transport_producers
+            .remove_member(producer.transport_id(), producer_id);
+
+        let consumer_ids = self.producer_consumers.take_members(producer_id);
+        let mut consumer_index = 0;
+        while let Some(consumer_id) = consumer_ids.get(consumer_index) {
+            if let Some(consumer_id) = *consumer_id {
+                self.remove_consumer(consumer_id);
+            }
+            consumer_index += 1;
+        }
+    }
+
+    fn remove_consumer(&mut self, consumer_id: ConsumerId) {
+        let Some(consumer) = self.consumer_by_id(consumer_id) else {
+            return;
+        };
+
+        self.clear_consumer(consumer_id);
+        self.transport_consumers
+            .remove_member(consumer.transport_id(), consumer_id);
+        self.producer_consumers
+            .remove_member(consumer.producer_id(), consumer_id);
+    }
+
     fn clear_session(&mut self, session_id: SessionId) {
         for slot in &mut self.sessions {
             if slot.is_some_and(|session| session.id() == session_id) {
@@ -279,50 +531,25 @@ impl<
         }
     }
 
-    fn clear_transports_for_session(
-        &mut self,
-        session_id: SessionId,
-    ) -> [Option<TransportId>; MAX_TRANSPORTS] {
-        let mut removed = [None; MAX_TRANSPORTS];
+    fn clear_transport(&mut self, transport_id: TransportId) {
         for slot in &mut self.transports {
-            if slot.is_some_and(|transport| transport.session_id() == session_id) {
-                if let Some(transport) = *slot {
-                    Self::push_removed_id(&mut removed, transport.id());
-                }
+            if slot.is_some_and(|transport| transport.id() == transport_id) {
                 *slot = None;
             }
         }
-        removed
     }
 
-    fn clear_producers_for_transports(
-        &mut self,
-        removed_transport_ids: &[Option<TransportId>; MAX_TRANSPORTS],
-    ) -> [Option<ProducerId>; MAX_PRODUCERS] {
-        let mut removed = [None; MAX_PRODUCERS];
+    fn clear_producer(&mut self, producer_id: ProducerId) {
         for slot in &mut self.producers {
-            if slot.is_some_and(|producer| {
-                Self::removed_id_contains(removed_transport_ids, producer.transport_id())
-            }) {
-                if let Some(producer) = *slot {
-                    Self::push_removed_id(&mut removed, producer.id());
-                }
+            if slot.is_some_and(|producer| producer.id() == producer_id) {
                 *slot = None;
             }
         }
-        removed
     }
 
-    fn clear_consumers_for_dependencies(
-        &mut self,
-        removed_transport_ids: &[Option<TransportId>; MAX_TRANSPORTS],
-        removed_producer_ids: &[Option<ProducerId>; MAX_PRODUCERS],
-    ) {
+    fn clear_consumer(&mut self, consumer_id: ConsumerId) {
         for slot in &mut self.consumers {
-            if slot.is_some_and(|consumer| {
-                Self::removed_id_contains(removed_transport_ids, consumer.transport_id())
-                    || Self::removed_id_contains(removed_producer_ids, consumer.producer_id())
-            }) {
+            if slot.is_some_and(|consumer| consumer.id() == consumer_id) {
                 *slot = None;
             }
         }
@@ -346,24 +573,6 @@ impl<
         self.sessions
             .iter_mut()
             .find_map(|slot| slot.as_mut().filter(|session| session.id() == session_id))
-    }
-
-    fn push_removed_id<T: Copy>(removed_ids: &mut [Option<T>], value: T) {
-        for slot in removed_ids {
-            if slot.is_none() {
-                *slot = Some(value);
-                return;
-            }
-        }
-    }
-
-    fn removed_id_contains<T: Copy + Eq>(removed_ids: &[Option<T>], value: T) -> bool {
-        for current in removed_ids {
-            if current.is_some_and(|current| current == value) {
-                return true;
-            }
-        }
-        false
     }
 
     pub(super) fn contains_session(&self, session_id: SessionId) -> bool {
@@ -406,6 +615,15 @@ impl<
         for producer in &self.producers {
             if producer.is_some_and(|producer| producer.id() == producer_id) {
                 return *producer;
+            }
+        }
+        None
+    }
+
+    pub(super) fn consumer_by_id(&self, consumer_id: ConsumerId) -> Option<Consumer> {
+        for consumer in &self.consumers {
+            if consumer.is_some_and(|consumer| consumer.id() == consumer_id) {
+                return *consumer;
             }
         }
         None

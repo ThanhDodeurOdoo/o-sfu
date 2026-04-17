@@ -219,6 +219,25 @@ export async function peerSnapshot(page) {
     });
 }
 
+export async function latestTrackUpdate(page, targetSessionId, targetType) {
+    return page.evaluate(
+        ({ sessionId: nextSessionId, type: nextType }) => {
+            const harness = globalThis.__liveHarness;
+            return (
+                harness.updates
+                    .filter(
+                        (update) =>
+                            update.name === "track" &&
+                            update.payload.sessionId === nextSessionId &&
+                            update.payload.type === nextType
+                    )
+                    .at(-1) ?? null
+            );
+        },
+        { sessionId: targetSessionId, type: targetType }
+    );
+}
+
 export async function peerLocalDescriptionSdp(page) {
     return page.evaluate(() => {
         const peerConnection = globalThis.__liveHarness.client?._runtime?._peerConnection;
