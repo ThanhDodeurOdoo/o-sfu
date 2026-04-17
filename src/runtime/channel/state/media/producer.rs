@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use o_sfu_router::{
     MediaCapabilities, MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters,
 };
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::signaling::shared::{SessionId, SessionInfo, StreamType};
@@ -83,8 +83,32 @@ impl ChannelState {
         media_kind: RouterMediaKind,
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<PreparedPublishedTrack> {
-        let session = self.sessions.get(session_id)?;
-        if session.connection_id != publisher_connection_id || !session.negotiation.can_publish() {
+        let Some(session) = self.sessions.get(session_id) else {
+            warn!(
+                ?session_id,
+                publisher_connection_id,
+                ?stream_type,
+                "cannot prepare negotiated publish because the session is missing from channel state"
+            );
+            return None;
+        };
+        if session.connection_id != publisher_connection_id {
+            warn!(
+                ?session_id,
+                publisher_connection_id,
+                current_connection_id = session.connection_id,
+                ?stream_type,
+                "cannot prepare negotiated publish because the connection is stale"
+            );
+            return None;
+        }
+        if !session.negotiation.can_publish() {
+            warn!(
+                ?session_id,
+                publisher_connection_id,
+                ?stream_type,
+                "cannot prepare negotiated publish because the session is not publish-ready"
+            );
             return None;
         }
         Some(PreparedPublishedTrack {
@@ -101,10 +125,28 @@ impl ChannelState {
         pending: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
     ) -> Option<(ProducerRuntimeId, Vec<PendingConsumerBootstrapTarget>)> {
-        let session = self.sessions.get(&pending.owner_session_id)?;
+        let Some(session) = self.sessions.get(&pending.owner_session_id) else {
+            warn!(
+                session_id = ?pending.owner_session_id,
+                owner_connection_id = pending.owner_connection_id,
+                ?pending.stream_type,
+                ?transport_media_id,
+                "cannot commit negotiated publish because the session is missing from channel state"
+            );
+            return None;
+        };
         if session.connection_id != pending.owner_connection_id
             || !session.negotiation.can_publish()
         {
+            warn!(
+                session_id = ?pending.owner_session_id,
+                owner_connection_id = pending.owner_connection_id,
+                current_connection_id = session.connection_id,
+                publish_ready = session.negotiation.can_publish(),
+                ?pending.stream_type,
+                ?transport_media_id,
+                "cannot commit negotiated publish because the session state changed before commit"
+            );
             return None;
         }
         let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);

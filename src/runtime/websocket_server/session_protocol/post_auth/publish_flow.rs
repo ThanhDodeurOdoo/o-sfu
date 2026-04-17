@@ -19,6 +19,12 @@ struct PublishTransactionGuard {
     staged_publish: StagedPublishTransaction,
 }
 
+enum PublishCommitOutcome {
+    Committed,
+    LoadParametersFailed(TransportAdapterError),
+    PublishRejected,
+}
+
 impl PublishTransactionGuard {
     fn new(staged_publish: StagedPublishTransaction) -> Self {
         Self { staged_publish }
@@ -38,7 +44,7 @@ impl PublishTransactionGuard {
         load_consumable_parameters: LoadParameters,
         publish_track: PublishTrack,
         cleanup_media: Cleanup,
-    ) -> bool
+    ) -> PublishCommitOutcome
     where
         LoadParameters: FnOnce(TransportMediaId) -> LoadParametersFuture,
         LoadParametersFuture: Future<Output = Result<RouterRtpParameters, TransportAdapterError>>,
@@ -50,9 +56,9 @@ impl PublishTransactionGuard {
         let transport_media_id = self.staged_publish.transport_media_id;
         let consumable_rtp_parameters = match load_consumable_parameters(transport_media_id).await {
             Ok(rtp_parameters) => rtp_parameters,
-            Err(_error) => {
+            Err(error) => {
                 cleanup_media(transport_media_id).await;
-                return false;
+                return PublishCommitOutcome::LoadParametersFailed(error);
             }
         };
         if publish_track(NegotiatedPublish {
@@ -66,9 +72,9 @@ impl PublishTransactionGuard {
         .is_none()
         {
             cleanup_media(transport_media_id).await;
-            return false;
+            return PublishCommitOutcome::PublishRejected;
         }
-        true
+        PublishCommitOutcome::Committed
     }
 
     async fn rollback<Cleanup, CleanupFuture>(self, cleanup_media: Cleanup)
@@ -221,7 +227,7 @@ impl PostAuthSessionProtocol {
         for staged_publish in staged_publishes {
             let stream_type = staged_publish.stream_type;
             let transport_media_id = staged_publish.transport_media_id;
-            let committed = PublishTransactionGuard::new(staged_publish)
+            let commit_outcome = PublishTransactionGuard::new(staged_publish)
                 .commit(
                     self.connection_id,
                     |transport_media_id| async move {
@@ -241,22 +247,29 @@ impl PostAuthSessionProtocol {
                     },
                 )
                 .await;
-            if committed {
-                info!(
+            match commit_outcome {
+                PublishCommitOutcome::Committed => info!(
                     session_id = ?self.session_id,
                     connection_id = self.connection_id,
                     ?stream_type,
                     ?transport_media_id,
                     "committed negotiated publish stream"
-                );
-            } else {
-                warn!(
+                ),
+                PublishCommitOutcome::LoadParametersFailed(error) => warn!(
                     session_id = ?self.session_id,
                     connection_id = self.connection_id,
                     ?stream_type,
                     ?transport_media_id,
-                    "failed to commit negotiated publish stream"
-                );
+                    ?error,
+                    "failed to commit negotiated publish stream because negotiated producer parameters were unavailable"
+                ),
+                PublishCommitOutcome::PublishRejected => warn!(
+                    session_id = ?self.session_id,
+                    connection_id = self.connection_id,
+                    ?stream_type,
+                    ?transport_media_id,
+                    "failed to commit negotiated publish stream because channel state rejected the publish"
+                ),
             }
         }
     }
@@ -355,7 +368,10 @@ mod tests {
             )
             .await;
 
-        assert!(!committed);
+        assert!(matches!(
+            committed,
+            super::PublishCommitOutcome::LoadParametersFailed(TransportAdapterError::InvalidInput)
+        ));
         assert_eq!(
             steps.lock().expect("steps lock").as_slice(),
             &[Step::Load(17), Step::Cleanup(17)]
@@ -409,7 +425,10 @@ mod tests {
             )
             .await;
 
-        assert!(!committed);
+        assert!(matches!(
+            committed,
+            super::PublishCommitOutcome::PublishRejected
+        ));
         assert_eq!(
             steps.lock().expect("steps lock").as_slice(),
             &[Step::Load(17), Step::Publish(17), Step::Cleanup(17)]
@@ -463,7 +482,7 @@ mod tests {
             )
             .await;
 
-        assert!(committed);
+        assert!(matches!(committed, super::PublishCommitOutcome::Committed));
         assert_eq!(
             steps.lock().expect("steps lock").as_slice(),
             &[Step::Load(17), Step::Publish(17)]

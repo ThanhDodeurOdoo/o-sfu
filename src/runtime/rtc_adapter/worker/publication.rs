@@ -12,6 +12,7 @@ use str0m::{
     rtp::Extension,
 };
 use tokio::sync::oneshot;
+use tracing::warn;
 
 use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportMediaId, TransportSessionKey,
@@ -159,12 +160,31 @@ fn worker_resolve_negotiated_producer_parameters(
     let Some(session_state) = state.sessions.get(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    session_state
+    let result = session_state
         .sdp_negotiation
         .negotiated_producer_parameters
         .get(&mid)
         .cloned()
-        .ok_or(TransportAdapterError::UnsupportedFeature)
+        .ok_or(TransportAdapterError::UnsupportedFeature);
+    if let Err(TransportAdapterError::UnsupportedFeature) = &result {
+        warn!(
+            session_id = ?session_key.session_id(),
+            media_worker_id = session_key.media_worker_id(),
+            ?transport_media_id,
+            ?mid,
+            initial_offer_applied = session_state.sdp_negotiation.initial_offer_applied,
+            pending_offer = session_state.sdp_negotiation.pending_offer.is_some(),
+            staged_offer = session_state.sdp_negotiation.staged_offer_sdp.is_some(),
+            negotiated_mids = ?session_state
+                .sdp_negotiation
+                .negotiated_producer_parameters
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            "negotiated producer parameters were not projected for the staged producer media"
+        );
+    }
+    result
 }
 
 fn project_media_format(

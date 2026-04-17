@@ -253,6 +253,69 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
 }
 
 #[tokio::test]
+async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one_answer() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 48, SessionId::Integer(48));
+
+    let mut remote = build_remote_rtc(55_048);
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let audio_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Audio,
+            &RouterRtpParameters::new(vec![], vec![], vec![]),
+        )
+        .await
+        .expect("audio publish intent should stage a renegotiation offer");
+    let video_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &RouterRtpParameters::new(vec![], vec![], vec![]),
+        )
+        .await
+        .expect("video publish intent should merge into the same renegotiation offer");
+
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged renegotiation offer should be available");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        renegotiation_offer.into_sdp(),
+    )
+    .await;
+
+    let audio_parameters = adapter
+        .negotiated_producer_parameters(&session_key, audio_media_id)
+        .await;
+    assert!(
+        audio_parameters.is_ok(),
+        "audio publish should project negotiated RTP parameters after a shared answer, got {audio_parameters:?}"
+    );
+    let video_parameters = adapter
+        .negotiated_producer_parameters(&session_key, video_media_id)
+        .await;
+    assert!(
+        video_parameters.is_ok(),
+        "video publish should project negotiated RTP parameters after a shared answer, got {video_parameters:?}"
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let adapter = RtcTransportAdapter::default();
     let source_session_key = transport_key(1, 36, SessionId::Integer(36));
