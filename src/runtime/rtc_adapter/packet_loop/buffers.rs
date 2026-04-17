@@ -1,0 +1,75 @@
+use std::net::SocketAddr;
+
+use super::super::{forwarded_packet::ForwardedPacket, forwarding_destination::PacketForward};
+use super::keyframe_requests::PendingKeyframeRequest;
+use crate::runtime::transport_adapter::TransportSessionKey;
+
+pub(super) const RECEIVE_BUFFER_LEN: usize = 2000;
+pub(super) const MAX_RELAY_PACKETS_PER_ITERATION: usize = 64;
+
+#[derive(Debug)]
+pub(super) struct PendingTransmit {
+    pub(super) destination: SocketAddr,
+    pub(super) contents: Vec<u8>,
+}
+
+impl PendingTransmit {
+    fn empty() -> Self {
+        Self {
+            destination: SocketAddr::from(([0, 0, 0, 0], 0)),
+            contents: Vec::new(),
+        }
+    }
+
+    fn overwrite(&mut self, destination: SocketAddr, contents: &[u8]) {
+        self.destination = destination;
+        self.contents.clear();
+        self.contents.extend_from_slice(contents);
+    }
+}
+
+/// Reusable buffers for the packet loop, allocated once and cleared per iteration
+/// to avoid steady-state heap allocations.
+pub(super) struct PacketLoopBuffers {
+    pub(super) pending_transmits: Vec<PendingTransmit>,
+    pub(super) pending_transmit_count: usize,
+    pub(super) pending_packets: Vec<ForwardedPacket>,
+    pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
+    pub(super) forwards: Vec<PacketForward>,
+}
+
+impl PacketLoopBuffers {
+    pub(super) fn new() -> Self {
+        Self {
+            pending_transmits: Vec::with_capacity(64),
+            pending_transmit_count: 0,
+            pending_packets: Vec::with_capacity(32),
+            pending_keyframe_requests: Vec::with_capacity(8),
+            forwards: Vec::with_capacity(64),
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.pending_transmit_count = 0;
+        self.pending_packets.clear();
+        self.pending_keyframe_requests.clear();
+        self.forwards.clear();
+    }
+
+    pub(super) fn push_pending_transmit(&mut self, destination: SocketAddr, contents: &[u8]) {
+        if let Some(slot) = self.pending_transmits.get_mut(self.pending_transmit_count) {
+            slot.overwrite(destination, contents);
+        } else {
+            let mut slot = PendingTransmit::empty();
+            slot.overwrite(destination, contents);
+            self.pending_transmits.push(slot);
+        }
+        self.pending_transmit_count = self.pending_transmit_count.saturating_add(1);
+    }
+
+    pub(super) fn pending_transmits(&self) -> impl Iterator<Item = &PendingTransmit> {
+        self.pending_transmits
+            .iter()
+            .take(self.pending_transmit_count)
+    }
+}

@@ -16,7 +16,7 @@
 //! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
-//! - `packet_loop`: async UDP packet loop, session output pumping, incoming packet routing
+//! - `packet_loop/`: packet-loop driver, ingress routing, keyframe control, event observation, session draining, and forward flushing
 //! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
 //! - `dtls`: DTLS parameter parsing (RFC 8122, RFC 4572)
 //! - `ice`: ICE candidate parsing (RFC 8839, RFC 8445)

@@ -1,0 +1,288 @@
+use std::{
+    io::Error as IoError,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+
+use super::super::{
+    commands::RtcWorkerCommand,
+    forwarding_planner::populate_forward_routes,
+    relay_registry::RelayRegistry,
+    routing_miss::PacketLoopRoutingState,
+    state::{RtcBootstrapState, RtcSnapshotState},
+    worker::{WorkerCommandContext, handle_worker_command},
+};
+use super::{
+    buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
+    forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
+    ingress_routing::route_packet_to_matching_session,
+    keyframe_requests::flush_pending_keyframe_requests,
+    session_drain::drain_ready_sessions,
+};
+use crate::config::{MediaCodecFlags, RtcPortRange};
+use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
+
+pub(crate) struct PacketLoopConfig {
+    pub(crate) public_ip: IpAddr,
+    pub(crate) rtc_port_range: RtcPortRange,
+    pub(crate) codec_flags: MediaCodecFlags,
+    pub(crate) media_tap: Arc<MediaTap>,
+    pub(crate) relay_registry: Arc<RelayRegistry>,
+    pub(crate) metrics: Arc<RuntimeMetrics>,
+}
+
+struct SnapshotInfo {
+    socket: Arc<UdpSocket>,
+    candidate_addr: SocketAddr,
+    next_timeout: Option<Instant>,
+}
+
+enum NextLoopInput {
+    Command(RtcWorkerCommand),
+    Datagram {
+        source_addr: SocketAddr,
+        candidate_addr: SocketAddr,
+        received_size: usize,
+    },
+}
+
+pub(crate) async fn run_packet_loop(
+    config: PacketLoopConfig,
+    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
+    mut relay_rx: mpsc::UnboundedReceiver<super::super::forwarded_packet::ForwardedPacket>,
+    shutdown_token: CancellationToken,
+) {
+    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut routing_state = PacketLoopRoutingState::new();
+    let mut receive_buffer = vec![0_u8; RECEIVE_BUFFER_LEN];
+    let mut buffers = PacketLoopBuffers::new();
+
+    loop {
+        while let Ok(command) = command_rx.try_recv() {
+            handle_worker_command_and_clear_routing_cache(
+                &mut bootstrap_state,
+                &snapshot_state,
+                &config,
+                command,
+                &mut routing_state,
+            );
+        }
+
+        let snapshot = snapshot_and_pump(
+            &mut bootstrap_state,
+            &snapshot_state,
+            &config,
+            &mut relay_rx,
+            &mut buffers,
+        );
+
+        if let Some(info) = snapshot.as_ref() {
+            for pending_transmit in buffers.pending_transmits() {
+                if info
+                    .socket
+                    .send_to(
+                        pending_transmit.contents.as_slice(),
+                        pending_transmit.destination,
+                    )
+                    .await
+                    .is_err()
+                {
+                    warn!(
+                        destination = %pending_transmit.destination,
+                        "failed to send packet-loop transport datagram"
+                    );
+                }
+            }
+        }
+
+        let Some(next_input) = wait_for_next_loop_input(
+            snapshot,
+            &mut command_rx,
+            &mut receive_buffer,
+            &shutdown_token,
+        )
+        .await
+        else {
+            return;
+        };
+
+        match next_input {
+            NextLoopInput::Command(command) => {
+                handle_worker_command_and_clear_routing_cache(
+                    &mut bootstrap_state,
+                    &snapshot_state,
+                    &config,
+                    command,
+                    &mut routing_state,
+                );
+            }
+            NextLoopInput::Datagram {
+                source_addr,
+                candidate_addr,
+                received_size,
+            } => {
+                if received_size == 0 {
+                    continue;
+                }
+                let Some(packet) = receive_buffer.get(..received_size) else {
+                    continue;
+                };
+                route_packet_to_matching_session(
+                    &mut bootstrap_state,
+                    &snapshot_state,
+                    &mut routing_state,
+                    &config.metrics,
+                    source_addr,
+                    candidate_addr,
+                    packet,
+                );
+            }
+        }
+    }
+}
+
+fn handle_worker_command_and_clear_routing_cache(
+    bootstrap_state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    config: &PacketLoopConfig,
+    command: RtcWorkerCommand,
+    routing_state: &mut PacketLoopRoutingState,
+) {
+    handle_worker_command(
+        bootstrap_state,
+        &WorkerCommandContext {
+            snapshot_state,
+            relay_registry: &config.relay_registry,
+            public_ip: config.public_ip,
+            rtc_port_range: config.rtc_port_range,
+            codec_flags: config.codec_flags,
+            metrics: &config.metrics,
+        },
+        command,
+    );
+    routing_state.clear_on_topology_change();
+}
+
+fn snapshot_and_pump(
+    state: &mut RtcBootstrapState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    config: &PacketLoopConfig,
+    relay_rx: &mut mpsc::UnboundedReceiver<super::super::forwarded_packet::ForwardedPacket>,
+    buffers: &mut PacketLoopBuffers,
+) -> Option<SnapshotInfo> {
+    buffers.clear();
+    let (socket, candidate_addr) = {
+        let shared_socket = state.shared_socket.as_ref()?;
+        (
+            Arc::clone(&shared_socket.socket),
+            shared_socket.candidate_addr,
+        )
+    };
+    let now = Instant::now();
+    drain_ready_sessions(state, snapshot_state, &config.metrics, buffers, now);
+    drain_relay_packets(
+        relay_rx,
+        &mut buffers.pending_packets,
+        MAX_RELAY_PACKETS_PER_ITERATION,
+    );
+    flush_pending_keyframe_requests(state, &config.metrics, buffers);
+    record_incoming_stats(state, snapshot_state, &config.metrics, buffers);
+    populate_forward_routes(
+        state,
+        &config.media_tap,
+        &config.relay_registry,
+        &config.metrics,
+        &buffers.pending_packets,
+        &mut buffers.forwards,
+    );
+    flush_forward_routes(state, &config.metrics, buffers);
+    Some(SnapshotInfo {
+        socket,
+        candidate_addr,
+        next_timeout: state.next_timeout_deadline(),
+    })
+}
+
+async fn wait_for_next_loop_input(
+    snapshot: Option<SnapshotInfo>,
+    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    receive_buffer: &mut [u8],
+    shutdown_token: &CancellationToken,
+) -> Option<NextLoopInput> {
+    let Some(info) = snapshot else {
+        return tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => None,
+            maybe_command = command_rx.recv() => maybe_command.map(NextLoopInput::Command),
+        };
+    };
+    if let Some(next_timeout) = info.next_timeout {
+        tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => None,
+            maybe_command = command_rx.recv() => {
+                maybe_command.map(NextLoopInput::Command)
+            }
+            result = timeout(
+                socket_wait_duration(next_timeout),
+                info.socket.recv_from(receive_buffer),
+            ) => {
+                Some(match result {
+                    Ok(result) => handle_socket_receive_result(result, info.candidate_addr),
+                    Err(_elapsed) => NextLoopInput::Datagram {
+                        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+                        candidate_addr: info.candidate_addr,
+                        received_size: 0,
+                    },
+                })
+            }
+        }
+    } else {
+        tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => None,
+            maybe_command = command_rx.recv() => {
+                maybe_command.map(NextLoopInput::Command)
+            }
+            result = info.socket.recv_from(receive_buffer) => {
+                Some(handle_socket_receive_result(result, info.candidate_addr))
+            }
+        }
+    }
+}
+
+fn handle_socket_receive_result(
+    result: Result<(usize, SocketAddr), IoError>,
+    candidate_addr: SocketAddr,
+) -> NextLoopInput {
+    match result {
+        Ok((received_size, source_addr)) => NextLoopInput::Datagram {
+            source_addr,
+            candidate_addr,
+            received_size,
+        },
+        Err(_error) => {
+            warn!("rtc packet loop failed to receive datagram");
+            NextLoopInput::Datagram {
+                source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+                candidate_addr,
+                received_size: 0,
+            }
+        }
+    }
+}
+
+fn socket_wait_duration(next_timeout: Instant) -> Duration {
+    let timeout_duration = next_timeout.saturating_duration_since(Instant::now());
+    if timeout_duration.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        timeout_duration
+    }
+}
