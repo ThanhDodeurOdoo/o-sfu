@@ -16,7 +16,7 @@ use o_sfu::{
     runtime::testing::spawn_test_server,
     signaling::{
         http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
-        protocol::{ServerMessage, ServerRequest},
+        protocol::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
         shared::{SessionId, SessionInfo, StreamType},
     },
 };
@@ -624,6 +624,84 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
             .await,
         None,
         "stale replacement socket must not overwrite presence"
+    );
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+    assert!(replacement.close().await.is_some());
+}
+
+#[tokio::test]
+async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integration_test() {
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-replacement-queued-publish", None).await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(11));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(12));
+    assert!(alice_token.is_some());
+    assert!(bob_token.is_some());
+    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
+        return;
+    };
+
+    let peers =
+        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(12)).await;
+    assert!(peers.is_some());
+    let Some((mut alice, mut bob)) = peers else {
+        return;
+    };
+
+    assert!(
+        bob.send_message(ClientMessage::Publish(StreamIntentPayload {
+            stream_type: StreamType::Audio,
+        }))
+        .await
+        .is_some()
+    );
+    let request = bob.read_server_request().await;
+    assert!(request.is_some());
+    let Some((request_id, request)) = request else {
+        return;
+    };
+    assert!(
+        matches!(request, ServerRequest::Renegotiate(_)),
+        "publish should queue a renegotiation request before the replacement arrives"
+    );
+
+    let replacement =
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &bob_token).await;
+    assert!(replacement.is_some());
+    let Some((replacement, _welcome)) = replacement else {
+        return;
+    };
+
+    let departed = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(12))
+    })
+    .await;
+    assert!(departed.is_some());
+    let rejoined = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == SessionId::Integer(12))
+    })
+    .await;
+    assert!(rejoined.is_some());
+
+    assert!(
+        bob.respond_to_negotiation_request(request_id, request)
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        alice
+            .read_server_message_with_timeout(Duration::from_millis(150))
+            .await,
+        None,
+        "stale queued publish answers must not create observable room state"
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
     assert!(replacement.close().await.is_some());

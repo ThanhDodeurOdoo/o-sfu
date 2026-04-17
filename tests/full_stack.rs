@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use o_sfu::signaling::{
     http::IncomingBitRateStats,
-    protocol::ServerMessage,
+    protocol::{ServerMessage, ServerRequest},
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
 };
 
@@ -702,6 +702,116 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
     assert_peer_joined_message_protocol(&mut observer, SessionId::Integer(84)).await;
     assert_no_server_message_protocol(&mut observer).await;
     assert!(replacement.close().await.is_some());
+}
+
+#[tokio::test]
+async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
+    let config = test_config(1_000, 10);
+
+    let network = ProtocolLocalNetwork::start(config).await;
+    assert!(network.is_some());
+    let Some(network) = network else {
+        return;
+    };
+
+    let channel = network
+        .create_channel(
+            "issuer-replacement-rtc-queued-publish",
+            Some(TEST_CHANNEL_KEY),
+        )
+        .await;
+    assert!(channel.is_some());
+    let Some(channel) = channel else {
+        return;
+    };
+
+    let initial_publisher = network
+        .connect_fake_peer(&channel, SessionId::Integer(86), TEST_CHANNEL_KEY)
+        .await;
+    let subscriber = network
+        .connect_fake_peer(&channel, SessionId::Integer(87), TEST_CHANNEL_KEY)
+        .await;
+    assert!(initial_publisher.is_some());
+    assert!(subscriber.is_some());
+    let (Some(mut initial_publisher), Some(mut subscriber)) = (initial_publisher, subscriber)
+    else {
+        return;
+    };
+
+    assert!(
+        initial_publisher
+            .wait_until_connected(Duration::from_secs(5))
+            .await
+            .is_some()
+    );
+    assert!(
+        subscriber
+            .wait_until_connected(Duration::from_secs(5))
+            .await
+            .is_some()
+    );
+
+    let mut source = FakeMediaSource::audio();
+    assert!(initial_publisher.publish_track(&source).await.is_some());
+    let request = initial_publisher.read_next_server_request().await;
+    assert!(request.is_some());
+    let Some((request_id, request)) = request else {
+        return;
+    };
+    assert!(
+        matches!(request, ServerRequest::Renegotiate(_)),
+        "publish should leave a renegotiation answer pending on the original socket"
+    );
+
+    let replacement = network
+        .connect_fake_peer(&channel, SessionId::Integer(86), TEST_CHANNEL_KEY)
+        .await;
+    assert!(replacement.is_some());
+    let Some(mut replacement) = replacement else {
+        return;
+    };
+
+    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(86)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(86)).await;
+
+    assert!(
+        initial_publisher
+            .respond_to_server_request(request_id, request)
+            .await
+            .is_some()
+    );
+    assert_no_server_message_protocol(&mut subscriber).await;
+
+    let mut clock = FakeClock::default();
+    assert_audio_packet_dropped(
+        &mut initial_publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+    assert_eq!(
+        initial_publisher.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+
+    assert!(
+        replacement
+            .wait_until_connected(Duration::from_secs(5))
+            .await
+            .is_some()
+    );
+    assert!(replacement.publish_track(&source).await.is_some());
+    assert!(replacement.complete_next_negotiation().await.is_some());
+    assert_track_snapshot(
+        &mut subscriber,
+        SessionId::Integer(86),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_audio_packet_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
 }
 
 #[tokio::test]

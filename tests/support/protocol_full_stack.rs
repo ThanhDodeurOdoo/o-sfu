@@ -184,6 +184,21 @@ impl ProtocolFakePeer {
         }
     }
 
+    pub async fn read_next_server_request(&mut self) -> Option<(RequestId, ServerRequest)> {
+        loop {
+            let batch = read_protocol_batch(&mut self.websocket).await?;
+            for envelope in batch {
+                match ServerEnvelope::decode(envelope).ok()? {
+                    ServerEnvelope::Request {
+                        request_id,
+                        request,
+                    } => return Some((request_id, request)),
+                    ServerEnvelope::Message(_) | ServerEnvelope::Response { .. } => {}
+                }
+            }
+        }
+    }
+
     pub async fn read_server_message_with_timeout(
         &mut self,
         duration: Duration,
@@ -194,18 +209,8 @@ impl ProtocolFakePeer {
     }
 
     pub async fn complete_next_negotiation(&mut self) -> Option<()> {
-        loop {
-            let batch = read_protocol_batch(&mut self.websocket).await?;
-            for envelope in batch {
-                match ServerEnvelope::decode(envelope).ok()? {
-                    ServerEnvelope::Request {
-                        request_id,
-                        request,
-                    } => return self.respond_to_server_request(request_id, request).await,
-                    ServerEnvelope::Message(_) | ServerEnvelope::Response { .. } => {}
-                }
-            }
-        }
+        let (request_id, request) = self.read_next_server_request().await?;
+        self.respond_to_server_request(request_id, request).await
     }
 
     pub async fn close(mut self) -> Option<()> {
@@ -254,7 +259,7 @@ impl ProtocolFakePeer {
         Some(())
     }
 
-    async fn respond_to_server_request(
+    pub async fn respond_to_server_request(
         &mut self,
         request_id: RequestId,
         request: ServerRequest,

@@ -10,6 +10,22 @@ use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
+    async fn reject_stale_connection(&self) -> bool {
+        if self
+            .channel
+            .has_connection(&self.session_id, self.connection_id)
+            .await
+        {
+            return false;
+        }
+        debug!(
+            session_id = ?self.session_id,
+            connection_id = self.connection_id,
+            "rejecting client envelope from a stale websocket connection"
+        );
+        true
+    }
+
     async fn handle_info_message(&self, info: SessionInfo) {
         debug!(
             session_id = ?self.session_id,
@@ -33,6 +49,9 @@ impl PostAuthSessionProtocol {
         writer: &mut WsWriter,
         envelope: ClientEnvelope,
     ) -> SessionProtocolOutcome {
+        if self.reject_stale_connection().await {
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::Kicked);
+        }
         match envelope {
             ClientEnvelope::Message(ClientMessage::Info(info)) => {
                 self.handle_info_message(info).await;

@@ -176,6 +176,10 @@ impl Channel {
             .await;
     }
 
+    pub(crate) async fn has_connection(&self, session_id: &SessionId, connection_id: u64) -> bool {
+        self.state.read().await.session_connection_id(session_id) == Some(connection_id)
+    }
+
     #[cfg(test)]
     pub async fn update_session_info(
         &self,
