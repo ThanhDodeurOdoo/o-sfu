@@ -14,6 +14,7 @@ use crate::signaling::{
     protocol::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
     shared::SessionId,
 };
+use tracing::warn;
 
 use super::super::{
     controller::SessionProtocolOutcome,
@@ -93,24 +94,42 @@ impl PostAuthSessionProtocol {
     ) -> SessionProtocolOutcome {
         match message {
             Message::Text(payload) => self.handle_text_payload(writer, &payload).await,
-            Message::Binary(payload) => {
-                if payload.len() > MAX_CLIENT_FRAME_BYTES {
-                    self.metrics.record_ws_bus_invalid_input_failure();
-                    return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
-                }
-                match String::from_utf8(payload.to_vec()) {
-                    Ok(payload) => self.handle_text_payload(writer, &payload).await,
-                    Err(_error) => {
-                        self.metrics.record_ws_bus_invalid_input_failure();
-                        SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
-                    }
-                }
-            }
+            Message::Binary(payload) => self.handle_binary_payload(writer, &payload).await,
             Message::Close(frame) => {
                 tracing::info!(?frame, "websocket peer sent close frame");
                 SessionProtocolOutcome::Break
             }
             Message::Ping(_) | Message::Pong(_) => SessionProtocolOutcome::Continue,
+        }
+    }
+
+    async fn handle_binary_payload(
+        &mut self,
+        writer: &mut WsWriter,
+        payload: &[u8],
+    ) -> SessionProtocolOutcome {
+        if payload.len() > MAX_CLIENT_FRAME_BYTES {
+            self.metrics.record_ws_bus_invalid_input_failure();
+            warn!(
+                session_id = ?self.session_id,
+                connection_id = self.connection_id,
+                payload_len = payload.len(),
+                max_len = MAX_CLIENT_FRAME_BYTES,
+                "received oversized websocket binary frame"
+            );
+            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        }
+        match String::from_utf8(payload.to_vec()) {
+            Ok(payload) => self.handle_text_payload(writer, &payload).await,
+            Err(_error) => {
+                self.metrics.record_ws_bus_invalid_input_failure();
+                warn!(
+                    session_id = ?self.session_id,
+                    connection_id = self.connection_id,
+                    "received websocket binary frame with invalid UTF-8"
+                );
+                SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
+            }
         }
     }
 
@@ -125,9 +144,19 @@ impl PostAuthSessionProtocol {
                 match error.kind() {
                     ClientBatchDecodeFailureKind::InvalidInput => {
                         self.metrics.record_ws_bus_invalid_input_failure();
+                        warn!(
+                            session_id = ?self.session_id,
+                            connection_id = self.connection_id,
+                            "failed to decode client websocket batch because the payload was invalid"
+                        );
                     }
                     ClientBatchDecodeFailureKind::UnsupportedFeature => {
                         self.metrics.record_ws_bus_unsupported_feature_failure();
+                        warn!(
+                            session_id = ?self.session_id,
+                            connection_id = self.connection_id,
+                            "failed to decode client websocket batch because it used an unsupported feature"
+                        );
                     }
                 }
                 return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);

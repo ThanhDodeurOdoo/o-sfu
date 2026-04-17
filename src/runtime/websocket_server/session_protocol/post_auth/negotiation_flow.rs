@@ -5,11 +5,15 @@ use crate::runtime::websocket_server::WsWriter;
 use crate::signaling::protocol::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };
+use tracing::warn;
 
 use super::super::{
     controller::SessionProtocolOutcome,
     frame_codec::send_server_request,
-    negotiation::{PendingNegotiationAction, PendingNegotiationRequest, RenegotiationDisposition},
+    negotiation::{
+        PendingNegotiationAction, PendingNegotiationRequest, RenegotiationDisposition,
+        ResolvedNegotiation,
+    },
 };
 use super::controller::PostAuthSessionProtocol;
 
@@ -26,7 +30,15 @@ impl PostAuthSessionProtocol {
             .transport_adapter
             .create_initial_session_offer(&session_key)
             .await
-            .map_err(|_error| WebSocketCloseCode::Error)?;
+            .map_err(|error| {
+                warn!(
+                    session_id = ?self.session_id,
+                    connection_id = self.connection_id,
+                    ?error,
+                    "failed to create initial transport offer"
+                );
+                WebSocketCloseCode::Error
+            })?;
         let offer_request = ServerRequest::Offer(SessionDescriptionPayload {
             sdp: offer.into_sdp(),
         });
@@ -47,7 +59,16 @@ impl PostAuthSessionProtocol {
         action: PendingNegotiationAction,
     ) -> Result<(), WebSocketCloseCode> {
         let request_id = self.request_state.next_request_id();
-        send_server_request(writer, request_id.clone(), request.clone()).await?;
+        if let Err(code) = send_server_request(writer, request_id.clone(), request.clone()).await {
+            warn!(
+                session_id = ?self.session_id,
+                connection_id = self.connection_id,
+                ?request_id,
+                close_code = u16::from(code),
+                "failed to send negotiation request over websocket"
+            );
+            return Err(code);
+        }
         self.negotiation.issue(request_id, request, action);
         Ok(())
     }
@@ -84,22 +105,17 @@ impl PostAuthSessionProtocol {
         response_to: RequestId,
         answer: SessionDescriptionPayload,
     ) -> SessionProtocolOutcome {
-        if answer.sdp.is_empty() {
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+        if let Err(outcome) = self.validate_negotiation_answer(&response_to, &answer) {
+            return outcome;
         }
-        let Some(resolved) = self.negotiation.resolve_answer(&response_to) else {
+        let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         };
-        let session_key = self
-            .channel
-            .transport_session_key(&self.session_id, self.connection_id);
-        if self
-            .transport_adapter
-            .apply_session_answer(&session_key, &answer.sdp)
+        if let Err(outcome) = self
+            .apply_transport_negotiation_answer(&response_to, &answer.sdp, &resolved)
             .await
-            .is_err()
         {
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::Error);
+            return outcome;
         }
         if self
             .apply_negotiation_action(&resolved.pending, &answer.sdp)
@@ -112,18 +128,91 @@ impl PostAuthSessionProtocol {
         if matches!(resolved.pending.request, ServerRequest::Ping) {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
-        let needs_follow_up = if self.stage_queued_publish_streams().await {
-            true
-        } else {
-            resolved.queued_renegotiation
-        };
-        if needs_follow_up {
-            match self.request_renegotiation(writer).await {
-                Ok(_sent) => {}
-                Err(code) => return SessionProtocolOutcome::Close(code),
-            }
+        if let Err(outcome) = self
+            .send_follow_up_renegotiation_if_needed(writer, &resolved)
+            .await
+        {
+            return outcome;
         }
         SessionProtocolOutcome::Continue
+    }
+
+    fn validate_negotiation_answer(
+        &self,
+        response_to: &RequestId,
+        answer: &SessionDescriptionPayload,
+    ) -> Result<(), SessionProtocolOutcome> {
+        if answer.sdp.is_empty() {
+            warn!(
+                session_id = ?self.session_id,
+                connection_id = self.connection_id,
+                ?response_to,
+                "received empty SDP answer for negotiation request"
+            );
+            return Err(SessionProtocolOutcome::Close(
+                WebSocketCloseCode::ProtocolError,
+            ));
+        }
+        Ok(())
+    }
+
+    fn resolve_negotiation_answer(
+        &mut self,
+        response_to: &RequestId,
+    ) -> Option<ResolvedNegotiation> {
+        let Some(resolved) = self.negotiation.resolve_answer(response_to) else {
+            warn!(
+                session_id = ?self.session_id,
+                connection_id = self.connection_id,
+                ?response_to,
+                "received negotiation answer for an unknown or stale request"
+            );
+            return None;
+        };
+        Some(resolved)
+    }
+
+    async fn apply_transport_negotiation_answer(
+        &self,
+        response_to: &RequestId,
+        answer_sdp: &str,
+        resolved: &ResolvedNegotiation,
+    ) -> Result<(), SessionProtocolOutcome> {
+        let session_key = self
+            .channel
+            .transport_session_key(&self.session_id, self.connection_id);
+        if let Err(error) = self
+            .transport_adapter
+            .apply_session_answer(&session_key, answer_sdp)
+            .await
+        {
+            warn!(
+                session_id = ?self.session_id,
+                connection_id = self.connection_id,
+                ?response_to,
+                request = ?resolved.pending.request,
+                ?error,
+                "failed to apply negotiation answer to the transport session"
+            );
+            return Err(SessionProtocolOutcome::Close(WebSocketCloseCode::Error));
+        }
+        Ok(())
+    }
+
+    async fn send_follow_up_renegotiation_if_needed(
+        &mut self,
+        writer: &mut WsWriter,
+        resolved: &ResolvedNegotiation,
+    ) -> Result<(), SessionProtocolOutcome> {
+        let needs_follow_up =
+            self.stage_queued_publish_streams().await || resolved.queued_renegotiation;
+        if !needs_follow_up {
+            return Ok(());
+        }
+        self.request_renegotiation(writer)
+            .await
+            .map(|_sent| ())
+            .map_err(SessionProtocolOutcome::Close)
     }
 
     async fn apply_negotiation_action(
@@ -138,7 +227,14 @@ impl PostAuthSessionProtocol {
                 let client_rtp_capabilities = self
                     .transport_adapter
                     .negotiated_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
-                    .map_err(|_error| ())?;
+                    .map_err(|error| {
+                        warn!(
+                            session_id = ?self.session_id,
+                            connection_id = self.connection_id,
+                            ?error,
+                            "failed to project client RTP capabilities from the answered SDP"
+                        );
+                    })?;
                 if !self
                     .channel
                     .apply_session_negotiated(
@@ -149,6 +245,11 @@ impl PostAuthSessionProtocol {
                     )
                     .await
                 {
+                    warn!(
+                        session_id = ?self.session_id,
+                        connection_id = self.connection_id,
+                        "failed to commit negotiated session state after initial answer"
+                    );
                     return Err(());
                 }
             }
@@ -162,6 +263,11 @@ impl PostAuthSessionProtocol {
                     )
                     .await
                 {
+                    warn!(
+                        session_id = ?self.session_id,
+                        connection_id = self.connection_id,
+                        "failed to refresh session state after renegotiation answer"
+                    );
                     return Err(());
                 }
             }
@@ -184,7 +290,15 @@ async fn staged_renegotiation_request(
             },
         ))),
         Err(TransportAdapterError::UnsupportedFeature) => Ok(None),
-        Err(TransportAdapterError::TransportUnavailable | TransportAdapterError::InvalidInput) => {
+        Err(
+            error @ (TransportAdapterError::TransportUnavailable
+            | TransportAdapterError::InvalidInput),
+        ) => {
+            warn!(
+                ?session_key,
+                ?error,
+                "failed to build a staged renegotiation offer"
+            );
             Err(WebSocketCloseCode::Error)
         }
     }

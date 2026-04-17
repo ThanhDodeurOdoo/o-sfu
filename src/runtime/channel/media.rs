@@ -201,13 +201,15 @@ impl Channel {
             .await
         {
             Ok(transport_media_id) => transport_media_id,
-            Err(_error) => {
+            Err(error) => {
                 warn!(
                     consumer_session_id = ?target.consumer_session_id(),
                     consumer_connection_id = target.consumer_connection_id(),
                     producer_session_id = ?target.producer_session_id(),
                     producer_connection_id = target.producer_connection_id(),
                     source_transport_media_id = ?target.transport_media_id(),
+                    error = ?error,
+                    consumer_mid = prepared.consumer_rtp_parameters().mid(),
                     ?origin,
                     "transport adapter rejected consume media declaration"
                 );

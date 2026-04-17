@@ -3,7 +3,7 @@ use std::time::Instant;
 use str0m::media::{Direction, KeyframeRequestKind, MediaKind, Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::sync::oneshot;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::transport_adapter::{
@@ -426,13 +426,27 @@ fn worker_add_send_media(
     remote_source_control: Option<RemoteSourceControl>,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Result<TransportMediaId, TransportAdapterError> {
-    let route_source = ensure_route_source_registered(
+    let route_source = match ensure_route_source_registered(
         state,
         consumer_session_key,
         source_session_key,
         source_transport_media_id,
         remote_source_control,
-    )?;
+    ) {
+        Ok(route_source) => route_source,
+        Err(error) => {
+            warn!(
+                consumer_session_id = ?consumer_session_key.session_id(),
+                consumer_media_worker_id = consumer_session_key.media_worker_id(),
+                source_session_id = ?source_session_key.session_id(),
+                source_media_worker_id = source_session_key.media_worker_id(),
+                ?source_transport_media_id,
+                error = ?error,
+                "failed to register route source for consumer media"
+            );
+            return Err(error);
+        }
+    };
     let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -498,6 +512,11 @@ fn worker_stage_native_send_media(
     if session_state.sdp_negotiation.pending_offer.is_some()
         && session_state.sdp_negotiation.staged_offer_sdp.is_none()
     {
+        warn!(
+            ?media_kind,
+            initial_offer_applied = session_state.sdp_negotiation.initial_offer_applied,
+            "cannot stage consumer media while a previous offer is still awaiting answer"
+        );
         return Err(TransportAdapterError::InvalidInput);
     }
 

@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::{Span, field, info};
+use tracing::{Span, field, info, warn};
 
 use super::{
     WsWriter, close_writer,
@@ -85,9 +85,15 @@ async fn receive_auth(
     )
     .await
     {
-        Err(_) => Err(Some(WebSocketCloseCode::AuthTimeout)),
+        Err(_) => {
+            info!("timed out waiting for initial websocket auth payload");
+            Err(Some(WebSocketCloseCode::AuthTimeout))
+        }
         Ok(None) => Ok(None),
-        Ok(Some(Err(_error))) => Err(Some(WebSocketCloseCode::Error)),
+        Ok(Some(Err(_error))) => {
+            info!("websocket reader returned an error before authentication completed");
+            Err(Some(WebSocketCloseCode::Error))
+        }
         Ok(Some(Ok(message))) => parse_auth_payload(message).map(Some).map_err(Some),
     }
 }
@@ -116,25 +122,52 @@ async fn receive_auth_or_reject(
 }
 
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
-    let payload = match message {
-        Message::Text(payload) => payload.to_string(),
+    let payload = auth_payload_text(message)?;
+    let batch = decode_auth_batch(&payload)?;
+    extract_auth_envelope(batch)
+}
+
+fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
+    match message {
+        Message::Text(payload) => Ok(payload.to_string()),
         Message::Binary(payload) => {
             if payload.len() > MAX_CLIENT_FRAME_BYTES {
+                info!(
+                    payload_len = payload.len(),
+                    max_len = MAX_CLIENT_FRAME_BYTES,
+                    "authentication payload exceeded the websocket frame limit"
+                );
                 return Err(WebSocketCloseCode::ProtocolError);
             }
-            String::from_utf8(payload.to_vec())
-                .map_err(|_error| WebSocketCloseCode::ProtocolError)?
+            String::from_utf8(payload.to_vec()).map_err(|_error| {
+                info!("authentication payload contained invalid UTF-8");
+                WebSocketCloseCode::ProtocolError
+            })
         }
-        Message::Close(_) => return Err(WebSocketCloseCode::Clean),
+        Message::Close(_) => Err(WebSocketCloseCode::Clean),
         Message::Ping(_) | Message::Pong(_) => {
-            return Err(WebSocketCloseCode::ProtocolError);
+            info!("received websocket control frame before authentication payload");
+            Err(WebSocketCloseCode::ProtocolError)
         }
-    };
-    let batch =
-        decode_client_batch(&payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
+    }
+}
+
+fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketCloseCode> {
+    let batch = decode_client_batch(payload).map_err(|_error| {
+        info!("failed to decode authentication envelope batch");
+        WebSocketCloseCode::ProtocolError
+    })?;
     if batch.len() != 1 {
+        info!(
+            batch_len = batch.len(),
+            "authentication batch must contain exactly one envelope"
+        );
         return Err(WebSocketCloseCode::ProtocolError);
     }
+    Ok(batch)
+}
+
+fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebSocketCloseCode> {
     let Some(envelope) = batch.into_iter().next() else {
         return Err(WebSocketCloseCode::ProtocolError);
     };
@@ -142,7 +175,10 @@ fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCod
         ClientEnvelope::Message(ClientMessage::Auth(auth_payload)) => Ok(auth_payload),
         ClientEnvelope::Message(_)
         | ClientEnvelope::Request { .. }
-        | ClientEnvelope::Response { .. } => Err(WebSocketCloseCode::ProtocolError),
+        | ClientEnvelope::Response { .. } => {
+            info!("first websocket envelope was not an auth message");
+            Err(WebSocketCloseCode::ProtocolError)
+        }
     }
 }
 
@@ -152,6 +188,10 @@ async fn authenticate(
 ) -> Result<(Arc<Channel>, WebSocketConnectClaims), WebSocketCloseCode> {
     if let Some(channel_uuid) = auth_payload.channel.as_deref() {
         let Some(channel) = state.channels.get_by_uuid(channel_uuid).await else {
+            info!(
+                channel_uuid,
+                "authentication referenced an unknown explicit channel"
+            );
             return Err(WebSocketCloseCode::AuthFailed);
         };
         let key = channel.key().unwrap_or(&state.config.auth_key);
@@ -160,11 +200,22 @@ async fn authenticate(
     }
 
     let claims = auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth_key)
-        .map_err(|_error| WebSocketCloseCode::AuthFailed)?;
+        .map_err(|_error| {
+            info!("failed to verify websocket auth token against the global key");
+            WebSocketCloseCode::AuthFailed
+        })?;
     let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
+        info!(
+            channel_uuid = claims.sfu_channel_uuid,
+            "verified websocket token referenced a missing channel"
+        );
         return Err(WebSocketCloseCode::AuthFailed);
     };
     if channel.key().is_some() {
+        info!(
+            channel_uuid = claims.sfu_channel_uuid,
+            "global-key websocket token targeted a channel that requires a scoped key"
+        );
         return Err(WebSocketCloseCode::AuthFailed);
     }
     Ok((channel, claims))
@@ -177,13 +228,21 @@ fn authenticate_channel_scoped_claims(
 ) -> Result<WebSocketConnectClaims, WebSocketCloseCode> {
     if let Ok(claims) = auth::verify::<WebSocketConnectClaims>(token, key) {
         if claims.sfu_channel_uuid != channel_uuid {
+            info!(
+                expected_channel_uuid = channel_uuid,
+                claimed_channel_uuid = claims.sfu_channel_uuid,
+                "channel-scoped websocket token targeted the wrong channel"
+            );
             return Err(WebSocketCloseCode::AuthFailed);
         }
         return Ok(claims);
     }
 
-    let claims = auth::verify::<LegacyChannelScopedConnectClaims>(token, key)
-        .map_err(|_error| WebSocketCloseCode::AuthFailed)?;
+    let claims =
+        auth::verify::<LegacyChannelScopedConnectClaims>(token, key).map_err(|_error| {
+            info!("failed to verify websocket auth token against the channel-scoped key");
+            WebSocketCloseCode::AuthFailed
+        })?;
     Ok(WebSocketConnectClaims {
         registered: claims.registered,
         sfu_channel_uuid: channel_uuid.to_owned(),
@@ -248,6 +307,12 @@ async fn join_authenticated_session(
                     WebSocketCloseCode::AuthFailed
                 }
             };
+            info!(
+                ?session_id,
+                ?error,
+                close_code = u16::from(close_code),
+                "rejecting websocket because the authenticated session could not join the channel"
+            );
             reject_handshake(
                 state,
                 Some(writer),
@@ -275,13 +340,16 @@ async fn initialize_session(
     session_protocol: &mut SessionProtocol,
 ) -> Option<()> {
     if send_welcome(channel, session_id, writer).await.is_err() {
-        info!("failed to send welcome payload");
+        info!(?session_id, connection_id, "failed to send welcome payload");
         state.metrics.record_ws_startup_send_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
     }
     if session_protocol.initialize(writer).await.is_err() {
-        info!("failed to initialize websocket session protocol");
+        info!(
+            ?session_id,
+            connection_id, "failed to initialize websocket session protocol"
+        );
         state.metrics.record_ws_session_initialize_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
@@ -305,10 +373,18 @@ async fn cleanup_failed_session(
             RuntimeState::session_cleanup_policy(),
         )
         .await;
-    let _result = state
+    if let Err(error) = state
         .transport_adapter
         .close_session(&channel.transport_session_key(session_id, connection_id))
-        .await;
+        .await
+    {
+        warn!(
+            ?session_id,
+            connection_id,
+            ?error,
+            "failed to cleanup transport session after websocket startup failure"
+        );
+    }
 }
 
 async fn reject_handshake<T>(

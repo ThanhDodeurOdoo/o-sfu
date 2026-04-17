@@ -26,6 +26,7 @@ use o_sfu_router::{MediaCapabilities, MediaKind, RtpParameters as RouterRtpParam
 use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
+use tracing::warn;
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub(crate) use fake::FakeWebRtcAdapter;
@@ -549,7 +550,7 @@ impl RuntimeTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.create_initial_session_offer(session_key).await,
             Self::Rtc(adapter) => {
@@ -558,7 +559,15 @@ impl RuntimeTransportAdapter {
                     .create_initial_session_offer(session_key)
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                ?error,
+                "transport adapter failed to create initial session offer"
+            );
         }
+        result
     }
 
     /// Create a follow-up renegotiation offer for the protocol signaling path.
@@ -566,7 +575,7 @@ impl RuntimeTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
@@ -579,7 +588,15 @@ impl RuntimeTransportAdapter {
                     .create_session_renegotiation_offer(session_key)
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                ?error,
+                "transport adapter failed to create renegotiation offer"
+            );
         }
+        result
     }
 
     /// Apply the remote answer to the outstanding protocol session offer.
@@ -588,7 +605,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<(), TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.apply_session_answer(session_key, answer_sdp).await,
             Self::Rtc(adapter) => {
@@ -597,7 +614,16 @@ impl RuntimeTransportAdapter {
                     .apply_session_answer(session_key, answer_sdp)
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                answer_len = answer_sdp.len(),
+                ?error,
+                "transport adapter failed to apply session answer"
+            );
         }
+        result
     }
 
     pub(crate) fn negotiated_client_rtp_capabilities(
@@ -607,7 +633,7 @@ impl RuntimeTransportAdapter {
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         #[cfg(not(any(test, feature = "testing-transport")))]
         let _ = offered_router_capabilities;
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_adapter) => FakeWebRtcAdapter::project_answered_client_rtp_capabilities(
                 answer_sdp,
@@ -615,7 +641,15 @@ impl RuntimeTransportAdapter {
             ),
             Self::Rtc(_adapter) => client_rtp_capabilities_from_answer(answer_sdp)
                 .ok_or(TransportAdapterError::InvalidInput),
+        };
+        if let Err(error) = &result {
+            warn!(
+                answer_len = answer_sdp.len(),
+                ?error,
+                "transport adapter failed to derive client RTP capabilities from answer SDP"
+            );
         }
+        result
     }
 
     /// Build session transport bootstrap state for transport tests and benchmarks.
@@ -646,7 +680,7 @@ impl RuntimeTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.close_session(session_key).await,
             Self::Rtc(adapter) => {
@@ -657,7 +691,15 @@ impl RuntimeTransportAdapter {
                 adapter.release_relay_cleanup(&session_shard, close_outcome.relay_cleanup());
                 Ok(())
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                ?error,
+                "transport adapter failed to close session"
+            );
         }
+        result
     }
 
     /// Remove a previously declared media line owned by `session_id`.
@@ -666,7 +708,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.remove_media(session_key, transport_media_id).await,
             Self::Rtc(adapter) => {
@@ -680,7 +722,16 @@ impl RuntimeTransportAdapter {
                 }
                 Ok(())
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                ?transport_media_id,
+                ?error,
+                "transport adapter failed to remove media"
+            );
         }
+        result
     }
 
     #[allow(
@@ -715,7 +766,7 @@ impl RuntimeTransportAdapter {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
@@ -732,7 +783,17 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                ?media_kind,
+                mid = rtp_parameters.mid(),
+                ?error,
+                "transport adapter failed to declare producer media"
+            );
         }
+        result
     }
 
     /// Declare a media line for sending RTP to a consumer session, routed from a producer.
@@ -744,7 +805,7 @@ impl RuntimeTransportAdapter {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
@@ -793,7 +854,19 @@ impl RuntimeTransportAdapter {
                 }
                 add_result
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?consumer_session_key,
+                ?source_session_key,
+                ?source_media_id,
+                ?media_kind,
+                mid = consumer_rtp_parameters.mid(),
+                ?error,
+                "transport adapter failed to declare consumer media"
+            );
         }
+        result
     }
 
     pub(crate) fn transport_bitrate_snapshot(
@@ -835,7 +908,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
@@ -848,7 +921,17 @@ impl RuntimeTransportAdapter {
                     .set_producer_active(session_key, transport_media_id, active)
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?session_key,
+                ?transport_media_id,
+                active,
+                ?error,
+                "transport adapter failed to update producer activity"
+            );
         }
+        result
     }
 
     /// Update whether one consumer route is allowed to forward packets.
@@ -860,7 +943,7 @@ impl RuntimeTransportAdapter {
         source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        match self {
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
@@ -890,7 +973,19 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?consumer_session_key,
+                ?consumer_transport_media_id,
+                ?source_session_key,
+                ?source_transport_media_id,
+                active,
+                ?error,
+                "transport adapter failed to update consumer activity"
+            );
         }
+        result
     }
 
     pub(crate) async fn transport_media_mid(
@@ -917,7 +1012,8 @@ impl RuntimeTransportAdapter {
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
-        match self {
+        let has_packet_gate = packet_gate.is_some();
+        let result = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
@@ -938,7 +1034,17 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
+        };
+        if let Err(error) = &result {
+            warn!(
+                ?source_session_key,
+                ?source_transport_media_id,
+                has_packet_gate,
+                ?error,
+                "transport adapter failed to update source packet gate"
+            );
         }
+        result
     }
 
     #[cfg(test)]
