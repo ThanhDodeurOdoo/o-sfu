@@ -25,6 +25,10 @@ export class LocalUploads {
         this._senderMidByType.clear();
     }
 
+    boundMidFor(streamType: StreamType): string | undefined {
+        return this._senderMidByType.get(streamType);
+    }
+
     async attachTrack(
         peerConnection: ClientPeerConnection | null,
         mid: string,

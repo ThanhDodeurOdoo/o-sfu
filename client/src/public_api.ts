@@ -31,6 +31,14 @@ export interface SessionInfo {
     isRaisingHand?: boolean;
 }
 
+export interface UpdateInfoOptions {
+    /**
+     * @deprecated The welcome payload already carries the current peer snapshot,
+     * so the browser shell keeps this legacy flag as a compatibility no-op.
+     */
+    needRefresh?: boolean;
+}
+
 export interface AvailableFeatures {
     rtc: boolean;
     transcription: boolean;
@@ -49,6 +57,14 @@ export interface RecordingOptions {
     audio?: boolean;
     video?: boolean;
     transcription?: boolean;
+}
+
+export interface SfuStats {
+    uploadStats?: RTCStatsReport;
+    downloadStats?: RTCStatsReport;
+    audio?: RTCStatsReport;
+    camera?: RTCStatsReport;
+    screen?: RTCStatsReport;
 }
 
 export type RecordingStopCode =
@@ -119,6 +135,7 @@ export interface StateChangeDetail {
 
 export interface SfuClientSurface extends EventTarget {
     readonly state: ConnectionState;
+    readonly errors: Error[];
     readonly availableFeatures: AvailableFeatures;
     readonly recordingState: RecordingState;
 
@@ -134,7 +151,8 @@ export interface SfuClientSurface extends EventTarget {
      * @deprecated Use `subscribe()` instead.
      */
     updateDownload(sessionId: SessionId, states: DownloadStates): void;
-    updateInfo(info: SessionInfo): void;
+    updateInfo(info: SessionInfo, options?: UpdateInfoOptions): void;
+    getStats(): Promise<SfuStats>;
     broadcast(message: unknown): void;
     startRecording(options?: RecordingOptions): Promise<boolean>;
     stopRecording(): Promise<boolean>;

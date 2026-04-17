@@ -10,8 +10,10 @@ import {
     type RecordingState,
     type SessionId,
     type SessionInfo,
+    type SfuStats,
     type SfuClientSurface,
-    type StreamType
+    type StreamType,
+    type UpdateInfoOptions
 } from "./public_api.js";
 import {
     createProtocolCore,
@@ -40,6 +42,7 @@ export type { SfuClientDependencies } from "./sfu_client/browser_types.js";
 
 export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
+    public errors: Error[] = [];
     public recordingState: RecordingState = {};
     public readonly _consumers: ReadonlyMap<SessionId, ConsumersCompat>;
 
@@ -68,6 +71,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     connect(url: string, jwt: string, options: ConnectOptions = {}): void {
         validateConnectOptions(options);
+        this.errors = [];
         this._iceServers = cloneIceServers(options.iceServers);
         this._runtime.enqueueProtocolCommands(
             () =>
@@ -81,6 +85,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     disconnect(): void {
+        this.errors = [];
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.disconnect(),
             this._runtimeHooks()
@@ -143,11 +148,15 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this.subscribe(sessionId, states);
     }
 
-    updateInfo(info: SessionInfo): void {
+    updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.updateInfo(info),
             this._runtimeHooks()
         );
+    }
+
+    async getStats(): Promise<SfuStats> {
+        return this._runtime.getStats(this._localUploads);
     }
 
     broadcast(message: unknown): void {
@@ -218,6 +227,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     private _handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
+        this.errors.push(resolvedError);
         this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
         this._runtime.teardown(this._runtimeHooks(), 1011);

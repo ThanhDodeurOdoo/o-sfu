@@ -34,6 +34,7 @@ export interface ClientWebSocket {
 }
 
 export interface PeerConnectionSender {
+    getStats?(): Promise<RTCStatsReport>;
     replaceTrack(track: MediaTrack | null): Promise<void>;
     track?: MediaTrack | null;
 }
@@ -71,6 +72,7 @@ export interface ClientPeerConnection {
     close(): void;
     connectionState?: ClientPeerConnectionState;
     createAnswer(): Promise<{ sdp: string; type: "answer" }>;
+    getStats?(): Promise<RTCStatsReport>;
     getTransceivers(): PeerConnectionTransceiver[];
     iceGatheringState?: ClientIceGatheringState;
     localDescription?: { sdp: string; type: "answer" } | null;

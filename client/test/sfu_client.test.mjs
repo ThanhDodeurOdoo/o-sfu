@@ -44,8 +44,13 @@ class FakeWebSocket {
 }
 
 class FakeSender {
-    constructor() {
+    constructor(statsReport = undefined) {
+        this.statsReport = statsReport;
         this.track = null;
+    }
+
+    async getStats() {
+        return this.statsReport;
     }
 
     async replaceTrack(track) {
@@ -56,7 +61,12 @@ class FakeSender {
 class FakePeerConnection {
     constructor(
         config,
-        { answerSdp = "answer-sdp", autoConnect = true, gatheredAnswerSdp = null } = {}
+        {
+            answerSdp = "answer-sdp",
+            autoConnect = true,
+            gatheredAnswerSdp = null,
+            peerConnectionStats = undefined
+        } = {}
     ) {
         this.answerSdp = answerSdp;
         this.autoConnect = autoConnect;
@@ -71,6 +81,7 @@ class FakePeerConnection {
         this.onicecandidate = null;
         this.onicegatheringstatechange = null;
         this.ontrack = null;
+        this.peerConnectionStats = peerConnectionStats;
         this.remoteDescriptions = [];
         this.transceivers = [
             {
@@ -154,6 +165,10 @@ class FakePeerConnection {
         return this.transceivers;
     }
 
+    async getStats() {
+        return this.peerConnectionStats;
+    }
+
     close() {
         this.connectionState = "closed";
         this.closed = true;
@@ -200,6 +215,7 @@ class FakeProtocolCore {
         this.trackBindings = new Map();
         this.transportReadyCalls = 0;
         this.transportFailureState = null;
+        this.updateInfoCalls = [];
         this.wsCloseCodes = [];
     }
 
@@ -368,7 +384,8 @@ class FakeProtocolCore {
         return [];
     }
 
-    updateInfo() {
+    updateInfo(info) {
+        this.updateInfoCalls.push(info);
         return [];
     }
 
@@ -1533,9 +1550,76 @@ test("renegotiation binds a newly published local track before answering", async
     });
 });
 
+test("getStats exposes compatibility-shaped transport and producer stats", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const peerConnectionStats = new Map([["transport", { type: "transport" }]]);
+    const cameraProducerStats = new Map([["outbound-rtp", { type: "outbound-rtp" }]]);
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config, {
+                peerConnectionStats
+            });
+            peerConnection.transceivers[1].sender = new FakeSender(cameraProducerStats);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    client.updateUpload("camera", {
+        enabled: true,
+        id: "camera-track-compat",
+        kind: "video",
+        muted: false
+    });
+    await tick();
+
+    sockets[0].emitMessage("offer-with-attach-camera");
+    await tick();
+
+    const stats = await client.getStats();
+
+    assert.equal(peerConnections.length, 1);
+    assert.equal(stats.uploadStats, peerConnectionStats);
+    assert.equal(stats.downloadStats, peerConnectionStats);
+    assert.equal(stats.camera, cameraProducerStats);
+    assert.equal(stats.audio, undefined);
+    assert.equal(stats.screen, undefined);
+});
+
+test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", async () => {
+    const core = new FakeProtocolCore();
+    const client = new SfuClient({
+        createProtocolCore: () => core
+    });
+
+    client.updateInfo({ isCameraOn: true, isRaisingHand: true }, { needRefresh: true });
+    await tick();
+
+    assert.deepEqual(core.updateInfoCalls, [
+        {
+            isCameraOn: true,
+            isRaisingHand: true
+        }
+    ]);
+});
+
 test("fatal runtime errors reset the public client surface", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
+    const handledErrors = [];
     const client = new SfuClient({
         createProtocolCore: () => core,
         createWebSocket: (url) => {
@@ -1543,6 +1627,9 @@ test("fatal runtime errors reset the public client surface", async () => {
             sockets.push(socket);
             return socket;
         }
+    });
+    client.addEventListener("handledError", (event) => {
+        handledErrors.push(event.detail.error);
     });
 
     client.connect("ws://example.test/ws", "jwt-token");
@@ -1568,6 +1655,9 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.deepEqual(client.availableFeatures, EMPTY_FEATURES);
     assert.deepEqual(client.recordingState, {});
     assert.equal(client._consumers.size, 0);
+    assert.equal(client.errors.length, 1);
+    assert.match(client.errors[0].message, /boom/);
+    assert.equal(handledErrors[0], client.errors[0]);
     assert.equal(sockets[0].readyState, 3);
 });
 

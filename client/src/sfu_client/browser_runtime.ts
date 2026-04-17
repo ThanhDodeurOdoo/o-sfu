@@ -1,4 +1,4 @@
-import type { ClientUpdateDetail, ConnectionState, StreamType } from "../public_api.js";
+import type { ClientUpdateDetail, ConnectionState, SfuStats, StreamType } from "../public_api.js";
 import type { HostCommand, ProtocolCoreBindings } from "../runtime_contract.js";
 import type {
     ClientPeerConnection,
@@ -83,6 +83,29 @@ export class BrowserRuntime {
 
     async detachTrack(streamType: StreamType, localUploads: LocalUploads): Promise<void> {
         await localUploads.detachTrack(this._peerConnection, streamType);
+    }
+
+    async getStats(localUploads: LocalUploads): Promise<SfuStats> {
+        const peerConnection = this._peerConnection;
+        if (!peerConnection) {
+            return {};
+        }
+
+        const stats: SfuStats = {};
+        if (typeof peerConnection.getStats === "function") {
+            const peerConnectionStats = await peerConnection.getStats();
+            stats.uploadStats = peerConnectionStats;
+            stats.downloadStats = peerConnectionStats;
+        }
+
+        for (const streamType of orderedStreamTypes()) {
+            const senderStats = await this.getSenderStats(streamType, localUploads);
+            if (senderStats) {
+                stats[streamType] = senderStats;
+            }
+        }
+
+        return stats;
     }
 
     teardown(hooks: BrowserRuntimeHooks, webSocketCloseCode: number): void {
@@ -252,6 +275,24 @@ export class BrowserRuntime {
         this._peerConnection = null;
     }
 
+    private async getSenderStats(
+        streamType: StreamType,
+        localUploads: LocalUploads
+    ): Promise<RTCStatsReport | undefined> {
+        const peerConnection = this._peerConnection;
+        const boundMid = localUploads.boundMidFor(streamType);
+        if (!peerConnection || !boundMid) {
+            return undefined;
+        }
+        const transceiver = peerConnection
+            .getTransceivers()
+            .find((candidate) => candidate.mid === boundMid);
+        if (!transceiver || typeof transceiver.sender.getStats !== "function") {
+            return undefined;
+        }
+        return transceiver.sender.getStats();
+    }
+
     private async applyNegotiation(
         requestId: string,
         negotiationKind: "offer" | "renegotiate",
@@ -372,4 +413,8 @@ export class BrowserRuntime {
         this._clearTimer(handle);
         this._timerHandles.delete(id);
     }
+}
+
+function orderedStreamTypes(): StreamType[] {
+    return ["audio", "camera", "screen"];
 }
