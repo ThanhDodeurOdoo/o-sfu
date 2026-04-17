@@ -7,13 +7,10 @@ mod support;
 
 use std::time::Duration;
 
-use o_sfu::{
-    config::TransportBackend,
-    signaling::{
-        http::IncomingBitRateStats,
-        protocol::ServerMessage,
-        shared::{DownloadStates, SessionId, SessionInfo, StreamType},
-    },
+use o_sfu::signaling::{
+    http::IncomingBitRateStats,
+    protocol::ServerMessage,
+    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
 };
 
 use crate::support::{
@@ -45,8 +42,7 @@ fn fake_media_source_uses_manual_clock_deterministically() {
 
 #[tokio::test]
 async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -94,8 +90,7 @@ async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries(
 
 #[tokio::test]
 async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -138,8 +133,7 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
 
 #[tokio::test]
 async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_deterministically() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -185,8 +179,7 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
 
 #[tokio::test]
 async fn fake_peers_cover_session_replacement_and_republish_over_protocol_session_flow() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -246,8 +239,7 @@ async fn fake_peers_cover_session_replacement_and_republish_over_protocol_sessio
 
 #[tokio::test]
 async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -320,8 +312,7 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
 
 #[tokio::test]
 async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -370,8 +361,7 @@ async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run
 
 #[tokio::test]
 async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -469,8 +459,7 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
 
 #[tokio::test]
 async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_routes() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -568,8 +557,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
 
 #[tokio::test]
 async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotiation() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -661,8 +649,7 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
 
 #[tokio::test]
 async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -719,8 +706,7 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
 
 #[tokio::test]
 async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_browsers() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());
@@ -747,8 +733,7 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
 
 #[tokio::test]
 async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
-    let mut config = test_config(1_000, 10);
-    config.transport_backend = TransportBackend::Rtc;
+    let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
     assert!(network.is_some());

@@ -14,7 +14,7 @@ pub(super) use tokio_tungstenite::{
 };
 
 pub(super) use crate::{
-    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TransportBackend},
+    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags},
     runtime::{
         RuntimeState,
         channel::Channel,
@@ -87,7 +87,6 @@ pub(super) fn test_config(
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,
-        transport_backend: TransportBackend::Fake,
     }
 }
 
@@ -100,7 +99,7 @@ pub(super) async fn spawn_test_server(
         10_000,
         60_000,
         channel_size,
-        RuntimeTransportAdapter::builder().fake().build(),
+        RuntimeTransportAdapter::fake_for_testing(),
     )
     .await
 }
@@ -199,7 +198,7 @@ pub(super) async fn spawn_protocol_test_server(
         10_000,
         60_000,
         channel_size,
-        RuntimeTransportAdapter::builder().fake().build(),
+        RuntimeTransportAdapter::fake_for_testing(),
     )
     .await
 }
@@ -222,16 +221,14 @@ pub(super) async fn spawn_test_server_with_feature_flags(
 }
 
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::builder()
-        .rtc(RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RtcPortRange::new(47_200, 47_299),
-            1,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-        .build()
+    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        RtcPortRange::new(47_200, 47_299),
+        1,
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ))
 }
 
 pub(super) async fn spawn_protocol_rtc_test_server(

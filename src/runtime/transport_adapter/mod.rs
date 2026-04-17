@@ -1,3 +1,4 @@
+#[cfg(any(test, feature = "testing-transport"))]
 mod fake;
 #[cfg(test)]
 mod fake_bootstrap;
@@ -26,8 +27,14 @@ use str0m::media::MediaKind as Str0mMediaKind;
 #[cfg(test)]
 use str0m::media::Mid;
 
+#[cfg(any(test, feature = "testing-transport"))]
 pub(crate) use fake::FakeWebRtcAdapter;
+#[cfg(any(test, feature = "testing-transport"))]
 #[cfg(test)]
+#[allow(
+    unused_imports,
+    reason = "fake transport events are re-exported for test modules even when a feature-only build does not consume them"
+)]
 pub(crate) use fake::FakeWebRtcEvent;
 
 /// Channel-scooped transport-adapter session identity.
@@ -359,41 +366,13 @@ impl RtcTransportAdapterShardSetConfig {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct RuntimeTransportAdapterBuilder {
-    rtc_config: Option<RtcTransportAdapterShardSetConfig>,
-}
-
-impl RuntimeTransportAdapterBuilder {
-    #[must_use]
-    pub(crate) fn fake(mut self) -> Self {
-        self.rtc_config = None;
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn rtc(mut self, config: RtcTransportAdapterShardSetConfig) -> Self {
-        self.rtc_config = Some(config);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn build(self) -> RuntimeTransportAdapter {
-        self.rtc_config.map_or_else(
-            || RuntimeTransportAdapter::Fake(Arc::new(FakeWebRtcAdapter::default())),
-            |config| {
-                RuntimeTransportAdapter::Rtc(Arc::new(RtcTransportAdapterShardSet::new(&config)))
-            },
-        )
-    }
-}
-
 /// Runtime boundary between signaling/session orchestration and transport-specific behavior.
 ///
 /// Implementations provide transport bootstrap payloads and transport connection handling
 /// without leaking concrete WebRTC library details into the signaling flow.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeTransportAdapter {
+    #[cfg(any(test, feature = "testing-transport"))]
     Fake(Arc<FakeWebRtcAdapter>),
     Rtc(Arc<RtcTransportAdapterShardSet>),
 }
@@ -541,11 +520,25 @@ impl RtcTransportAdapterShardSet {
 
 impl RuntimeTransportAdapter {
     #[must_use]
-    pub(crate) fn builder() -> RuntimeTransportAdapterBuilder {
-        RuntimeTransportAdapterBuilder::default()
+    pub(crate) fn rtc(config: &RtcTransportAdapterShardSetConfig) -> Self {
+        Self::Rtc(Arc::new(RtcTransportAdapterShardSet::new(config)))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
+    #[allow(
+        dead_code,
+        reason = "the fake transport remains available only for deterministic test and feature-gated development workflows"
+    )]
+    #[must_use]
+    pub(crate) fn fake_for_testing() -> Self {
+        Self::Fake(Arc::new(FakeWebRtcAdapter::default()))
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    #[allow(
+        dead_code,
+        reason = "targeted tests still need to inject a preconfigured fake transport adapter instance"
+    )]
     #[must_use]
     pub(crate) fn from_fake_adapter(adapter: Arc<FakeWebRtcAdapter>) -> Self {
         Self::Fake(adapter)
@@ -557,6 +550,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.create_initial_session_offer(session_key).await,
             Self::Rtc(adapter) => {
                 adapter
@@ -573,6 +567,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .create_session_renegotiation_offer(session_key)
@@ -594,6 +589,7 @@ impl RuntimeTransportAdapter {
         answer_sdp: &str,
     ) -> Result<(), TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.apply_session_answer(session_key, answer_sdp).await,
             Self::Rtc(adapter) => {
                 adapter
@@ -609,7 +605,10 @@ impl RuntimeTransportAdapter {
         answer_sdp: &str,
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
+        #[cfg(not(any(test, feature = "testing-transport")))]
+        let _ = offered_router_capabilities;
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_adapter) => FakeWebRtcAdapter::project_answered_client_rtp_capabilities(
                 answer_sdp,
                 offered_router_capabilities,
@@ -627,6 +626,7 @@ impl RuntimeTransportAdapter {
         router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .transport_bootstrap_payload(session_key, router_capabilities)
@@ -647,6 +647,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.close_session(session_key).await,
             Self::Rtc(adapter) => {
                 let session_shard = adapter.shard_for_session(session_key);
@@ -666,6 +667,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.remove_media(session_key, transport_media_id).await,
             Self::Rtc(adapter) => {
                 let session_shard = adapter.shard_for_session(session_key);
@@ -691,6 +693,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .negotiated_producer_parameters(session_key, transport_media_id)
@@ -713,6 +716,7 @@ impl RuntimeTransportAdapter {
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .publish_media(session_key, media_kind, rtp_parameters)
@@ -741,6 +745,7 @@ impl RuntimeTransportAdapter {
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .consume_media(
@@ -796,6 +801,7 @@ impl RuntimeTransportAdapter {
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_adapter) => TransportBitrateSnapshot::default(),
             Self::Rtc(adapter) => adapter.transport_bitrate_snapshot(session_keys),
         }
@@ -803,6 +809,7 @@ impl RuntimeTransportAdapter {
 
     pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => adapter.active_speaker_source_snapshot().await,
             Self::Rtc(adapter) => adapter.active_speaker_source_snapshot().await,
         }
@@ -813,6 +820,7 @@ impl RuntimeTransportAdapter {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_adapter) => None,
             Self::Rtc(adapter) => adapter
                 .shard_for_session(session_key)
@@ -828,6 +836,7 @@ impl RuntimeTransportAdapter {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .set_producer_active(session_key, transport_media_id, active)
@@ -852,6 +861,7 @@ impl RuntimeTransportAdapter {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .set_consumer_active(
@@ -889,6 +899,7 @@ impl RuntimeTransportAdapter {
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_adapter) => None,
             Self::Rtc(adapter) => adapter
                 .shard_for_session(session_key)
@@ -907,6 +918,7 @@ impl RuntimeTransportAdapter {
         packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(adapter) => {
                 adapter
                     .set_source_packet_gate(
@@ -953,6 +965,7 @@ impl RuntimeTransportAdapter {
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
@@ -969,6 +982,7 @@ impl RuntimeTransportAdapter {
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 if let Some(entry) = adapter
@@ -1001,6 +1015,7 @@ impl RuntimeTransportAdapter {
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
         match self {
+            #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 if let Some(entry) = adapter

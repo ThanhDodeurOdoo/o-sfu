@@ -139,7 +139,7 @@ async fn join_session_notifies_existing_peers_with_session_joined() {
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
+    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let first_join = channel
@@ -231,7 +231,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let transport_adapter = RuntimeTransportAdapter::builder().fake().build();
+    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let (tx1, mut alice_rx) = test_sender();
     let (tx2, mut bob_old_rx) = test_sender();
     let (tx3, _bob_new_rx) = test_sender();

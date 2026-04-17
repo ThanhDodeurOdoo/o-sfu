@@ -7,7 +7,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Duration, MissedTickBehavior};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::{Config, TransportBackend};
+use crate::config::Config;
 
 #[cfg(feature = "internal-benchmarks")]
 #[doc(hidden)]
@@ -161,18 +161,12 @@ fn build_transport_adapter(
     recording_media_tap: Arc<MediaTap>,
     metrics: Arc<RuntimeMetrics>,
 ) -> RuntimeTransportAdapter {
-    let builder = RuntimeTransportAdapter::builder();
-    match config.transport_backend {
-        TransportBackend::Fake => builder.fake().build(),
-        TransportBackend::Rtc => builder
-            .rtc(RtcTransportAdapterShardSetConfig::new(
-                config.public_ip,
-                config.rtc_port_range,
-                config.rtc_media_worker_count,
-                config.codec_flags,
-                recording_media_tap,
-                metrics,
-            ))
-            .build(),
-    }
+    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        config.public_ip,
+        config.rtc_port_range,
+        config.rtc_media_worker_count,
+        config.codec_flags,
+        recording_media_tap,
+        metrics,
+    ))
 }

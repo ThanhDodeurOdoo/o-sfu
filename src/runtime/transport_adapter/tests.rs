@@ -168,16 +168,14 @@ async fn assert_remote_route_activity(
 }
 
 fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::builder()
-        .rtc(RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            rtc_port_range,
-            worker_count,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-        .build()
+    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        rtc_port_range,
+        worker_count,
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ))
 }
 
 #[test]
@@ -205,16 +203,14 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
 
 #[test]
 fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
-    let adapter = RuntimeTransportAdapter::builder()
-        .rtc(RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RtcPortRange::new(46_100, 46_199),
-            1,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-        .build();
+    let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        RtcPortRange::new(46_100, 46_199),
+        1,
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ));
 
     let projected = adapter.negotiated_client_rtp_capabilities(
         "v=0\r\ns=invalid-answer\r\n",
@@ -226,16 +222,14 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
 
 #[tokio::test]
 async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
-    let adapter = RuntimeTransportAdapter::builder()
-        .rtc(RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RtcPortRange::new(46_000, 46_003),
-            2,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-        .build();
+    let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        RtcPortRange::new(46_000, 46_003),
+        2,
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ));
     let first_channel_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));
     let second_channel_session = TransportSessionKey::new(11, 1, 1, SessionId::Integer(2));
     let same_shard_session = TransportSessionKey::new(12, 0, 1, SessionId::Integer(3));
@@ -371,16 +365,14 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
 
 #[tokio::test]
 async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
-    let adapter = RuntimeTransportAdapter::builder()
-        .rtc(RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RtcPortRange::new(46_300, 46_599),
-            3,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-        .build();
+    let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        RtcPortRange::new(46_300, 46_599),
+        3,
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ));
     let source_session = TransportSessionKey::new(30, 0, 1, SessionId::Integer(1));
     let first_consumer_session = TransportSessionKey::new(30, 1, 2, SessionId::Integer(2));
     let second_consumer_session = TransportSessionKey::new(30, 2, 3, SessionId::Integer(3));

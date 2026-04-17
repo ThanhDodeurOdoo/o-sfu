@@ -2306,7 +2306,7 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     let server = spawn_test_server_with_feature_flags(
         1_000,
         100,
-        RuntimeTransportAdapter::builder().fake().build(),
+        RuntimeTransportAdapter::fake_for_testing(),
         RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,

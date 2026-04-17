@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU16, Ordering},
+    time::Duration,
+};
 
 use futures_util::SinkExt;
 use tokio::time::timeout;
@@ -9,17 +12,18 @@ use o_sfu::{
     runtime::testing::TestServer,
     signaling::protocol::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientResponse,
-        EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-        SessionDescriptionPayload, WelcomePayload,
+        EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, WelcomePayload,
     },
     signaling::shared::{SessionId, SessionInfo},
 };
 
-use super::harness::{
-    TestWebSocket, connect_websocket, read_close_code, read_text_message, test_config,
+use super::{
+    fake_rtc_peer::FakeRtcPeer,
+    harness::{TestWebSocket, connect_websocket, read_close_code, read_text_message, test_config},
 };
 
-const FAKE_NEGOTIATION_ANSWER_SDP: &str = "v=0\r\ns=integration-answer\r\n";
+const RTC_NEGOTIATION_PORT_BASE: u16 = 56_000;
+static NEXT_RTC_NEGOTIATION_PORT: AtomicU16 = AtomicU16::new(RTC_NEGOTIATION_PORT_BASE);
 
 pub fn protocol_test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
     test_config(authentication_timeout_ms, channel_size)
@@ -27,12 +31,14 @@ pub fn protocol_test_config(authentication_timeout_ms: u64, channel_size: usize)
 
 pub struct ProtocolWebSocketClient {
     websocket: TestWebSocket,
+    rtc_peer: FakeRtcPeer,
 }
 
 impl ProtocolWebSocketClient {
     pub async fn connect(server: &TestServer) -> Option<Self> {
         Some(Self {
             websocket: connect_websocket(server).await?,
+            rtc_peer: FakeRtcPeer::bind(next_negotiation_port()).await?,
         })
     }
 
@@ -68,7 +74,7 @@ impl ProtocolWebSocketClient {
     ) -> Option<(Self, WelcomePayload)> {
         let mut client = Self::authenticate_with_jwt(server, token).await?;
         let welcome = client.read_welcome().await?;
-        client.finish_initial_negotiation_with_fake_answer().await?;
+        client.finish_initial_negotiation().await?;
         Some((client, welcome))
     }
 
@@ -80,7 +86,10 @@ impl ProtocolWebSocketClient {
             ))
             .await
             .ok()?;
-        Some(Self { websocket })
+        Some(Self {
+            websocket,
+            rtc_peer: FakeRtcPeer::bind(next_negotiation_port()).await?,
+        })
     }
 
     pub async fn read_welcome(&mut self) -> Option<WelcomePayload> {
@@ -95,12 +104,12 @@ impl ProtocolWebSocketClient {
         }
     }
 
-    pub async fn finish_initial_negotiation_with_fake_answer(&mut self) -> Option<()> {
+    pub async fn finish_initial_negotiation(&mut self) -> Option<()> {
         let (request_id, request) = self.read_server_request().await?;
         let ServerRequest::Offer(_) = request else {
             return None;
         };
-        self.respond_to_negotiation_request(request_id, request, FAKE_NEGOTIATION_ANSWER_SDP)
+        self.respond_to_negotiation_request(request_id, request)
             .await
     }
 
@@ -155,16 +164,13 @@ impl ProtocolWebSocketClient {
         &mut self,
         response_to: RequestId,
         request: ServerRequest,
-        sdp: &str,
     ) -> Option<()> {
         let response = match request {
-            ServerRequest::Offer(_) => ClientResponse::Offer(SessionDescriptionPayload {
-                sdp: sdp.to_owned(),
-            }),
-            ServerRequest::Renegotiate(_) => {
-                ClientResponse::Renegotiate(SessionDescriptionPayload {
-                    sdp: sdp.to_owned(),
-                })
+            ServerRequest::Offer(payload) => {
+                ClientResponse::Offer(self.rtc_peer.answer_offer(&payload.sdp)?)
+            }
+            ServerRequest::Renegotiate(payload) => {
+                ClientResponse::Renegotiate(self.rtc_peer.answer_offer(&payload.sdp)?)
             }
             ServerRequest::Ping => {
                 self.respond_to_ping(response_to).await?;
@@ -228,6 +234,10 @@ fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {
     serde_json::to_string(&envelopes).ok()
 }
 
+fn next_negotiation_port() -> u16 {
+    NEXT_RTC_NEGOTIATION_PORT.fetch_add(1, Ordering::Relaxed)
+}
+
 pub async fn read_until_server_message(
     client: &mut ProtocolWebSocketClient,
     timeout_duration: Duration,
@@ -249,13 +259,23 @@ pub async fn connect_protocol_pair(
     second_token: &str,
     second_session_id: SessionId,
 ) -> Option<(ProtocolWebSocketClient, ProtocolWebSocketClient)> {
-    let (mut first, _welcome) =
-        ProtocolWebSocketClient::authenticate_and_negotiate(server, first_token).await?;
-    let (second, _welcome) =
-        ProtocolWebSocketClient::authenticate_and_negotiate(server, second_token).await?;
-    read_until_server_message(&mut first, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == second_session_id)
-    })
+    let (mut first, _welcome) = Box::pin(ProtocolWebSocketClient::authenticate_and_negotiate(
+        server,
+        first_token,
+    ))
+    .await?;
+    let (second, _welcome) = Box::pin(ProtocolWebSocketClient::authenticate_and_negotiate(
+        server,
+        second_token,
+    ))
+    .await?;
+    Box::pin(read_until_server_message(
+        &mut first,
+        Duration::from_secs(1),
+        |message| {
+            matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == second_session_id)
+        },
+    ))
     .await?;
     Some((first, second))
 }

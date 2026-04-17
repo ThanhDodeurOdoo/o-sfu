@@ -25,7 +25,6 @@ COPY --from=builder /app/target/release/o-sfu /usr/local/bin/o-sfu
 
 ENV BIND_ADDRESS=0.0.0.0:8080
 ENV PROXY=false
-ENV TRANSPORT_BACKEND=fake
 ENV RUST_LOG=info
 
 EXPOSE 8080

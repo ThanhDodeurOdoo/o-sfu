@@ -1763,16 +1763,14 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
 }
 
 fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::builder()
-        .rtc(RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            RtcPortRange::new(46_200, 46_299),
-            1,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-        .build()
+    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        RtcPortRange::new(46_200, 46_299),
+        1,
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ))
 }
 
 async fn bootstrap_real_rtc_session(

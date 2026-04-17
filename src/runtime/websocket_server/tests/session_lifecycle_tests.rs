@@ -9,7 +9,7 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
         200,
         20,
         100,
-        RuntimeTransportAdapter::builder().fake().build(),
+        RuntimeTransportAdapter::fake_for_testing(),
     )
     .await;
     assert!(server.is_some());
@@ -65,7 +65,7 @@ async fn websocket_closes_when_ping_response_times_out() {
         30,
         15,
         100,
-        RuntimeTransportAdapter::builder().fake().build(),
+        RuntimeTransportAdapter::fake_for_testing(),
     )
     .await;
     assert!(server.is_some());

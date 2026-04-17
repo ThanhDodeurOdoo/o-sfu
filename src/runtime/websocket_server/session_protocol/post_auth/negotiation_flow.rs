@@ -214,16 +214,14 @@ mod tests {
     };
 
     fn build_real_rtc_transport_adapter(port_min: u16) -> RuntimeTransportAdapter {
-        RuntimeTransportAdapter::builder()
-            .rtc(RtcTransportAdapterShardSetConfig::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                RtcPortRange::new(port_min, port_min.saturating_add(99)),
-                1,
-                MediaCodecFlags::default(),
-                Arc::new(MediaTap::default()),
-                Arc::new(RuntimeMetrics::default()),
-            ))
-            .build()
+        RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            RtcPortRange::new(port_min, port_min.saturating_add(99)),
+            1,
+            MediaCodecFlags::default(),
+            Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
+        ))
     }
 
     fn answer_offer(offer_sdp: &str, port: u16) -> Option<String> {

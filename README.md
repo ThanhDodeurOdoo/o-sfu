@@ -31,18 +31,7 @@ Build the server image from the repository root with:
 docker build --tag o-sfu:local .
 ```
 
-Run a local container with the minimum required auth key:
-
-```bash
-docker run --rm \
-  -p 8080:8080 \
-  -e AUTH_KEY=dev-secret \
-  o-sfu:local
-```
-
-The container defaults to `TRANSPORT_BACKEND=fake`. (TODO: for tests, will change later)
-
-For real RTC traffic, also expose the UDP worker range and provide the advertised public IP:
+Run a local container by providing the auth key, the advertised RTC IP, and the UDP worker range:
 
 ```bash
 docker run --rm \
@@ -50,10 +39,13 @@ docker run --rm \
   -p 40000-49999:40000-49999/udp \
   -e AUTH_KEY=dev-secret \
   -e PROXY=true \
-  -e TRANSPORT_BACKEND=rtc \
   -e PUBLIC_IP=203.0.113.10 \
   o-sfu:local
 ```
+
+The runtime always boots the RTC transport. The fake transport is
+available for test and development workflows with the cfg flag
+`cargo test -p o-sfu --features testing-transport`.
 
 parser/auth fuzzing is in `fuzz/` crate.
  Install `cargo-fuzz` separately:
