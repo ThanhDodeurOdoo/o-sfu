@@ -42,6 +42,7 @@ pub(crate) fn respond_set_remote_source_packet_gate(
     );
 }
 
+// TODO: needs documentation:
 pub(super) fn ensure_route_source_registered(
     state: &mut RtcBootstrapState,
     route_owner_session_key: &TransportSessionKey,

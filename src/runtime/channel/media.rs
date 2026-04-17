@@ -93,6 +93,7 @@ impl Channel {
                 .await;
         }
     }
+    // TODO: needs documentation:
     pub async fn publish_track(
         &self,
         session_id: &SessionId,
@@ -220,6 +221,7 @@ impl Channel {
         .await;
     }
 
+    // TODO: needs documentation:
     pub(crate) async fn update_subscription_runtime(
         &self,
         session_id: &SessionId,

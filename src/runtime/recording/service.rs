@@ -124,6 +124,7 @@ struct RecordingServiceState {
     sessions: BTreeMap<SessionId, RecordingSession>,
 }
 
+// TODO: needs documentation:
 pub(crate) struct RecordingService {
     channel_runtime_id: u64,
     media_source: Arc<dyn MediaSource>,
@@ -162,6 +163,7 @@ impl RecordingService {
         }
     }
 
+    // TODO: needs documentation:
     pub(crate) fn start(&self) -> Result<(), RecordingTransitionError> {
         self.transition_lifecycle(
             RecordingLifecycleState::Idle,
@@ -180,6 +182,7 @@ impl RecordingService {
         Ok(())
     }
 
+    // TODO: needs documentation:
     pub(crate) fn stop(&self) -> Result<(), RecordingTransitionError> {
         self.transition_lifecycle(
             RecordingLifecycleState::Recording,
@@ -217,6 +220,7 @@ impl RecordingService {
         }
     }
 
+    // TODO: needs documentation:
     pub(crate) fn handle_router_event(&self, event: RouterEvent) {
         let mut state = self.lock_sessions();
         match event {

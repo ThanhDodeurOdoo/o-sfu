@@ -34,6 +34,7 @@ pub(crate) struct WorkerCommandContext<'a> {
     pub(crate) metrics: &'a RuntimeMetrics,
 }
 
+// TODO: needs documentation:
 pub(crate) fn handle_worker_command(
     state: &mut RtcBootstrapState,
     context: &WorkerCommandContext<'_>,

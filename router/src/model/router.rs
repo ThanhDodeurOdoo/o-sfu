@@ -6,6 +6,7 @@ use super::{
     TransportDirection, TransportId,
 };
 
+// TODO: needs documentation:
 #[derive(Debug, Clone)]
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
     pub(super) id: RouterId,
@@ -61,6 +62,7 @@ impl<O: RouterObserver> Router<O> {
     /// # Errors
     ///
     /// Returns [`RouterError::DuplicateSession`] when the session already exists.
+    // TODO: needs documentation:
     pub fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
         let session_id = session.id();
         if self.sessions.contains_key(&session_id) {
@@ -91,6 +93,7 @@ impl<O: RouterObserver> Router<O> {
     ///
     /// Returns [`RouterError::MissingSession`] when the owning session does not exist
     /// or [`RouterError::DuplicateTransport`] when the transport already exists.
+    // TODO: needs documentation:
     pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
         let transport_id = transport.id();
         let session_id = transport.session_id();
@@ -113,6 +116,7 @@ impl<O: RouterObserver> Router<O> {
     /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist
     /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
     /// producers, or [`RouterError::DuplicateProducer`] when the producer already exists.
+    // TODO: needs documentation:
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
@@ -160,6 +164,7 @@ impl<O: RouterObserver> Router<O> {
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
+    // TODO: needs documentation:
     pub fn add_consumer(
         &mut self,
         mut consumer: Consumer,
@@ -280,6 +285,7 @@ impl<O: RouterObserver> Router<O> {
     /// # Errors
     ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
+    // TODO: needs documentation:
     pub fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
         let Some(mut session) = self.sessions.remove(&session_id) else {
             return Err(RouterError::MissingSession(session_id));

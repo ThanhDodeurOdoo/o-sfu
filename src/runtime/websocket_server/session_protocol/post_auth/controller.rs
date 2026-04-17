@@ -25,6 +25,7 @@ use super::super::{
 };
 use super::state::PostAuthSessionState;
 
+// TODO: needs documentation:
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) session_id: SessionId,

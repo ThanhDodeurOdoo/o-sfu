@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 mod consumer;
 mod consumer_capability;
 mod diagnostic;

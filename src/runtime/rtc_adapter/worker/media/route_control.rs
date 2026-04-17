@@ -61,6 +61,7 @@ pub(crate) fn respond_set_consumer_active(
     ));
 }
 
+// TODO: needs documentation:
 pub(crate) fn refresh_source_packet_gate(
     state: &mut RtcBootstrapState,
     source_transport_media_id: TransportMediaId,

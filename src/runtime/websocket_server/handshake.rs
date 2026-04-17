@@ -39,6 +39,7 @@ struct LegacyChannelScopedConnectClaims {
     permissions: Option<SessionPermissions>,
 }
 
+// TODO: needs documentation:
 pub(super) async fn establish_session(
     state: &RuntimeState,
     writer: &mut WsWriter,

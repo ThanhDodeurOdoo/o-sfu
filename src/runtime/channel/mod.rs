@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 //! Channel runtime layer: membership, bootstrap orchestration, and channel-local state.
 //!
 //! Internal modules:

@@ -38,6 +38,7 @@ impl PostAuthSessionProtocol {
             .await;
     }
 
+    // TODO: needs documentation:
     pub(super) async fn dispatch_client_envelope(
         &mut self,
         writer: &mut WsWriter,

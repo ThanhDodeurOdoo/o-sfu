@@ -30,6 +30,7 @@ impl RtcTransportAdapter {
         Ok(worker_handle.clone())
     }
 
+    // TODO: needs documentation:
     pub(super) fn ensure_packet_loop_started(
         &self,
     ) -> Result<RtcWorkerHandle, TransportAdapterError> {

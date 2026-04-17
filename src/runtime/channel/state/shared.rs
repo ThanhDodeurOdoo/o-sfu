@@ -34,6 +34,7 @@ const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
 ///
 /// The two-phase patterns (`prepare_*` / `commit_*`) allow async transport work
 /// to happen between phases without holding the state lock.
+// TODO: needs documentation:
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct ChannelState {
     pub(super) admission_policy: ChannelAdmissionPolicy,

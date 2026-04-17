@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 //! Pure client-side signaling state machine for the `o-sfu` protocol.
 //!
 //! `ProtocolCore` never perform I/O directly. Every public transition returns
@@ -65,6 +66,7 @@ const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 /// test harness) must execute in order. That keeps transport work, timers, and
 /// projection updates visible at the protocol boundary instead of being buried
 /// in host-specific control flow.
+// TODO: needs documentation:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Serialize and send a JSON frame over the WebSocket.
@@ -178,6 +180,7 @@ struct PendingNegotiation {
     kind: NegotiationKind,
 }
 
+// TODO: needs documentation:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolCore {
     state: ConnectionState,

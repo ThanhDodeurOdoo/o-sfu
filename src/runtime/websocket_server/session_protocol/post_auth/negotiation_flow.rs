@@ -18,6 +18,7 @@ use super::super::{
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
+    // TODO: needs documentation:
     pub(in crate::runtime::websocket_server) async fn send_initial_offer(
         &mut self,
         writer: &mut WsWriter,
@@ -73,6 +74,7 @@ impl PostAuthSessionProtocol {
         Ok(())
     }
 
+    // TODO: needs documentation:
     pub(super) async fn request_renegotiation(
         &mut self,
         writer: &mut WsWriter,

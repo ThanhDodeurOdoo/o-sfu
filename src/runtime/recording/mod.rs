@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 #![allow(
     dead_code,
     reason = "recording capture surfaces are live, but deferred finalization and federation work still leave some helpers unused on the main runtime path"

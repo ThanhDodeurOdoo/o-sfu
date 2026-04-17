@@ -104,6 +104,7 @@ pub(super) fn respond_connect_transport(
 }
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
+// TODO: needs documentation:
 fn worker_build_bootstrap_payload(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

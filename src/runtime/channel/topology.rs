@@ -75,6 +75,7 @@ impl RoutedConsumerId {
     }
 }
 
+// TODO: needs documentation:
 #[derive(Debug, Clone)]
 pub(super) struct ChannelTopology {
     primary_router: RouterId,

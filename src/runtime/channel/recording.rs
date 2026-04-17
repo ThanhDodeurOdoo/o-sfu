@@ -20,6 +20,7 @@ impl RecordingPermissions {
 }
 
 impl Channel {
+    // TODO: needs documentation:
     pub(crate) async fn start_recording_runtime(
         &self,
         session_id: &SessionId,
@@ -115,6 +116,7 @@ impl Channel {
             .await
     }
 
+    // TODO: needs documentation:
     pub(crate) async fn stop_recording_runtime(
         &self,
         session_id: &SessionId,

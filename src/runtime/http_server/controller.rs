@@ -48,6 +48,7 @@ pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
     Ok(())
 }
 
+// TODO: needs documentation:
 pub(crate) fn app(state: RuntimeState) -> Router {
     Router::new()
         .route("/", get(websocket_server::upgrade))
@@ -92,6 +93,7 @@ async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
 ///
 /// The bearer token is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
+// TODO: needs documentation:
 async fn channel(
     State(state): State<RuntimeState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -147,6 +149,7 @@ async fn channel(
 ///
 /// The request body is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
+// TODO: needs documentation:
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
     state.metrics.record_http_disconnect_request();
     let Ok(token) = str::from_utf8(&body) else {

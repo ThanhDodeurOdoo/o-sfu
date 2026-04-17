@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 mod controller;
 pub(super) mod frame_codec;
 mod negotiation;

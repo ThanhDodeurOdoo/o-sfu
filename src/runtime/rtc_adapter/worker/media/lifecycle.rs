@@ -73,6 +73,7 @@ pub(crate) fn respond_resolve_media_mid(
     let _ = response.send(Ok(resolved_mid));
 }
 
+// TODO: needs documentation:
 fn worker_remove_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -206,6 +207,7 @@ fn worker_stage_native_media_removal(
     Ok(())
 }
 
+// TODO: needs documentation:
 fn worker_add_recv_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -282,6 +284,7 @@ fn worker_stage_native_recv_media(
     Ok(mid)
 }
 
+// TODO: needs documentation:
 fn worker_add_send_media(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,

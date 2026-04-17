@@ -68,6 +68,7 @@ pub(super) struct SharedRtcSocket {
     pub(super) candidate_addr: SocketAddr,
 }
 
+// TODO: needs documentation:
 pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     pub(super) started_at: Instant,
@@ -208,6 +209,7 @@ impl RecentBitrate {
     }
 }
 
+// TODO: needs documentation:
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,

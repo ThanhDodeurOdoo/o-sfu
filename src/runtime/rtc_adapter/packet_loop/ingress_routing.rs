@@ -68,6 +68,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
     }
 }
 
+// TODO: needs documentation:
 pub(super) fn route_packet_to_matching_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

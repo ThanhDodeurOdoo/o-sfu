@@ -38,6 +38,7 @@ pub(super) enum PacketRouteDecision {
     Drop,
 }
 
+// TODO: needs documentation:
 #[derive(Debug, Default)]
 pub(super) struct RouteControlState {
     sources: BTreeMap<TransportMediaId, SourceRouteControl>,

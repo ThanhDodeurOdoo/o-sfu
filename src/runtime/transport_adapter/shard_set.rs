@@ -12,6 +12,7 @@ use crate::runtime::transport_adapter::types::{
 #[cfg(test)]
 use str0m::media::Mid;
 
+// TODO: needs documentation:
 #[derive(Debug)]
 pub(crate) struct RtcTransportAdapterShardSet {
     primary_shard: Arc<RtcTransportAdapter>,

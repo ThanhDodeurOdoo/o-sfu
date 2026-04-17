@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 //! Runtime transport adapter for the `rtc` WebRTC backend.
 //!
 //! Internal modules:

@@ -67,6 +67,7 @@ impl Channel {
         .await
     }
 
+    // TODO: needs documentation:
     async fn join_session_with_cleanup(
         &self,
         session_id: SessionId,
@@ -372,6 +373,7 @@ impl Channel {
         }
     }
 
+    // TODO: needs documentation:
     pub(crate) async fn apply_client_rtp_capabilities(
         &self,
         session_id: &SessionId,
@@ -432,6 +434,7 @@ impl Channel {
         .await
     }
 
+    // TODO: needs documentation:
     pub(crate) async fn apply_session_negotiated(
         &self,
         session_id: &SessionId,

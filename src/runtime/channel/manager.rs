@@ -56,6 +56,7 @@ pub(crate) struct JoinSessionRequest {
     pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
 
+// TODO: needs documentation:
 #[derive(Debug)]
 pub struct ChannelManager {
     state: RwLock<ChannelManagerState>,

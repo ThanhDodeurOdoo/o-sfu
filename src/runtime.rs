@@ -46,6 +46,7 @@ use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapt
 
 const SOURCE_PACKET_POLICY_SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
+// TODO: needs documentation:
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
@@ -116,6 +117,7 @@ impl Runtime {
     }
 }
 
+// TODO: needs documentation:
 fn spawn_source_packet_policy_sync_task(
     channels: Arc<ChannelManager>,
     transport_adapter: RuntimeTransportAdapter,
@@ -153,6 +155,7 @@ fn init_tracing() -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when configuration loading fails or the HTTP server cannot bind.
+// TODO: needs documentation:
 pub fn run() -> Result<()> {
     init_tracing()?;
     let runtime = Runtime::new(Config::from_env()?);

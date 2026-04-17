@@ -51,6 +51,7 @@ enum NextLoopInput {
     },
 }
 
+// TODO: needs documentation:
 pub(crate) async fn run_packet_loop(
     config: PacketLoopConfig,
     bitrate_state: Arc<Mutex<RtcBitrateState>>,

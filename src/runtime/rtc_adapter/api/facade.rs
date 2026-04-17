@@ -65,6 +65,7 @@ impl fmt::Debug for RtcWorkerHandle {
     }
 }
 
+// TODO: needs documentation:
 pub(crate) struct RtcTransportAdapter {
     pub(super) relay_target_id: RelayTargetId,
     pub(super) public_ip: IpAddr,

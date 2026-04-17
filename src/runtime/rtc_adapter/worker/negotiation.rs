@@ -70,6 +70,7 @@ pub(super) fn respond_apply_session_answer(
     let _ = response.send(worker_apply_session_answer(state, session_key, answer_sdp));
 }
 
+// TODO: needs documentation:
 fn worker_create_initial_session_offer(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -123,6 +124,7 @@ fn worker_create_session_renegotiation_offer(
     Ok(SessionOffer::new(offer_sdp))
 }
 
+// TODO: needs documentation:
 fn worker_apply_session_answer(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,

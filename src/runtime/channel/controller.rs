@@ -138,6 +138,7 @@ pub(crate) struct ChannelSessionStatsSnapshot {
     pub(crate) screen_count: u64,
 }
 
+// TODO: needs documentation:
 /// A single discussion channel owning sessions, features, and recording state,
 /// roughly same concepts as in odoo's sfu and odoo discuss
 /// Identity fields (uuid, issuer, key, features) are imuttable after creation.

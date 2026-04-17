@@ -17,6 +17,7 @@ use super::{
     session_protocol::{SessionProtocol, SessionProtocolOutcome},
 };
 
+// TODO: needs documentation:
 pub(super) async fn run(
     writer: &mut WsWriter,
     reader: &mut WsReader,

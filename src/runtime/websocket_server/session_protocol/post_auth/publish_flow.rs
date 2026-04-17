@@ -87,6 +87,7 @@ impl PublishTransactionGuard {
 }
 
 impl PostAuthSessionProtocol {
+    // TODO: needs documentation:
     pub(super) async fn handle_publish_intent(
         &mut self,
         writer: &mut WsWriter,

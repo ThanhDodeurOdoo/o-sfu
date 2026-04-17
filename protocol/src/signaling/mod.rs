@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -24,6 +25,7 @@ impl RequestId {
     }
 }
 
+// TODO: needs documentation:
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     #[serde(rename = "t")]
@@ -203,6 +205,7 @@ pub struct RecordingActionResult {
     pub ok: bool,
 }
 
+// TODO: needs documentation:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMessage {
     Auth(AuthPayload),
@@ -272,6 +275,7 @@ pub enum ClientResponse {
     Ping,
 }
 
+// TODO: needs documentation:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerMessage {
     Welcome(WelcomePayload),

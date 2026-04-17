@@ -1,3 +1,4 @@
+// TODO: needs documentation:
 mod model;
 
 pub use self::model::{
