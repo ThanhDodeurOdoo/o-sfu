@@ -14,7 +14,7 @@ use str0m::net::{Protocol, Receive};
 use str0m::{Event, Input, Output};
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
 use super::{
     commands::RtcWorkerCommand,
@@ -751,7 +751,7 @@ fn drain_single_session(
 fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     match event {
         Event::IceConnectionStateChange(state) => {
-            debug!(
+            info!(
                 session_id = ?session_key.session_id(),
                 media_worker_id = session_key.media_worker_id(),
                 ?state,
@@ -759,7 +759,7 @@ fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
             );
         }
         Event::Connected => {
-            debug!(
+            info!(
                 session_id = ?session_key.session_id(),
                 media_worker_id = session_key.media_worker_id(),
                 "rtc DTLS transport reached connected state"

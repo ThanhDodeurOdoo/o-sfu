@@ -94,3 +94,7 @@ another advantage is the router/recording topology, we have recording nodes that
 
 also the recording feature on the official repo is still in active development so the API may change, and this repo
 will adapt accordingly.
+
+## crypto
+
+investigate chacha20 instead of classical dtls/srtp

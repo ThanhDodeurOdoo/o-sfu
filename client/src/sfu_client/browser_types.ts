@@ -60,6 +60,15 @@ export interface PeerConnectionTrackEvent {
 
 export type ClientIceGatheringState = "new" | "gathering" | "complete";
 
+export type ClientIceConnectionState =
+    | "new"
+    | "checking"
+    | "connected"
+    | "completed"
+    | "disconnected"
+    | "failed"
+    | "closed";
+
 export type ClientPeerConnectionState =
     | "new"
     | "connecting"
@@ -74,9 +83,11 @@ export interface ClientPeerConnection {
     createAnswer(): Promise<{ sdp: string; type: "answer" }>;
     getStats?(): Promise<RTCStatsReport>;
     getTransceivers(): PeerConnectionTransceiver[];
+    iceConnectionState?: ClientIceConnectionState;
     iceGatheringState?: ClientIceGatheringState;
     localDescription?: { sdp: string; type: "answer" } | null;
     onicecandidate: ((event: { candidate: { candidate: string } | null }) => void) | null;
+    oniceconnectionstatechange: (() => void) | null;
     onicegatheringstatechange: (() => void) | null;
     onconnectionstatechange: (() => void) | null;
     ontrack: ((event: PeerConnectionTrackEvent) => void) | null;

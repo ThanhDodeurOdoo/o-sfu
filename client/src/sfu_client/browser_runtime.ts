@@ -313,6 +313,32 @@ export class BrowserRuntime {
                 this.closeWebSocketForTransportFailure(hooks);
             }
         };
+        peerConnection.oniceconnectionstatechange = () => {
+            if (this._peerConnection !== peerConnection) {
+                return;
+            }
+            const state = peerConnection.iceConnectionState;
+            if (!state) {
+                return;
+            }
+            emitRuntimeLog(
+                hooks,
+                state === "failed" || state === "disconnected"
+                    ? CLIENT_LOG_LEVEL.WARN
+                    : CLIENT_LOG_LEVEL.INFO,
+                `ICE connection state changed to ${state}`
+            );
+        };
+        peerConnection.onicegatheringstatechange = () => {
+            if (this._peerConnection !== peerConnection) {
+                return;
+            }
+            const state = peerConnection.iceGatheringState;
+            if (!state) {
+                return;
+            }
+            emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, `ICE gathering state changed to ${state}`);
+        };
         peerConnection.ontrack = (event) => {
             emitRuntimeLog(
                 hooks,
