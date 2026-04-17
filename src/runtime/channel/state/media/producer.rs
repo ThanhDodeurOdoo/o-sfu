@@ -15,7 +15,7 @@ use super::super::{
         topology::RoutedProducerId,
     },
     ids::ProducerRuntimeId,
-    shared::{ChannelState, ProducerKey, PublishedProducer, TransportMediaRemoval},
+    shared::{ChannelState, ConsumerKey, ProducerKey, PublishedProducer, TransportMediaRemoval},
 };
 use super::{bootstrap::PendingConsumerBootstrapTarget, router_stream_type::to_router_stream_type};
 
@@ -211,6 +211,13 @@ impl ChannelState {
                 {
                     return None;
                 }
+                if self.consumer_bootstrap_exists(&ConsumerKey::new(
+                    peer_session_id,
+                    producer_session_id,
+                    stream_type,
+                )) {
+                    return None;
+                }
                 Some(PendingConsumerBootstrapTarget {
                     consumer_session_id: peer_session_id.clone(),
                     consumer_connection_id: peer_session.connection_id,
@@ -317,6 +324,8 @@ impl ChannelState {
         self.consumer_index.retain(|key, _consumer_state| {
             key.producer_session_id != *session_id || key.stream_type != stream_type
         });
+        self.pending_consumer_bootstraps
+            .retain(|key| key.producer_session_id != *session_id || key.stream_type != stream_type);
         let removed_producer = self.producers.remove(&producer_target.producer_id)?;
         self.producer_ids_by_owner_stream
             .remove(&ProducerKey::new(session_id, stream_type));

@@ -145,6 +145,13 @@ impl RtcBootstrapState {
             .map(RegisteredMediaHandle::mid)
     }
 
+    pub(super) fn media_handle(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<&RegisteredMediaHandle> {
+        self.mid_registry.get(&transport_media_id.as_u64())
+    }
+
     pub(super) fn remove_media_handle(
         &mut self,
         transport_media_id: TransportMediaId,

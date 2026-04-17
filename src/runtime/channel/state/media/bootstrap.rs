@@ -42,6 +42,7 @@ pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
+    consumer_key: ConsumerKey,
     sender: OutboundSender,
     bootstrap: RemoteTrackBootstrap,
     consumer_active: bool,
@@ -100,11 +101,9 @@ impl ChannelState {
                 if producer.owner_session_id == *session_id {
                     return None;
                 }
-                if self.consumer_index.contains_key(&ConsumerKey {
-                    consumer_session_id: session_id.clone(),
-                    producer_session_id: producer.owner_session_id.clone(),
-                    stream_type: producer.stream_type,
-                }) {
+                let consumer_key =
+                    ConsumerKey::new(session_id, &producer.owner_session_id, producer.stream_type);
+                if self.consumer_bootstrap_exists(&consumer_key) {
                     return None;
                 }
                 Some(PendingConsumerBootstrapTarget {
@@ -202,8 +201,19 @@ impl ChannelState {
         {
             return None;
         }
+        let consumer_key = ConsumerKey::new(
+            &target.consumer_session_id,
+            &target.producer_session_id,
+            target.stream_type,
+        );
+        if self.consumer_bootstrap_exists(&consumer_key) {
+            return None;
+        }
+        self.pending_consumer_bootstraps
+            .insert(consumer_key.clone());
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         Some(PendingConsumerBootstrap {
+            consumer_key,
             sender: prepared.sender.clone(),
             bootstrap: RemoteTrackBootstrap {
                 consumer_id,
@@ -236,6 +246,8 @@ impl ChannelState {
         consumer_transport_media_id: TransportMediaId,
         consumer_mid: Option<String>,
     ) -> Option<(OutboundSender, RemoteTrackBootstrap, bool)> {
+        self.pending_consumer_bootstraps
+            .remove(&pending.consumer_key);
         let session = self.sessions.get(&target.consumer_session_id)?;
         if session.connection_id != target.consumer_connection_id
             || !session.negotiation.can_consume()
@@ -251,6 +263,9 @@ impl ChannelState {
             || producer.routed_producer_id != pending.producer_routed_id
             || producer.active != pending.producer_active
         {
+            return None;
+        }
+        if self.consumer_index.contains_key(&pending.consumer_key) {
             return None;
         }
         let routed_consumer_id = match self.topology.add_consumer(
@@ -287,11 +302,7 @@ impl ChannelState {
             return None;
         }
         self.consumer_index.insert(
-            ConsumerKey {
-                consumer_session_id: target.consumer_session_id.clone(),
-                producer_session_id: pending.producer_owner_session_id.clone(),
-                stream_type: pending.producer_stream_type,
-            },
+            pending.consumer_key,
             ConsumerState {
                 routed_consumer_id,
                 consumer_connection_id: target.consumer_connection_id,
@@ -301,6 +312,25 @@ impl ChannelState {
             },
         );
         Some((pending.sender, pending.bootstrap, pending.consumer_active))
+    }
+
+    pub(in crate::runtime::channel) fn release_pending_consumer_bootstrap(
+        &mut self,
+        target: &PendingConsumerBootstrapTarget,
+    ) {
+        self.pending_consumer_bootstraps.remove(&ConsumerKey::new(
+            &target.consumer_session_id,
+            &target.producer_session_id,
+            target.stream_type,
+        ));
+    }
+
+    pub(in crate::runtime::channel) fn consumer_bootstrap_exists(
+        &self,
+        consumer_key: &ConsumerKey,
+    ) -> bool {
+        self.consumer_index.contains_key(consumer_key)
+            || self.pending_consumer_bootstraps.contains(consumer_key)
     }
 }
 

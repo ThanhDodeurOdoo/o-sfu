@@ -463,6 +463,63 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
 }
 
 #[tokio::test]
+async fn rtc_adapter_rejects_stale_session_removal_without_dropping_consumer_handle() {
+    let adapter = test_rtc_adapter(1, RtcPortRange::new(46_600, 46_649));
+    let source_session = TransportSessionKey::new(35, 0, 1, SessionId::Integer(1));
+    let consumer_session = TransportSessionKey::new(35, 0, 2, SessionId::Integer(2));
+    let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
+    let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 55_000);
+
+    bootstrap_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
+
+    let Some(source_media_id) =
+        publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
+    else {
+        return;
+    };
+    let Some(consumer_media_id) = consume_audio(
+        &adapter,
+        &consumer_session,
+        &source_session,
+        source_media_id,
+        &consumer_rtp_parameters,
+    )
+    .await
+    else {
+        return;
+    };
+
+    assert_eq!(
+        adapter
+            .remove_media(&source_session, consumer_media_id)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
+    assert!(route_entry.is_some());
+    let Some(route_entry) = route_entry else {
+        return;
+    };
+    assert!(route_entry.destinations.iter().any(|destination| {
+        destination.dest_session == consumer_session
+            && destination.dest_transport_media_id == consumer_media_id
+    }));
+
+    assert!(
+        adapter
+            .remove_media(&consumer_session, consumer_media_id)
+            .await
+            .is_ok()
+    );
+    assert!(
+        adapter
+            .debug_route_entry_by_media_id(source_media_id)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes() {
     let adapter = test_rtc_adapter(2, RtcPortRange::new(46_600, 46_699));
     let source_session = TransportSessionKey::new(40, 0, 1, SessionId::Integer(1));

@@ -202,12 +202,15 @@ fn worker_remove_media(
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<RemoveMediaOutcome, TransportAdapterError> {
-    let Some(handle) = state.remove_media_handle(transport_media_id) else {
+    let Some(handle) = state.media_handle(transport_media_id).cloned() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     if handle.session_key() != session_key {
         return Err(TransportAdapterError::InvalidInput);
     }
+    let Some(handle) = state.remove_media_handle(transport_media_id) else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
             let should_remove_media = !state.session_has_mid(&session_key, mid);

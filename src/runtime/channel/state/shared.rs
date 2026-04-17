@@ -51,6 +51,7 @@ pub(in crate::runtime::channel) struct ChannelState {
     /// Control-plane lookup for bitrate snapshots keyed by transport-owned media ids.
     pub(super) producer_stream_types_by_transport_media_id: BTreeMap<TransportMediaId, StreamType>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
+    pub(super) pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
     /// Shadow of session/producer/consumer state inside the pure router core.
     pub(super) topology: ChannelTopology,
 }
@@ -62,6 +63,20 @@ pub(in crate::runtime::channel) struct ConsumerKey {
     pub(super) consumer_session_id: SessionId,
     pub(super) producer_session_id: SessionId,
     pub(super) stream_type: StreamType,
+}
+
+impl ConsumerKey {
+    pub(in crate::runtime::channel) fn new(
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> Self {
+        Self {
+            consumer_session_id: consumer_session_id.clone(),
+            producer_session_id: producer_session_id.clone(),
+            stream_type,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -153,6 +168,7 @@ impl ChannelState {
             producer_ids_by_owner_stream: BTreeMap::new(),
             producer_stream_types_by_transport_media_id: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
+            pending_consumer_bootstraps: BTreeSet::new(),
             topology: ChannelTopology::new_with_recording_service(
                 router_id,
                 router_rtp_capabilities,
@@ -229,6 +245,9 @@ impl ChannelState {
             }
         }
         self.consumer_index.retain(|key, _consumer_state| {
+            key.consumer_session_id != *session_id && key.producer_session_id != *session_id
+        });
+        self.pending_consumer_bootstraps.retain(|key| {
             key.consumer_session_id != *session_id && key.producer_session_id != *session_id
         });
     }

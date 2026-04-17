@@ -202,6 +202,7 @@ impl Channel {
         {
             Ok(transport_media_id) => transport_media_id,
             Err(error) => {
+                self.release_pending_consumer_bootstrap(target).await;
                 warn!(
                     consumer_session_id = ?target.consumer_session_id(),
                     consumer_connection_id = target.consumer_connection_id(),
@@ -281,6 +282,11 @@ impl Channel {
                 "transport adapter failed to remove consumer transport media after bootstrap state commit failed"
             );
         }
+    }
+
+    async fn release_pending_consumer_bootstrap(&self, target: &PendingConsumerBootstrapTarget) {
+        let mut state = self.state.write().await;
+        state.release_pending_consumer_bootstrap(target);
     }
 
     async fn apply_initial_consumer_pause_state(

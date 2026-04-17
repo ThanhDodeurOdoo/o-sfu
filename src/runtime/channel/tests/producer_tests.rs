@@ -1373,6 +1373,106 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
 }
 
 #[tokio::test]
+async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_cleanup() {
+    let (channel, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    drain_outbound(&mut publisher_rx);
+    drain_outbound(&mut subscriber_rx);
+
+    fake.set_consume_media_delay(Some(Duration::from_millis(200)));
+
+    let publish_task = tokio::spawn({
+        let channel = Arc::clone(&channel);
+        let adapter = transport_adapter.clone();
+        async move {
+            channel
+                .publish_track(
+                    &SessionId::Integer(1),
+                    StreamType::Camera,
+                    MediaKind::Video,
+                    test_video_rtp_parameters(),
+                    &adapter,
+                )
+                .await
+        }
+    });
+
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumeMediaRequested {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+                media_kind: MediaKind::Video,
+            }
+        )
+    })
+    .await;
+
+    channel
+        .bootstrap_missing_consumers(&SessionId::Integer(2), &transport_adapter)
+        .await;
+
+    assert!(
+        publish_task
+            .await
+            .unwrap_or_else(|error| panic!("publish task should finish: {error}"))
+            .is_some()
+    );
+
+    let consume_requests = fake
+        .snapshot_events()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                FakeWebRtcEvent::ConsumeMediaRequested {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                    media_kind: MediaKind::Video,
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        consume_requests, 1,
+        "late-join retry must not schedule a second consumer consume while publish bootstrap is in flight"
+    );
+    assert_eq!(channel.consumer_count().await, 1);
+    assert_eq!(
+        drain_outbound(&mut subscriber_rx)
+            .iter()
+            .filter(|message| matches!(message, SessionOutbound::Request(_)))
+            .count(),
+        1,
+        "subscriber should receive exactly one bootstrap request for the published track"
+    );
+
+    assert!(
+        channel
+            .unpublish_track(
+                &SessionId::Integer(1),
+                0,
+                StreamType::Camera,
+                &transport_adapter
+            )
+            .await
+    );
+    assert_eq!(channel.producer_count().await, 0);
+    assert_eq!(channel.consumer_count().await, 0);
+
+    let removed_media = fake
+        .snapshot_events()
+        .into_iter()
+        .filter(|event| matches!(event, FakeWebRtcEvent::MediaRemoved { .. }))
+        .count();
+    assert_eq!(
+        removed_media, 2,
+        "unpublish should remove exactly the publisher and subscriber transport media after a retried bootstrap"
+    );
+}
+
+#[tokio::test]
 async fn production_change_ignores_unknown_stream_type() {
     let (channel, adapter, mut rx1, mut _rx2) = setup_two_ready_sessions().await;
 
