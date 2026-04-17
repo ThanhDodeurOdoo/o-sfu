@@ -40,6 +40,8 @@ import {
 
 export type { SfuClientDependencies } from "./sfu_client/browser_types.js";
 
+const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
+
 export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public errors: Error[] = [];
@@ -92,9 +94,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    publish(type: StreamType, track: MediaStreamTrack | null): void {
+    publish(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         validateTrackForStreamType(type, track);
-        const transition = this._localUploads.setTrack(type, track);
+        const normalizedTrack = track ?? null;
+        const transition = this._localUploads.setTrack(type, normalizedTrack);
 
         if (transition.hadTrack && transition.hasTrack) {
             this._runtime.enqueueLocalOperation(async () => {
@@ -137,7 +140,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     /**
      * @deprecated Use `publish()` instead.
      */
-    updateUpload(type: StreamType, track: MediaStreamTrack | null): void {
+    updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         this.publish(type, track);
     }
 
@@ -230,7 +233,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this.errors.push(resolvedError);
         this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
-        this._runtime.teardown(this._runtimeHooks(), 1011);
+        this._runtime.teardown(this._runtimeHooks(), CLIENT_RECOVERABLE_CLOSE_CODE);
         this._syncPublicState();
         this.dispatchEvent(
             new CustomEvent("handledError", {

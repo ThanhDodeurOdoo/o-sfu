@@ -22,7 +22,7 @@ export type BrowserRuntimeHooks = {
     syncPublicState: () => void;
 };
 
-const TRANSPORT_FAILURE_CLOSE_CODE = 1011;
+const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
 
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
@@ -256,7 +256,7 @@ export class BrowserRuntime {
                 this.enqueueProtocolCommands(() => hooks.protocolCore.onTransportReady(), hooks);
                 return;
             }
-            if (state === "disconnected" || state === "failed") {
+            if (state === "failed") {
                 this.closeWebSocketForTransportFailure();
             }
         };
@@ -402,7 +402,7 @@ export class BrowserRuntime {
         if (!this._webSocket || this._webSocket.readyState >= 2) {
             return;
         }
-        this._webSocket.close(TRANSPORT_FAILURE_CLOSE_CODE);
+        this._webSocket.close(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
     private cancelTimer(id: number): void {

@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -204,8 +204,10 @@ fn split_token(token: &str) -> Result<(&str, &str, &str), AuthenticationError> {
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, AuthenticationError> {
-    STANDARD
-        .decode(pad_base64(input).as_bytes())
+    let padded = pad_base64(input);
+    URL_SAFE
+        .decode(padded.as_bytes())
+        .or_else(|_error| STANDARD.decode(padded.as_bytes()))
         .map_err(|_error| AuthenticationError::InvalidBase64Encoding)
 }
 
@@ -342,6 +344,40 @@ mod tests {
             return;
         };
         assert_eq!(verified, claims);
+    }
+
+    #[test]
+    fn sign_and_verify_round_trip_with_uuid_like_channel_key() {
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims {
+                iss: Some("https://odoo.example.com".to_owned()),
+                ..RegisteredJwtClaims::default()
+            },
+            key: Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
+        };
+        let token = sign(&claims, "123e4567-e89b-12d3-a456-426614174000");
+        assert!(token.is_ok());
+        let Some(token) = token.ok() else {
+            return;
+        };
+        let verified = verify::<HttpChannelClaims>(&token, "123e4567-e89b-12d3-a456-426614174000");
+        assert!(verified.is_ok());
+        let Some(verified) = verified.ok() else {
+            return;
+        };
+        assert_eq!(verified, claims);
+    }
+
+    #[test]
+    fn decode_base64_matches_legacy_uuid_like_channel_key_bytes() {
+        let decoded = decode_base64("123e4567-e89b-12d3-a456-426614174000");
+        assert_eq!(
+            decoded.ok(),
+            Some(vec![
+                0xd7, 0x6d, 0xde, 0xe3, 0x9e, 0xbb, 0xf9, 0xef, 0x3d, 0x6f, 0xed, 0x76, 0x77, 0x7f,
+                0x9a, 0xe3, 0x9e, 0xbe, 0xe3, 0x6e, 0xba, 0xd7, 0x8d, 0x7b, 0xe3, 0x4d, 0x34,
+            ])
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{Span, field, info};
@@ -17,14 +18,26 @@ use crate::runtime::{
     channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
 };
 use crate::signaling::{
-    auth::{self, WebSocketConnectClaims},
+    auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
     client_batch::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
     protocol::{
         AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
         WelcomePayload,
     },
-    shared::SessionId,
+    shared::{SessionId, SessionPermissions},
 };
+
+#[derive(Deserialize)]
+struct LegacyChannelScopedConnectClaims {
+    #[serde(flatten)]
+    registered: RegisteredJwtClaims,
+    #[serde(rename = "session_id")]
+    session_id: SessionId,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    permissions: Option<SessionPermissions>,
+}
 
 pub(super) async fn establish_session(
     state: &RuntimeState,
@@ -142,11 +155,7 @@ async fn authenticate(
             return Err(WebSocketCloseCode::AuthFailed);
         };
         let key = channel.key().unwrap_or(&state.config.auth_key);
-        let claims = auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, key)
-            .map_err(|_error| WebSocketCloseCode::AuthFailed)?;
-        if claims.sfu_channel_uuid != channel_uuid {
-            return Err(WebSocketCloseCode::AuthFailed);
-        }
+        let claims = authenticate_channel_scoped_claims(&auth_payload.jwt, key, channel_uuid)?;
         return Ok((channel, claims));
     }
 
@@ -159,6 +168,29 @@ async fn authenticate(
         return Err(WebSocketCloseCode::AuthFailed);
     }
     Ok((channel, claims))
+}
+
+fn authenticate_channel_scoped_claims(
+    token: &str,
+    key: &str,
+    channel_uuid: &str,
+) -> Result<WebSocketConnectClaims, WebSocketCloseCode> {
+    if let Ok(claims) = auth::verify::<WebSocketConnectClaims>(token, key) {
+        if claims.sfu_channel_uuid != channel_uuid {
+            return Err(WebSocketCloseCode::AuthFailed);
+        }
+        return Ok(claims);
+    }
+
+    let claims = auth::verify::<LegacyChannelScopedConnectClaims>(token, key)
+        .map_err(|_error| WebSocketCloseCode::AuthFailed)?;
+    Ok(WebSocketConnectClaims {
+        registered: claims.registered,
+        sfu_channel_uuid: channel_uuid.to_owned(),
+        session_id: claims.session_id,
+        label: claims.label,
+        permissions: claims.permissions,
+    })
 }
 
 async fn authenticate_session(

@@ -44,8 +44,11 @@ export function validateDownloadStates(states: DownloadStates): void {
     }
 }
 
-export function validateTrackForStreamType(type: StreamType, track: MediaStreamTrack | null): void {
-    if (track === null) {
+export function validateTrackForStreamType(
+    type: StreamType,
+    track: MediaStreamTrack | null | undefined
+): void {
+    if (track == null) {
         return;
     }
     if (

@@ -141,12 +141,12 @@ export interface SfuClientSurface extends EventTarget {
 
     connect(url: string, jwt: string, options?: ConnectOptions): void;
     disconnect(): void;
-    publish(type: StreamType, track: MediaStreamTrack | null): void;
+    publish(type: StreamType, track: MediaStreamTrack | null | undefined): void;
     subscribe(sessionId: SessionId, states: DownloadStates): void;
     /**
      * @deprecated Use `publish()` instead.
      */
-    updateUpload(type: StreamType, track: MediaStreamTrack | null): void;
+    updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void;
     /**
      * @deprecated Use `subscribe()` instead.
      */

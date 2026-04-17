@@ -294,6 +294,35 @@ pub(super) fn signed_connect_claims_with_permissions(
     .ok()
 }
 
+pub(super) fn signed_legacy_channel_scoped_connect_claims(
+    key: &str,
+    session_id: SessionId,
+    permissions: Option<SessionPermissions>,
+) -> Option<String> {
+    #[derive(serde::Serialize)]
+    struct LegacyClaims {
+        #[serde(flatten)]
+        registered: RegisteredJwtClaims,
+        #[serde(rename = "session_id")]
+        session_id: SessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permissions: Option<SessionPermissions>,
+    }
+
+    sign(
+        &LegacyClaims {
+            registered: RegisteredJwtClaims::default(),
+            session_id,
+            label: Some("Alice".to_owned()),
+            permissions,
+        },
+        key,
+    )
+    .ok()
+}
+
 pub(super) async fn create_channel(
     server: &TestServer,
     issuer: &str,

@@ -15,6 +15,7 @@ class FakeWebSocket {
         this.url = url;
         this.readyState = 0;
         this.sent = [];
+        this.closeCode = null;
         this.onclose = null;
         this.onerror = null;
         this.onmessage = null;
@@ -38,6 +39,7 @@ class FakeWebSocket {
         if (this.readyState >= 2) {
             return;
         }
+        this.closeCode = code;
         this.readyState = 3;
         this.onclose?.({ code });
     }
@@ -1093,7 +1095,44 @@ test("initial offer with only inactive media enters connected without waiting fo
     assert.equal(client.state, "connected");
 });
 
-test("peer connection transport failure closes the websocket and enters recovery", async () => {
+test("peer connection failed closes the websocket and enters recovery", async () => {
+    const core = new FakeProtocolCore();
+    core.transportFailureState = "recovering";
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].open();
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    peerConnections[0].emitConnectionState("failed");
+    await tick();
+
+    assert.equal(sockets[0].readyState, 3);
+    assert.equal(sockets[0].closeCode, 4000);
+    assert.deepEqual(core.wsCloseCodes, [4000]);
+    assert.equal(client.state, "recovering");
+});
+
+test("peer connection disconnected does not tear down the websocket session", async () => {
     const core = new FakeProtocolCore();
     core.transportFailureState = "recovering";
     const sockets = [];
@@ -1124,9 +1163,10 @@ test("peer connection transport failure closes the websocket and enters recovery
     peerConnections[0].emitConnectionState("disconnected");
     await tick();
 
-    assert.equal(sockets[0].readyState, 3);
-    assert.deepEqual(core.wsCloseCodes, [1011]);
-    assert.equal(client.state, "recovering");
+    assert.equal(sockets[0].readyState, 1);
+    assert.equal(sockets[0].closeCode, null);
+    assert.deepEqual(core.wsCloseCodes, []);
+    assert.equal(client.state, "connected");
 });
 
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {
@@ -1658,6 +1698,7 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(client.errors.length, 1);
     assert.match(client.errors[0].message, /boom/);
     assert.equal(handledErrors[0], client.errors[0]);
+    assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
 });
 
@@ -1691,4 +1732,16 @@ test("deprecated updateUpload and updateDownload delegate to publish and subscri
 
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
     assert.equal(core.subscriptionUpdates.length, 1);
+});
+
+test("deprecated updateUpload treats undefined like the legacy no-track sentinel", async () => {
+    const core = new FakeProtocolCore();
+    const client = new SfuClient({
+        createProtocolCore: () => core
+    });
+
+    client.updateUpload("camera", undefined);
+    await tick();
+
+    assert.deepEqual(core.publicationUpdates, []);
 });
