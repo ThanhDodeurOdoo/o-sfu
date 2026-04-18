@@ -17,10 +17,8 @@ use super::{
     rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
     transport_adapter::{RtcTransportAdapterConfig, TransportAdapterError, TransportSessionKey},
 };
-use crate::{
-    config::{MediaCodecFlags, RtcPortRange},
-    signaling::shared::SessionId,
-};
+use crate::config::{MediaCodecFlags, RtcPortRange};
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
 
 const BENCHMARK_PUBLIC_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);

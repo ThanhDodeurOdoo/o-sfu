@@ -1,6 +1,6 @@
 use super::fixtures::*;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
-use crate::signaling::protocol::{ServerMessage, ServerRequest, TrackBinding};
+use o_sfu_protocol::signaling::{ServerMessage, ServerRequest, TrackBinding};
 use o_sfu_router::MediaKind;
 
 #[tokio::test]

@@ -2,7 +2,7 @@ use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportAdapterError, TransportSessionKey,
 };
 use crate::runtime::websocket_server::WsWriter;
-use crate::signaling::protocol::{
+use o_sfu_protocol::signaling::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };
 use tracing::warn;
@@ -326,8 +326,8 @@ mod tests {
                 RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportSessionKey,
             },
         },
-        signaling::{protocol::WebSocketCloseCode, shared::SessionId},
     };
+    use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 
     fn build_real_rtc_transport_adapter(port_min: u16) -> RuntimeTransportAdapter {
         RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(

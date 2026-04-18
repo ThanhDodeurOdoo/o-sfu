@@ -1,5 +1,5 @@
 use super::metrics::{RuntimeMetrics, RuntimeMetricsSnapshot};
-use crate::signaling::protocol::WebSocketCloseCode;
+use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 pub(super) const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
@@ -766,8 +766,8 @@ mod tests {
             RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
         },
         runtime::rtc_adapter::TransportSessionHealth,
-        signaling::protocol::WebSocketCloseCode,
     };
+    use o_sfu_protocol::signaling::WebSocketCloseCode;
     use std::time::Duration;
 
     fn assert_http_and_websocket_metrics(rendered: &str) {

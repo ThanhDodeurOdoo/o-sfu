@@ -20,8 +20,8 @@ use crate::{
             TransportMediaId, TransportSessionKey,
         },
     },
-    signaling::shared::SessionId,
 };
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
 
 fn empty_router_capabilities() -> RouterRtpCapabilities {

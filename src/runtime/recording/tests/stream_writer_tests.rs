@@ -1,12 +1,10 @@
 use serde_json::json;
 
-use crate::{
-    runtime::recording::{
-        OrtpCodec, OrtpFileHeader, OrtpFrameHeader, RecordingFileMetadata, RecordingMetadata,
-        RecordingSegment, StreamWriter,
-    },
-    signaling::shared::StreamType,
+use crate::runtime::recording::{
+    OrtpCodec, OrtpFileHeader, OrtpFrameHeader, RecordingFileMetadata, RecordingMetadata,
+    RecordingSegment, StreamWriter,
 };
+use o_sfu_protocol::shared::StreamType;
 
 #[test]
 fn stream_writer_serializes_ortp_header_and_frames() {

@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
-use crate::signaling::shared::{SessionId, SessionInfo, SessionPermissions};
+use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
     Channel, ChannelJoinError, SessionOutbound,
@@ -13,7 +13,7 @@ use super::{
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportMediaId;
 #[cfg(test)]
-use crate::signaling::shared::StreamType;
+use o_sfu_protocol::shared::StreamType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionCleanupPolicy {

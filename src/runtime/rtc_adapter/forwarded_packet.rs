@@ -312,7 +312,7 @@ mod tests {
     use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
 
     use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
-    use crate::signaling::shared::SessionId;
+    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn forwarded_packet_resolves_transport_media_id_through_the_registry() {

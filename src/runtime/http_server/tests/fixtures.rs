@@ -9,6 +9,7 @@ pub(super) use axum::{
     http::{Request, StatusCode, header, request::Builder as HttpRequestBuilder},
     response::Response as AxumResponse,
 };
+pub(super) use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 pub(super) use serde::de::DeserializeOwned;
 pub(super) use tokio::sync::mpsc;
 pub(super) use tower::util::ServiceExt;
@@ -32,7 +33,6 @@ pub(super) use crate::{
             CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH,
             NOOP_PATH, NoopResponse, STATS_PATH, StatsResponse,
         },
-        shared::{SessionId, SessionPermissions},
     },
 };
 

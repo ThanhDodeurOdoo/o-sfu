@@ -1,4 +1,4 @@
-use crate::signaling::shared::SessionInfo;
+use o_sfu_protocol::shared::SessionInfo;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct SessionPresence {

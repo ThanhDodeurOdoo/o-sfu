@@ -19,14 +19,15 @@ use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use o_sfu_protocol::{
+    shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
+    signaling::{PeerSnapshot, WebSocketCloseCode},
+};
+
 use crate::config::RuntimeFeatureFlags;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
-use crate::signaling::{
-    protocol::{PeerSnapshot, WebSocketCloseCode},
-    shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
-};
 
 use super::{
     events::ChannelEventMessage,

@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use crate::runtime::channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate};
-use crate::signaling::{
-    protocol::{
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo, StreamType},
+    signaling::{
         PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, TrackBinding,
     },
-    shared::{SessionId, SessionInfo, StreamType},
 };
+
+use crate::runtime::channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TranslatedServerMessage {

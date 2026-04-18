@@ -15,7 +15,7 @@ use super::{
     recording::MediaTap,
 };
 use crate::config::Config;
-use crate::signaling::protocol::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
+use o_sfu_protocol::signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]

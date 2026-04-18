@@ -9,6 +9,7 @@ use axum::{
 };
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
+use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 use tokio::sync::mpsc;
 use tracing::{Instrument, field, info, info_span};
 
@@ -16,7 +17,6 @@ use crate::runtime::{
     RuntimeState,
     channel::{Channel, SessionOutbound},
 };
-use crate::signaling::{protocol::WebSocketCloseCode, shared::SessionId};
 
 use super::{WsWriter, session_protocol::SessionProtocol};
 

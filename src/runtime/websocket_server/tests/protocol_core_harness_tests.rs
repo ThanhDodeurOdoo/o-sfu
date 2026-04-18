@@ -30,7 +30,7 @@ use str0m::{
 use super::fixtures::*;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use crate::runtime::{rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey};
-use crate::signaling::shared::SessionPermissions;
+use o_sfu_protocol::shared::SessionPermissions;
 use o_sfu_router::MediaKind;
 
 const BATCH_FLUSH_DELAY_MS: u32 = 100;

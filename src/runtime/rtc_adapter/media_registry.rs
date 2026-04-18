@@ -383,7 +383,7 @@ mod tests {
     use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
 
     use crate::runtime::transport_adapter::TransportSessionKey;
-    use crate::signaling::shared::SessionId;
+    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn consumer_media_lookup_uses_the_reverse_index() {

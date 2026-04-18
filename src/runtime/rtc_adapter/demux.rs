@@ -260,7 +260,7 @@ mod tests {
 
     use super::RemoteAddrDemux;
     use crate::runtime::transport_adapter::TransportSessionKey;
-    use crate::signaling::shared::SessionId;
+    use o_sfu_protocol::shared::SessionId;
 
     fn session_key(channel_runtime_id: u64, session_numeric_id: i64) -> TransportSessionKey {
         TransportSessionKey::new(

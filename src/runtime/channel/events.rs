@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::signaling::shared::{JsonPayload, RecordingStateUpdate, SessionId, SessionInfo};
+use o_sfu_protocol::shared::{JsonPayload, RecordingStateUpdate, SessionId, SessionInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ChannelEventMessage {

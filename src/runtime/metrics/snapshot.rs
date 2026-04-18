@@ -1,4 +1,4 @@
-use crate::signaling::protocol::WebSocketCloseCode;
+use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::catalog::RuntimeMetrics;
 use super::labels::{

@@ -3,6 +3,13 @@ pub(super) use std::sync::Arc;
 pub(super) use std::time::Duration;
 
 pub(super) use futures_util::{SinkExt, StreamExt};
+pub(super) use o_sfu_protocol::{
+    shared::{AvailableFeatures, RecordingState, SessionId, SessionPermissions, StreamType},
+    signaling::{
+        AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
+        ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload, WelcomePayload,
+    },
+};
 pub(super) use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinHandle,
@@ -32,15 +39,7 @@ pub(super) use crate::{
             RuntimeTransportAdapter,
         },
     },
-    signaling::{
-        auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
-        protocol::{
-            AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
-            ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
-            WelcomePayload,
-        },
-        shared::{AvailableFeatures, RecordingState, SessionId, SessionPermissions, StreamType},
-    },
+    signaling::auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
 };
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";

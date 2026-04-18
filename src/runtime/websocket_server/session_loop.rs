@@ -10,7 +10,7 @@ use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
 };
-use crate::signaling::protocol::WebSocketCloseCode;
+use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::{
     WsWriter,

@@ -5,9 +5,9 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     recording::MediaTap,
 };
-use crate::signaling::{
-    protocol::RecordingOptions,
+use o_sfu_protocol::{
     shared::{RecordingState, RecordingStateUpdate, StopCode},
+    signaling::RecordingOptions,
 };
 
 async fn build_recording_channel() -> (

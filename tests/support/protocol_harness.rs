@@ -7,14 +7,13 @@ use futures_util::SinkExt;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
-use o_sfu::{
-    config::Config,
-    runtime::testing::TestServer,
-    signaling::protocol::{
+use o_sfu::{config::Config, runtime::testing::TestServer};
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo},
+    signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientResponse,
         EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, WelcomePayload,
     },
-    signaling::shared::{SessionId, SessionInfo},
 };
 
 use super::{

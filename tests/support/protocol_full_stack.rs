@@ -9,21 +9,21 @@ use std::{
 };
 
 use futures_util::SinkExt;
+use o_sfu_protocol::{
+    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
+    signaling::{
+        AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
+        ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
+        WelcomePayload,
+    },
+};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use o_sfu::{
     config::Config,
     runtime::testing::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
-    signaling::{
-        http::{METRICS_PATH, STATS_PATH, StatsResponse},
-        protocol::{
-            AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
-            ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
-            WelcomePayload,
-        },
-        shared::{DownloadStates, SessionId, SessionInfo, StreamType},
-    },
+    signaling::http::{METRICS_PATH, STATS_PATH, StatsResponse},
 };
 
 use super::{

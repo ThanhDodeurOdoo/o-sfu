@@ -6,7 +6,7 @@ import {
     type SfuStats,
     type StreamType
 } from "../public_api.js";
-import type { HostCommand, ProtocolCoreBindings } from "../runtime_contract.js";
+import { CommandKind, type HostCommand, type ProtocolCoreBindings } from "../runtime_contract.js";
 import type {
     ClientPeerConnection,
     ClientWebSocket,
@@ -155,13 +155,13 @@ export class BrowserRuntime {
         hooks: BrowserRuntimeHooks
     ): Promise<HostCommand[]> {
         switch (command.kind) {
-            case "sendWebSocket":
+            case CommandKind.SEND_WEB_SOCKET:
                 if (!this._webSocket || this._webSocket.readyState !== 1) {
                     throw new Error("cannot send websocket frame while socket is not open");
                 }
                 this._webSocket.send(command.frame);
                 return [];
-            case "applyNegotiation":
+            case CommandKind.APPLY_NEGOTIATION:
                 return this.applyNegotiation(
                     command.requestId,
                     command.negotiationKind,
@@ -170,7 +170,7 @@ export class BrowserRuntime {
                     hooks.protocolCore,
                     hooks
                 );
-            case "attachTrack":
+            case CommandKind.ATTACH_TRACK:
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.INFO,
@@ -178,7 +178,7 @@ export class BrowserRuntime {
                 );
                 await this.attachTrack(command.mid, command.streamType, hooks.localUploads);
                 return [];
-            case "detachTrack":
+            case CommandKind.DETACH_TRACK:
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.INFO,
@@ -186,13 +186,13 @@ export class BrowserRuntime {
                 );
                 await this.detachTrack(command.streamType, hooks.localUploads);
                 return [];
-            case "createPeerConnection":
+            case CommandKind.CREATE_PEER_CONNECTION:
                 this.createPeerConnection(hooks);
                 return [];
-            case "closePeerConnection":
+            case CommandKind.CLOSE_PEER_CONNECTION:
                 this.closePeerConnection(hooks);
                 return [];
-            case "closeWebSocket":
+            case CommandKind.CLOSE_WEB_SOCKET:
                 if (this._webSocket && this._webSocket.readyState < 2) {
                     emitRuntimeLog(
                         hooks,
@@ -202,10 +202,10 @@ export class BrowserRuntime {
                     this._webSocket.close(command.code);
                 }
                 return [];
-            case "emitStateChange":
+            case CommandKind.EMIT_STATE_CHANGE:
                 hooks.onStateChange(command.state, command.cause);
                 return [];
-            case "replaceTrackBindings":
+            case CommandKind.REPLACE_TRACK_BINDINGS:
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.DEBUG,
@@ -213,7 +213,7 @@ export class BrowserRuntime {
                 );
                 hooks.remoteTracks.replaceTrackBindings(command.bindings, hooks.onUpdate);
                 return [];
-            case "removeSessionTracks":
+            case CommandKind.REMOVE_SESSION_TRACKS:
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.INFO,
@@ -221,16 +221,16 @@ export class BrowserRuntime {
                 );
                 hooks.remoteTracks.removeSessionTracks(command.sessionId);
                 return [];
-            case "emitUpdate":
+            case CommandKind.EMIT_UPDATE:
                 hooks.onUpdate(command.update);
                 return [];
-            case "registerPendingRequest":
+            case CommandKind.REGISTER_PENDING_REQUEST:
                 hooks.pendingRequests.register(command.requestId, command.requestKind);
                 return [];
-            case "resolvePendingRequest":
+            case CommandKind.RESOLVE_PENDING_REQUEST:
                 hooks.pendingRequests.resolve(command.requestId, command.ok);
                 return [];
-            case "scheduleTimer":
+            case CommandKind.SCHEDULE_TIMER:
                 this.cancelTimer(command.id);
                 this._timerHandles.set(
                     command.id,
@@ -242,10 +242,10 @@ export class BrowserRuntime {
                     }, command.ms)
                 );
                 return [];
-            case "cancelTimer":
+            case CommandKind.CANCEL_TIMER:
                 this.cancelTimer(command.id);
                 return [];
-            case "connect":
+            case CommandKind.CONNECT:
                 this.openWebSocket(command.url, hooks);
                 return [];
         }

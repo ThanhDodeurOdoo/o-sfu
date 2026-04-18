@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo, SessionPermissions},
+    signaling::WebSocketCloseCode,
+};
 use o_sfu_router::{MediaCapabilities, RouterError};
 use tracing::{debug, error, warn};
-
-use crate::signaling::{
-    protocol::WebSocketCloseCode,
-    shared::{SessionId, SessionInfo, SessionPermissions},
-};
 
 use super::super::{
     ChannelEventMessage, ChannelJoinError,
@@ -445,7 +444,7 @@ mod tests {
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
-    use crate::signaling::shared::{DownloadStates, SessionPermissions, StreamType};
+    use o_sfu_protocol::shared::{DownloadStates, SessionPermissions, StreamType};
     use o_sfu_router::MediaKind;
 
     fn test_state() -> ChannelState {

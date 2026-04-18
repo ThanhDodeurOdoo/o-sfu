@@ -4,14 +4,12 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use crate::{
-    runtime::{
-        recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
-        rtc_adapter::sample_forwarded_packet,
-        transport_adapter::{TransportMediaId, TransportSessionKey},
-    },
-    signaling::shared::SessionId,
+use crate::runtime::{
+    recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
+    rtc_adapter::sample_forwarded_packet,
+    transport_adapter::{TransportMediaId, TransportSessionKey},
 };
+use o_sfu_protocol::shared::SessionId;
 
 struct CountingSink {
     frames: AtomicUsize,

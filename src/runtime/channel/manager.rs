@@ -11,8 +11,8 @@ use super::{
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
-use crate::signaling::shared::{SessionId, SessionPermissions};
 use crate::utils::rfc3339_now;
+use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
 #[cfg(test)]
 use super::ChannelAdmissionPolicy;

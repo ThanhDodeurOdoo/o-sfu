@@ -28,32 +28,53 @@ export const PENDING_REQUEST_KIND = {
 
 export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
 
+export const CommandKind = {
+    SEND_WEB_SOCKET: "sendWebSocket",
+    APPLY_NEGOTIATION: "applyNegotiation",
+    ATTACH_TRACK: "attachTrack",
+    DETACH_TRACK: "detachTrack",
+    CREATE_PEER_CONNECTION: "createPeerConnection",
+    CLOSE_PEER_CONNECTION: "closePeerConnection",
+    CLOSE_WEB_SOCKET: "closeWebSocket",
+    EMIT_STATE_CHANGE: "emitStateChange",
+    REPLACE_TRACK_BINDINGS: "replaceTrackBindings",
+    REMOVE_SESSION_TRACKS: "removeSessionTracks",
+    EMIT_UPDATE: "emitUpdate",
+    REGISTER_PENDING_REQUEST: "registerPendingRequest",
+    RESOLVE_PENDING_REQUEST: "resolvePendingRequest",
+    SCHEDULE_TIMER: "scheduleTimer",
+    CANCEL_TIMER: "cancelTimer",
+    CONNECT: "connect"
+} as const;
+
+export type HostCommandKind = (typeof CommandKind)[keyof typeof CommandKind];
+
 export type HostCommand =
-    | { kind: "sendWebSocket"; frame: string }
+    | { kind: typeof CommandKind.SEND_WEB_SOCKET; frame: string }
     | {
-          kind: "applyNegotiation";
+          kind: typeof CommandKind.APPLY_NEGOTIATION;
           requestId: string;
           negotiationKind: NegotiationKind;
           sdp: string;
       }
-    | { kind: "attachTrack"; mid: string; streamType: StreamType }
-    | { kind: "detachTrack"; streamType: StreamType }
-    | { kind: "createPeerConnection" }
-    | { kind: "closePeerConnection" }
-    | { kind: "closeWebSocket"; code: number }
-    | { kind: "emitStateChange"; state: ConnectionState; cause?: string }
-    | { kind: "replaceTrackBindings"; bindings: TrackBinding[] }
-    | { kind: "removeSessionTracks"; sessionId: SessionId }
-    | { kind: "emitUpdate"; update: ClientUpdateDetail }
+    | { kind: typeof CommandKind.ATTACH_TRACK; mid: string; streamType: StreamType }
+    | { kind: typeof CommandKind.DETACH_TRACK; streamType: StreamType }
+    | { kind: typeof CommandKind.CREATE_PEER_CONNECTION }
+    | { kind: typeof CommandKind.CLOSE_PEER_CONNECTION }
+    | { kind: typeof CommandKind.CLOSE_WEB_SOCKET; code: number }
+    | { kind: typeof CommandKind.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
+    | { kind: typeof CommandKind.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
+    | { kind: typeof CommandKind.REMOVE_SESSION_TRACKS; sessionId: SessionId }
+    | { kind: typeof CommandKind.EMIT_UPDATE; update: ClientUpdateDetail }
     | {
-          kind: "registerPendingRequest";
+          kind: typeof CommandKind.REGISTER_PENDING_REQUEST;
           requestId: string;
           requestKind: PendingRequestKind;
       }
-    | { kind: "resolvePendingRequest"; requestId: string; ok: boolean }
-    | { kind: "scheduleTimer"; id: number; ms: number }
-    | { kind: "cancelTimer"; id: number }
-    | { kind: "connect"; url: string };
+    | { kind: typeof CommandKind.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
+    | { kind: typeof CommandKind.SCHEDULE_TIMER; id: number; ms: number }
+    | { kind: typeof CommandKind.CANCEL_TIMER; id: number }
+    | { kind: typeof CommandKind.CONNECT; url: string };
 
 export interface ProtocolCoreBindings {
     readonly state: ConnectionState;
@@ -187,32 +208,32 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
     const command = asRecord(value, context);
     const kind = requireString(command.kind, `${context}.kind`);
     switch (kind) {
-        case "sendWebSocket":
+        case CommandKind.SEND_WEB_SOCKET:
             requireString(command.frame, `${context}.frame`);
             return command as HostCommand;
-        case "applyNegotiation":
+        case CommandKind.APPLY_NEGOTIATION:
             requireString(command.requestId, `${context}.requestId`);
             validateNegotiationKind(command.negotiationKind, `${context}.negotiationKind`);
             requireString(command.sdp, `${context}.sdp`);
             return command as HostCommand;
-        case "attachTrack":
+        case CommandKind.ATTACH_TRACK:
             requireString(command.mid, `${context}.mid`);
             validateStreamType(command.streamType, `${context}.streamType`);
             return command as HostCommand;
-        case "detachTrack":
+        case CommandKind.DETACH_TRACK:
             validateStreamType(command.streamType, `${context}.streamType`);
             return command as HostCommand;
-        case "createPeerConnection":
-        case "closePeerConnection":
+        case CommandKind.CREATE_PEER_CONNECTION:
+        case CommandKind.CLOSE_PEER_CONNECTION:
             return command as HostCommand;
-        case "closeWebSocket":
+        case CommandKind.CLOSE_WEB_SOCKET:
             requireInteger(command.code, `${context}.code`);
             return command as HostCommand;
-        case "emitStateChange":
+        case CommandKind.EMIT_STATE_CHANGE:
             validateConnectionState(command.state, `${context}.state`);
             requireOptionalString(command.cause, `${context}.cause`);
             return command as HostCommand;
-        case "replaceTrackBindings":
+        case CommandKind.REPLACE_TRACK_BINDINGS:
             if (!Array.isArray(command.bindings)) {
                 throw new Error(`${context}.bindings must be an array`);
             }
@@ -226,30 +247,30 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
                 }
             });
             return command as HostCommand;
-        case "removeSessionTracks":
+        case CommandKind.REMOVE_SESSION_TRACKS:
             validateSessionId(command.sessionId, `${context}.sessionId`);
             return command as HostCommand;
-        case "emitUpdate":
+        case CommandKind.EMIT_UPDATE:
             return {
                 kind,
                 update: validateClientUpdate(command.update, `${context}.update`)
             };
-        case "registerPendingRequest":
+        case CommandKind.REGISTER_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
             validatePendingRequestKind(command.requestKind, `${context}.requestKind`);
             return command as HostCommand;
-        case "resolvePendingRequest":
+        case CommandKind.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
             requireBoolean(command.ok, `${context}.ok`);
             return command as HostCommand;
-        case "scheduleTimer":
+        case CommandKind.SCHEDULE_TIMER:
             requireInteger(command.id, `${context}.id`);
             requireInteger(command.ms, `${context}.ms`);
             return command as HostCommand;
-        case "cancelTimer":
+        case CommandKind.CANCEL_TIMER:
             requireInteger(command.id, `${context}.id`);
             return command as HostCommand;
-        case "connect":
+        case CommandKind.CONNECT:
             requireString(command.url, `${context}.url`);
             return command as HostCommand;
         default:

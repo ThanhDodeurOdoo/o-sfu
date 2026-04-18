@@ -19,7 +19,7 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::RecordingService;
 #[cfg(test)]
 use crate::runtime::recording::{MediaSource, MediaTap};
-use crate::signaling::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
+use o_sfu_protocol::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
 
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 

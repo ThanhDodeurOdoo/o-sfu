@@ -1,4 +1,4 @@
-use crate::signaling::protocol::{ClientEnvelope, EnvelopeBatch, EnvelopeDecodeError};
+use o_sfu_protocol::signaling::{ClientEnvelope, EnvelopeBatch, EnvelopeDecodeError};
 
 pub const MAX_CLIENT_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_CLIENT_BATCH_ENVELOPES: usize = 64;

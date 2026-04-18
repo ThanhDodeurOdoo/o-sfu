@@ -7,6 +7,10 @@ mod support;
 
 use std::collections::BTreeMap;
 
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo, StreamType},
+    signaling::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
+};
 use reqwest::StatusCode;
 use tokio::time::{Duration, sleep};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -14,11 +18,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use o_sfu::{
     config::RtcPortRange,
     runtime::testing::spawn_test_server,
-    signaling::{
-        http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
-        protocol::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
-        shared::{SessionId, SessionInfo, StreamType},
-    },
+    signaling::http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
 };
 
 use crate::support::protocol_harness::{

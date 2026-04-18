@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::signaling::protocol::PeerSnapshot;
-use crate::signaling::shared::SessionInfo;
-use crate::signaling::shared::{SessionId, StreamType};
+use o_sfu_protocol::shared::SessionInfo;
+use o_sfu_protocol::shared::{SessionId, StreamType};
+use o_sfu_protocol::signaling::PeerSnapshot;
 
 use super::layout::SessionLayout;
 use super::presence::SessionPresence;

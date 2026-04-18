@@ -1,7 +1,7 @@
 use tracing::error;
 
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::shared::{DownloadStates, SessionId, StreamType};
+use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::super::shared::{ChannelState, ConsumerKey, ConsumerState};
 

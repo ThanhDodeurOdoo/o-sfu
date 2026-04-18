@@ -1,9 +1,9 @@
 use crate::runtime::websocket_server::WsWriter;
-use crate::signaling::protocol::{
+use o_sfu_protocol::shared::SessionInfo;
+use o_sfu_protocol::signaling::{
     ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
     RecordingActionResult, ServerResponse, WebSocketCloseCode,
 };
-use crate::signaling::shared::SessionInfo;
 use tracing::debug;
 
 use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_response};

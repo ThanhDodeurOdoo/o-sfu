@@ -1,4 +1,4 @@
-use crate::signaling::shared::{
+use o_sfu_protocol::shared::{
     RecordingState, RecordingStateUpdate, SessionId, SessionPermissions, StopCode,
 };
 

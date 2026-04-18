@@ -38,8 +38,8 @@ pub(super) use crate::{
         TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
         TransportConnectIceParameters,
     },
-    signaling::shared::SessionId,
 };
+pub(super) use o_sfu_protocol::shared::SessionId;
 
 pub(super) const VALID_SDP_OFFER: &str = "v=0\r\n\
 o=- 0 0 IN IP4 127.0.0.1\r\n\

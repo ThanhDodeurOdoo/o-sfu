@@ -25,7 +25,7 @@ use crate::runtime::channel::{
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
+use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
 
 fn test_state() -> ChannelState {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());

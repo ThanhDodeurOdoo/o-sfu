@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use futures_util::StreamExt;
+use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 use reqwest::StatusCode;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -23,7 +24,6 @@ use o_sfu::{
             sign,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH},
-        shared::{SessionId, SessionPermissions},
     },
 };
 

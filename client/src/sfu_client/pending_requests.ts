@@ -1,4 +1,5 @@
 import {
+    CommandKind,
     PENDING_REQUEST_KIND,
     type HostCommand,
     type PendingRequestKind
@@ -69,10 +70,13 @@ export class PendingRequests {
 
     private findRegistrationCommand(
         commands: HostCommand[]
-    ): Extract<HostCommand, { kind: "registerPendingRequest" }> | null {
-        let registration: Extract<HostCommand, { kind: "registerPendingRequest" }> | null = null;
+    ): Extract<HostCommand, { kind: typeof CommandKind.REGISTER_PENDING_REQUEST }> | null {
+        let registration: Extract<
+            HostCommand,
+            { kind: typeof CommandKind.REGISTER_PENDING_REQUEST }
+        > | null = null;
         for (const command of commands) {
-            if (command.kind !== "registerPendingRequest") {
+            if (command.kind !== CommandKind.REGISTER_PENDING_REQUEST) {
                 continue;
             }
             if (registration) {

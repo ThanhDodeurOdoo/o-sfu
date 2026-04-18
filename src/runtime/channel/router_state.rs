@@ -12,7 +12,7 @@ use o_sfu_router::{
 };
 
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
-use crate::signaling::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
+use o_sfu_protocol::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
 #[derive(Debug, Clone)]

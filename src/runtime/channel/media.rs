@@ -4,7 +4,7 @@ use o_sfu_router::{
 use tracing::warn;
 
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
-use crate::signaling::shared::{DownloadStates, SessionId, StreamType};
+use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
     Channel,

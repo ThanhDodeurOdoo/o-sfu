@@ -12,7 +12,7 @@ use crate::runtime::{
     },
     rtc_adapter::sample_forwarded_packet,
 };
-use crate::signaling::shared::SessionId as SignalingSessionId;
+use o_sfu_protocol::shared::SessionId as SignalingSessionId;
 
 #[test]
 fn recording_service_counts_packets_without_recounting_streams() {

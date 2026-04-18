@@ -6,7 +6,7 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::shared::{SessionId, SessionInfo, StreamType};
+use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 
 use super::super::{
     super::{

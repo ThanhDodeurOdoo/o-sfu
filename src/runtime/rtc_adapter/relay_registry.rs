@@ -399,7 +399,7 @@ mod tests {
     use super::*;
     use crate::runtime::rtc_adapter::{sample_forwarded_packet, state::RtcBootstrapState};
     use crate::runtime::transport_adapter::TransportSessionKey;
-    use crate::signaling::shared::SessionId;
+    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn relay_registry_tracks_active_sources() {

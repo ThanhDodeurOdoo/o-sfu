@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::runtime::rtc_adapter::TransportSessionHealth;
-use crate::signaling::protocol::WebSocketCloseCode;
+use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::counter::{Counter, CounterFamily, UpDownCounter};
 use super::labels::{

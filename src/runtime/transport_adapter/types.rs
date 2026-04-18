@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Instant};
 use crate::runtime::transport_connect::{
     TransportConnectDtlsParameters, TransportConnectIceParameters,
 };
-use crate::signaling::shared::SessionId;
+use o_sfu_protocol::shared::SessionId;
 
 /// Channel-scoped transport-adapter session identity.
 ///

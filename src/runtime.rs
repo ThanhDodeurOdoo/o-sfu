@@ -152,19 +152,6 @@ fn init_tracing() -> Result<()> {
     Ok(())
 }
 
-/// # Errors
-///
-/// Returns an error when configuration loading fails or the HTTP server cannot bind.
-// TODO: needs documentation:
-pub fn run() -> Result<()> {
-    init_tracing()?;
-    let runtime = Runtime::new(Config::from_env()?);
-    Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(runtime.run_until_stopped())
-}
-
 fn build_transport_adapter(
     config: &Config,
     recording_media_tap: Arc<MediaTap>,
@@ -178,4 +165,17 @@ fn build_transport_adapter(
         recording_media_tap,
         metrics,
     ))
+}
+
+/// # Errors
+///
+/// Returns an error when configuration loading fails or the HTTP server cannot bind.
+// TODO: needs documentation:
+pub fn run() -> Result<()> {
+    init_tracing()?;
+    let runtime = Runtime::new(Config::from_env()?);
+    Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(runtime.run_until_stopped())
 }

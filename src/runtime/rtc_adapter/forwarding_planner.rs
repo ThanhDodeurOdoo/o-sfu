@@ -127,7 +127,7 @@ mod tests {
         sample_forwarded_packet, sample_forwarded_packet_with_rid,
     };
     use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-    use crate::signaling::shared::SessionId;
+    use o_sfu_protocol::shared::SessionId;
 
     struct CountingSink {
         packets: AtomicUsize,

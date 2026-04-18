@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use o_sfu_router::MediaKind;
 
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::signaling::shared::StreamType;
+use o_sfu_protocol::shared::StreamType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct StagedPublishTransaction {
@@ -95,7 +95,8 @@ impl PostAuthSessionState {
 #[cfg(test)]
 mod tests {
     use super::{ClearedPublishTransition, PostAuthSessionState, StagedPublishTransaction};
-    use crate::{runtime::transport_adapter::TransportMediaId, signaling::shared::StreamType};
+    use crate::runtime::transport_adapter::TransportMediaId;
+    use o_sfu_protocol::shared::StreamType;
     use o_sfu_router::MediaKind;
 
     #[test]

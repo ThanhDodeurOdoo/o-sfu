@@ -1,6 +1,6 @@
 use o_sfu_router::StreamType as RouterStreamType;
 
-use crate::signaling::shared::StreamType;
+use o_sfu_protocol::shared::StreamType;
 
 pub(super) const fn to_router_stream_type(stream_type: StreamType) -> RouterStreamType {
     match stream_type {

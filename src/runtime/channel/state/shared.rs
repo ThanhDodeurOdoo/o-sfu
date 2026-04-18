@@ -7,7 +7,7 @@ use o_sfu_router::{
 
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
-use crate::signaling::shared::{
+use o_sfu_protocol::shared::{
     DownloadStates, RecordingState, SessionId, SessionPermissions, StreamType,
 };
 

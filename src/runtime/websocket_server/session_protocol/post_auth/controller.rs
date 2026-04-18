@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
 use axum::extract::ws::Message;
+use o_sfu_protocol::{
+    shared::SessionId,
+    signaling::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
+};
 
 use crate::runtime::{
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
@@ -9,10 +13,8 @@ use crate::runtime::{
     transport_adapter::RuntimeTransportAdapter,
     websocket_server::WsWriter,
 };
-use crate::signaling::{
-    client_batch::{ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch},
-    protocol::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
-    shared::SessionId,
+use crate::signaling::client_batch::{
+    ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
 };
 use tracing::warn;
 

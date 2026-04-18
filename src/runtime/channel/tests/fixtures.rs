@@ -20,9 +20,9 @@ use crate::runtime::test_rtp_samples::{
 pub(super) use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, FakeWebRtcAdapter, FakeWebRtcEvent, RuntimeTransportAdapter,
 };
-pub(super) use crate::signaling::{
-    protocol::WebSocketCloseCode,
+pub(super) use o_sfu_protocol::{
     shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
+    signaling::WebSocketCloseCode,
 };
 
 /// Realistic client RTP capabilities (default codecs)

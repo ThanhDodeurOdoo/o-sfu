@@ -17,7 +17,7 @@ use crate::runtime::rtc_adapter::{
     state::RtcBootstrapState,
 };
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-use crate::signaling::shared::SessionId;
+use o_sfu_protocol::shared::SessionId;
 
 fn prepare_source_session(
     state: &mut RtcBootstrapState,

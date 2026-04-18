@@ -12,7 +12,7 @@ use std::{
 use tokio::{net::UdpSocket, time::timeout};
 use tokio_util::bytes::Bytes;
 
-use o_sfu::signaling::protocol::SessionDescriptionPayload;
+use o_sfu_protocol::signaling::SessionDescriptionPayload;
 use o_sfu_router::MediaKind;
 use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,

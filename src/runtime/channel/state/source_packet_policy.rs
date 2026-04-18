@@ -1,5 +1,5 @@
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportMediaId};
-use crate::signaling::shared::{SessionId, StreamType};
+use o_sfu_protocol::shared::{SessionId, StreamType};
 use std::collections::BTreeSet;
 
 use super::{

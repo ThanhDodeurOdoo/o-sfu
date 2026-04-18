@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::signaling::shared::{SessionId, SessionPermissions};
+use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -239,7 +239,7 @@ mod tests {
         AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, JwtHeader,
         RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, sign, sign_hs256, verify,
     };
-    use crate::signaling::shared::{SessionId, SessionPermissions};
+    use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
     const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

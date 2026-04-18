@@ -3,7 +3,7 @@ use super::super::{
     outbound::{MessageFanout, fanout_all, fanout_all_except},
 };
 use super::shared::ChannelState;
-use crate::signaling::shared::SessionId;
+use o_sfu_protocol::shared::SessionId;
 
 impl ChannelState {
     pub(in crate::runtime::channel) fn fanout_all(

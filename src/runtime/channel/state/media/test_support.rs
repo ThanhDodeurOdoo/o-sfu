@@ -1,4 +1,4 @@
-use crate::signaling::shared::SessionId;
+use o_sfu_protocol::shared::SessionId;
 
 use super::{super::shared::ChannelState, PendingConsumerBootstrapTarget};
 

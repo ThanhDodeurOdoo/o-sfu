@@ -3,6 +3,13 @@ use std::time::Duration;
 
 use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
+use o_sfu_protocol::{
+    shared::{SessionId, SessionPermissions},
+    signaling::{
+        AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
+        WelcomePayload,
+    },
+};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -20,11 +27,6 @@ use crate::runtime::{
 use crate::signaling::{
     auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
     client_batch::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
-    protocol::{
-        AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
-        WelcomePayload,
-    },
-    shared::{SessionId, SessionPermissions},
 };
 
 #[derive(Deserialize)]
@@ -402,7 +404,7 @@ mod tests {
     use serde_json::json;
 
     use super::parse_auth_payload;
-    use crate::signaling::protocol::WebSocketCloseCode;
+    use o_sfu_protocol::signaling::WebSocketCloseCode;
 
     #[test]
     fn parse_auth_payload_accepts_single_auth_message() {

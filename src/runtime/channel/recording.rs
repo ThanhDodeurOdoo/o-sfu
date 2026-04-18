@@ -1,6 +1,6 @@
-use crate::signaling::{
-    protocol::RecordingOptions,
+use o_sfu_protocol::{
     shared::{RecordingState, SessionId, SessionPermissions, StopCode},
+    signaling::RecordingOptions,
 };
 
 use super::Channel;

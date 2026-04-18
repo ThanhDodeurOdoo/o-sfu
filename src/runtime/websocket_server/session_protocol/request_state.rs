@@ -1,4 +1,4 @@
-use crate::signaling::protocol::RequestId;
+use o_sfu_protocol::signaling::RequestId;
 
 #[derive(Debug, Default)]
 pub(super) struct SessionRequestState {

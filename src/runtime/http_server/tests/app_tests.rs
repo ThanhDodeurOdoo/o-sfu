@@ -3,7 +3,7 @@ use o_sfu_router::{MediaKind, RtpParameters};
 
 use crate::runtime::channel::Channel;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters;
-use crate::signaling::shared::StreamType;
+use o_sfu_protocol::shared::StreamType;
 
 fn test_video_rtp_parameters(ssrc: u64) -> RtpParameters {
     sample_video_rtp_parameters(None, u32::try_from(ssrc).unwrap_or(u32::MAX))

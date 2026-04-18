@@ -1,8 +1,7 @@
 use std::time::Duration;
 
-use crate::{
-    runtime::rtc_adapter::TransportSessionHealth, signaling::protocol::WebSocketCloseCode,
-};
+use crate::runtime::rtc_adapter::TransportSessionHealth;
+use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::{
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind,

@@ -1,6 +1,6 @@
 use o_sfu_router::MediaCapabilities;
 
-use crate::signaling::protocol::{RequestId, ServerRequest};
+use o_sfu_protocol::signaling::{RequestId, ServerRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PendingNegotiationAction {

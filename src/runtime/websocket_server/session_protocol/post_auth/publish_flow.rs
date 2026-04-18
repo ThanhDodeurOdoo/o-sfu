@@ -3,11 +3,11 @@ use std::future::Future;
 use tracing::{debug, warn};
 
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportMediaId};
+use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
 use o_sfu_router::MediaKind;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use crate::runtime::{channel::NegotiatedPublish, websocket_server::WsWriter};
-use crate::signaling::{protocol::WebSocketCloseCode, shared::StreamType};
 
 use super::super::controller::SessionProtocolOutcome;
 use super::{
@@ -306,13 +306,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::{PublishTransactionGuard, StagedPublishTransaction};
-    use crate::{
-        runtime::{
-            transport_adapter::{TransportAdapterError, TransportMediaId},
-            websocket_server::session_protocol::controller::SessionProtocolOutcome,
-        },
-        signaling::{protocol::WebSocketCloseCode, shared::StreamType},
+    use crate::runtime::{
+        transport_adapter::{TransportAdapterError, TransportMediaId},
+        websocket_server::session_protocol::controller::SessionProtocolOutcome,
     };
+    use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
     use o_sfu_router::{MediaKind, RtpParameters as RouterRtpParameters};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
