@@ -108,3 +108,7 @@ allow the SFUs to share shards between them.
 ## crypto
 
 investigate chacha20 instead of classical dtls/srtp
+
+## API documentation
+
+Can copy the one form odoo/sfu since it's roughly the same (Bundle API and http API)

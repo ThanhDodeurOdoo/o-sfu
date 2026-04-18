@@ -10,6 +10,7 @@
 //! `shared` owns the in-memory state and bookkeeping types.
 //! `membership` owns session lifecycle, presence fan-out, and negotiation readiness.
 //! `media` owns producer/consumer bootstrap and routing-side media bookkeeping.
+//! `test_support` owns read-only state inspectors used only by tests.
 
 mod fanout;
 mod ids;
@@ -21,6 +22,8 @@ mod recording;
 mod session_info_projection;
 mod shared;
 mod source_packet_policy;
+#[cfg(test)]
+mod test_support;
 
 pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{

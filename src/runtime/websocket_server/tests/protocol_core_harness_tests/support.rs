@@ -32,7 +32,6 @@ pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCod
 
 pub(super) use super::super::fixtures::*;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
-use crate::runtime::{rtc_adapter::DebugRouteEntry, transport_adapter::TransportSessionKey};
 pub(super) use crate::{
     config::RuntimeFeatureFlags,
     runtime::{channel::Channel, transport_adapter::RuntimeTransportAdapter},
@@ -41,6 +40,12 @@ pub(super) use o_sfu_router::MediaKind;
 
 pub(super) const BATCH_FLUSH_DELAY_MS: u32 = 100;
 pub(super) const RECOVERY_DELAY_MS: u32 = 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RealRtcRouteActivity {
+    pub(super) source_active: bool,
+    pub(super) consumer_active: bool,
+}
 
 struct ProtocolHarnessRtcPeer {
     rtc: Rtc,
@@ -377,23 +382,13 @@ pub(super) async fn read_track_snapshot(
     Some(track_bindings)
 }
 
-pub(super) fn route_has_consumer_activity(
-    route_entry: &DebugRouteEntry,
-    consumer_session_key: &TransportSessionKey,
-    active: bool,
-) -> bool {
-    route_entry.destinations.iter().any(|destination| {
-        destination.dest_session == *consumer_session_key && destination.active == active
-    })
-}
-
-pub(super) async fn real_rtc_route_entry(
+pub(super) async fn real_rtc_route_activity(
     server: &TestServer,
     channel: &Arc<Channel>,
     source_session_id: SessionId,
     consumer_session_id: SessionId,
     mid: &str,
-) -> Option<(DebugRouteEntry, TransportSessionKey)> {
+) -> Option<RealRtcRouteActivity> {
     let _source_connection_id = channel.session_connection_id(&source_session_id).await?;
     let consumer_connection_id = channel.session_connection_id(&consumer_session_id).await?;
     let consumer_session_key =
@@ -403,7 +398,12 @@ pub(super) async fn real_rtc_route_entry(
         .transport_adapter
         .debug_route_entry_by_consumer_mid(&consumer_session_key, Mid::from(mid))
         .await?;
-    Some((route_entry, consumer_session_key))
+    Some(RealRtcRouteActivity {
+        source_active: route_entry.source_active,
+        consumer_active: route_entry.destinations.iter().any(|destination| {
+            destination.dest_session == consumer_session_key && destination.active
+        }),
+    })
 }
 
 pub(super) async fn assert_real_rtc_subscribe_activity(
@@ -426,7 +426,7 @@ pub(super) async fn assert_real_rtc_subscribe_activity(
     if !no_server_frame(bob, Duration::from_millis(150)).await {
         return None;
     }
-    let (route_entry, consumer_session_key) = real_rtc_route_entry(
+    let route_activity = real_rtc_route_activity(
         server,
         channel,
         source_session_id,
@@ -434,8 +434,11 @@ pub(super) async fn assert_real_rtc_subscribe_activity(
         &published_track.mid,
     )
     .await?;
-    if !route_entry.source_active
-        || !route_has_consumer_activity(&route_entry, &consumer_session_key, active)
+    if route_activity
+        != (RealRtcRouteActivity {
+            source_active: true,
+            consumer_active: active,
+        })
     {
         return None;
     }

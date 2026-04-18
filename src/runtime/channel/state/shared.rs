@@ -274,35 +274,6 @@ impl ChannelState {
         Some(session)
     }
 
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn session_permissions(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<o_sfu_router::SessionPermissions> {
-        self.topology.session_permissions(session_id)
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn session_has_parsed_client_rtp_capabilities(
-        &self,
-        session_id: &SessionId,
-    ) -> bool {
-        self.sessions
-            .get(session_id)
-            .and_then(|session| session.parsed_client_rtp_capabilities.as_ref())
-            .is_some()
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn parsed_client_rtp_capabilities(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<RouterRtpCapabilities> {
-        self.sessions
-            .get(session_id)
-            .and_then(|session| session.parsed_client_rtp_capabilities.clone())
-    }
-
     pub(in crate::runtime::channel) fn recording_state(&self) -> RecordingState {
         self.recording_state.clone()
     }
@@ -318,16 +289,6 @@ impl ChannelState {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn producer_count(&self) -> usize {
-        self.producers.len()
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn consumer_count(&self) -> usize {
-        self.consumer_index.len()
-    }
-
     pub(in crate::runtime::channel) fn session_connection_id(
         &self,
         session_id: &SessionId,
@@ -341,39 +302,8 @@ impl ChannelState {
         self.sessions.len()
     }
 
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn has_session(&self, session_id: &SessionId) -> bool {
-        self.sessions.contains_key(session_id)
-    }
-
     pub(in crate::runtime::channel) fn is_empty(&self) -> bool {
         self.sessions.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn first_published_transport_media_id(
-        &self,
-    ) -> Option<TransportMediaId> {
-        self.producers
-            .values()
-            .find_map(|producer| producer.transport_media_id)
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn producer_transport_media_id(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        stream_type: StreamType,
-    ) -> Option<TransportMediaId> {
-        let producer_id = self
-            .producer_ids_by_owner_stream
-            .get(&ProducerKey::new(session_id, stream_type))?;
-        let producer = self.producers.get(producer_id)?;
-        if producer.owner_connection_id != connection_id {
-            return None;
-        }
-        producer.transport_media_id
     }
 }
 

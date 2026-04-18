@@ -10,7 +10,9 @@ use tokio::sync::oneshot;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::super::{
-    commands::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcCommand},
+    commands::debug::{
+        DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcWorkerCommand,
+    },
     state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
 };
 
@@ -18,21 +20,21 @@ pub(super) fn handle_debug_command(
     state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    command: DebugRtcCommand,
+    command: DebugRtcWorkerCommand,
 ) {
     match command {
-        DebugRtcCommand::ResolveMid {
+        DebugRtcWorkerCommand::ResolveMid {
             transport_media_id,
             response,
         } => respond_debug_resolve_mid(state, transport_media_id, response),
-        DebugRtcCommand::RemoteAddrOwner {
+        DebugRtcWorkerCommand::RemoteAddrOwner {
             source_addr,
             response,
         } => respond_debug_remote_addr_owner(snapshot_state, source_addr, response),
-        DebugRtcCommand::HasAnyRemoteAddrSession { response } => {
+        DebugRtcWorkerCommand::HasAnyRemoteAddrSession { response } => {
             respond_debug_has_any_remote_addr_session(snapshot_state, response);
         }
-        DebugRtcCommand::RememberRemoteAddr {
+        DebugRtcWorkerCommand::RememberRemoteAddr {
             source_addr,
             session_key,
             response,
@@ -43,26 +45,26 @@ pub(super) fn handle_debug_command(
             &session_key,
             response,
         ),
-        DebugRtcCommand::SessionStreamRxSsrc {
+        DebugRtcWorkerCommand::SessionStreamRxSsrc {
             session_key,
             mid,
             response,
         } => respond_debug_session_stream_rx_ssrc(state, &session_key, mid, response),
-        DebugRtcCommand::SessionStreamTxSsrc {
+        DebugRtcWorkerCommand::SessionStreamTxSsrc {
             session_key,
             mid,
             response,
         } => respond_debug_session_stream_tx_ssrc(state, &session_key, mid, response),
-        DebugRtcCommand::RemoteSourceOwner {
+        DebugRtcWorkerCommand::RemoteSourceOwner {
             source_transport_media_id,
             response,
         } => respond_debug_remote_source_owner(state, source_transport_media_id, response),
-        DebugRtcCommand::RouteEntry {
+        DebugRtcWorkerCommand::RouteEntry {
             source_session_key,
             source_mid,
             response,
         } => respond_debug_route_entry(state, &source_session_key, source_mid, response),
-        DebugRtcCommand::RouteEntryByConsumerMid {
+        DebugRtcWorkerCommand::RouteEntryByConsumerMid {
             consumer_session_key,
             consumer_mid,
             response,
@@ -72,11 +74,11 @@ pub(super) fn handle_debug_command(
             consumer_mid,
             response,
         ),
-        DebugRtcCommand::RouteEntryByMediaId {
+        DebugRtcWorkerCommand::RouteEntryByMediaId {
             source_transport_media_id,
             response,
         } => respond_debug_route_entry_by_media_id(state, source_transport_media_id, response),
-        DebugRtcCommand::RecordIncomingMedia {
+        DebugRtcWorkerCommand::RecordIncomingMedia {
             session_key,
             transport_media_id,
             payload_bytes,
@@ -91,7 +93,7 @@ pub(super) fn handle_debug_command(
             now,
             response,
         ),
-        DebugRtcCommand::ObserveAudioActivity {
+        DebugRtcWorkerCommand::ObserveAudioActivity {
             transport_media_id,
             voice_activity,
             audio_level_dbov,

@@ -12,6 +12,10 @@ use o_sfu_router::{
 
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
 use o_sfu_protocol::shared::SessionId;
+
+#[cfg(test)]
+mod test_support;
+
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
 #[derive(Debug, Clone)]
@@ -291,23 +295,6 @@ impl ChannelRouterState {
         self.router_session_ids_by_session_id.remove(session_id);
         self.transport_ids_by_session_id.remove(session_id);
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn session_count(&self) -> u64 {
-        u64::try_from(self.router.session_count()).unwrap_or(u64::MAX)
-    }
-
-    #[cfg(test)]
-    pub(super) fn session_permissions(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<RouterSessionPermissions> {
-        let router_session_id = self.router_session_ids_by_session_id.get(session_id)?;
-        self.router
-            .sessions()
-            .find(|session| session.id() == *router_session_id)
-            .map(o_sfu_router::Session::permissions)
     }
 
     fn allocate_transport_id(&mut self) -> RouterTransportId {

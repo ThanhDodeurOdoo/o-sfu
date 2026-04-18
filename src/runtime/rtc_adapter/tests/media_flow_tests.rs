@@ -6,9 +6,7 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
     assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
     let session_key = transport_key(1, 15, SessionId::Integer(15));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started.load(Ordering::Acquire));
@@ -20,12 +18,7 @@ async fn rtc_metrics_track_live_transport_sessions_without_double_counting() {
     let session_key = transport_key(1, 16, SessionId::Integer(16));
 
     assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 0);
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
     assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
 
     assert!(
@@ -48,9 +41,7 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 18, SessionId::Integer(18));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
@@ -63,13 +54,11 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
 
     let expected_mid: Mid = "aud-up".into();
     assert_eq!(
-        adapter.debug_resolve_mid(transport_media_id).await,
+        resolve_mid(&adapter, transport_media_id).await,
         Some(expected_mid)
     );
     assert_eq!(
-        adapter
-            .debug_session_stream_rx_ssrc(&session_key, expected_mid)
-            .await,
+        session_stream_rx_ssrc(&adapter, &session_key, expected_mid).await,
         Some(42_424)
     );
 }
@@ -83,14 +72,12 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_000);
 
     assert!(
-        adapter
-            .transport_bootstrap_payload(&producer_session_key, &empty_router_capabilities())
+        bootstrap_transport(&adapter, &producer_session_key)
             .await
             .is_ok()
     );
     assert!(
-        adapter
-            .transport_bootstrap_payload(&consumer_session_key, &empty_router_capabilities())
+        bootstrap_transport(&adapter, &consumer_session_key)
             .await
             .is_ok()
     );
@@ -123,7 +110,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     };
 
     let expected_dest_mid: Mid = "aud-down".into();
-    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id).await;
     assert!(route_entry.is_some());
     let Some(route_entry) = route_entry else {
         return;
@@ -136,9 +123,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
             && dest.dest_mid == expected_dest_mid
     }));
     assert_eq!(
-        adapter
-            .debug_session_stream_tx_ssrc(&consumer_session_key, expected_dest_mid)
-            .await,
+        session_stream_tx_ssrc(&adapter, &consumer_session_key, expected_dest_mid).await,
         Some(61_000)
     );
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
@@ -160,12 +145,7 @@ async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
         &first_consumer_session_key,
         &second_consumer_session_key,
     ] {
-        assert!(
-            adapter
-                .transport_bootstrap_payload(session_key, &empty_router_capabilities())
-                .await
-                .is_ok()
-        );
+        assert!(bootstrap_transport(&adapter, session_key).await.is_ok());
     }
 
     let source_media_id = adapter
@@ -189,8 +169,7 @@ async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
         .await
         .expect("selected-rid consumer should register");
 
-    let route_entry = adapter
-        .debug_route_entry_by_media_id(source_media_id)
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should exist after first consumer registration");
     assert_eq!(
@@ -210,8 +189,7 @@ async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
         .await
         .expect("open consumer should register");
 
-    let route_entry = adapter
-        .debug_route_entry_by_media_id(source_media_id)
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should still exist after mixed policy registration");
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
@@ -226,12 +204,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
     let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
 
     for session_key in [&producer_session_key, &consumer_session_key] {
-        assert!(
-            adapter
-                .transport_bootstrap_payload(session_key, &empty_router_capabilities())
-                .await
-                .is_ok()
-        );
+        assert!(bootstrap_transport(&adapter, session_key).await.is_ok());
     }
 
     let source_media_id = adapter
@@ -266,8 +239,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
             .is_ok()
     );
 
-    let route_entry = adapter
-        .debug_route_entry_by_media_id(source_media_id)
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should exist after source gate update");
     assert_eq!(
@@ -286,8 +258,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
             .is_ok()
     );
 
-    let route_entry = adapter
-        .debug_route_entry_by_media_id(source_media_id)
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should still exist after conflicting source gate update");
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
@@ -302,14 +273,12 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 92_000);
 
     assert!(
-        adapter
-            .transport_bootstrap_payload(&producer_session_key, &empty_router_capabilities())
+        bootstrap_transport(&adapter, &producer_session_key)
             .await
             .is_ok()
     );
     assert!(
-        adapter
-            .transport_bootstrap_payload(&consumer_session_key, &empty_router_capabilities())
+        bootstrap_transport(&adapter, &consumer_session_key)
             .await
             .is_ok()
     );
@@ -360,7 +329,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
             .is_ok()
     );
 
-    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id).await;
     assert!(route_entry.is_some());
     let Some(route_entry) = route_entry else {
         return;
@@ -381,20 +350,20 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     let session_key = transport_key(1, 21, SessionId::Integer(21));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 77_777);
 
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
     let transport_media_id = adapter
         .add_recv_media(&session_key, Str0mMediaKind::Video, &rtp_parameters)
         .await
         .expect("should declare recv media");
 
-    adapter
-        .debug_record_incoming_media(&session_key, transport_media_id, 120, Instant::now())
-        .await;
+    record_incoming_media(
+        &adapter,
+        &session_key,
+        transport_media_id,
+        120,
+        Instant::now(),
+    )
+    .await;
 
     let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
     assert_eq!(snapshot.per_media.len(), 1);
@@ -413,21 +382,14 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     let session_key = transport_key(1, 22, SessionId::Integer(22));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 88_888);
 
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
     let transport_media_id = adapter
         .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await
         .expect("should declare recv media");
 
     let now = Instant::now();
-    adapter
-        .debug_record_incoming_media(&session_key, transport_media_id, 64, now)
-        .await;
+    record_incoming_media(&adapter, &session_key, transport_media_id, 64, now).await;
     let Some(worker_handle) = adapter.worker_handle().ok().flatten() else {
         return;
     };
@@ -453,12 +415,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
     let second_rtp_parameters = sample_router_rtp_parameters("aud-up-2", 93_002);
 
     for session_key in [&first_session_key, &second_session_key] {
-        assert!(
-            adapter
-                .transport_bootstrap_payload(session_key, &empty_router_capabilities())
-                .await
-                .is_ok()
-        );
+        assert!(bootstrap_transport(&adapter, session_key).await.is_ok());
     }
 
     let first_media_id = adapter
@@ -479,17 +436,15 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
         .expect("second audio media should register");
 
     let now = Instant::now();
-    adapter
-        .debug_observe_audio_activity(first_media_id, Some(true), None, now)
-        .await;
-    adapter
-        .debug_observe_audio_activity(
-            second_media_id,
-            Some(true),
-            None,
-            now + Duration::from_millis(10),
-        )
-        .await;
+    observe_audio_activity(&adapter, first_media_id, Some(true), None, now).await;
+    observe_audio_activity(
+        &adapter,
+        second_media_id,
+        Some(true),
+        None,
+        now + Duration::from_millis(10),
+    )
+    .await;
 
     let snapshot = adapter.active_speaker_source_snapshot().await;
     assert_eq!(
@@ -508,28 +463,26 @@ async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
     let source_transport_media_id = TransportMediaId::new(91);
 
     assert!(
-        source_adapter
-            .debug_activate_relay_route(source_transport_media_id, &target_adapter)
-            .is_ok()
+        activate_relay_route(&source_adapter, source_transport_media_id, &target_adapter,).is_ok()
     );
     assert_eq!(
-        source_adapter.debug_relay_target_count_for_source(source_transport_media_id),
+        relay_target_count_for_source(&source_adapter, source_transport_media_id),
         1
     );
     assert_eq!(
-        source_adapter.debug_active_relay_target_count_for_source(source_transport_media_id),
+        active_relay_target_count_for_source(&source_adapter, source_transport_media_id),
         0
     );
 
     source_adapter.set_relay_route_active(source_transport_media_id, &target_adapter, true);
     assert_eq!(
-        source_adapter.debug_active_relay_target_count_for_source(source_transport_media_id),
+        active_relay_target_count_for_source(&source_adapter, source_transport_media_id),
         1
     );
 
-    source_adapter.debug_deactivate_relay_route(source_transport_media_id, &target_adapter);
+    deactivate_relay_route(&source_adapter, source_transport_media_id, &target_adapter);
     assert_eq!(
-        source_adapter.debug_relay_target_count_for_source(source_transport_media_id),
+        relay_target_count_for_source(&source_adapter, source_transport_media_id),
         0
     );
 }

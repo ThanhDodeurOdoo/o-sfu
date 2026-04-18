@@ -313,7 +313,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     else {
         return;
     };
-    let Some((route_entry, consumer_session_key)) = real_rtc_route_entry(
+    let Some(route_activity) = real_rtc_route_activity(
         &server,
         &channel,
         alice_session_id.clone(),
@@ -324,9 +324,12 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     else {
         panic!("recovered subscriber route should exist");
     };
-    assert!(route_entry.source_active);
     assert!(
-        route_has_consumer_activity(&route_entry, &consumer_session_key, false),
+        route_activity
+            == RealRtcRouteActivity {
+                source_active: true,
+                consumer_active: false,
+            },
         "subscriber recovery should replay the latest muted camera subscription on the real rtc path"
     );
     assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));

@@ -4,9 +4,7 @@ use super::fixtures::*;
 async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 10, SessionId::Integer(10));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let first_connect = adapter
         .connect_transport(
@@ -34,9 +32,7 @@ async fn rtc_transport_connect_rejects_duplicate_direction_connect() {
 async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 11, SessionId::Integer(11));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let connect_result = adapter
         .connect_transport(
@@ -55,9 +51,7 @@ async fn rtc_transport_connect_rejects_invalid_sdp_before_rtc_connect() {
 async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 12, SessionId::Integer(12));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let connect_result = adapter
         .connect_transport(
@@ -79,9 +73,7 @@ async fn rtc_transport_connect_rejects_unsupported_sdp_before_rtc_connect() {
 async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_context() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 16, SessionId::Integer(16));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let upload_connect_result = adapter
         .connect_transport(
@@ -109,9 +101,7 @@ async fn rtc_transport_connect_allows_both_transport_directions_with_one_dtls_co
 async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 17, SessionId::Integer(17));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let first_connect_result = adapter
         .connect_transport(
@@ -145,12 +135,7 @@ async fn rtc_transport_connect_rejects_mismatched_fingerprint_between_directions
 async fn rtc_transport_connect_allows_late_remote_ice_credentials_on_second_direction() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 92, SessionId::Integer(92));
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
 
     assert_eq!(
         adapter
@@ -184,12 +169,7 @@ async fn rtc_transport_connect_allows_late_remote_ice_credentials_on_second_dire
 async fn rtc_transport_connect_rejects_mismatched_remote_ice_credentials_between_directions() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 93, SessionId::Integer(93));
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
 
     assert_eq!(
         adapter

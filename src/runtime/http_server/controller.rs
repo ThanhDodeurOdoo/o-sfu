@@ -165,12 +165,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
     for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
         state
             .channels
-            .disconnect_sessions(
-                channel_uuid,
-                session_ids,
-                &state.transport_adapter,
-                RuntimeState::session_cleanup_policy(),
-            )
+            .disconnect_sessions(channel_uuid, session_ids, &state.transport_adapter)
             .await;
     }
     state.metrics.record_http_disconnect_success();

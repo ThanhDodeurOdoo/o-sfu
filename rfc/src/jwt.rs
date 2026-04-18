@@ -17,18 +17,25 @@ pub const ALGORITHM_HS256: &str = "HS256";
 /// Registered JWT claims from RFC 7519 section 4.1.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegisteredJwtClaims {
+    /// Expiration time (in seconds since epoch)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exp: Option<u64>,
+    /// Issued at (in seconds since epoch)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iat: Option<u64>,
+    /// Not before (in seconds since epoch)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nbf: Option<u64>,
+    /// Issuer
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iss: Option<String>,
+    /// Subject
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<String>,
+    /// Audience
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<JwtAudience>,
+    /// JWT ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<String>,
 }

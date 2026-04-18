@@ -1,15 +1,14 @@
+#[cfg(test)]
+pub(crate) mod debug;
+
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::RtpCapabilities;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-#[cfg(test)]
-use str0m::media::Mid;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
+#[cfg(feature = "internal-benchmarks")]
 use std::net::SocketAddr;
-#[cfg(test)]
-use std::time::Instant;
 
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportConnectDirection;
@@ -275,100 +274,10 @@ pub(super) enum RtcWorkerCommand {
         active: bool,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
-    #[cfg(test)]
-    Debug(DebugRtcCommand),
     #[cfg(feature = "internal-benchmarks")]
     RememberRemoteAddr {
         source_addr: SocketAddr,
         session_key: TransportSessionKey,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
-}
-
-#[cfg(test)]
-pub(super) enum DebugRtcCommand {
-    ResolveMid {
-        transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Option<Mid>>,
-    },
-    RemoteAddrOwner {
-        source_addr: SocketAddr,
-        response: oneshot::Sender<Option<TransportSessionKey>>,
-    },
-    HasAnyRemoteAddrSession {
-        response: oneshot::Sender<bool>,
-    },
-    RememberRemoteAddr {
-        source_addr: SocketAddr,
-        session_key: TransportSessionKey,
-        response: oneshot::Sender<()>,
-    },
-    SessionStreamRxSsrc {
-        session_key: TransportSessionKey,
-        mid: Mid,
-        response: oneshot::Sender<Option<u32>>,
-    },
-    SessionStreamTxSsrc {
-        session_key: TransportSessionKey,
-        mid: Mid,
-        response: oneshot::Sender<Option<u32>>,
-    },
-    RemoteSourceOwner {
-        source_transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Option<TransportSessionKey>>,
-    },
-    RouteEntry {
-        source_session_key: TransportSessionKey,
-        source_mid: Mid,
-        response: oneshot::Sender<Option<DebugRouteEntry>>,
-    },
-    RouteEntryByConsumerMid {
-        consumer_session_key: TransportSessionKey,
-        consumer_mid: Mid,
-        response: oneshot::Sender<Option<DebugRouteEntry>>,
-    },
-    RouteEntryByMediaId {
-        source_transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Option<DebugRouteEntry>>,
-    },
-    RecordIncomingMedia {
-        session_key: TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        payload_bytes: usize,
-        now: Instant,
-        response: oneshot::Sender<()>,
-    },
-    ObserveAudioActivity {
-        transport_media_id: TransportMediaId,
-        voice_activity: Option<bool>,
-        audio_level_dbov: Option<i8>,
-        now: Instant,
-        response: oneshot::Sender<()>,
-    },
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DebugRouteDestination {
-    pub(crate) dest_session: TransportSessionKey,
-    pub(crate) dest_transport_media_id: TransportMediaId,
-    pub(crate) dest_mid: Mid,
-    pub(crate) active: bool,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DebugRouteEntry {
-    pub(crate) source_transport_media_id: TransportMediaId,
-    pub(crate) source_active: bool,
-    pub(crate) effective_packet_gate: DebugPacketGate,
-    pub(crate) destinations: Vec<DebugRouteDestination>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DebugPacketGate {
-    Open,
-    Block,
-    Rid(String),
 }

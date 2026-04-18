@@ -1,5 +1,4 @@
 use super::fixtures::*;
-use crate::runtime::channel::SessionCleanupPolicy;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 
 #[tokio::test]
@@ -306,7 +305,6 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
             channel.uuid(),
             &[SessionId::Integer(1)],
             &server.state.transport_adapter,
-            SessionCleanupPolicy::StateAndTransportMedia,
         )
         .await;
 

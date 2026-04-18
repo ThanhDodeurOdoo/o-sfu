@@ -56,7 +56,6 @@ pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
-pub(crate) use membership::SessionCleanupPolicy;
-pub(crate) use state::RemoteTrackBootstrap;
 #[cfg(test)]
-pub(crate) use tests::api::NegotiatedPublish;
+pub(in crate::runtime::channel) use membership::SessionCleanup;
+pub(crate) use state::RemoteTrackBootstrap;

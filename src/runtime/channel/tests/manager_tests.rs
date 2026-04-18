@@ -154,7 +154,7 @@ async fn channel_manager_join_session_reports_missing_channel() {
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let (tx, _rx) = test_sender();
     let result = manager
-        .join_session(
+        .join_session_for_test(
             "missing-channel",
             JoinSessionRequest {
                 session_id: SessionId::Integer(1),
@@ -163,7 +163,6 @@ async fn channel_manager_join_session_reports_missing_channel() {
                 sender: tx,
             },
             &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await;
     assert!(matches!(
@@ -182,7 +181,7 @@ async fn manager_leave_session_removes_empty_channel() {
     let channel_uuid = first_channel.uuid().to_owned();
     let (tx, _rx) = test_sender();
     let joined = manager
-        .join_session(
+        .join_session_for_test(
             &channel_uuid,
             JoinSessionRequest {
                 session_id: SessionId::Integer(1),
@@ -191,7 +190,6 @@ async fn manager_leave_session_removes_empty_channel() {
                 sender: tx,
             },
             &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await;
     assert!(joined.is_ok());
@@ -205,7 +203,6 @@ async fn manager_leave_session_removes_empty_channel() {
             &SessionId::Integer(1),
             connection_id,
             &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await;
 
@@ -226,7 +223,7 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
     let channel_uuid = first_channel.uuid().to_owned();
     let (tx, _rx) = test_sender();
     let joined = manager
-        .join_session(
+        .join_session_for_test(
             &channel_uuid,
             JoinSessionRequest {
                 session_id: SessionId::Integer(1),
@@ -235,18 +232,12 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
                 sender: tx,
             },
             &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await;
     assert!(joined.is_ok());
 
     manager
-        .disconnect_sessions(
-            &channel_uuid,
-            &[SessionId::Integer(1)],
-            &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
-        )
+        .disconnect_sessions_for_test(&channel_uuid, &[SessionId::Integer(1)], &transport_adapter)
         .await;
 
     assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
@@ -280,7 +271,7 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
 
     let (first_tx, _first_rx) = test_sender();
     let first_join = manager
-        .join_session(
+        .join_session_for_test(
             &channel_uuid,
             JoinSessionRequest {
                 session_id: SessionId::Integer(1),
@@ -289,7 +280,6 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
                 sender: first_tx,
             },
             &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await;
     assert!(first_join.is_ok());
@@ -297,7 +287,7 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
 
     let (replacement_tx, _replacement_rx) = test_sender();
     let replacement_join = manager
-        .join_session(
+        .join_session_for_test(
             &channel_uuid,
             JoinSessionRequest {
                 session_id: SessionId::Integer(1),
@@ -306,19 +296,13 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
                 sender: replacement_tx,
             },
             &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await;
     assert!(replacement_join.is_ok());
     assert_eq!(metrics.snapshot().active_sessions, 1);
 
     manager
-        .disconnect_sessions(
-            &channel_uuid,
-            &[SessionId::Integer(1)],
-            &transport_adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
-        )
+        .disconnect_sessions_for_test(&channel_uuid, &[SessionId::Integer(1)], &transport_adapter)
         .await;
 
     let snapshot = metrics.snapshot();

@@ -12,6 +12,9 @@ use crate::runtime::transport_adapter::TransportMediaId;
 
 use super::forwarded_packet::ForwardedPacket;
 
+#[cfg(test)]
+mod test_support;
+
 pub(super) const RELAY_MAILBOX_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,19 +41,6 @@ impl RelayPacketMailbox {
     ) -> RelayEnqueueOutcome {
         forward_packet_to_target(&self.tx, packet, source_transport_media_id)
     }
-
-    #[cfg(test)]
-    pub(super) fn channel_for_test() -> (Self, mpsc::Receiver<ForwardedPacket>) {
-        Self::channel_for_test_with_capacity(RELAY_MAILBOX_CAPACITY)
-    }
-
-    #[cfg(test)]
-    pub(super) fn channel_for_test_with_capacity(
-        capacity: usize,
-    ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
-        let (tx, rx) = mpsc::channel(capacity);
-        (Self::new(tx), rx)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,43 +56,12 @@ impl InterNodeRelaySender {
     ) -> RelayEnqueueOutcome {
         forward_packet_to_target(&self.tx, packet, source_transport_media_id)
     }
-
-    #[cfg(test)]
-    pub(super) fn channel_for_test() -> (Self, mpsc::Receiver<ForwardedPacket>) {
-        Self::channel_for_test_with_capacity(RELAY_MAILBOX_CAPACITY)
-    }
-
-    #[cfg(test)]
-    pub(super) fn channel_for_test_with_capacity(
-        capacity: usize,
-    ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
-        let (tx, rx) = mpsc::channel(capacity);
-        (Self { tx }, rx)
-    }
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum RelayTargetTransport {
     IntraNodeMailbox(RelayPacketMailbox),
     InterNodeSender(InterNodeRelaySender),
-}
-
-impl RelayTargetTransport {
-    #[cfg(test)]
-    pub(super) fn forward_packet(
-        &self,
-        packet: &ForwardedPacket,
-        source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueOutcome {
-        match self {
-            Self::IntraNodeMailbox(mailbox) => {
-                mailbox.forward_packet(packet, source_transport_media_id)
-            }
-            Self::InterNodeSender(sender) => {
-                sender.forward_packet(packet, source_transport_media_id)
-            }
-        }
-    }
 }
 
 impl From<RelayPacketMailbox> for RelayTargetTransport {
@@ -205,19 +164,6 @@ impl RelaySourceRegistration {
 
     fn active_targets(&self) -> Arc<[RelayTargetTransport]> {
         Arc::clone(&self.active_targets)
-    }
-
-    #[cfg(test)]
-    fn target_count(&self) -> usize {
-        self.targets.len()
-    }
-
-    #[cfg(test)]
-    fn active_target_count(&self) -> usize {
-        self.targets
-            .values()
-            .filter(|registration| registration.active_reference_count > 0)
-            .count()
     }
 
     fn has_active_targets(&self) -> bool {
@@ -357,30 +303,6 @@ impl RelayRegistry {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .len()
-    }
-
-    #[cfg(test)]
-    pub(super) fn target_count_for_source(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> usize {
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&source_transport_media_id)
-            .map_or(0, RelaySourceRegistration::target_count)
-    }
-
-    #[cfg(test)]
-    pub(super) fn active_target_count_for_source(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> usize {
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&source_transport_media_id)
-            .map_or(0, RelaySourceRegistration::active_target_count)
     }
 }
 

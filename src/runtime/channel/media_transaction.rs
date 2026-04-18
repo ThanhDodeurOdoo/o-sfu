@@ -17,6 +17,9 @@ use super::{
     },
 };
 
+#[cfg(test)]
+mod test_support;
+
 #[derive(Debug, Default)]
 pub(super) struct PendingPublishTransactions {
     staged: BTreeMap<PendingPublishKey, StagedPublishTransaction>,
@@ -96,14 +99,6 @@ impl PendingPublishTransactions {
             .into_iter()
             .filter_map(|key| self.staged.remove(&key))
             .collect()
-    }
-
-    #[cfg(test)]
-    pub(super) fn count_for_connection(&self, session_id: &SessionId, connection_id: u64) -> usize {
-        self.staged
-            .keys()
-            .filter(|key| key.session_id == *session_id && key.connection_id == connection_id)
-            .count()
     }
 }
 
@@ -522,18 +517,6 @@ impl Channel {
                 }
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(super) async fn staged_publish_count_for_connection(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-    ) -> usize {
-        self.pending_publish_transactions
-            .lock()
-            .await
-            .count_for_connection(session_id, connection_id)
     }
 
     pub(super) async fn prepare_consumer_bootstrap_transaction(

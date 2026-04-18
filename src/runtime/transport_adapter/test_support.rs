@@ -7,7 +7,7 @@ pub(crate) use super::fake::FakeWebRtcEvent;
 #[cfg(test)]
 use super::types::{TransportAdapterError, TransportMediaId, TransportSessionKey};
 #[cfg(test)]
-use crate::runtime::rtc_adapter::{DebugRouteEntry, TransportSessionHealth};
+use crate::runtime::rtc_adapter::{TransportSessionHealth, test_support::DebugRouteEntry};
 #[cfg(test)]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 #[cfg(test)]

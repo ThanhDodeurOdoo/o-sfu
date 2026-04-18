@@ -107,16 +107,6 @@ impl Channel {
         true
     }
 
-    #[cfg(test)]
-    pub async fn start_recording(&self, session_id: &SessionId, options: RecordingOptions) -> bool {
-        let Some(connection_id) = self.session_connection_id(session_id).await else {
-            self.metrics.record_recording_start_rejected();
-            return false;
-        };
-        self.start_recording_runtime(session_id, connection_id, options)
-            .await
-    }
-
     /// Validate and apply a recording-stop request for one live session.
     pub(crate) async fn stop_recording_runtime(
         &self,
@@ -165,15 +155,6 @@ impl Channel {
         self.metrics.record_recording_stop_accepted();
         self.metrics.add_active_recording_channels(-1);
         true
-    }
-
-    #[cfg(test)]
-    pub async fn stop_recording(&self, session_id: &SessionId) -> bool {
-        let Some(connection_id) = self.session_connection_id(session_id).await else {
-            self.metrics.record_recording_stop_rejected();
-            return false;
-        };
-        self.stop_recording_runtime(session_id, connection_id).await
     }
 
     fn recording_permissions(

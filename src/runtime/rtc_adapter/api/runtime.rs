@@ -47,12 +47,16 @@ impl RtcTransportAdapter {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         let (command_tx, command_rx) = mpsc::channel(64);
+        #[cfg(test)]
+        let (debug_tx, debug_rx) = mpsc::channel(64);
         let (relay_tx, relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
         let bitrate_state = Arc::new(Mutex::new(super::super::state::RtcBitrateState::default()));
         let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
         let shutdown_token = CancellationToken::new();
         let worker_handle = RtcWorkerHandle {
             command_tx,
+            #[cfg(test)]
+            debug_tx,
             relay_mailbox: RelayPacketMailbox::new(relay_tx),
             bitrate_state: Arc::clone(&bitrate_state),
             snapshot_state: Arc::clone(&snapshot_state),
@@ -84,6 +88,8 @@ impl RtcTransportAdapter {
             bitrate_state,
             snapshot_state,
             command_rx,
+            #[cfg(test)]
+            debug_rx,
             relay_rx,
             shutdown_token,
         ));

@@ -2,7 +2,7 @@
 //!
 //! Internal modules:
 //! - `api`: runtime adapter facade and worker lifecycle
-//! - `commands`: worker mailbox contract and debug-only test commands
+//! - `commands`: production worker mailbox contract plus explicit test-only debug commands
 //! - `worker`: command dispatch and worker-local state mutations
 //! - `state`: pure state types and session scheduling
 //! - `media_registry`: media handle tracking and mid registry
@@ -16,6 +16,7 @@
 //! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
+//! - `test_support`: runtime-owned re-exports for rtc-adapter test helpers that should not live on the production module root
 //! - `packet_loop/`: packet-loop driver, ingress routing, keyframe control, event observation, session draining, and forward flushing
 //! - `worker/media/`: media lifecycle plus one control owner for source validation, route ownership, and gate synchronization
 //! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
@@ -50,14 +51,14 @@ mod sdp;
 mod shared_payload;
 mod state;
 #[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 mod validation;
 mod worker;
 
 pub(crate) use api::RtcTransportAdapter;
-#[cfg(test)]
-pub(crate) use commands::DebugRouteEntry;
 pub(crate) use commands::RelayCleanup;
 #[cfg(feature = "internal-benchmarks")]
 pub(crate) use demux::RemoteAddrDemux;

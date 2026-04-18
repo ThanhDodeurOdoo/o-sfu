@@ -314,7 +314,6 @@ async fn join_session(
                 sender: outbound_tx,
             },
             &state.transport_adapter,
-            RuntimeState::session_cleanup_policy(),
         )
         .await;
     match join_result {
@@ -389,7 +388,6 @@ async fn cleanup_failed_session(
             session_id,
             connection_id,
             &state.transport_adapter,
-            RuntimeState::session_cleanup_policy(),
         )
         .await;
 }

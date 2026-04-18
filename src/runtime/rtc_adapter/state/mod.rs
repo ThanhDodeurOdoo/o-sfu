@@ -1,4 +1,10 @@
 //! Pure state types and session scheduling for the RTC transport adapter.
+//!
+//! `test_support` owns the transport lifecycle bookkeeping and state mutators
+//! that exist only for deterministic adapter tests.
+
+#[cfg(test)]
+pub(in crate::runtime::rtc_adapter) mod test_support;
 
 use std::{
     cmp::Reverse,
@@ -19,8 +25,6 @@ use str0m::media::{Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::net::UdpSocket;
 
-#[cfg(test)]
-use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
@@ -35,40 +39,17 @@ use super::route_control::RouteControlState;
 
 pub(super) const BITRATE_WINDOW: Duration = Duration::from_secs(1);
 
-// ---------------------------------------------------------------------------
-// Transport lifecycle
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TransportLifecycleState {
-    BootstrapSent,
-    Connected,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportSessionHealth {
     Connected,
     Disconnected,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct TransportStateKey {
-    pub(super) session_key: TransportSessionKey,
-    pub(super) direction: TransportConnectDirection,
-}
-
-// ---------------------------------------------------------------------------
-// Session state
-// ---------------------------------------------------------------------------
-
 pub(super) struct SharedRtcSocket {
     pub(super) socket: Arc<UdpSocket>,
     pub(super) candidate_addr: SocketAddr,
 }
 
-// TODO: needs documentation:
 pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     pub(super) started_at: Instant,
@@ -127,10 +108,6 @@ impl ParsedRemoteIceCredentials {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Bitrate tracking
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 pub(super) struct SessionIncomingBitrates {
@@ -209,7 +186,6 @@ impl RecentBitrate {
     }
 }
 
-// TODO: needs documentation:
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
@@ -229,7 +205,6 @@ pub(super) struct RtcBootstrapState {
     pub(super) next_media_id: u64,
 }
 
-/// Session scheduling methods.
 impl RtcBootstrapState {
     pub(super) fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
         self.dirty_sessions.insert(session_key.clone());
@@ -289,21 +264,7 @@ impl RtcBootstrapState {
         self.dirty_sessions.remove(session_key);
         self.session_timeouts.remove(session_key);
     }
-
-    #[cfg(test)]
-    pub(super) fn set_source_packet_gate(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: super::route_control::PacketLayerGate,
-    ) {
-        self.route_control
-            .set_packet_gate(source_transport_media_id, packet_gate);
-    }
 }
-
-// ---------------------------------------------------------------------------
-// RtcSnapshotState
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
 pub(crate) struct RtcSnapshotState {

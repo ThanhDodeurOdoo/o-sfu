@@ -1,9 +1,10 @@
+use super::api::NegotiatedPublish;
 use super::fixtures::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Instant;
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::channel::{Channel, NegotiatedPublish};
+use crate::runtime::channel::Channel;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
@@ -283,13 +284,12 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
 
     let (sender, _receiver) = test_sender();
     channel
-        .join_session_runtime(
+        .join_session_without_transport_cleanup(
             SessionId::Integer(3),
             None,
             SessionPermissions::default(),
             sender,
             &adapter,
-            super::super::SessionCleanupPolicy::StateOnly,
         )
         .await
         .expect("third session should join");
@@ -319,13 +319,12 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
         channel
-            .join_session_runtime(
+            .join_session_without_transport_cleanup(
                 session_id.clone(),
                 None,
                 SessionPermissions::default(),
                 sender,
                 &adapter,
-                super::super::SessionCleanupPolicy::StateOnly,
             )
             .await
             .expect("session should join");
@@ -358,12 +357,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
 
     assert!(
         channel
-            .leave_session_runtime(
-                &SessionId::Integer(3),
-                2,
-                &adapter,
-                super::super::SessionCleanupPolicy::StateOnly,
-            )
+            .leave_session_without_transport_cleanup(&SessionId::Integer(3), 2, &adapter,)
             .await
     );
 
@@ -396,13 +390,12 @@ async fn setup_ready_sessions_with_fake(
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
         channel
-            .join_session_runtime(
+            .join_session_without_transport_cleanup(
                 session_id.clone(),
                 None,
                 SessionPermissions::default(),
                 sender,
                 &adapter,
-                super::super::SessionCleanupPolicy::StateOnly,
             )
             .await
             .expect("session should join");

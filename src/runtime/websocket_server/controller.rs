@@ -102,7 +102,6 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
                 &session.session_id,
                 session.connection_id,
                 &state.transport_adapter,
-                RuntimeState::session_cleanup_policy(),
             )
             .await;
     }

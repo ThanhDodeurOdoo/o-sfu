@@ -10,7 +10,7 @@ pub(in crate::runtime::channel) struct PublishPrerequisites {
 }
 
 impl ChannelState {
-    pub(in crate::runtime::channel) fn publish_prerequisites_for_test(
+    pub(in crate::runtime::channel) fn publish_prerequisites(
         &self,
         session_id: &SessionId,
     ) -> Option<PublishPrerequisites> {

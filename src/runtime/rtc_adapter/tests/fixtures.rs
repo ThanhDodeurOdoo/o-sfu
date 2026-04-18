@@ -20,7 +20,11 @@ pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
-    RtcTransportAdapter, commands::DebugPacketGate, shared_payload::SharedPayload, validation,
+    RtcTransportAdapter,
+    commands::debug::{DebugPacketGate, DebugRouteEntry},
+    shared_payload::SharedPayload,
+    state::TransportSessionHealth,
+    validation,
 };
 pub(super) use crate::{
     runtime::transport_adapter::{
@@ -187,4 +191,128 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
         vec![RouterRtpEncoding::new().with_ssrc(ssrc).with_rid(rid)],
     )
     .with_mid(mid.to_owned())
+}
+
+pub(super) async fn bootstrap_transport(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+) -> Result<SessionTransportBootstrap, TransportAdapterError> {
+    adapter
+        .transport_bootstrap_payload(session_key, &empty_router_capabilities())
+        .await
+}
+
+pub(super) fn set_transport_health(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+    health: TransportSessionHealth,
+) {
+    adapter.debug_set_session_transport_health(session_key, health);
+}
+
+pub(super) async fn remember_remote_addr(
+    adapter: &RtcTransportAdapter,
+    source_addr: SocketAddr,
+    session_key: &TransportSessionKey,
+) {
+    adapter
+        .debug_remember_remote_addr(source_addr, session_key)
+        .await;
+}
+
+pub(super) async fn remote_addr_owner(
+    adapter: &RtcTransportAdapter,
+    source_addr: SocketAddr,
+) -> Option<TransportSessionKey> {
+    adapter.debug_remote_addr_owner(source_addr).await
+}
+
+pub(super) async fn has_any_remote_addr_session(adapter: &RtcTransportAdapter) -> bool {
+    adapter.debug_has_any_remote_addr_session().await
+}
+
+pub(super) async fn resolve_mid(
+    adapter: &RtcTransportAdapter,
+    transport_media_id: TransportMediaId,
+) -> Option<Mid> {
+    adapter.debug_resolve_mid(transport_media_id).await
+}
+
+pub(super) async fn session_stream_rx_ssrc(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+    mid: Mid,
+) -> Option<u32> {
+    adapter.debug_session_stream_rx_ssrc(session_key, mid).await
+}
+
+pub(super) async fn session_stream_tx_ssrc(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+    mid: Mid,
+) -> Option<u32> {
+    adapter.debug_session_stream_tx_ssrc(session_key, mid).await
+}
+
+pub(super) async fn route_entry_by_media_id(
+    adapter: &RtcTransportAdapter,
+    source_transport_media_id: TransportMediaId,
+) -> Option<DebugRouteEntry> {
+    adapter
+        .debug_route_entry_by_media_id(source_transport_media_id)
+        .await
+}
+
+pub(super) async fn record_incoming_media(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    payload_bytes: usize,
+    now: Instant,
+) {
+    adapter
+        .debug_record_incoming_media(session_key, transport_media_id, payload_bytes, now)
+        .await;
+}
+
+pub(super) async fn observe_audio_activity(
+    adapter: &RtcTransportAdapter,
+    transport_media_id: TransportMediaId,
+    voice_activity: Option<bool>,
+    audio_level_dbov: Option<i8>,
+    now: Instant,
+) {
+    adapter
+        .debug_observe_audio_activity(transport_media_id, voice_activity, audio_level_dbov, now)
+        .await;
+}
+
+pub(super) fn activate_relay_route(
+    source_adapter: &RtcTransportAdapter,
+    source_transport_media_id: TransportMediaId,
+    target_adapter: &RtcTransportAdapter,
+) -> Result<(), TransportAdapterError> {
+    source_adapter.debug_activate_relay_route(source_transport_media_id, target_adapter)
+}
+
+pub(super) fn deactivate_relay_route(
+    source_adapter: &RtcTransportAdapter,
+    source_transport_media_id: TransportMediaId,
+    target_adapter: &RtcTransportAdapter,
+) {
+    source_adapter.debug_deactivate_relay_route(source_transport_media_id, target_adapter);
+}
+
+pub(super) fn relay_target_count_for_source(
+    adapter: &RtcTransportAdapter,
+    source_transport_media_id: TransportMediaId,
+) -> usize {
+    adapter.debug_relay_target_count_for_source(source_transport_media_id)
+}
+
+pub(super) fn active_relay_target_count_for_source(
+    adapter: &RtcTransportAdapter,
+    source_transport_media_id: TransportMediaId,
+) -> usize {
+    adapter.debug_active_relay_target_count_for_source(source_transport_media_id)
 }

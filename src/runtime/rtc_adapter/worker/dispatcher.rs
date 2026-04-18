@@ -9,6 +9,8 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportAdapterError};
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+use super::super::commands::debug::DebugRtcWorkerCommand;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::bootstrap;
 #[cfg(test)]
@@ -34,40 +36,42 @@ pub(crate) struct WorkerCommandContext<'a> {
     pub(crate) metrics: &'a RuntimeMetrics,
 }
 
-// TODO: needs documentation:
 pub(crate) fn handle_worker_command(
     state: &mut RtcBootstrapState,
     context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
-        #[cfg(test)]
-        RtcWorkerCommand::Debug(command) => {
-            debug::handle_debug_command(
-                state,
-                context.bitrate_state,
-                context.snapshot_state,
-                command,
-            );
-        }
         #[cfg(feature = "internal-benchmarks")]
         RtcWorkerCommand::RememberRemoteAddr {
             source_addr,
             session_key,
             response,
-        } => {
-            session::respond_remember_remote_addr(
-                state,
-                context.snapshot_state,
-                source_addr,
-                &session_key,
-                response,
-            );
-        }
+        } => session::respond_remember_remote_addr(
+            state,
+            context.snapshot_state,
+            source_addr,
+            &session_key,
+            response,
+        ),
         command => {
             handle_core_worker_command(state, context, command);
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn handle_debug_worker_command(
+    state: &mut RtcBootstrapState,
+    context: &WorkerCommandContext<'_>,
+    command: DebugRtcWorkerCommand,
+) {
+    debug::handle_debug_command(
+        state,
+        context.bitrate_state,
+        context.snapshot_state,
+        command,
+    );
 }
 
 fn handle_core_worker_command(
@@ -151,8 +155,6 @@ fn handle_core_worker_command(
         | RtcWorkerCommand::SetConsumerActive { .. } => {
             handle_media_command(state, context.metrics, context.relay_registry, command);
         }
-        #[cfg(test)]
-        RtcWorkerCommand::Debug(_command) => {}
         #[cfg(feature = "internal-benchmarks")]
         RtcWorkerCommand::RememberRemoteAddr { .. } => {}
     }

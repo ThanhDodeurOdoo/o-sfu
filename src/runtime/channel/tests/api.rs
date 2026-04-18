@@ -1,6 +1,7 @@
 use o_sfu_protocol::shared::{
     DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
 };
+use o_sfu_protocol::signaling::RecordingOptions;
 use o_sfu_router::{
     MediaCapabilities, MediaKind, RtpParameters as RouterRtpParameters,
     derive_consumable_rtp_parameters,
@@ -12,7 +13,7 @@ use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaI
 
 use super::super::session_negotiation::SessionTransportReady;
 use super::super::{
-    Channel, ChannelJoinError, ChannelManager, SessionCleanupPolicy, SessionOutbound,
+    Channel, ChannelJoinError, ChannelManager, SessionCleanup, SessionOutbound,
     media_transaction::StagedPublishTransaction, session_negotiation::SessionNegotiationUpdate,
     state::ConsumerBootstrapOrigin,
 };
@@ -39,18 +40,32 @@ impl Channel {
             label,
             permissions,
             sender,
-            None,
-            SessionCleanupPolicy::StateOnly,
+            SessionCleanup::state_only(None),
+            false,
         )
         .await
     }
 
     pub async fn leave_session(&self, session_id: &SessionId, connection_id: u64) -> bool {
-        self.leave_session_with_cleanup(
+        self.leave_session_with_cleanup(session_id, connection_id, SessionCleanup::state_only(None))
+            .await
+    }
+
+    pub(crate) async fn join_session_without_transport_cleanup(
+        &self,
+        session_id: SessionId,
+        label: Option<String>,
+        permissions: SessionPermissions,
+        sender: mpsc::UnboundedSender<SessionOutbound>,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Result<u64, ChannelJoinError> {
+        self.join_session_with_cleanup(
             session_id,
-            connection_id,
-            None,
-            SessionCleanupPolicy::StateOnly,
+            label,
+            permissions,
+            sender,
+            SessionCleanup::state_only(Some(transport_adapter)),
+            false,
         )
         .await
     }
@@ -60,13 +75,25 @@ impl Channel {
         session_id: &SessionId,
         connection_id: u64,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
         self.leave_session_with_cleanup(
             session_id,
             connection_id,
-            Some(transport_adapter),
-            cleanup_policy,
+            SessionCleanup::runtime(transport_adapter),
+        )
+        .await
+    }
+
+    pub(crate) async fn leave_session_without_transport_cleanup(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        self.leave_session_with_cleanup(
+            session_id,
+            connection_id,
+            SessionCleanup::state_only(Some(transport_adapter)),
         )
         .await
     }
@@ -75,8 +102,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: u64,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_policy: SessionCleanupPolicy,
+        cleanup: SessionCleanup<'_>,
     ) -> bool {
         let outcome = {
             let mut state = self.state.write().await;
@@ -85,13 +111,9 @@ impl Channel {
         let Some(outcome) = outcome else {
             return false;
         };
-        self.cleanup_transport_removals(
-            transport_adapter,
-            &outcome.transport_removals,
-            cleanup_policy,
-        )
-        .await;
-        self.sync_source_packet_selection_policy(transport_adapter)
+        self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+            .await;
+        self.sync_source_packet_selection_policy(cleanup.transport_adapter())
             .await;
         Self::emit_lifecycle_effects(outcome.effects);
         true
@@ -123,6 +145,23 @@ impl Channel {
         }
     }
 
+    pub async fn start_recording(&self, session_id: &SessionId, options: RecordingOptions) -> bool {
+        let Some(connection_id) = self.session_connection_id(session_id).await else {
+            self.metrics.record_recording_start_rejected();
+            return false;
+        };
+        self.start_recording_runtime(session_id, connection_id, options)
+            .await
+    }
+
+    pub async fn stop_recording(&self, session_id: &SessionId) -> bool {
+        let Some(connection_id) = self.session_connection_id(session_id).await else {
+            self.metrics.record_recording_stop_rejected();
+            return false;
+        };
+        self.stop_recording_runtime(session_id, connection_id).await
+    }
+
     pub(crate) async fn update_session_info_runtime(
         &self,
         session_id: &SessionId,
@@ -144,8 +183,20 @@ impl Channel {
     }
 
     pub async fn disconnect_sessions(&self, session_ids: &[SessionId]) {
-        self.disconnect_sessions_with_cleanup(session_ids, None, SessionCleanupPolicy::StateOnly)
+        self.disconnect_sessions_with_cleanup(session_ids, SessionCleanup::state_only(None))
             .await;
+    }
+
+    pub(crate) async fn disconnect_sessions_without_transport_cleanup(
+        &self,
+        session_ids: &[SessionId],
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        self.disconnect_sessions_with_cleanup(
+            session_ids,
+            SessionCleanup::state_only(Some(transport_adapter)),
+        )
+        .await;
     }
 
     pub(crate) async fn apply_client_rtp_capabilities(
@@ -415,7 +466,7 @@ impl Channel {
     ) -> Option<String> {
         let publish_prerequisites = {
             let state = self.state.read().await;
-            state.publish_prerequisites_for_test(session_id)?
+            state.publish_prerequisites(session_id)?
         };
         let publisher_connection_id = publish_prerequisites.connection_id();
         let router_capabilities = publish_prerequisites.router_capabilities();

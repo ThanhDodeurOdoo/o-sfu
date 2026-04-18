@@ -5,7 +5,7 @@ use tokio::sync::{RwLock, mpsc};
 
 use super::{
     Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelRuntimePolicy,
-    ChannelSessionStatsSnapshot, SessionCleanupPolicy, SessionOutbound,
+    ChannelSessionStatsSnapshot, SessionOutbound,
     directory::{ChannelDirectory, ChannelDirectoryEntry},
     factory::{ChannelCreationIntent, ChannelFactory},
 };
@@ -156,7 +156,6 @@ impl ChannelManager {
         channel_uuid: &str,
         request: JoinSessionRequest,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
         let Some((channel, session_count_before, join_result)) = self
             .with_current_channel(channel_uuid, |channel| async move {
@@ -168,7 +167,6 @@ impl ChannelManager {
                         request.permissions,
                         request.sender,
                         transport_adapter,
-                        cleanup_policy,
                     )
                     .await;
                 (channel, session_count_before, join_result)
@@ -191,18 +189,12 @@ impl ChannelManager {
         session_id: &SessionId,
         connection_id: u64,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
         let Some((channel, session_count_before, did_remove_active_session)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
                 let did_remove_active_session = channel
-                    .close_session_runtime(
-                        session_id,
-                        connection_id,
-                        transport_adapter,
-                        cleanup_policy,
-                    )
+                    .close_session_runtime(session_id, connection_id, transport_adapter)
                     .await;
                 (channel, session_count_before, did_remove_active_session)
             })
@@ -225,13 +217,12 @@ impl ChannelManager {
         channel_uuid: &str,
         session_ids: &[SessionId],
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) {
         let Some((channel, session_count_before)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
                 channel
-                    .disconnect_sessions_runtime(session_ids, transport_adapter, cleanup_policy)
+                    .disconnect_sessions_runtime(session_ids, transport_adapter)
                     .await;
                 (channel, session_count_before)
             })

@@ -40,9 +40,7 @@ async fn rtc_transport_connect_requires_bootstrap_first() {
 async fn rtc_transport_connect_succeeds_after_bootstrap() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 9, SessionId::Integer(9));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let connect_result = adapter
         .connect_transport(
@@ -61,12 +59,7 @@ async fn rtc_transport_connect_succeeds_after_bootstrap() {
 async fn rtc_transport_connect_accepts_remote_ice_credentials() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 90, SessionId::Integer(90));
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
 
     let result = adapter
         .connect_transport(
@@ -85,12 +78,7 @@ async fn rtc_transport_connect_accepts_remote_ice_credentials() {
 async fn rtc_transport_connect_rejects_invalid_remote_ice_credentials() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 91, SessionId::Integer(91));
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
 
     let result = adapter
         .connect_transport(
@@ -112,9 +100,7 @@ async fn rtc_transport_connect_rejects_invalid_remote_ice_credentials() {
 async fn rtc_transport_bootstrap_uses_real_ice_and_dtls_parameters() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 13, SessionId::Integer(13));
-    let payload = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let payload = bootstrap_transport(&adapter, &session_key).await;
     assert!(payload.is_ok());
     let Some(payload) = payload.ok() else {
         return;
@@ -209,9 +195,7 @@ fn rtc_transport_ice_state_metric_maps_all_supported_states() {
 async fn rtc_transport_close_session_cleans_bootstrap_state() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 14, SessionId::Integer(14));
-    let bootstrap_result = adapter
-        .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-        .await;
+    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     let close_result = adapter.close_session(&session_key).await;
     assert_eq!(close_result, Ok(()));
@@ -234,14 +218,10 @@ async fn rtc_transport_close_session_cleans_bootstrap_state() {
 async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 143, SessionId::Integer(143));
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
 
-    adapter.debug_set_session_transport_health(
+    set_transport_health(
+        &adapter,
         &session_key,
         super::super::state::TransportSessionHealth::Disconnected,
     );
@@ -264,26 +244,19 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
 async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 140, SessionId::Integer(140));
-    assert!(
-        adapter
-            .transport_bootstrap_payload(&session_key, &empty_router_capabilities())
-            .await
-            .is_ok()
-    );
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
 
     let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_000);
-    adapter
-        .debug_remember_remote_addr(source_addr, &session_key)
-        .await;
+    remember_remote_addr(&adapter, source_addr, &session_key).await;
     assert_eq!(
-        adapter.debug_remote_addr_owner(source_addr).await,
+        remote_addr_owner(&adapter, source_addr).await,
         Some(session_key.clone())
     );
 
     assert_eq!(adapter.close_session(&session_key).await, Ok(()));
 
-    assert_eq!(adapter.debug_remote_addr_owner(source_addr).await, None);
-    assert!(!adapter.debug_has_any_remote_addr_session().await);
+    assert_eq!(remote_addr_owner(&adapter, source_addr).await, None);
+    assert!(!has_any_remote_addr_session(&adapter).await);
 }
 
 #[tokio::test]
@@ -291,8 +264,7 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     let adapter = RtcTransportAdapter::default();
     let first_session_key = transport_key(1, 141, SessionId::Integer(141));
     assert!(
-        adapter
-            .transport_bootstrap_payload(&first_session_key, &empty_router_capabilities())
+        bootstrap_transport(&adapter, &first_session_key)
             .await
             .is_ok()
     );
@@ -305,8 +277,7 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
 
     let second_session_key = transport_key(1, 142, SessionId::Integer(142));
     assert!(
-        adapter
-            .transport_bootstrap_payload(&second_session_key, &empty_router_capabilities())
+        bootstrap_transport(&adapter, &second_session_key)
             .await
             .is_ok()
     );
@@ -320,12 +291,8 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
     let second_session_key = transport_key_on_worker(2, 1, 30, SessionId::Integer(30));
 
-    let first_payload = adapter
-        .transport_bootstrap_payload(&first_session_key, &empty_router_capabilities())
-        .await;
-    let second_payload = adapter
-        .transport_bootstrap_payload(&second_session_key, &empty_router_capabilities())
-        .await;
+    let first_payload = bootstrap_transport(&adapter, &first_session_key).await;
+    let second_payload = bootstrap_transport(&adapter, &second_session_key).await;
     assert!(first_payload.is_ok());
     assert!(second_payload.is_ok());
     let Some(first_payload) = first_payload.ok() else {

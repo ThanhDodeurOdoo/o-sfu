@@ -9,6 +9,10 @@ use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+#[cfg(test)]
+use super::super::commands::debug::DebugRtcWorkerCommand;
+#[cfg(test)]
+use super::super::worker::handle_debug_worker_command;
 use super::super::{
     commands::RtcWorkerCommand,
     forwarding_planner::populate_forward_routes,
@@ -44,6 +48,8 @@ struct SnapshotInfo {
 
 enum NextLoopInput {
     Command(RtcWorkerCommand),
+    #[cfg(test)]
+    DebugCommand(DebugRtcWorkerCommand),
     Datagram {
         source_addr: SocketAddr,
         candidate_addr: SocketAddr,
@@ -57,6 +63,7 @@ pub(crate) async fn run_packet_loop(
     bitrate_state: Arc<Mutex<RtcBitrateState>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
+    #[cfg(test)] mut debug_rx: mpsc::Receiver<DebugRtcWorkerCommand>,
     mut relay_rx: mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
     shutdown_token: CancellationToken,
 ) {
@@ -66,16 +73,16 @@ pub(crate) async fn run_packet_loop(
     let mut buffers = PacketLoopBuffers::new();
 
     loop {
-        while let Ok(command) = command_rx.try_recv() {
-            handle_worker_command_and_clear_routing_cache(
-                &mut bootstrap_state,
-                &bitrate_state,
-                &snapshot_state,
-                &config,
-                command,
-                &mut routing_state,
-            );
-        }
+        drain_pending_worker_commands(
+            &mut bootstrap_state,
+            &bitrate_state,
+            &snapshot_state,
+            &config,
+            &mut command_rx,
+            #[cfg(test)]
+            &mut debug_rx,
+            &mut routing_state,
+        );
 
         let snapshot = snapshot_and_pump(
             &mut bootstrap_state,
@@ -108,6 +115,8 @@ pub(crate) async fn run_packet_loop(
         let Some(next_input) = wait_for_next_loop_input(
             snapshot,
             &mut command_rx,
+            #[cfg(test)]
+            &mut debug_rx,
             &mut receive_buffer,
             &shutdown_token,
         )
@@ -116,38 +125,104 @@ pub(crate) async fn run_packet_loop(
             return;
         };
 
-        match next_input {
-            NextLoopInput::Command(command) => {
-                handle_worker_command_and_clear_routing_cache(
-                    &mut bootstrap_state,
-                    &bitrate_state,
-                    &snapshot_state,
-                    &config,
-                    command,
-                    &mut routing_state,
-                );
+        let _ = handle_loop_input(
+            &mut bootstrap_state,
+            &bitrate_state,
+            &snapshot_state,
+            &config,
+            next_input,
+            &receive_buffer,
+            &mut routing_state,
+        );
+    }
+}
+
+fn drain_pending_worker_commands(
+    bootstrap_state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    config: &PacketLoopConfig,
+    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    #[cfg(test)] debug_rx: &mut mpsc::Receiver<DebugRtcWorkerCommand>,
+    routing_state: &mut PacketLoopRoutingState,
+) {
+    while let Ok(command) = command_rx.try_recv() {
+        handle_worker_command_and_clear_routing_cache(
+            bootstrap_state,
+            bitrate_state,
+            snapshot_state,
+            config,
+            command,
+            routing_state,
+        );
+    }
+    #[cfg(test)]
+    while let Ok(command) = debug_rx.try_recv() {
+        handle_debug_worker_command_and_clear_routing_cache(
+            bootstrap_state,
+            bitrate_state,
+            snapshot_state,
+            config,
+            command,
+            routing_state,
+        );
+    }
+}
+
+fn handle_loop_input(
+    bootstrap_state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    config: &PacketLoopConfig,
+    next_input: NextLoopInput,
+    receive_buffer: &[u8],
+    routing_state: &mut PacketLoopRoutingState,
+) -> bool {
+    match next_input {
+        NextLoopInput::Command(command) => {
+            handle_worker_command_and_clear_routing_cache(
+                bootstrap_state,
+                bitrate_state,
+                snapshot_state,
+                config,
+                command,
+                routing_state,
+            );
+            true
+        }
+        #[cfg(test)]
+        NextLoopInput::DebugCommand(command) => {
+            handle_debug_worker_command_and_clear_routing_cache(
+                bootstrap_state,
+                bitrate_state,
+                snapshot_state,
+                config,
+                command,
+                routing_state,
+            );
+            true
+        }
+        NextLoopInput::Datagram {
+            source_addr,
+            candidate_addr,
+            received_size,
+        } => {
+            if received_size == 0 {
+                return false;
             }
-            NextLoopInput::Datagram {
+            let Some(packet) = receive_buffer.get(..received_size) else {
+                return false;
+            };
+            route_packet_to_matching_session(
+                bootstrap_state,
+                snapshot_state,
+                routing_state,
+                &config.metrics,
                 source_addr,
                 candidate_addr,
-                received_size,
-            } => {
-                if received_size == 0 {
-                    continue;
-                }
-                let Some(packet) = receive_buffer.get(..received_size) else {
-                    continue;
-                };
-                route_packet_to_matching_session(
-                    &mut bootstrap_state,
-                    &snapshot_state,
-                    &mut routing_state,
-                    &config.metrics,
-                    source_addr,
-                    candidate_addr,
-                    packet,
-                );
-            }
+                packet,
+            );
+            true
         }
     }
 }
@@ -161,6 +236,31 @@ fn handle_worker_command_and_clear_routing_cache(
     routing_state: &mut PacketLoopRoutingState,
 ) {
     handle_worker_command(
+        bootstrap_state,
+        &WorkerCommandContext {
+            bitrate_state,
+            snapshot_state,
+            relay_registry: &config.relay_registry,
+            public_ip: config.public_ip,
+            rtc_port_range: config.rtc_port_range,
+            codec_flags: config.codec_flags,
+            metrics: &config.metrics,
+        },
+        command,
+    );
+    routing_state.clear_on_topology_change();
+}
+
+#[cfg(test)]
+fn handle_debug_worker_command_and_clear_routing_cache(
+    bootstrap_state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    config: &PacketLoopConfig,
+    command: DebugRtcWorkerCommand,
+    routing_state: &mut PacketLoopRoutingState,
+) {
+    handle_debug_worker_command(
         bootstrap_state,
         &WorkerCommandContext {
             bitrate_state,
@@ -217,6 +317,7 @@ fn snapshot_and_pump(
     })
 }
 
+#[cfg(not(test))]
 async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
@@ -257,6 +358,63 @@ async fn wait_for_next_loop_input(
             () = shutdown_token.cancelled() => None,
             maybe_command = command_rx.recv() => {
                 maybe_command.map(NextLoopInput::Command)
+            }
+            result = info.socket.recv_from(receive_buffer) => {
+                Some(handle_socket_receive_result(result, info.candidate_addr))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+async fn wait_for_next_loop_input(
+    snapshot: Option<SnapshotInfo>,
+    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    debug_rx: &mut mpsc::Receiver<DebugRtcWorkerCommand>,
+    receive_buffer: &mut [u8],
+    shutdown_token: &CancellationToken,
+) -> Option<NextLoopInput> {
+    let Some(info) = snapshot else {
+        return tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => None,
+            maybe_command = command_rx.recv() => maybe_command.map(NextLoopInput::Command),
+            maybe_debug_command = debug_rx.recv() => maybe_debug_command.map(NextLoopInput::DebugCommand),
+        };
+    };
+    if let Some(next_timeout) = info.next_timeout {
+        tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => None,
+            maybe_command = command_rx.recv() => {
+                maybe_command.map(NextLoopInput::Command)
+            }
+            maybe_debug_command = debug_rx.recv() => {
+                maybe_debug_command.map(NextLoopInput::DebugCommand)
+            }
+            result = timeout(
+                socket_wait_duration(next_timeout),
+                info.socket.recv_from(receive_buffer),
+            ) => {
+                Some(match result {
+                    Ok(result) => handle_socket_receive_result(result, info.candidate_addr),
+                    Err(_elapsed) => NextLoopInput::Datagram {
+                        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+                        candidate_addr: info.candidate_addr,
+                        received_size: 0,
+                    },
+                })
+            }
+        }
+    } else {
+        tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => None,
+            maybe_command = command_rx.recv() => {
+                maybe_command.map(NextLoopInput::Command)
+            }
+            maybe_debug_command = debug_rx.recv() => {
+                maybe_debug_command.map(NextLoopInput::DebugCommand)
             }
             result = info.socket.recv_from(receive_buffer) => {
                 Some(handle_socket_receive_result(result, info.candidate_addr))

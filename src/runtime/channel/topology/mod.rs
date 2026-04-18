@@ -11,14 +11,11 @@ use o_sfu_router::{
 };
 
 use super::router_state::ChannelRouterState;
-#[cfg(test)]
-use crate::config::MediaCodecFlags;
-#[cfg(test)]
-use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::RecordingService;
-#[cfg(test)]
-use crate::runtime::recording::{MediaSource, MediaTap};
 use o_sfu_protocol::shared::SessionId;
+
+#[cfg(test)]
+mod test_support;
 
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
@@ -111,20 +108,6 @@ impl ChannelRouterObserverFactory {
 }
 
 impl ChannelTopology {
-    #[cfg(test)]
-    pub(super) fn new(primary_router_id: RouterId) -> Self {
-        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
-        Self::new_with_recording_observer_factory(
-            primary_router_id,
-            super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-            &ChannelRouterObserverFactory::new(Arc::new(RecordingService::new(
-                0,
-                media_source,
-                Arc::new(RuntimeMetrics::default()),
-            ))),
-        )
-    }
-
     pub(super) fn new_with_recording_observer_factory(
         primary_router_id: RouterId,
         router_rtp_capabilities: RtpCapabilities,
@@ -261,30 +244,6 @@ impl ChannelTopology {
         self.router_mut(router_id)?.remove_session(session_id)?;
         self.session_home_router.remove(session_id);
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn session_count(&self) -> u64 {
-        self.routers
-            .values()
-            .map(ChannelRouterState::session_count)
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(super) fn home_router_id_for_session(&self, session_id: &SessionId) -> Option<RouterId> {
-        self.session_home_router.get(session_id).copied()
-    }
-
-    #[cfg(test)]
-    pub(super) fn session_permissions(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<RouterSessionPermissions> {
-        let router_id = self.session_home_router.get(session_id).copied()?;
-        self.routers
-            .get(&router_id)?
-            .session_permissions(session_id)
     }
 
     fn router_id_for_session(&self, session_id: &SessionId) -> RouterId {

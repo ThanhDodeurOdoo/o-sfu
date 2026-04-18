@@ -1,7 +1,7 @@
 use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 
 #[cfg(test)]
-use crate::runtime::rtc_adapter::DebugRouteEntry;
+use crate::runtime::rtc_adapter::test_support::DebugRouteEntry;
 use crate::runtime::rtc_adapter::{RelayCleanup, RtcTransportAdapter};
 use crate::runtime::transport_adapter::config::RtcTransportAdapterShardSetConfig;
 #[cfg(test)]

@@ -13,16 +13,40 @@ use super::{
         TransportMediaRemoval,
     },
 };
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionCleanupPolicy {
-    #[cfg(test)]
-    StateOnly,
-    StateAndTransportMedia,
+#[derive(Clone, Copy)]
+pub(in crate::runtime::channel) struct SessionCleanup<'a> {
+    transport_adapter: Option<&'a RuntimeTransportAdapter>,
+    remove_transport_media: bool,
 }
 
-impl SessionCleanupPolicy {
+impl<'a> SessionCleanup<'a> {
+    pub(in crate::runtime::channel) const fn runtime(
+        transport_adapter: &'a RuntimeTransportAdapter,
+    ) -> Self {
+        Self {
+            transport_adapter: Some(transport_adapter),
+            remove_transport_media: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::channel) const fn state_only(
+        transport_adapter: Option<&'a RuntimeTransportAdapter>,
+    ) -> Self {
+        Self {
+            transport_adapter,
+            remove_transport_media: false,
+        }
+    }
+
+    pub(in crate::runtime::channel) const fn transport_adapter(
+        self,
+    ) -> Option<&'a RuntimeTransportAdapter> {
+        self.transport_adapter
+    }
+
     const fn removes_transport_media(self) -> bool {
-        matches!(self, Self::StateAndTransportMedia)
+        self.remove_transport_media
     }
 }
 
@@ -67,29 +91,28 @@ impl Channel {
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) -> Result<u64, ChannelJoinError> {
         self.join_session_with_cleanup(
             session_id,
             label,
             permissions,
             sender,
-            Some(transport_adapter),
-            cleanup_policy,
+            SessionCleanup::runtime(transport_adapter),
+            true,
         )
         .await
     }
 
     /// Run the room-owned join transition and perform the deferred cleanup only
     /// after the state lock has been released.
-    pub(super) async fn join_session_with_cleanup(
+    pub(in crate::runtime::channel) async fn join_session_with_cleanup(
         &self,
         session_id: SessionId,
         label: Option<String>,
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_policy: SessionCleanupPolicy,
+        cleanup: SessionCleanup<'_>,
+        emit_joined_fanout: bool,
     ) -> Result<u64, ChannelJoinError> {
         let SessionTransitionResult::Joined(connection_id) = self
             .run_session_transition(
@@ -98,10 +121,9 @@ impl Channel {
                     label,
                     permissions: permissions.into(),
                     sender,
-                    emit_joined_fanout: cleanup_policy.removes_transport_media(),
+                    emit_joined_fanout,
                 },
-                transport_adapter,
-                cleanup_policy,
+                cleanup,
             )
             .await?
         else {
@@ -115,15 +137,13 @@ impl Channel {
         session_id: &SessionId,
         connection_id: u64,
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
         self.run_session_transition(
             SessionTransition::Close {
                 session_id,
                 connection_id,
             },
-            Some(transport_adapter),
-            cleanup_policy,
+            SessionCleanup::runtime(transport_adapter),
         )
         .await
         .is_ok_and(|result| !matches!(result, SessionTransitionResult::Missing))
@@ -197,38 +217,34 @@ impl Channel {
         &self,
         session_ids: &[SessionId],
         transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
     ) {
-        self.disconnect_sessions_with_cleanup(session_ids, Some(transport_adapter), cleanup_policy)
-            .await;
+        self.disconnect_sessions_with_cleanup(
+            session_ids,
+            SessionCleanup::runtime(transport_adapter),
+        )
+        .await;
     }
 
-    pub(super) async fn disconnect_sessions_with_cleanup(
+    pub(in crate::runtime::channel) async fn disconnect_sessions_with_cleanup(
         &self,
         session_ids: &[SessionId],
-        transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_policy: SessionCleanupPolicy,
+        cleanup: SessionCleanup<'_>,
     ) {
         let _ = self
-            .run_session_transition(
-                SessionTransition::Disconnect { session_ids },
-                transport_adapter,
-                cleanup_policy,
-            )
+            .run_session_transition(SessionTransition::Disconnect { session_ids }, cleanup)
             .await
             .ok();
     }
 
-    pub(super) async fn cleanup_transport_removals(
+    pub(in crate::runtime::channel) async fn cleanup_transport_removals(
         &self,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
+        cleanup: SessionCleanup<'_>,
         removals: &[TransportMediaRemoval],
-        cleanup_policy: SessionCleanupPolicy,
     ) {
-        let Some(transport_adapter) = transport_adapter else {
+        let Some(transport_adapter) = cleanup.transport_adapter() else {
             return;
         };
-        if !cleanup_policy.removes_transport_media() {
+        if !cleanup.removes_transport_media() {
             return;
         }
         for removal in removals {
@@ -271,15 +287,12 @@ impl Channel {
     async fn run_session_transition(
         &self,
         transition: SessionTransition<'_>,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_policy: SessionCleanupPolicy,
+        cleanup: SessionCleanup<'_>,
     ) -> Result<SessionTransitionResult, ChannelJoinError> {
         let Some(outcome) = self.apply_state_transition(transition).await? else {
             return Ok(SessionTransitionResult::Missing);
         };
-        Ok(self
-            .finalize_session_transition(outcome, transport_adapter, cleanup_policy)
-            .await)
+        Ok(self.finalize_session_transition(outcome, cleanup).await)
     }
 
     async fn apply_state_transition(
@@ -328,18 +341,13 @@ impl Channel {
     async fn finalize_session_transition(
         &self,
         outcome: SessionTransitionOutcome,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_policy: SessionCleanupPolicy,
+        cleanup: SessionCleanup<'_>,
     ) -> SessionTransitionResult {
         match outcome {
             SessionTransitionOutcome::Join(outcome) => {
-                self.cleanup_transport_removals(
-                    transport_adapter,
-                    &outcome.transport_removals,
-                    cleanup_policy,
-                )
-                .await;
-                self.sync_source_packet_selection_policy(transport_adapter)
+                self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+                    .await;
+                self.sync_source_packet_selection_policy(cleanup.transport_adapter())
                     .await;
                 let connection_id = outcome.connection_id;
                 Self::emit_lifecycle_effects(outcome.effects);
@@ -352,32 +360,24 @@ impl Channel {
             } => {
                 let had_state = outcome.is_some();
                 if let Some(outcome) = outcome {
-                    self.cleanup_transport_removals(
-                        transport_adapter,
-                        &outcome.transport_removals,
-                        cleanup_policy,
-                    )
-                    .await;
+                    self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+                        .await;
                     Self::emit_lifecycle_effects(outcome.effects);
                 }
-                if let Some(transport_adapter) = transport_adapter {
+                if let Some(transport_adapter) = cleanup.transport_adapter() {
                     self.close_transport_session(&session_id, connection_id, transport_adapter)
                         .await;
                 }
                 if had_state {
-                    self.sync_source_packet_selection_policy(transport_adapter)
+                    self.sync_source_packet_selection_policy(cleanup.transport_adapter())
                         .await;
                 }
                 SessionTransitionResult::Applied
             }
             SessionTransitionOutcome::Disconnect(outcome) => {
-                self.cleanup_transport_removals(
-                    transport_adapter,
-                    &outcome.transport_removals,
-                    cleanup_policy,
-                )
-                .await;
-                self.sync_source_packet_selection_policy(transport_adapter)
+                self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+                    .await;
+                self.sync_source_packet_selection_policy(cleanup.transport_adapter())
                     .await;
                 Self::emit_lifecycle_effects(outcome.effects);
                 SessionTransitionResult::Applied
