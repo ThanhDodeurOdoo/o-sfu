@@ -5,10 +5,27 @@ use super::{MediaKind, ProducerId, SessionId, StreamType, TransportId};
 /// This boundary exists so downstream features (for example recording) can
 /// subscribe to router-side lifecycle events without requiring router-core
 /// refactors.
+///
+/// Example:
+///
+/// ```rust
+/// use o_sfu_router::{RouterEvent, RouterObserver};
+///
+/// struct RecordingObserver;
+///
+/// impl RouterObserver for RecordingObserver {
+///     fn on_event(&mut self, event: RouterEvent) {
+///         if let RouterEvent::ProducerAdded { producer_id, .. } = event {
+///             let _ = producer_id;
+///         }
+///     }
+/// }
+/// ```
 pub trait RouterObserver {
     fn on_event(&mut self, event: RouterEvent);
 }
 
+/// Events emitted when router-owned lifecycle changes matter to outer systems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterEvent {
     SessionJoined {

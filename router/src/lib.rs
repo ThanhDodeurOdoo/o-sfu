@@ -1,4 +1,8 @@
-// TODO: needs documentation:
+//! Pure router-core domain types for `o-sfu`.
+//!
+//! This crate keep session, transport, producer, consumer, and RTP negotiation
+//! state independant from async runtime, sockets, or WebRTC bindings. The
+//! router is the proof-friendly core that channel and trnasport layers build on.
 mod model;
 
 pub use self::model::{

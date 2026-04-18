@@ -1,9 +1,13 @@
+//! Structured diagnostics for parse and negotiation failures.
+
+/// High-level failure class used at protocol-sensitive boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseDiagnosticKind {
     InvalidInput,
     UnsupportedFeature,
 }
 
+/// A bit of a prototype, not sure if I will keep it but it's for mapping RFC citations directly to issues
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RfcReference {
     document: &'static str,
@@ -37,6 +41,12 @@ impl RfcReference {
     }
 }
 
+/// Stable diagnostic payload that callers can log or surface upstream.
+///
+/// `kind` separates invalid from unsupported input, `summary` is the short
+/// operator-facing explanation, `rfc_reference` points to the rule that defined
+/// the expectation, and `replay_context` describes the minimum capture needed to
+/// reproduce the failure deterministically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseDiagnosticSpec {
     kind: ParseDiagnosticKind,
@@ -82,6 +92,7 @@ impl ParseDiagnosticSpec {
     }
 }
 
+/// Trait for errors that can explain themselves with a structured diagnostic.
 pub trait ParseDiagnostic {
     fn diagnostic(&self) -> ParseDiagnosticSpec;
 }

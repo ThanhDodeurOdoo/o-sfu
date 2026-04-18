@@ -1,4 +1,5 @@
-// TODO: needs documentation:
+//! The modules in this tree define the pure routing state machine, the typed
+//! RTP/domain models used at its boundary, and some helpers (for test/proofs)
 mod consumer;
 mod consumer_capability;
 mod diagnostic;

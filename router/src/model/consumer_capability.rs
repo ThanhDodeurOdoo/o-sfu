@@ -1,3 +1,9 @@
+//! Result of capability negotiation as seen by the pure router.
+/// Structural compatibility gate used when attaching a consumer.
+///
+/// The full negotiation algorithm happen outside the router. The router only
+/// needs the final yes or no result so it can reject impossible attachments
+/// without importing RTP-matching mechanics into the core state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsumerCapability {
     Compatible,

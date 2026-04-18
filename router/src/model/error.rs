@@ -1,5 +1,6 @@
 use super::{ConsumerId, MediaKind, ProducerId, SessionId, StreamType, TransportId};
 
+/// Router mutation errors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterError {
     DuplicateSession(SessionId),

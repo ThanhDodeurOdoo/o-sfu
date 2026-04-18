@@ -1,5 +1,13 @@
+//! Producer-side entities tracked by the pure router.
+
 use super::{MediaKind, ProducerId, StreamType, TransportId};
 
+/// Media source attached to a receive transport.
+///
+/// `id` and `transport_id` identify the producer and its owning transport,
+/// `media_kind` plus `stream_type` preserve the semantic media identity used by
+/// consumers, and `paused` is the source-side mute shadow propagated to
+/// dependent consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Producer {
     id: ProducerId,

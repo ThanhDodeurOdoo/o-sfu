@@ -1,3 +1,8 @@
+//! RTP capability matching between producers, routers, and consumers.
+//!
+//! These helpers keep codec and header-extension negotiation outside the pure
+//! router state machine while still using the same typed RTP domain model.
+
 use std::collections::BTreeSet;
 
 use super::{
@@ -7,6 +12,7 @@ use super::{
     RtcpFeedbackKind, StreamBinding,
 };
 
+/// Failure raised while deriving or negotiating RTP parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RtpNegotiationError {
     UnsupportedProducerCodec {
@@ -215,6 +221,10 @@ pub fn negotiate_consumer_rtp_parameters(
     Ok(negotiated)
 }
 
+/// Check whether a consumer capability set can negotiate at least one media codec.
+///
+/// This is the boolean gateway used by router-core when it only needs the final
+/// compatibility result and does not need the fully negotiated RTP output.
 #[must_use]
 pub fn can_consume(
     consumable_parameters: &MediaStream,

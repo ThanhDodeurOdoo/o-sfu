@@ -1,3 +1,5 @@
+//! Pure router state machine plus the reverse indexes that keep teardown local.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
@@ -6,14 +8,21 @@ use super::{
     TransportDirection, TransportId,
 };
 
-// TODO: needs documentation:
+/// Pure routing state for one router instance.
+///
+/// The main maps hold the persistent entities.
+///
+/// And their associated reverse indexes to keep dependency cleanup proportional
+/// to the removed entity instead of requiring scans across the full router state.
 #[derive(Debug, Clone)]
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
     pub(super) id: RouterId,
+    /// Live sessions that currently belong to this router.
     pub(super) sessions: BTreeMap<SessionId, Session>,
     pub(super) transports: BTreeMap<TransportId, Transport>,
     pub(super) producers: BTreeMap<ProducerId, Producer>,
     pub(super) consumers: BTreeMap<ConsumerId, Consumer>,
+    // Reverse indexes
     pub(super) session_transports: BTreeMap<SessionId, BTreeSet<TransportId>>,
     pub(super) transport_producers: BTreeMap<TransportId, BTreeSet<ProducerId>>,
     pub(super) transport_consumers: BTreeMap<TransportId, BTreeSet<ConsumerId>>,
@@ -59,10 +68,15 @@ impl<O: RouterObserver> Router<O> {
         self.sessions.values()
     }
 
+    /// Admit a new session to the router.
+    ///
+    /// This is the first state transition for a participant. A joined session
+    /// has no transports or media yet, but later transitions require the
+    /// session to exist first.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::DuplicateSession`] when the session already exists.
-    // TODO: needs documentation:
     pub fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
         let session_id = session.id();
         if self.sessions.contains_key(&session_id) {
@@ -89,11 +103,15 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// Register a transport under an existing session.
+    ///
+    /// The router only records ownership and direction here. Transport-specific
+    /// protocol or WebRTC state stays outside the router core.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingSession`] when the owning session does not exist
     /// or [`RouterError::DuplicateTransport`] when the transport already exists.
-    // TODO: needs documentation:
     pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
         let transport_id = transport.id();
         let session_id = transport.session_id();
@@ -111,12 +129,16 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// Register a producer on a receive transport.
+    ///
+    /// Producers are source-side entities. The router enforces that they only
+    /// live on receive transports so downstream state stays structurally valid.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist
     /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
     /// producers, or [`RouterError::DuplicateProducer`] when the producer already exists.
-    // TODO: needs documentation:
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
@@ -150,8 +172,8 @@ impl<O: RouterObserver> Router<O> {
     /// The `capability` parameter is the result of the external capability negotiation
     /// (e.g. [`crate::rtp_negotiation::can_consume`]). The router treats it as an opaque
     /// compatibility gate: when [`ConsumerCapability::Incompatible`], the consumer is rejected
-    /// without inspecting RTP parameters. This keeps the full ORTC matching logic outside the
-    /// router while allowing the router to enforce the gate structurally.
+    /// without inspecting RTP parameters. This keeps the full RTP capabillity matching logic
+    /// outside the router while allowing the router to enforce the gate structurally.
     ///
     /// # Errors
     ///
@@ -164,7 +186,6 @@ impl<O: RouterObserver> Router<O> {
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
-    // TODO: needs documentation:
     pub fn add_consumer(
         &mut self,
         mut consumer: Consumer,
@@ -282,10 +303,15 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// Remove a session and cascade all dependent transports and media entities.
+    ///
+    /// This is the authoritative teardown path for session-onwed router state.
+    /// Reverse indexes guarantee that cleanup only walks the transports,
+    /// producers, and consumers that actually belong to the removed session.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingSession`] when the session does not exist.
-    // TODO: needs documentation:
     pub fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
         let Some(mut session) = self.sessions.remove(&session_id) else {
             return Err(RouterError::MissingSession(session_id));
