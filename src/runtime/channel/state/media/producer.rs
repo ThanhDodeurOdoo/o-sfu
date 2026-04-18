@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use o_sfu_router::{
-    MediaCapabilities, MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters,
-};
+#[cfg(test)]
+use o_sfu_router::MediaCapabilities;
+use o_sfu_router::{MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters};
 use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -31,6 +31,8 @@ pub(in crate::runtime::channel) struct ProducerRouteTarget {
     transport_media_id: TransportMediaId,
 }
 
+// TODO: CLEANUP TESTING
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PublishPrerequisites {
     connection_id: u64,
@@ -64,11 +66,12 @@ pub(in crate::runtime::channel) struct ProducerActivityOutcome {
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
-    pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
     session_info_snapshot: Option<BTreeMap<SessionId, SessionInfo>>,
 }
 
 impl ChannelState {
+    // TODO: CLEANUP TESTING
+    #[cfg(test)]
     pub(in crate::runtime::channel) fn publish_prerequisites(
         &self,
         session_id: &SessionId,
@@ -312,7 +315,6 @@ impl ChannelState {
         session_id: &SessionId,
         connection_id: u64,
         stream_type: StreamType,
-        transport_removals: Vec<TransportMediaRemoval>,
     ) -> Option<UnpublishTrackOutcome> {
         let producer_target = self.producer_route_target(session_id, connection_id, stream_type)?;
         if self
@@ -351,7 +353,6 @@ impl ChannelState {
                 .values()
                 .map(|session| session.sender.clone())
                 .collect(),
-            transport_removals,
             session_info_snapshot,
         })
     }
@@ -398,6 +399,8 @@ impl ChannelState {
     }
 }
 
+// TODO: CLEANUP TESTING
+#[cfg(test)]
 impl PublishPrerequisites {
     pub(in crate::runtime::channel) const fn connection_id(&self) -> u64 {
         self.connection_id
@@ -415,10 +418,6 @@ impl ValidatedPublishDescriptor {
 
     pub(in crate::runtime::channel) const fn stream_type(&self) -> StreamType {
         self.stream_type
-    }
-
-    pub(in crate::runtime::channel) const fn media_kind(&self) -> RouterMediaKind {
-        self.media_kind
     }
 
     pub(in crate::runtime::channel) fn owner_session_id(&self) -> &SessionId {
@@ -442,10 +441,6 @@ impl ValidatedPublishDescriptor {
 impl ProducerRouteTarget {
     pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> u64 {
         self.owner_connection_id
-    }
-
-    pub(in crate::runtime::channel) const fn transport_media_id(&self) -> TransportMediaId {
-        self.transport_media_id
     }
 }
 

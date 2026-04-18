@@ -1,3 +1,37 @@
+//! This module exists because consumer-route mutation touches several pieces of
+//! worker-local state that must stay consistent:
+//!
+//! - `media_route_index` records which consumer transpors depend on a source
+//! - remote-source registrations track cross-worker ownership and relay control
+//! - `route_control` keeps the effective local and relay packet gates
+//! - relay cleanup must be emitted when the last remote-backed route disappears
+//!
+//! `lifecycle.rs` owns media declaration and teardown againts `RtcSessionState`.
+//! Once a producer or consumer handle exists, this module owns the routing-side
+//! bookkeeping that decide whether the source is valid, how one consumer route
+//! is registered or removed and how packet-gate state is recomputed
+//!
+//! Small ownership graph:
+//!
+//! ```text
+//! lifecycle.rs
+//!   |-- declare/remove str0m media
+//!   |-- register/remove media handles
+//!   `-- call control.rs when route ownership changes
+//!
+//! control.rs
+//!   |-- validate source ownership (local vs remote)
+//!   |-- mutate media_route_index
+//!   |-- refresh route_control packet gates
+//!   `-- propagate remote relay state / cleanup
+//!
+//! keyframe.rs
+//!   `-- reads the same source-ownership rules for feedback routing
+//! ```
+//!
+//! The `respond_*` functions at the top are command-adapter entry points
+//! for the worker dispatcher
+
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::{Mid, Rid};
 use tokio::sync::oneshot;

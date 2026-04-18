@@ -4,10 +4,12 @@ use o_sfu_protocol::shared::{SessionId, SessionInfo};
 use o_sfu_router::{MediaCapabilities, RouterError};
 use tracing::{debug, error, warn};
 
+#[cfg(test)]
+use super::super::session_negotiation::SessionTransportReady;
 use super::super::{
     ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
     outbound::{MessageFanout, OutboundSender},
-    session_negotiation::{SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady},
+    session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
     topology::ChannelTopology,
 };
 use super::layout::SessionLayout;
@@ -382,6 +384,8 @@ impl ChannelState {
         ))
     }
 
+    // TODO: CLEANUP TESTING
+    #[cfg(test)]
     pub(in crate::runtime::channel) fn set_client_rtp_capabilities(
         &mut self,
         session_id: &SessionId,
@@ -395,6 +399,7 @@ impl ChannelState {
         session.negotiation.set_client_rtp_capabilities()
     }
 
+    #[cfg(test)]
     pub(in crate::runtime::channel) fn set_transport_ready(
         &mut self,
         session_id: &SessionId,

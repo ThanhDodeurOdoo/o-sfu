@@ -19,20 +19,18 @@ pub(super) use crate::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags},
     runtime::{
         RuntimeState,
+        auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
         channel::{
             ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
             ChannelRuntimePolicy, rtp_capabilities,
         },
-        metrics::RuntimeMetrics,
-        recording::MediaTap,
-        transport_adapter::RuntimeTransportAdapter,
-    },
-    signaling::{
-        auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
-        http::{
+        http_server::contract::{
             CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH,
             NOOP_PATH, NoopResponse, STATS_PATH, StatsResponse,
         },
+        metrics::RuntimeMetrics,
+        recording::MediaTap,
+        transport_adapter::RuntimeTransportAdapter,
     },
 };
 

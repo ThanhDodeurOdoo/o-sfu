@@ -24,6 +24,7 @@ pub(super) use crate::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags},
     runtime::{
         RuntimeState,
+        auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
         channel::Channel,
         channel::rtp_capabilities,
         channel::{
@@ -39,7 +40,6 @@ pub(super) use crate::{
             RuntimeTransportAdapter,
         },
     },
-    signaling::auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
 };
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";

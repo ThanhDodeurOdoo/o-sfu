@@ -16,16 +16,14 @@ use crate::{
     config::Config,
     runtime::{
         RuntimeState,
-        channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
-        metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-        websocket_server,
-    },
-    signaling::{
         auth::{self, HttpChannelClaims, HttpDisconnectClaims},
-        http::{
+        channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
+        http_server::contract::{
             CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery, DISCONNECT_PATH,
             IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
+        metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+        websocket_server,
     },
 };
 

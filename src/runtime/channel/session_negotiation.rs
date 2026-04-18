@@ -32,21 +32,29 @@ pub(super) enum SessionNegotiationState {
     /// Neither transport ready nor capabilities received.
     AwaitingCapabilities,
     /// Capabilities received, but no transport connected yet.
+    #[cfg(test)]
     CapabilitiesReady,
     /// Publish transport ready; still waiting for capabilities.
+    #[cfg(test)]
     PublishTransportReadyAwaitingCapabilities,
     /// Consume transport ready; still waiting for capabilities.
+    #[cfg(test)]
     ConsumeTransportReadyAwaitingCapabilities,
     /// Both transports ready; still waiting for capabilities.
+    #[cfg(test)]
     BothTransportsReadyAwaitingCapabilities,
     /// Publish transport ready and capabilities received; consume pending.
+    #[cfg(test)]
     PublishReady,
     /// Consume transport ready and capabilities received; publish pending.
+    #[cfg(test)]
     ConsumeReady,
     /// Fully negotiated: both transports ready and capabilities received.
     Ready,
 }
 
+// TODO: CLEANUP TESTING
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SessionTransportReady {
     Publish,
@@ -85,23 +93,38 @@ impl SessionNegotiation {
 
     #[must_use]
     pub(super) fn can_publish(&self) -> bool {
-        matches!(
-            self.state,
-            SessionNegotiationState::PublishTransportReadyAwaitingCapabilities
-                | SessionNegotiationState::BothTransportsReadyAwaitingCapabilities
-                | SessionNegotiationState::PublishReady
-                | SessionNegotiationState::Ready
-        )
+        #[cfg(test)]
+        {
+            matches!(
+                self.state,
+                SessionNegotiationState::PublishTransportReadyAwaitingCapabilities
+                    | SessionNegotiationState::BothTransportsReadyAwaitingCapabilities
+                    | SessionNegotiationState::PublishReady
+                    | SessionNegotiationState::Ready
+            )
+        }
+        #[cfg(not(test))]
+        {
+            matches!(self.state, SessionNegotiationState::Ready)
+        }
     }
 
     #[must_use]
     pub(super) fn can_consume(&self) -> bool {
-        matches!(
-            self.state,
-            SessionNegotiationState::ConsumeReady | SessionNegotiationState::Ready
-        )
+        #[cfg(test)]
+        {
+            matches!(
+                self.state,
+                SessionNegotiationState::ConsumeReady | SessionNegotiationState::Ready
+            )
+        }
+        #[cfg(not(test))]
+        {
+            matches!(self.state, SessionNegotiationState::Ready)
+        }
     }
 
+    #[cfg(test)]
     pub(super) fn set_client_rtp_capabilities(&mut self) -> SessionNegotiationUpdate {
         let was_consumer_ready = self.can_consume();
         self.state = match &self.state {
@@ -126,6 +149,7 @@ impl SessionNegotiation {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn set_transport_ready(
         &mut self,
         readiness: SessionTransportReady,

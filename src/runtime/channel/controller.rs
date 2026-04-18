@@ -141,8 +141,12 @@ pub(crate) struct ChannelSessionStatsSnapshot {
     pub(crate) screen_count: u64,
 }
 
-/// A single discussion channel owning immutable room metadata plus mutable
-/// session, recording, and routing state.
+/// Analogus to a odoo discuss channel
+///
+/// `Channel` owns immutable room definition plus the guarded mutable state needed to run
+/// membership, routing, and recording for that room. Callers are expected to express
+/// room-level intents through this facade, while process-level lookup and lifecycle
+/// serialization stay in [`super::manager::ChannelManager`].
 pub struct Channel {
     pub(super) definition: ChannelDefinition,
     #[allow(
@@ -293,11 +297,6 @@ impl Channel {
     #[must_use]
     pub(crate) fn feature_flags(&self) -> RuntimeFeatureFlags {
         self.definition.feature_flags()
-    }
-
-    #[must_use]
-    pub(crate) const fn media_worker_id(&self) -> usize {
-        self.definition.media_worker_id()
     }
 }
 

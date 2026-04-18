@@ -17,14 +17,14 @@ use tokio_tungstenite::{
 
 use o_sfu::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags},
-    runtime::testing::TestServer,
-    signaling::{
+    public::{
         auth::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
             sign,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH},
     },
+    runtime::testing::TestServer,
 };
 
 pub type TestWebSocket =

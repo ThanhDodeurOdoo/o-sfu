@@ -3,13 +3,12 @@
 //! Fuzz target for the `/v1/disconnect` body and JWT verification boundary.
 //!
 //! The HTTP route first rejects non-UTF-8 bodies, then verifies the raw body
-//! as `HttpDisconnectClaims`. Keeping that exact boundary under fuzzing makes
-//! future auth-surface changes pay for a dedicated hostile-input regression.
+//! as `HttpDisconnectClaims`.
 
 use std::str;
 
 use libfuzzer_sys::fuzz_target;
-use o_sfu::signaling::auth::{HttpDisconnectClaims, verify};
+use o_sfu::public::auth::{HttpDisconnectClaims, verify};
 
 const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

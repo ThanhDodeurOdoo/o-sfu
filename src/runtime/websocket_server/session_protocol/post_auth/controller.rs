@@ -12,10 +12,9 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     rtc_adapter::TransportSessionHealth,
     transport_adapter::RuntimeTransportAdapter,
-    websocket_server::WsWriter,
-};
-use crate::signaling::client_batch::{
-    ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
+    websocket_server::{
+        ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, WsWriter, decode_client_batch,
+    },
 };
 use tracing::warn;
 

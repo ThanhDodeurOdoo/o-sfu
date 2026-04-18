@@ -22,11 +22,9 @@ use super::{
 };
 use crate::runtime::{
     RuntimeState,
-    channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
-};
-use crate::signaling::{
     auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
-    client_batch::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
+    channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
+    websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
 };
 
 #[derive(Deserialize)]
@@ -41,7 +39,16 @@ struct LegacyChannelScopedConnectClaims {
     permissions: Option<SessionPermissions>,
 }
 
-// TODO: needs documentation:
+/// Admit one upgraded socket into an authenticated channel session.
+///
+/// The first client frame must be exactly one `auth` envelope. On success this function
+/// authenticates the JWT, joins the target channel, sends the initial welcome snapshot,
+/// and initializes the post-auth protocol state that will drive the first offer/answer
+/// exchange
+///
+/// Returning `None` means the caller should stop processing the socket imediately. In
+/// rejection cases this function is also responsible for sending the appropriate close
+/// frame so callrs do not duplicate handshake failure handling.
 pub(super) async fn establish_session(
     state: &RuntimeState,
     writer: &mut WsWriter,

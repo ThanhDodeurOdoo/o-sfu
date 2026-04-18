@@ -17,7 +17,12 @@ use super::{
     session_protocol::{SessionProtocol, SessionProtocolOutcome},
 };
 
-// TODO: needs documentation:
+/// Drives a live authenticated WebSocket session until it terminates.
+///
+/// This loop owns transport-shaped concerns only: ping timeouts, RTC transport health
+/// checks, inbound frame dispatch, and outbound channel fanout. The detailed signaling
+/// state machine lives behind [`SessionProtocol`]; this function only decides which event
+/// source fired next and converts that outcome into a [`WsSessionLoopExitReason`].
 pub(super) async fn run(
     writer: &mut WsWriter,
     reader: &mut WsReader,

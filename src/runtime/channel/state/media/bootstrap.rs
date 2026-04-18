@@ -367,22 +367,11 @@ impl PreparedConsumerBootstrap {
 }
 
 impl RemoteTrackBootstrap {
-    pub(crate) fn consumer_id(&self) -> String {
-        self.consumer_id.into_wire_id()
-    }
-
-    pub(crate) const fn media_kind(&self) -> RouterMediaKind {
-        self.media_kind
-    }
-
     pub(crate) fn mid(&self) -> &str {
         &self.mid
     }
 
-    pub(crate) fn producer_id(&self) -> String {
-        self.producer_id.into_wire_id()
-    }
-
+    #[cfg(test)]
     pub(crate) fn rtp_parameters(&self) -> &RouterRtpParameters {
         &self.rtp_parameters
     }

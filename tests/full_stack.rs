@@ -7,7 +7,7 @@ mod support;
 
 use std::time::Duration;
 
-use o_sfu::signaling::http::IncomingBitRateStats;
+use o_sfu::public::http::IncomingBitRateStats;
 use o_sfu_protocol::{
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     signaling::{ServerMessage, ServerRequest},

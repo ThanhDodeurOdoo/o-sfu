@@ -7,19 +7,15 @@ use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
     Channel, ChannelJoinError, ChannelSessionPermissions, SessionOutbound,
-    session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
+    session_negotiation::SessionNegotiationUpdate,
     state::{
         DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome, LifecycleEffects,
         TransportMediaRemoval,
     },
 };
-#[cfg(test)]
-use crate::runtime::transport_adapter::TransportMediaId;
-#[cfg(test)]
-use o_sfu_protocol::shared::StreamType;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionCleanupPolicy {
+    #[cfg(test)]
     StateOnly,
     StateAndTransportMedia,
 }
@@ -38,10 +34,6 @@ enum SessionTransition<'a> {
         sender: mpsc::UnboundedSender<SessionOutbound>,
         emit_joined_fanout: bool,
     },
-    Leave {
-        session_id: &'a SessionId,
-        connection_id: u64,
-    },
     Close {
         session_id: &'a SessionId,
         connection_id: u64,
@@ -59,7 +51,6 @@ enum SessionTransitionResult {
 
 enum SessionTransitionOutcome {
     Join(JoinSessionOutcome),
-    Leave(LeaveSessionOutcome),
     Close {
         outcome: Option<LeaveSessionOutcome>,
         session_id: SessionId,
@@ -69,25 +60,6 @@ enum SessionTransitionOutcome {
 }
 
 impl Channel {
-    #[cfg(test)]
-    pub async fn join_session(
-        &self,
-        session_id: SessionId,
-        label: Option<String>,
-        permissions: SessionPermissions,
-        sender: mpsc::UnboundedSender<SessionOutbound>,
-    ) -> Result<u64, ChannelJoinError> {
-        self.join_session_with_cleanup(
-            session_id,
-            label,
-            permissions,
-            sender,
-            None,
-            SessionCleanupPolicy::StateOnly,
-        )
-        .await
-    }
-
     pub(crate) async fn join_session_runtime(
         &self,
         session_id: SessionId,
@@ -110,7 +82,7 @@ impl Channel {
 
     /// Run the room-owned join transition and perform the deferred cleanup only
     /// after the state lock has been released.
-    async fn join_session_with_cleanup(
+    pub(super) async fn join_session_with_cleanup(
         &self,
         session_id: SessionId,
         label: Option<String>,
@@ -138,33 +110,6 @@ impl Channel {
         Ok(connection_id)
     }
 
-    #[cfg(test)]
-    pub async fn leave_session(&self, session_id: &SessionId, connection_id: u64) -> bool {
-        self.leave_session_with_cleanup(
-            session_id,
-            connection_id,
-            None,
-            SessionCleanupPolicy::StateOnly,
-        )
-        .await
-    }
-
-    pub(crate) async fn leave_session_runtime(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
-    ) -> bool {
-        self.leave_session_with_cleanup(
-            session_id,
-            connection_id,
-            Some(transport_adapter),
-            cleanup_policy,
-        )
-        .await
-    }
-
     pub(crate) async fn close_session_runtime(
         &self,
         session_id: &SessionId,
@@ -178,25 +123,6 @@ impl Channel {
                 connection_id,
             },
             Some(transport_adapter),
-            cleanup_policy,
-        )
-        .await
-        .is_ok_and(|result| !matches!(result, SessionTransitionResult::Missing))
-    }
-
-    async fn leave_session_with_cleanup(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
-        cleanup_policy: SessionCleanupPolicy,
-    ) -> bool {
-        self.run_session_transition(
-            SessionTransition::Leave {
-                session_id,
-                connection_id,
-            },
-            transport_adapter,
             cleanup_policy,
         )
         .await
@@ -218,37 +144,8 @@ impl Channel {
         }
     }
 
-    #[cfg(test)]
-    pub async fn broadcast(&self, sender_id: &SessionId, message: serde_json::Value) {
-        let Some(connection_id) = self.session_connection_id(sender_id).await else {
-            return;
-        };
-        self.broadcast_runtime(sender_id, connection_id, message)
-            .await;
-    }
-
     pub(crate) async fn has_connection(&self, session_id: &SessionId, connection_id: u64) -> bool {
         self.state.read().await.session_connection_id(session_id) == Some(connection_id)
-    }
-
-    #[cfg(test)]
-    pub async fn update_session_info(
-        &self,
-        session_id: &SessionId,
-        info: SessionInfo,
-        need_refresh: bool,
-    ) {
-        let Some(connection_id) = self.session_connection_id(session_id).await else {
-            return;
-        };
-        self.update_session_info_with_transport(
-            session_id,
-            connection_id,
-            info,
-            need_refresh,
-            None,
-        )
-        .await;
     }
 
     pub(crate) async fn update_session_info_runtime_for_connection(
@@ -265,27 +162,6 @@ impl Channel {
             info,
             need_refresh,
             Some(transport_adapter),
-        )
-        .await;
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn update_session_info_runtime(
-        &self,
-        session_id: &SessionId,
-        info: SessionInfo,
-        need_refresh: bool,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
-        let Some(connection_id) = self.session_connection_id(session_id).await else {
-            return;
-        };
-        self.update_session_info_runtime_for_connection(
-            session_id,
-            connection_id,
-            info,
-            need_refresh,
-            transport_adapter,
         )
         .await;
     }
@@ -317,12 +193,6 @@ impl Channel {
         }
     }
 
-    #[cfg(test)]
-    pub async fn disconnect_sessions(&self, session_ids: &[SessionId]) {
-        self.disconnect_sessions_with_cleanup(session_ids, None, SessionCleanupPolicy::StateOnly)
-            .await;
-    }
-
     pub(crate) async fn disconnect_sessions_runtime(
         &self,
         session_ids: &[SessionId],
@@ -333,7 +203,7 @@ impl Channel {
             .await;
     }
 
-    async fn disconnect_sessions_with_cleanup(
+    pub(super) async fn disconnect_sessions_with_cleanup(
         &self,
         session_ids: &[SessionId],
         transport_adapter: Option<&RuntimeTransportAdapter>,
@@ -430,19 +300,6 @@ impl Channel {
                 };
                 SessionTransitionOutcome::Join(outcome)
             }
-            SessionTransition::Leave {
-                session_id,
-                connection_id,
-            } => {
-                let outcome = {
-                    let mut state = self.state.write().await;
-                    state.apply_leave(session_id, connection_id)
-                };
-                let Some(outcome) = outcome else {
-                    return Ok(None);
-                };
-                SessionTransitionOutcome::Leave(outcome)
-            }
             SessionTransition::Close {
                 session_id,
                 connection_id,
@@ -488,18 +345,6 @@ impl Channel {
                 Self::emit_lifecycle_effects(outcome.effects);
                 SessionTransitionResult::Joined(connection_id)
             }
-            SessionTransitionOutcome::Leave(outcome) => {
-                self.cleanup_transport_removals(
-                    transport_adapter,
-                    &outcome.transport_removals,
-                    cleanup_policy,
-                )
-                .await;
-                self.sync_source_packet_selection_policy(transport_adapter)
-                    .await;
-                Self::emit_lifecycle_effects(outcome.effects);
-                SessionTransitionResult::Applied
-            }
             SessionTransitionOutcome::Close {
                 outcome,
                 session_id,
@@ -540,7 +385,7 @@ impl Channel {
         }
     }
 
-    fn emit_lifecycle_effects(effects: LifecycleEffects) {
+    pub(super) fn emit_lifecycle_effects(effects: LifecycleEffects) {
         for close_request in effects.close_requests {
             let _ = close_request
                 .sender
@@ -549,68 +394,6 @@ impl Channel {
         for fanout in effects.fanouts {
             fanout.emit();
         }
-    }
-
-    /// Record the browser-advertised RTP capabilities for one live connection
-    /// and trigger any consumer bootstrap that becomes newly legal.
-    pub(crate) async fn apply_client_rtp_capabilities(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        capabilities: MediaCapabilities,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        let update = {
-            let mut state = self.state.write().await;
-            state.set_client_rtp_capabilities(session_id, connection_id, &capabilities)
-        };
-        self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
-            .await
-    }
-
-    async fn apply_transport_ready(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        readiness: SessionTransportReady,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        let update = {
-            let mut state = self.state.write().await;
-            state.set_transport_ready(session_id, connection_id, readiness)
-        };
-        self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
-            .await
-    }
-
-    pub(crate) async fn apply_publish_transport_ready(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        self.apply_transport_ready(
-            session_id,
-            connection_id,
-            SessionTransportReady::Publish,
-            transport_adapter,
-        )
-        .await
-    }
-
-    pub(crate) async fn apply_consume_transport_ready(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        self.apply_transport_ready(
-            session_id,
-            connection_id,
-            SessionTransportReady::Consume,
-            transport_adapter,
-        )
-        .await
     }
 
     /// Commit the answer-derived negotiated capability set for one live
@@ -666,146 +449,8 @@ impl Channel {
         .await
     }
 
-    #[cfg(test)]
-    pub(super) async fn set_client_rtp_capabilities(
-        &self,
-        session_id: &SessionId,
-        capabilities: MediaCapabilities,
-    ) -> SessionNegotiationUpdate {
-        let mut state = self.state.write().await;
-        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_client_rtp_capabilities(session_id, connection_id, &capabilities)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn set_publish_transport_ready(
-        &self,
-        session_id: &SessionId,
-    ) -> SessionNegotiationUpdate {
-        let mut state = self.state.write().await;
-        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_transport_ready(session_id, connection_id, SessionTransportReady::Publish)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn set_consume_transport_ready(
-        &self,
-        session_id: &SessionId,
-    ) -> SessionNegotiationUpdate {
-        let mut state = self.state.write().await;
-        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_transport_ready(session_id, connection_id, SessionTransportReady::Consume)
-    }
-
     pub(super) async fn session_count(&self) -> usize {
         self.state.read().await.session_count()
-    }
-
-    #[cfg(test)]
-    pub(super) async fn router_session_count(&self) -> usize {
-        let (count, _camera_count, _screen_count) = self.state.read().await.session_stats_counts();
-        usize::try_from(count).unwrap_or(usize::MAX)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn router_session_permissions(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<o_sfu_router::SessionPermissions> {
-        self.state.read().await.session_permissions(session_id)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn session_has_parsed_client_rtp_capabilities(
-        &self,
-        session_id: &SessionId,
-    ) -> bool {
-        self.state
-            .read()
-            .await
-            .session_has_parsed_client_rtp_capabilities(session_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn parsed_client_rtp_capabilities(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<o_sfu_router::MediaCapabilities> {
-        self.state
-            .read()
-            .await
-            .parsed_client_rtp_capabilities(session_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn session_connection_id(&self, session_id: &SessionId) -> Option<u64> {
-        self.state.read().await.session_connection_id(session_id)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn producer_count(&self) -> usize {
-        self.state.read().await.producer_count()
-    }
-
-    #[cfg(test)]
-    pub(super) async fn consumer_count(&self) -> usize {
-        self.state.read().await.consumer_count()
-    }
-
-    #[cfg(test)]
-    pub(super) async fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.state.read().await.first_published_transport_media_id()
-    }
-
-    #[cfg(test)]
-    pub(super) async fn producer_transport_media_id(
-        &self,
-        session_id: &SessionId,
-        connection_id: u64,
-        stream_type: StreamType,
-    ) -> Option<TransportMediaId> {
-        self.state
-            .read()
-            .await
-            .producer_transport_media_id(session_id, connection_id, stream_type)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn has_producer_route_target(
-        &self,
-        owner_session_id: &SessionId,
-        owner_connection_id: u64,
-        stream_type: StreamType,
-    ) -> bool {
-        self.state
-            .read()
-            .await
-            .producer_route_target(owner_session_id, owner_connection_id, stream_type)
-            .is_some()
-    }
-
-    #[cfg(test)]
-    pub(super) async fn producer_stream_type_for_transport_media_id(
-        &self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<StreamType> {
-        self.state
-            .read()
-            .await
-            .producer_stream_type_for_transport_media_id(transport_media_id)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn session_info_snapshot(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<(SessionId, SessionInfo)> {
-        self.state.read().await.session_info_snapshot(session_id)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn has_session(&self, session_id: &SessionId) -> bool {
-        self.state.read().await.has_session(session_id)
     }
 
     pub(super) async fn is_empty(&self) -> bool {

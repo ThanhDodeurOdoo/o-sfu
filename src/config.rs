@@ -6,8 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, ensure};
 
-use crate::signaling::DEFAULT_AUTHENTICATION_TIMEOUT_MS;
-
+const DEFAULT_AUTHENTICATION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_CHANNEL_SIZE: usize = 100;
 const DEFAULT_SESSION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;

@@ -1,3 +1,19 @@
+//! `runtime` decide which concerns stay process-global, wires those long-lived subsystems
+//! together once, and then hands request-local work to the apporpriate child node instead of
+//! mixing admission, room state, and media execution in one place.
+//!
+//! ```text
+//! Runtime
+//! |- http_server          -> HTTP control-plane routes and server boot
+//! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
+//! |  `- session_protocol  -> authenticated signaling flow for one connected session
+//! |- channel              -> room allocation, membership, negotiation, and recording policy
+//! |- transport_adapter    -> runtime-facing transport facade
+//! |  `- rtc_adapter       -> WebRTC worker and packet execution engine
+//! |- recording            -> shared media tap used by channel policy and transport execution
+//! `- metrics              -> process-global observability and export state
+//! ```
+
 use std::{process, sync::Arc};
 
 use anyhow::Result;
@@ -10,15 +26,12 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 
+pub(crate) mod auth;
 #[cfg(feature = "internal-benchmarks")]
 #[doc(hidden)]
 pub mod benchmark_support;
-#[allow(
-    dead_code,
-    reason = "protocol session establishment does not yet exercise the remaining publish and transport-readiness channel paths that stay scheduled for the next implementation phase"
-)]
 pub(crate) mod channel;
-mod http_server;
+pub(crate) mod http_server;
 mod metrics;
 mod metrics_export;
 mod recording;
@@ -32,7 +45,7 @@ mod transport_adapter;
 mod transport_bootstrap;
 #[cfg(test)]
 mod transport_connect;
-mod websocket_server;
+pub(crate) mod websocket_server;
 
 use channel::ChannelAdmissionPolicy;
 use channel::ChannelManager;
@@ -46,7 +59,11 @@ use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapt
 
 const SOURCE_PACKET_POLICY_SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
-// TODO: needs documentation:
+/// Process-global application shell for the server process.
+///
+/// `Runtime` owns the long-lived subsystems that every request shares: configuration,
+/// channel allocation, metrics,and the transport backend. Per-requets entrypoints take
+/// cheap clones of these dependencies through [`RuntimeState`].
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
@@ -117,7 +134,11 @@ impl Runtime {
     }
 }
 
-// TODO: needs documentation:
+/// Channel state decides which producer layers should remain routable from room-level
+/// facts like membership and publication state, while the transport layer own the
+/// live packet gates that enforce those deciisons on RTP fanout. Keeping the sync in one
+/// background task avoids forcing every channel mutation to await transport updates while
+/// still ensuring the steady-state packet policy converges quickly.
 fn spawn_source_packet_policy_sync_task(
     channels: Arc<ChannelManager>,
     transport_adapter: RuntimeTransportAdapter,
@@ -169,8 +190,9 @@ fn build_transport_adapter(
 
 /// # Errors
 ///
-/// Returns an error when configuration loading fails or the HTTP server cannot bind.
-// TODO: needs documentation:
+/// Returns an error when tracing initialization fails, configuration loading fails,
+/// the Tokio runtime cannot be built, or the HTTP/WebSocket listener exits with an
+/// error.
 pub fn run() -> Result<()> {
     init_tracing()?;
     let runtime = Runtime::new(Config::from_env()?);

@@ -37,7 +37,13 @@ pub(crate) async fn upgrade(
     websocket.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-// TODO: needs documentation:
+/// Owns one upgraded WebSocket from first split through final channel cleanup.
+///
+/// After the HTTP upgrade complete, this function records connection metrics, delegates
+/// authenticated admission to [`super::handshake::establish_session`], runs the steady-state
+/// session loop, and then closes the logical channel session exactly once. Keeping that
+/// sequencing here prevent handshake code and steady-state protocol code from racing to
+/// clean up the same chanel session.
 async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     async move {
         let (mut ws_writer, mut ws_reader) = socket.split();

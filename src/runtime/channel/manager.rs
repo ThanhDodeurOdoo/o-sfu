@@ -55,6 +55,13 @@ pub(crate) struct JoinSessionRequest {
     pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
 
+/// global owner of live channels keyed by issuer and UUID.
+///
+/// `ChannelManager` keeps channel creation idempotent by issuer and centralizes per-room
+/// lifecycle serialization so concurrent HTTP and WebSocket tasks cannot overlap join,
+/// leave, disconnect, and empty-room cleanup on the same channel. Runtime entrypoints
+/// should go through this type instead of cordinating room lookup and teardown
+/// themselve
 #[derive(Debug)]
 pub struct ChannelManager {
     directory: RwLock<ChannelDirectory>,
@@ -158,14 +165,6 @@ impl ChannelManager {
         directory.get_by_uuid(uuid)
     }
 
-    #[cfg(test)]
-    pub async fn has_session(&self, channel_uuid: &str, session_id: &SessionId) -> bool {
-        let Some(entry) = self.entry(channel_uuid).await else {
-            return false;
-        };
-        entry.channel().has_session(session_id).await
-    }
-
     pub async fn stats_snapshots(
         &self,
         transport_adapter: &RuntimeTransportAdapter,
@@ -235,6 +234,8 @@ impl ChannelManager {
         Ok((channel, connection_id))
     }
 
+    // TODO: CLEANUP TESTING
+    #[cfg(test)]
     pub async fn leave_session(
         &self,
         channel_uuid: &str,

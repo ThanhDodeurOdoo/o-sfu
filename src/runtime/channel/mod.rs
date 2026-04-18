@@ -1,21 +1,28 @@
-//! Channel runtime layer: membership, bootstrap orchestration, and channel-local state.
+//! `channel` is the main business-flow layer of the SFU. It receives authenticated
+//! session intent from signaling, owns the mutable room model, cordinates lifecycle
+//! transitions, and bridge room policy into the router and transport layers without
+//! exposing those lower-level details back to the socket code.
 //!
-//! Internal modules:
-//! - `controller`: channel identity, immutable configuration, and shared accessors
-//! - `definition`: immutable channel identity, placement, and policy-backed config
-//! - `directory`: server-global issuer and UUID lookup plus channel entry indexing
-//! - `manager`: server-global channel lookup, creation, and cleanup coordination
-//! - `membership`: join/leave, session-info fan-out, and publish/consume readiness
-//! - `media`: producer/consumer bootstrap plus publication/subscription activity transitions
-//! - `outbound`: shared outbound fan-out helpers for session handlers
-//! - `session_negotiation`: explicit transport/bootstrap readiness state for one session
-//! - `source_packet_policy`: room-owned source-layer policy orchestration for transport media
-//! - `state`: channel-local mutable state and internal bootstrap bookkeeping
-//! - `router_state`: post-auth bridge from signaling session ids into the router core
-//! - `topology`: channel-local routing placement boundary
-//! - `rtp_capabilities`: default router RTP capability surface
-//! - signaling edges own the protocol wire mapping; the channel boundary consumes
-//!   browser codec baseline RTP capabilities, negotiated parameters, and track bootstrap data
+//! ```text
+//! ChannelManager
+//! |- directory / definition -> process-global lookup and immutable identity
+//! `- Channel
+//!    |- controller          -> room-facing facade and immutable accessors
+//!    |- lifecycle           -> single owner of join, leave, and cleanup sequencing
+//!    |- state               -> locked mutable room model
+//!    |- membership          -> session presence, permissions, and fanout
+//!    |- session_negotiation -> per-session transport readiness
+//!    |- media               -> publish and subscribe activity transitions
+//!    |- recording           -> channel-scoped recording policy
+//!    |- router_state        -> bridge into the router core
+//!    |- topology            -> routing placement boundary
+//!    |- outbound            -> shared server-to-client fanout helpers
+//!    `- source_packet_policy-> room-owned packet gate intent for transport execution
+//! ```
+//!
+//! Supporting modules such as `events`, `factory`, `media_transaction`, and
+//! `rtp_capabilities` exist to keep these ownership edges small rather than to define
+//! separate business roots of their own.
 
 mod controller;
 mod definition;
@@ -49,7 +56,7 @@ pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
-#[cfg(test)]
-pub(crate) use media::NegotiatedPublish;
 pub(crate) use membership::SessionCleanupPolicy;
 pub(crate) use state::RemoteTrackBootstrap;
+#[cfg(test)]
+pub(crate) use tests::api::NegotiatedPublish;

@@ -318,12 +318,7 @@ impl UnpublishTransaction {
         }
         let Some(outcome) = ({
             let mut state = channel.state.write().await;
-            state.unpublish_track(
-                &self.session_id,
-                self.connection_id,
-                self.stream_type,
-                self.transport_removals,
-            )
+            state.unpublish_track(&self.session_id, self.connection_id, self.stream_type)
         }) else {
             warn!(
                 session_id = ?self.session_id,
