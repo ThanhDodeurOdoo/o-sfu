@@ -29,6 +29,7 @@ pub(in crate::runtime::channel) fn project_session_info(
         is_deaf: presence.deaf(),
         is_raising_hand: presence.raising_hand(),
     }
+    .snapshot_complete()
 }
 
 impl ChannelState {

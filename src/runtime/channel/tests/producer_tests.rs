@@ -148,7 +148,13 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     assert!(subscriber_messages.iter().any(|message| matches!(
         message,
         SessionOutbound::Message(ChannelEventMessage::SessionInfoChanged(snapshot))
-            if snapshot.values().next().is_some_and(|info| info.is_camera_on.is_none())
+            if snapshot
+                .values()
+                .next()
+                .is_some_and(|info| info == &SessionInfo {
+                    is_camera_on: Some(false),
+                    ..SessionInfo::snapshot_defaults()
+                })
     )));
 
     let removed_media_events = fake

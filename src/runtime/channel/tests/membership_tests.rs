@@ -169,7 +169,7 @@ async fn join_session_notifies_existing_peers_with_session_joined() {
         msg
     {
         assert_eq!(session_id, SessionId::Integer(2));
-        assert_eq!(info, SessionInfo::default());
+        assert_eq!(info, SessionInfo::snapshot_defaults());
     } else {
         panic!("expected SessionJoined, got {msg:?}");
     }
@@ -260,7 +260,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
     assert!(matches!(
         alice_rx.try_recv().ok(),
         Some(SessionOutbound::Message(ChannelEventMessage::SessionJoined { session_id, info }))
-            if session_id == SessionId::Integer(2) && info == SessionInfo::default()
+            if session_id == SessionId::Integer(2) && info == SessionInfo::snapshot_defaults()
     ));
 
     assert!(
@@ -287,7 +287,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
     assert!(matches!(
         alice_rx.try_recv().ok(),
         Some(SessionOutbound::Message(ChannelEventMessage::SessionJoined { session_id, info }))
-            if session_id == SessionId::Integer(2) && info == SessionInfo::default()
+            if session_id == SessionId::Integer(2) && info == SessionInfo::snapshot_defaults()
     ));
     assert_eq!(channel.session_count().await, 2);
 }

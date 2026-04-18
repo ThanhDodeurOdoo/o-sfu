@@ -1318,7 +1318,13 @@ async fn assert_camera_unpublish_updates_snapshot_and_info(
         panic!("expected peer info update after camera unpublish");
     };
     assert_eq!(peer_info.session_id, SessionId::Integer(10));
-    assert_eq!(peer_info.info.is_camera_on, None);
+    assert_eq!(
+        peer_info.info,
+        SessionInfo {
+            is_camera_on: Some(false),
+            ..SessionInfo::snapshot_defaults()
+        }
+    );
 }
 
 async fn connect_late_subscriber(

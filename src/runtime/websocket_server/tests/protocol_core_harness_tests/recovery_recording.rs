@@ -470,7 +470,11 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
         alice.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(72)),
-            latest_info,
+            ProtocolSessionInfo {
+                is_self_muted: Some(false),
+                is_raising_hand: Some(true),
+                ..ProtocolSessionInfo::snapshot_defaults()
+            },
         )])))
     );
     assert!(peer_reached_state(&bob, BundleConnectionState::Recovering));
@@ -501,7 +505,10 @@ async fn protocol_core_propagates_raise_hand_info_over_real_server_session_flow(
         alice.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(92)),
-            latest_info,
+            ProtocolSessionInfo {
+                is_raising_hand: Some(true),
+                ..ProtocolSessionInfo::snapshot_defaults()
+            },
         )])))
     );
 }

@@ -105,6 +105,26 @@ pub struct SessionInfo {
     pub is_raising_hand: Option<bool>,
 }
 
+impl SessionInfo {
+    #[must_use]
+    pub fn snapshot_defaults() -> Self {
+        Self::default().snapshot_complete()
+    }
+
+    #[must_use]
+    pub fn snapshot_complete(self) -> Self {
+        Self {
+            is_talking: Some(self.is_talking.unwrap_or(false)),
+            is_featured: Some(self.is_featured.unwrap_or(false)),
+            is_camera_on: Some(self.is_camera_on.unwrap_or(false)),
+            is_screen_sharing_on: Some(self.is_screen_sharing_on.unwrap_or(false)),
+            is_self_muted: Some(self.is_self_muted.unwrap_or(false)),
+            is_deaf: Some(self.is_deaf.unwrap_or(false)),
+            is_raising_hand: Some(self.is_raising_hand.unwrap_or(false)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadStates {
     #[serde(skip_serializing_if = "Option::is_none")]

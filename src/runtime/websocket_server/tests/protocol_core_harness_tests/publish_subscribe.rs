@@ -605,7 +605,10 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
         bob.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(77)),
-            ProtocolSessionInfo::default(),
+            ProtocolSessionInfo {
+                is_camera_on: Some(false),
+                ..ProtocolSessionInfo::snapshot_defaults()
+            },
         )]))),
         "committed unpublish should clear the publisher camera flag in the observable peer info"
     );

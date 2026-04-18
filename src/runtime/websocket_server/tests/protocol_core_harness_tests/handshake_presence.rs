@@ -82,7 +82,7 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() {
         peer.updates,
         vec![BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(31)),
-            ProtocolSessionInfo::default(),
+            ProtocolSessionInfo::snapshot_defaults(),
         )]))]
     );
 }
@@ -257,7 +257,7 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
             bundle_session_info_key(&ProtocolSessionId::Integer(41)),
             ProtocolSessionInfo {
                 is_talking: Some(true),
-                ..ProtocolSessionInfo::default()
+                ..ProtocolSessionInfo::snapshot_defaults()
             },
         )])))
     );
@@ -437,7 +437,7 @@ async fn protocol_session_replacement_emits_peerleft_then_peerjoined_for_existin
         alice.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(46)),
-            ProtocolSessionInfo::default(),
+            ProtocolSessionInfo::snapshot_defaults(),
         )]))),
     );
 }
