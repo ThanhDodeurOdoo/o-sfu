@@ -17,7 +17,6 @@ use std::sync::Arc;
 
 use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
@@ -30,6 +29,7 @@ use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
 
 use super::{
+    definition::ChannelDefinition,
     events::ChannelEventMessage,
     state::{ChannelState, RemoteTrackBootstrap},
 };
@@ -140,21 +140,10 @@ pub(crate) struct ChannelSessionStatsSnapshot {
 }
 
 // TODO: needs documentation:
-/// A single discussion channel owning sessions, features, and recording state,
-/// roughly same concepts as in odoo's sfu and odoo discuss
-/// Identity fields (uuid, issuer, key, features) are imuttable after creation.
-/// Mutable state (sessions, recording, routing) is behind an interior lock.
-/// TODO: update docstring later
+/// A single discussion channel owning immutable room metadata plus mutable
+/// session, recording, and routing state.
 pub struct Channel {
-    pub(super) runtime_id: u64,
-    pub(super) media_worker_id: usize,
-    pub(super) uuid: String,
-    pub(super) issuer: String,
-    pub(super) key: Option<String>,
-    pub(super) web_rtc_enabled: bool,
-    pub(super) feature_flags: RuntimeFeatureFlags,
-    #[allow(dead_code, reason = "stored for future recording pipeline integration")]
-    pub(super) recording_address: Option<String>,
+    pub(super) definition: ChannelDefinition,
     #[allow(
         dead_code,
         reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
@@ -174,21 +163,16 @@ impl Channel {
         recording_media_tap: Arc<MediaTap>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
+        let definition =
+            ChannelDefinition::new(runtime_context, &runtime_policy, issuer, key, config);
         let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
         let recording_service = Arc::new(RecordingService::new(
-            runtime_context.runtime,
+            definition.runtime_id(),
             recording_media_source,
             Arc::clone(&metrics),
         ));
         Self {
-            runtime_id: runtime_context.runtime,
-            media_worker_id: runtime_context.media_worker,
-            uuid: Uuid::new_v4().to_string(),
-            issuer,
-            key,
-            web_rtc_enabled: config.web_rtc_enabled,
-            feature_flags: runtime_policy.feature_flags,
-            recording_address: config.recording_address,
+            definition,
             recording_service: Arc::clone(&recording_service),
             metrics,
             state: RwLock::new(ChannelState::new(
@@ -202,7 +186,7 @@ impl Channel {
 
     #[must_use]
     pub fn uuid(&self) -> &str {
-        &self.uuid
+        self.definition.uuid()
     }
 
     #[must_use]
@@ -211,32 +195,23 @@ impl Channel {
         session_id: &SessionId,
         connection_id: u64,
     ) -> TransportSessionKey {
-        TransportSessionKey::new(
-            self.runtime_id,
-            self.media_worker_id,
-            connection_id,
-            session_id.clone(),
-        )
+        self.definition
+            .transport_session_key(session_id, connection_id)
     }
 
     #[must_use]
     pub fn issuer(&self) -> &str {
-        &self.issuer
+        self.definition.issuer()
     }
 
     #[must_use]
     pub fn key(&self) -> Option<&str> {
-        self.key.as_deref()
+        self.definition.key()
     }
 
     #[must_use]
     pub fn available_features(&self) -> AvailableFeatures {
-        AvailableFeatures {
-            rtc: self.web_rtc_enabled,
-            transcription: self.feature_flags.transcription,
-            audio_recording: self.feature_flags.audio_recording,
-            video_recording: self.feature_flags.video_recording,
-        }
+        self.definition.available_features()
     }
 
     pub async fn recording_state(&self) -> RecordingState {
@@ -304,13 +279,22 @@ impl Channel {
 
     #[must_use]
     pub(crate) fn web_rtc_enabled(&self) -> bool {
-        self.web_rtc_enabled
+        self.definition.web_rtc_enabled()
     }
 
-    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn recording_enabled(&self) -> bool {
+        self.definition.recording_enabled()
+    }
+
+    #[must_use]
+    pub(crate) fn feature_flags(&self) -> RuntimeFeatureFlags {
+        self.definition.feature_flags()
+    }
+
     #[must_use]
     pub(crate) const fn media_worker_id(&self) -> usize {
-        self.media_worker_id
+        self.definition.media_worker_id()
     }
 }
 
@@ -318,11 +302,11 @@ impl fmt::Debug for Channel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Channel")
-            .field("runtime_id", &self.runtime_id)
-            .field("media_worker_id", &self.media_worker_id)
-            .field("uuid", &self.uuid)
-            .field("issuer", &self.issuer)
-            .field("web_rtc_enabled", &self.web_rtc_enabled)
+            .field("runtime_id", &self.definition.runtime_id())
+            .field("media_worker_id", &self.definition.media_worker_id())
+            .field("uuid", &self.definition.uuid())
+            .field("issuer", &self.definition.issuer())
+            .field("web_rtc_enabled", &self.definition.web_rtc_enabled())
             .finish_non_exhaustive()
     }
 }

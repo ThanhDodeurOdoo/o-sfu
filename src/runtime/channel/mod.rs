@@ -3,6 +3,8 @@
 //!
 //! Internal modules:
 //! - `controller`: channel identity, immutable configuration, and shared accessors
+//! - `definition`: immutable channel identity, placement, and policy-backed config
+//! - `directory`: server-global issuer and UUID lookup plus channel entry indexing
 //! - `manager`: server-global channel lookup, creation, and cleanup coordination
 //! - `membership`: join/leave, session-info fan-out, and publish/consume readiness
 //! - `media`: producer/consumer bootstrap plus publication/subscription activity transitions
@@ -17,7 +19,10 @@
 //!   browser codec baseline RTP capabilities, negotiated parameters, and track bootstrap data
 
 mod controller;
+mod definition;
+mod directory;
 mod events;
+mod factory;
 mod manager;
 mod media;
 mod media_transaction;

@@ -176,16 +176,17 @@ impl Channel {
     }
 
     fn recording_permissions(&self, permissions: &SessionPermissions) -> RecordingPermissions {
-        let recording_enabled = self.recording_address.is_some();
+        let feature_flags = self.feature_flags();
+        let recording_enabled = self.recording_enabled();
         RecordingPermissions {
             audio: recording_enabled
-                && self.feature_flags.audio_recording
+                && feature_flags.audio_recording
                 && permissions.audio_recording.unwrap_or(false),
             video: recording_enabled
-                && self.feature_flags.video_recording
+                && feature_flags.video_recording
                 && permissions.video_recording.unwrap_or(false),
             transcription: recording_enabled
-                && self.feature_flags.transcription
+                && feature_flags.transcription
                 && permissions.transcription.unwrap_or(false),
         }
     }

@@ -1,17 +1,16 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use o_sfu_router::RouterId;
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc};
 
 use super::{
-    Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelRuntimeContext,
-    ChannelRuntimePolicy, ChannelSessionStatsSnapshot, SessionCleanupPolicy, SessionOutbound,
+    Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelRuntimePolicy,
+    ChannelSessionStatsSnapshot, SessionCleanupPolicy, SessionOutbound,
+    directory::{ChannelDirectory, ChannelDirectoryEntry},
+    factory::{ChannelCreationIntent, ChannelFactory},
 };
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
-use crate::utils::rfc3339_now;
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
 #[cfg(test)]
@@ -20,9 +19,9 @@ use super::ChannelAdmissionPolicy;
 use super::rtp_capabilities::router_rtp_capabilities;
 #[cfg(test)]
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
+
 #[cfg(test)]
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
-const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelManagerConfig {
@@ -56,30 +55,11 @@ pub(crate) struct JoinSessionRequest {
     pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
 
-// TODO: needs documentation:
 #[derive(Debug)]
 pub struct ChannelManager {
-    state: RwLock<ChannelManagerState>,
-    media_worker_count: usize,
-    runtime_policy: ChannelRuntimePolicy,
-    recording_media_tap: Arc<MediaTap>,
+    directory: RwLock<ChannelDirectory>,
+    factory: ChannelFactory,
     metrics: Arc<RuntimeMetrics>,
-}
-
-#[derive(Debug, Default)]
-struct ChannelManagerState {
-    channels_by_uuid: BTreeMap<String, ChannelEntry>,
-    next_channel_runtime_id: u64,
-    next_router_id: u64,
-    uuids_by_issuer: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-struct ChannelEntry {
-    channel: Arc<Channel>,
-    op_lock: Arc<Mutex<()>>,
-    create_date: String,
-    remote_address: String,
 }
 
 impl ChannelManager {
@@ -131,21 +111,22 @@ impl ChannelManager {
         recording_media_tap: Arc<MediaTap>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
-        Self {
-            state: RwLock::new(ChannelManagerState::default()),
-            media_worker_count: config.media_worker_count.max(1),
-            runtime_policy: config.runtime_policy,
+        let factory = ChannelFactory::new(
+            config.media_worker_count,
+            config.runtime_policy,
             recording_media_tap,
+            Arc::clone(&metrics),
+        );
+        Self {
+            directory: RwLock::new(ChannelDirectory::default()),
+            factory,
             metrics,
         }
     }
 
     /// Create a channel for the given issuer, or return the existing one.
-    /// Channel creation is idempotent: repeated calls with the same issuer
-    /// return the same channel regardless of key, config, or remote-address differences
-    /// similar to odoo's sfu
-    ///
-    /// `remote_address` is observability metadata used for stats like traceability, lggging,...
+    /// Channel creation remains idempotent by issuer so repeated requests keep
+    /// the existing runtime placement and metadata entry.
     pub async fn create_or_get(
         &self,
         issuer: &str,
@@ -154,61 +135,27 @@ impl ChannelManager {
         remote_address: Option<&str>,
     ) -> Arc<Channel> {
         {
-            let state = self.state.read().await;
-            if let Some(uuid) = state.uuids_by_issuer.get(issuer)
-                && let Some(entry) = state.channels_by_uuid.get(uuid)
-            {
-                return Arc::clone(&entry.channel);
+            let directory = self.directory.read().await;
+            if let Some(channel) = directory.get_by_issuer(issuer) {
+                return channel;
             }
         }
-        let mut state = self.state.write().await;
-        if let Some(uuid) = state.uuids_by_issuer.get(issuer)
-            && let Some(entry) = state.channels_by_uuid.get(uuid)
-        {
-            return Arc::clone(&entry.channel);
+        let mut directory = self.directory.write().await;
+        if let Some(channel) = directory.get_by_issuer(issuer) {
+            return channel;
         }
-        let channel_runtime_id = state.next_channel_runtime_id;
-        state.next_channel_runtime_id = state.next_channel_runtime_id.saturating_add(1);
-        let media_worker_id = self.media_worker_id_for_channel_runtime(channel_runtime_id);
-        let router_id = RouterId(state.next_router_id);
-        state.next_router_id = state.next_router_id.saturating_add(1);
-        let channel = Arc::new(Channel::new(
-            ChannelRuntimeContext {
-                runtime: channel_runtime_id,
-                media_worker: media_worker_id,
-                router: router_id,
-            },
-            self.runtime_policy.clone(),
-            issuer.to_owned(),
-            key.map(str::to_owned),
-            config.clone(),
-            Arc::clone(&self.recording_media_tap),
-            Arc::clone(&self.metrics),
-        ));
-        let channel_uuid = channel.uuid().to_owned();
-        state
-            .uuids_by_issuer
-            .insert(issuer.to_owned(), channel_uuid.clone());
-        state.channels_by_uuid.insert(
-            channel_uuid,
-            ChannelEntry {
-                channel: Arc::clone(&channel),
-                op_lock: Arc::new(Mutex::new(())),
-                create_date: rfc3339_now(),
-                remote_address: remote_address.unwrap_or(UNKNOWN_REMOTE_ADDRESS).to_owned(),
-            },
-        );
-        drop(state);
+        let channel = self
+            .factory
+            .create(ChannelCreationIntent::new(issuer, key, config));
+        directory.insert(Arc::clone(&channel), remote_address);
+        drop(directory);
         self.metrics.add_active_channels(1);
         channel
     }
 
     pub async fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Channel>> {
-        let state = self.state.read().await;
-        state
-            .channels_by_uuid
-            .get(uuid)
-            .map(|entry| Arc::clone(&entry.channel))
+        let directory = self.directory.read().await;
+        directory.get_by_uuid(uuid)
     }
 
     #[cfg(test)]
@@ -216,7 +163,7 @@ impl ChannelManager {
         let Some(entry) = self.entry(channel_uuid).await else {
             return false;
         };
-        entry.channel.has_session(session_id).await
+        entry.channel().has_session(session_id).await
     }
 
     pub async fn stats_snapshots(
@@ -224,8 +171,8 @@ impl ChannelManager {
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Vec<RuntimeChannelStatsSnapshot> {
         let entries = {
-            let state = self.state.read().await;
-            state.channels_by_uuid.values().cloned().collect::<Vec<_>>()
+            let directory = self.directory.read().await;
+            directory.entries()
         };
         let mut snapshots = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -239,11 +186,11 @@ impl ChannelManager {
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         let channels = {
-            let state = self.state.read().await;
-            state
-                .channels_by_uuid
-                .values()
-                .map(|entry| Arc::clone(&entry.channel))
+            let directory = self.directory.read().await;
+            directory
+                .entries()
+                .into_iter()
+                .map(|entry| entry.channel())
                 .collect::<Vec<_>>()
         };
         for channel in channels {
@@ -263,13 +210,14 @@ impl ChannelManager {
         let Some(entry) = self.entry(channel_uuid).await else {
             return Err(ChannelManagerJoinError::MissingChannel);
         };
-        let _op_guard = entry.op_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+        let channel = entry.channel();
+        let lifecycle_lock = entry.lifecycle_lock();
+        let _lifecycle_guard = lifecycle_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &channel).await {
             return Err(ChannelManagerJoinError::MissingChannel);
         }
-        let session_count_before = entry.channel.session_count().await;
-        let connection_id = entry
-            .channel
+        let session_count_before = channel.session_count().await;
+        let connection_id = channel
             .join_session_runtime(
                 request.session_id,
                 request.label,
@@ -283,8 +231,8 @@ impl ChannelManager {
                 ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
                 ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
             })?;
-        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
-        Ok((Arc::clone(&entry.channel), connection_id))
+        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        Ok((channel, connection_id))
     }
 
     pub async fn leave_session(
@@ -298,19 +246,19 @@ impl ChannelManager {
         let Some(entry) = self.entry(channel_uuid).await else {
             return false;
         };
-        let _op_guard = entry.op_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+        let channel = entry.channel();
+        let lifecycle_lock = entry.lifecycle_lock();
+        let _lifecycle_guard = lifecycle_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &channel).await {
             return false;
         }
-        let session_count_before = entry.channel.session_count().await;
-        let did_remove_active_session = entry
-            .channel
+        let session_count_before = channel.session_count().await;
+        let did_remove_active_session = channel
             .leave_session_runtime(session_id, connection_id, transport_adapter, cleanup_policy)
             .await;
-        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
-        if did_remove_active_session && entry.channel.is_empty().await {
-            self.remove_entry_if_current(channel_uuid, &entry.channel)
-                .await;
+        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        if did_remove_active_session && channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, &channel).await;
         }
         did_remove_active_session
     }
@@ -326,19 +274,19 @@ impl ChannelManager {
         let Some(entry) = self.entry(channel_uuid).await else {
             return false;
         };
-        let _op_guard = entry.op_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+        let channel = entry.channel();
+        let lifecycle_lock = entry.lifecycle_lock();
+        let _lifecycle_guard = lifecycle_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &channel).await {
             return false;
         }
-        let session_count_before = entry.channel.session_count().await;
-        let did_remove_active_session = entry
-            .channel
+        let session_count_before = channel.session_count().await;
+        let did_remove_active_session = channel
             .close_session_runtime(session_id, connection_id, transport_adapter, cleanup_policy)
             .await;
-        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
-        if did_remove_active_session && entry.channel.is_empty().await {
-            self.remove_entry_if_current(channel_uuid, &entry.channel)
-                .await;
+        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        if did_remove_active_session && channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, &channel).await;
         }
         did_remove_active_session
     }
@@ -353,65 +301,55 @@ impl ChannelManager {
         let Some(entry) = self.entry(channel_uuid).await else {
             return;
         };
-        let _op_guard = entry.op_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &entry.channel).await {
+        let channel = entry.channel();
+        let lifecycle_lock = entry.lifecycle_lock();
+        let _lifecycle_guard = lifecycle_lock.lock().await;
+        if !self.is_current_entry(channel_uuid, &channel).await {
             return;
         }
-        let session_count_before = entry.channel.session_count().await;
-        entry
-            .channel
+        let session_count_before = channel.session_count().await;
+        channel
             .disconnect_sessions_runtime(session_ids, transport_adapter, cleanup_policy)
             .await;
-        self.record_active_session_delta(session_count_before, entry.channel.session_count().await);
-        if entry.channel.is_empty().await {
-            self.remove_entry_if_current(channel_uuid, &entry.channel)
-                .await;
+        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        if channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, &channel).await;
         }
     }
 
-    async fn entry(&self, channel_uuid: &str) -> Option<ChannelEntry> {
-        let state = self.state.read().await;
-        state.channels_by_uuid.get(channel_uuid).cloned()
+    async fn entry(&self, channel_uuid: &str) -> Option<ChannelDirectoryEntry> {
+        let directory = self.directory.read().await;
+        directory.entry(channel_uuid)
     }
 
     async fn entry_stats_snapshot(
         &self,
-        entry: ChannelEntry,
+        entry: ChannelDirectoryEntry,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> RuntimeChannelStatsSnapshot {
-        let sessions_stats = entry
-            .channel
-            .session_stats_snapshot(transport_adapter)
-            .await;
+        let channel = entry.channel();
+        let sessions_stats = channel.session_stats_snapshot(transport_adapter).await;
         RuntimeChannelStatsSnapshot {
-            create_date: entry.create_date,
-            uuid: entry.channel.uuid().to_owned(),
-            remote_address: entry.remote_address,
+            create_date: entry.create_date().to_owned(),
+            uuid: channel.uuid().to_owned(),
+            remote_address: entry.remote_address().to_owned(),
             sessions_stats,
-            web_rtc_enabled: entry.channel.web_rtc_enabled(),
+            web_rtc_enabled: channel.web_rtc_enabled(),
         }
     }
 
     async fn is_current_entry(&self, channel_uuid: &str, channel: &Arc<Channel>) -> bool {
-        let state = self.state.read().await;
-        state
-            .channels_by_uuid
-            .get(channel_uuid)
-            .is_some_and(|entry| Arc::ptr_eq(&entry.channel, channel))
+        let directory = self.directory.read().await;
+        directory.contains_current(channel_uuid, channel)
     }
 
     async fn remove_entry_if_current(&self, channel_uuid: &str, channel: &Arc<Channel>) {
-        let mut state = self.state.write().await;
-        let Some(entry) = state.channels_by_uuid.get(channel_uuid) else {
-            return;
-        };
-        if !Arc::ptr_eq(&entry.channel, channel) {
-            return;
+        let mut directory = self.directory.write().await;
+        let removed = directory.remove_if_current(channel_uuid, channel);
+        drop(directory);
+        if removed {
+            self.metrics.add_active_channels(-1);
         }
-        state.channels_by_uuid.remove(channel_uuid);
-        state.uuids_by_issuer.remove(channel.issuer());
-        drop(state);
-        self.metrics.add_active_channels(-1);
     }
 
     fn record_active_session_delta(&self, before: usize, after: usize) {
@@ -419,11 +357,6 @@ impl ChannelManager {
         let after = i64::try_from(after).unwrap_or(i64::MAX);
         self.metrics
             .add_active_sessions(after.saturating_sub(before));
-    }
-
-    fn media_worker_id_for_channel_runtime(&self, channel_runtime_id: u64) -> usize {
-        let media_worker_count_u64 = u64::try_from(self.media_worker_count).unwrap_or(1);
-        usize::try_from(channel_runtime_id % media_worker_count_u64).unwrap_or(0)
     }
 }
 
