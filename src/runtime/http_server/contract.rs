@@ -1,3 +1,9 @@
+//! HTTP API Contracts
+//!
+//! This module defines the paths and JSON payloads for the SFU's HTTP
+//! These endpoints are primarily used by the Odoo server to manage channels, disconnect
+//! sessions, and get metrics.
+
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: u16 = 1;
@@ -7,8 +13,11 @@ pub const STATS_PATH: &str = "/v1/stats";
 pub const CHANNEL_PATH: &str = "/v1/channel";
 pub const DISCONNECT_PATH: &str = "/v1/disconnect";
 
+/// Response payload for the `/v1/noop` health-check endpoint.
+/// used by the operators (infra team) to check if the SFU is up
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoopResponse {
+    /// Always returns "ok"
     pub result: String,
 }
 
@@ -21,10 +30,13 @@ impl NoopResponse {
     }
 }
 
+/// Query parameters for the `/v1/channel` creation endpoint.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateChannelQuery {
+    /// Whether the channel supports WebRTC features. Defaults to `true`.
     #[serde(rename = "webRTC", skip_serializing_if = "Option::is_none")]
     pub web_rtc: Option<bool>,
+    /// Optional webhook address to send recordings to when a recording session finishes.
     #[serde(rename = "recordingAddress", skip_serializing_if = "Option::is_none")]
     pub recording_address: Option<String>,
 }
@@ -36,40 +48,60 @@ impl CreateChannelQuery {
     }
 }
 
+/// Response payload for a successfully created channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelResponse {
+    /// The unique identifier allocated for the newly created channel.
     pub uuid: String,
+    /// The base URL (e.g., `https://sfu.example.com`) where clients should connect via WebSocket.
     pub url: String,
 }
 
+/// Incoming bitrate statistics broken down by media type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IncomingBitRateStats {
+    /// Total incoming bitrate across all streams (in bps).
     pub total: u64,
+    /// Incoming bitrate from screen sharing streams (in bps).
     pub screen: u64,
+    /// Incoming bitrate from audio streams (in bps).
     pub audio: u64,
+    /// Incoming bitrate from camera video streams (in bps).
     pub camera: u64,
 }
 
+/// Aggregated statistics for all active sessions within a channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionsStats {
+    /// Breakdown of incoming bitrates for the channel.
     pub incoming_bit_rate: IncomingBitRateStats,
+    /// Total number of connected sessions in this channel.
     pub count: u64,
+    /// Number of sessions currently publishing a camera stream.
     pub camera_count: u64,
+    /// Number of sessions currently publishing a screen share stream.
     pub screen_count: u64,
 }
 
+/// Statistics payload for an individual active channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelStats {
+    /// ISO 8601 formatted timestamp of when the channel was created.
     pub create_date: String,
+    /// The channel's unique identifier.
     pub uuid: String,
+    /// The remote IP address that requested the channel creation.
     pub remote_address: String,
+    /// Aggregated session statistics for the channel.
     pub sessions_stats: SessionsStats,
+    /// Whether WebRTC is enabled for this channel.
     pub web_rtc_enabled: bool,
 }
 
+/// Response payload for the `/v1/stats` endpoint, containing statistics for all active channels.
 pub type StatsResponse = Vec<ChannelStats>;
 
 #[cfg(test)]

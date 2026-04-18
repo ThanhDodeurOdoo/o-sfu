@@ -1,8 +1,5 @@
-use std::collections::BTreeMap;
-
-#[cfg(test)]
-use o_sfu_router::MediaCapabilities;
 use o_sfu_router::{MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters};
+use std::collections::BTreeMap;
 use tracing::{error, warn};
 
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -29,14 +26,6 @@ pub(in crate::runtime::channel) struct ProducerRouteTarget {
     owner_connection_id: u64,
     routed_producer_id: RoutedProducerId,
     transport_media_id: TransportMediaId,
-}
-
-// TODO: CLEANUP TESTING
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub(in crate::runtime::channel) struct PublishPrerequisites {
-    connection_id: u64,
-    router_capabilities: MediaCapabilities,
 }
 
 #[derive(Debug, Clone)]
@@ -70,22 +59,6 @@ pub(in crate::runtime::channel) struct UnpublishTrackOutcome {
 }
 
 impl ChannelState {
-    // TODO: CLEANUP TESTING
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn publish_prerequisites(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<PublishPrerequisites> {
-        let session = self.sessions.get(session_id)?;
-        if !session.negotiation.can_publish() {
-            return None;
-        }
-        Some(PublishPrerequisites {
-            connection_id: session.connection_id,
-            router_capabilities: self.topology.rtp_capabilities().clone(),
-        })
-    }
-
     pub(in crate::runtime::channel) fn validate_publish_descriptor(
         &self,
         session_id: &SessionId,
@@ -396,18 +369,6 @@ impl ChannelState {
             active,
             fanout: self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)),
         })
-    }
-}
-
-// TODO: CLEANUP TESTING
-#[cfg(test)]
-impl PublishPrerequisites {
-    pub(in crate::runtime::channel) const fn connection_id(&self) -> u64 {
-        self.connection_id
-    }
-
-    pub(in crate::runtime::channel) fn router_capabilities(&self) -> MediaCapabilities {
-        self.router_capabilities.clone()
     }
 }
 

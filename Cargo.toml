@@ -7,7 +7,7 @@ resolver = "3"
 authors = ["ThanhDodeurOdoo"]
 edition = "2024"
 rust-version = "1.92"
-version = "0.1.0"
+version = "0.2.0" # SFU basic feature is ready and can be used as a substitute for odoo/sfu
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -135,7 +135,10 @@ workspace = true
 
 [dev-dependencies]
 criterion = "0.7"
-reqwest = { version = "0.13", default-features = false, features = ["json", "query"] }
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "query",
+] }
 tower = { version = "0.5", features = ["util"] }
 
 [[bench]]

@@ -27,7 +27,11 @@ use super::super::{
 };
 use super::state::PostAuthSessionState;
 
-// TODO: needs documentation:
+/// The main orchestrator for an authenticated session.
+///
+/// It centralizes envelope dispatch, renegotiation sequencing, and staged publish
+/// transitions behind one session-scoped owner. It bridges the gap between the
+/// authenticated protocol surface and the `channel` runtime.
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) session_id: SessionId,

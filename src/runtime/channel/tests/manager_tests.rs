@@ -200,7 +200,7 @@ async fn manager_leave_session_removes_empty_channel() {
     };
 
     manager
-        .leave_session(
+        .leave_session_for_test(
             &channel_uuid,
             &SessionId::Integer(1),
             connection_id,

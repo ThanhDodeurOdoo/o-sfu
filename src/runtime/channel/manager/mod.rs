@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use tokio::sync::{RwLock, mpsc};
@@ -14,14 +15,7 @@ use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
 #[cfg(test)]
-use super::ChannelAdmissionPolicy;
-#[cfg(test)]
-use super::rtp_capabilities::router_rtp_capabilities;
-#[cfg(test)]
-use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
-
-#[cfg(test)]
-const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
+mod test_support;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelManagerConfig {
@@ -70,48 +64,6 @@ pub struct ChannelManager {
 }
 
 impl ChannelManager {
-    #[cfg(test)]
-    #[must_use]
-    pub fn for_test() -> Self {
-        Self::for_test_with_media_workers(1)
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn for_test_with_media_workers(media_worker_count: usize) -> Self {
-        Self::for_test_with_config(ChannelManagerConfig::new(
-            media_worker_count,
-            ChannelRuntimePolicy::new(
-                ChannelAdmissionPolicy::new(DEFAULT_TEST_MAX_SESSIONS),
-                RuntimeFeatureFlags::default(),
-                router_rtp_capabilities(MediaCodecFlags::default()),
-            ),
-        ))
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn for_test_with_admission_policy(admission_policy: ChannelAdmissionPolicy) -> Self {
-        Self::for_test_with_config(ChannelManagerConfig::new(
-            1,
-            ChannelRuntimePolicy::new(
-                admission_policy,
-                RuntimeFeatureFlags::default(),
-                router_rtp_capabilities(MediaCodecFlags::default()),
-            ),
-        ))
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn for_test_with_config(config: ChannelManagerConfig) -> Self {
-        Self::new(
-            config,
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        )
-    }
-
     #[must_use]
     pub fn new(
         config: ChannelManagerConfig,
@@ -206,62 +158,31 @@ impl ChannelManager {
         transport_adapter: &RuntimeTransportAdapter,
         cleanup_policy: SessionCleanupPolicy,
     ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
-        let Some(entry) = self.entry(channel_uuid).await else {
+        let Some((channel, session_count_before, join_result)) = self
+            .with_current_channel(channel_uuid, |channel| async move {
+                let session_count_before = channel.session_count().await;
+                let join_result = channel
+                    .join_session_runtime(
+                        request.session_id,
+                        request.label,
+                        request.permissions,
+                        request.sender,
+                        transport_adapter,
+                        cleanup_policy,
+                    )
+                    .await;
+                (channel, session_count_before, join_result)
+            })
+            .await
+        else {
             return Err(ChannelManagerJoinError::MissingChannel);
         };
-        let channel = entry.channel();
-        let lifecycle_lock = entry.lifecycle_lock();
-        let _lifecycle_guard = lifecycle_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &channel).await {
-            return Err(ChannelManagerJoinError::MissingChannel);
-        }
-        let session_count_before = channel.session_count().await;
-        let connection_id = channel
-            .join_session_runtime(
-                request.session_id,
-                request.label,
-                request.permissions,
-                request.sender,
-                transport_adapter,
-                cleanup_policy,
-            )
-            .await
-            .map_err(|error| match error {
-                ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
-                ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
-            })?;
+        let connection_id = join_result.map_err(|error| match error {
+            ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
+            ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
+        })?;
         self.record_active_session_delta(session_count_before, channel.session_count().await);
         Ok((channel, connection_id))
-    }
-
-    // TODO: CLEANUP TESTING
-    #[cfg(test)]
-    pub async fn leave_session(
-        &self,
-        channel_uuid: &str,
-        session_id: &SessionId,
-        connection_id: u64,
-        transport_adapter: &RuntimeTransportAdapter,
-        cleanup_policy: SessionCleanupPolicy,
-    ) -> bool {
-        let Some(entry) = self.entry(channel_uuid).await else {
-            return false;
-        };
-        let channel = entry.channel();
-        let lifecycle_lock = entry.lifecycle_lock();
-        let _lifecycle_guard = lifecycle_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &channel).await {
-            return false;
-        }
-        let session_count_before = channel.session_count().await;
-        let did_remove_active_session = channel
-            .leave_session_runtime(session_id, connection_id, transport_adapter, cleanup_policy)
-            .await;
-        self.record_active_session_delta(session_count_before, channel.session_count().await);
-        if did_remove_active_session && channel.is_empty().await {
-            self.remove_entry_if_current(channel_uuid, &channel).await;
-        }
-        did_remove_active_session
     }
 
     pub async fn close_session(
@@ -272,23 +193,30 @@ impl ChannelManager {
         transport_adapter: &RuntimeTransportAdapter,
         cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
-        let Some(entry) = self.entry(channel_uuid).await else {
+        let Some((channel, session_count_before, did_remove_active_session)) = self
+            .with_current_channel(channel_uuid, |channel| async move {
+                let session_count_before = channel.session_count().await;
+                let did_remove_active_session = channel
+                    .close_session_runtime(
+                        session_id,
+                        connection_id,
+                        transport_adapter,
+                        cleanup_policy,
+                    )
+                    .await;
+                (channel, session_count_before, did_remove_active_session)
+            })
+            .await
+        else {
             return false;
         };
-        let channel = entry.channel();
-        let lifecycle_lock = entry.lifecycle_lock();
-        let _lifecycle_guard = lifecycle_lock.lock().await;
-        if !self.is_current_entry(channel_uuid, &channel).await {
-            return false;
-        }
-        let session_count_before = channel.session_count().await;
-        let did_remove_active_session = channel
-            .close_session_runtime(session_id, connection_id, transport_adapter, cleanup_policy)
-            .await;
-        self.record_active_session_delta(session_count_before, channel.session_count().await);
-        if did_remove_active_session && channel.is_empty().await {
-            self.remove_entry_if_current(channel_uuid, &channel).await;
-        }
+        self.finish_session_mutation(
+            channel_uuid,
+            &channel,
+            session_count_before,
+            did_remove_active_session,
+        )
+        .await;
         did_remove_active_session
     }
 
@@ -299,22 +227,51 @@ impl ChannelManager {
         transport_adapter: &RuntimeTransportAdapter,
         cleanup_policy: SessionCleanupPolicy,
     ) {
-        let Some(entry) = self.entry(channel_uuid).await else {
+        let Some((channel, session_count_before)) = self
+            .with_current_channel(channel_uuid, |channel| async move {
+                let session_count_before = channel.session_count().await;
+                channel
+                    .disconnect_sessions_runtime(session_ids, transport_adapter, cleanup_policy)
+                    .await;
+                (channel, session_count_before)
+            })
+            .await
+        else {
             return;
         };
+        self.finish_session_mutation(channel_uuid, &channel, session_count_before, true)
+            .await;
+    }
+
+    pub(super) async fn with_current_channel<T, F, Fut>(
+        &self,
+        channel_uuid: &str,
+        action: F,
+    ) -> Option<T>
+    where
+        F: FnOnce(Arc<Channel>) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let entry = self.entry(channel_uuid).await?;
         let channel = entry.channel();
         let lifecycle_lock = entry.lifecycle_lock();
         let _lifecycle_guard = lifecycle_lock.lock().await;
         if !self.is_current_entry(channel_uuid, &channel).await {
-            return;
+            return None;
         }
-        let session_count_before = channel.session_count().await;
-        channel
-            .disconnect_sessions_runtime(session_ids, transport_adapter, cleanup_policy)
-            .await;
+        Some(action(channel).await)
+    }
+
+    async fn finish_session_mutation(
+        &self,
+        channel_uuid: &str,
+        channel: &Arc<Channel>,
+        session_count_before: usize,
+        remove_if_empty: bool,
+    ) {
         self.record_active_session_delta(session_count_before, channel.session_count().await);
-        if channel.is_empty().await {
-            self.remove_entry_if_current(channel_uuid, &channel).await;
+        if remove_if_empty && channel.is_empty().await {
+            self.remove_entry_if_current(channel_uuid, channel).await;
         }
     }
 
@@ -358,12 +315,5 @@ impl ChannelManager {
         let after = i64::try_from(after).unwrap_or(i64::MAX);
         self.metrics
             .add_active_sessions(after.saturating_sub(before));
-    }
-}
-
-#[cfg(test)]
-impl Default for ChannelManager {
-    fn default() -> Self {
-        Self::for_test()
     }
 }

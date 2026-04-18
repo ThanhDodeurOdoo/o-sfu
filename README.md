@@ -11,6 +11,11 @@
 > NOT PRODUCTION READY! This repo is mostly made for experimenting with ideas. The readme may not be up to date, or be incorrect.
 > Everything is up for refactor, some files are just testing prototypes.
 
+MISSING FEATURES [Odoo SFU](https://github.com/odoo/sfu):
+- Recording
+- Local sharding
+- Multi-server sharding
+
 ## Development
 
 Run the regular workspace checks from the repository root:
@@ -94,6 +99,11 @@ another advantage is the router/recording topology, we have recording nodes that
 
 also the recording feature on the official repo is still in active development so the API may change, and this repo
 will adapt accordingly.
+
+## scalability (sharding)
+
+channels will have multiple routers and the load will be sharded across them. In the long term an optional controller server will
+allow the SFUs to share shards between them.
 
 ## crypto
 

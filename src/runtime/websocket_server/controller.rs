@@ -1,3 +1,27 @@
+//! WebSocket Connection Lifecycle
+//!
+//! This module manages the lifecycle of a client's WebSocket connection and its
+//! relationship to the underlaying RTC sialing session:
+//!
+//! 1. **Creation**: A connection begins when the Axum router accepts an HTTP upgrade
+//!    request in the `upgrade` handler. It is then split into a read and write stream
+//!    as a raw, unauthenticated socket.
+//!
+//! 2. **Upgrade to RTC Session**: The raw socket is passed to `handshake::establish_session`,
+//!    where it waits for an `auth` envelope from the client. After JWT validation,
+//!    the connection is admitted into a `Channel`. At this point, the connection is upgraded
+//!    into a full RTC session: a `SessionProtocol` is created to handle WebRTC state, and
+//!    the `TransportAdapter` initializes the backend WebRTC transport resources.
+//!
+//! 3. **Steady State**: The connection enters the steady-state `session_loop::run`, continuously
+//!    polling for incoming WebSocket frames to feed the `SessionProtocol` and outbound
+//!    channel events to send back to the client.
+//!
+//! 4. **Removal**: When the session loop terminates (due to client disconnect, timeout, or
+//!    protocol error), the connection is cleaned up. The `close_session` method is invoked
+//!    on the `ChannelManager`, which removes the user from the channel and signasl
+//!    the `TransportAdapter` to tear down the associated WebRTC media resources.
+
 use std::sync::Arc;
 
 use axum::{

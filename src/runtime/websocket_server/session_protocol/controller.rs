@@ -19,6 +19,10 @@ pub(in crate::runtime::websocket_server) enum SessionProtocolOutcome {
     Close(WebSocketCloseCode),
 }
 
+/// Stateful manager for a single authenticated signaling session.
+///
+/// It acts as the facade between the raw WebSocket stream (handled by the session loop)
+/// and the business logic below.
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) struct SessionProtocol(PostAuthSessionProtocol);
 

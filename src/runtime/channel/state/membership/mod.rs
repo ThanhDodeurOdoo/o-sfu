@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_protocol::shared::{SessionId, SessionInfo};
-use o_sfu_router::{MediaCapabilities, RouterError};
+use o_sfu_router::RouterError;
 use tracing::{debug, error, warn};
 
-#[cfg(test)]
-use super::super::session_negotiation::SessionTransportReady;
 use super::super::{
     ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
     outbound::{MessageFanout, OutboundSender},
@@ -15,6 +13,9 @@ use super::super::{
 use super::layout::SessionLayout;
 use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
+
+#[cfg(test)]
+mod test_support;
 
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct LifecycleEffects {
@@ -260,19 +261,27 @@ impl ChannelState {
         if self.topology.apply_client_leave(session_id).is_err() {
             error!(
                 ?session_id,
-                "failed to mirror session leave into channel router"
+                "failed to remove departed session from channel router"
             );
             return None;
         }
-        self.sessions.remove(session_id);
         self.purge_session_media_state(session_id);
-        Some(LeaveSessionOutcome {
-            effects: LifecycleEffects {
-                close_requests: Vec::new(),
-                fanouts: vec![self.fanout_all(&ChannelEventMessage::SessionDeparted {
-                    session_id: session_id.clone(),
-                })],
+        let session = self.sessions.remove(session_id)?;
+        let mut effects = LifecycleEffects {
+            close_requests: Vec::new(),
+            fanouts: Vec::new(),
+        };
+        effects.push_fanout(Some(self.fanout_all(
+            &ChannelEventMessage::SessionDeparted {
+                session_id: session_id.clone(),
             },
+        )));
+        effects.push_close_request(Some(SessionCloseRequest {
+            sender: session.sender,
+            reason: SessionCloseReason::RemovedByRuntime,
+        }));
+        Some(LeaveSessionOutcome {
+            effects,
             transport_removals,
         })
     }
@@ -325,6 +334,19 @@ impl ChannelState {
         Some(SessionInfoUpdateOutcome {
             fanout: self.fanout_all(&ChannelEventMessage::SessionInfoChanged(snapshot)),
         })
+    }
+
+    pub(in crate::runtime::channel) fn set_session_negotiated(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+        capabilities: &o_sfu_router::MediaCapabilities,
+    ) -> SessionNegotiationUpdate {
+        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
+            return SessionNegotiationUpdate::default();
+        };
+        session.parsed_client_rtp_capabilities = Some(capabilities.clone());
+        session.negotiation.set_session_negotiated()
     }
 
     pub(in crate::runtime::channel) fn apply_disconnect_sessions(
@@ -383,51 +405,18 @@ impl ChannelState {
             Some(session_id),
         ))
     }
-
-    // TODO: CLEANUP TESTING
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn set_client_rtp_capabilities(
-        &mut self,
-        session_id: &SessionId,
-        connection_id: u64,
-        capabilities: &MediaCapabilities,
-    ) -> SessionNegotiationUpdate {
-        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
-            return SessionNegotiationUpdate::default();
-        };
-        session.parsed_client_rtp_capabilities = Some(capabilities.clone());
-        session.negotiation.set_client_rtp_capabilities()
-    }
-
-    #[cfg(test)]
-    pub(in crate::runtime::channel) fn set_transport_ready(
-        &mut self,
-        session_id: &SessionId,
-        connection_id: u64,
-        readiness: SessionTransportReady,
-    ) -> SessionNegotiationUpdate {
-        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
-            return SessionNegotiationUpdate::default();
-        };
-        session.negotiation.set_transport_ready(readiness)
-    }
-
-    pub(in crate::runtime::channel) fn set_session_negotiated(
-        &mut self,
-        session_id: &SessionId,
-        connection_id: u64,
-        capabilities: &MediaCapabilities,
-    ) -> SessionNegotiationUpdate {
-        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
-            return SessionNegotiationUpdate::default();
-        };
-        session.parsed_client_rtp_capabilities = Some(capabilities.clone());
-        session.negotiation.set_session_negotiated()
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::panic,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        reason = "state-level test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
+    )]
+
     use std::sync::Arc;
 
     use o_sfu_router::{ConsumerId, ProducerId, RouterId, RtpParameters};
@@ -444,7 +433,7 @@ mod tests {
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
-    use o_sfu_protocol::shared::{DownloadStates, SessionPermissions, StreamType};
+    use o_sfu_protocol::shared::{SessionPermissions, StreamType};
     use o_sfu_router::MediaKind;
 
     fn test_state() -> ChannelState {
@@ -468,7 +457,7 @@ mod tests {
         stream_type: StreamType,
         routed_producer_id: RoutedProducerId,
         transport_media_id: Option<TransportMediaId>,
-    ) {
+    ) -> ProducerRuntimeId {
         let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
         state.producer_ids_by_owner_stream.insert(
             super::super::shared::ProducerKey::new(session_id, stream_type),
@@ -488,267 +477,168 @@ mod tests {
                 active: true,
             },
         );
-        if let Some(transport_media_id) = transport_media_id {
-            state
-                .producer_stream_types_by_transport_media_id
-                .insert(transport_media_id, stream_type);
-        }
+        producer_id
     }
 
     #[test]
-    fn replacement_join_keeps_existing_channel_state_when_router_reset_fails() {
+    fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
         let mut state = test_state();
-        let session_id = SessionId::Integer(1);
-        let (first_sender, _first_rx) = mpsc::unbounded_channel();
-        let (replacement_sender, _replacement_rx) = mpsc::unbounded_channel();
-        let initial_permissions = SessionPermissions {
-            video_recording: Some(true),
-            ..SessionPermissions::default()
-        };
-
-        let first_join =
-            state.apply_join(&session_id, None, initial_permissions, first_sender, false);
-        assert!(first_join.is_ok());
-        let original_connection_id = state.session_connection_id(&session_id);
-
-        let valid_routed_producer_id_result = state.topology.add_producer(
-            &session_id,
-            MediaKind::Video,
-            o_sfu_router::StreamType::Camera,
-        );
-        assert!(
-            valid_routed_producer_id_result.is_ok(),
-            "valid producer route should be created: {valid_routed_producer_id_result:?}"
-        );
-        let Ok(valid_routed_producer_id) = valid_routed_producer_id_result else {
-            return;
-        };
-        install_test_published_producer(
-            &mut state,
-            &session_id,
-            original_connection_id.unwrap_or(u64::MAX),
-            StreamType::Camera,
-            valid_routed_producer_id,
-            Some(TransportMediaId::new(1)),
-        );
-        install_test_published_producer(
-            &mut state,
-            &session_id,
-            original_connection_id.unwrap_or(u64::MAX),
-            StreamType::Screen,
-            RoutedProducerId::new(RouterId(1), ProducerId(999)),
-            None,
-        );
-
-        let replacement = state.apply_join(
-            &session_id,
-            Some(String::from("replacement")),
-            SessionPermissions {
-                transcription: Some(true),
-                ..SessionPermissions::default()
-            },
-            replacement_sender,
-            false,
-        );
-        assert!(matches!(replacement, Err(ChannelJoinError::RouterState)));
-        assert_eq!(
-            state.session_connection_id(&session_id),
-            original_connection_id
-        );
-        assert_eq!(
-            state.session_permissions(&session_id),
-            Some(o_sfu_router::SessionPermissions::from_flags(
-                o_sfu_router::SessionPermissionFlags {
-                    transcription: false,
-                    audio_recording: false,
-                    video_recording: true,
-                },
-            ))
-        );
-        assert_eq!(state.producer_count(), 2);
-        assert!(
-            state
-                .producer_route_target_for_session(&session_id, StreamType::Camera)
-                .is_some(),
-            "the valid staged producer should remain installed when replacement fails"
-        );
-        assert!(
-            state
-                .producer_route_target_for_session(&session_id, StreamType::Screen)
-                .is_none(),
-            "the invalid staged producer should stay untouched when replacement fails"
-        );
-        assert!(state.has_session(&session_id));
-        assert_eq!(state.topology.session_count(), 1);
-    }
-
-    #[test]
-    fn bulk_disconnect_ignores_missing_sessions_when_collecting_transport_removals() {
-        let mut state = test_state();
-        let producer_session_id = SessionId::Integer(1);
-        let consumer_session_id = SessionId::Integer(2);
-        let missing_session_id = SessionId::Integer(999);
-        let (producer_sender, _producer_rx) = mpsc::unbounded_channel();
-        let (consumer_sender, _consumer_rx) = mpsc::unbounded_channel();
-
+        let (sender_a, _receiver_a) = mpsc::unbounded_channel();
+        let (sender_b, _receiver_b) = mpsc::unbounded_channel();
         assert!(
             state
                 .apply_join(
-                    &producer_session_id,
+                    &SessionId::Integer(1),
+                    None,
+                    SessionPermissions::default(),
+                    sender_a,
+                    false,
+                )
+                .is_ok()
+        );
+        assert!(
+            state
+                .apply_join(
+                    &SessionId::Integer(2),
+                    None,
+                    SessionPermissions::default(),
+                    sender_b,
+                    false,
+                )
+                .is_ok()
+        );
+
+        let outcome =
+            state.apply_disconnect_sessions(&[SessionId::Integer(1), SessionId::Integer(2)]);
+
+        assert_eq!(state.sessions.len(), 0);
+        assert_eq!(outcome.effects.close_requests.len(), 2);
+        assert_eq!(outcome.effects.fanouts.len(), 2);
+    }
+
+    #[test]
+    fn leave_removes_consumer_routes_for_departed_session() {
+        let mut state = test_state();
+        let (producer_sender, _producer_receiver) = mpsc::unbounded_channel();
+        let (consumer_sender, _consumer_receiver) = mpsc::unbounded_channel();
+        assert!(
+            state
+                .apply_join(
+                    &SessionId::Integer(1),
                     None,
                     SessionPermissions::default(),
                     producer_sender,
+                    false,
+                )
+                .is_ok()
+        );
+        assert!(
+            state
+                .apply_join(
+                    &SessionId::Integer(2),
+                    None,
+                    SessionPermissions::default(),
+                    consumer_sender,
                     false,
                 )
                 .is_ok()
         );
         let producer_connection_id = state
-            .session_connection_id(&producer_session_id)
-            .unwrap_or(u64::MAX);
-        assert!(
-            state
-                .apply_join(
-                    &consumer_session_id,
-                    None,
-                    SessionPermissions::default(),
-                    consumer_sender,
-                    false,
-                )
-                .is_ok()
-        );
+            .session_connection_id(&SessionId::Integer(1))
+            .expect("producer session should exist");
         let consumer_connection_id = state
-            .session_connection_id(&consumer_session_id)
-            .unwrap_or(u64::MAX);
-
-        let producer_media = TransportMediaId::new(1);
-        let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
-        state.producer_ids_by_owner_stream.insert(
-            super::super::shared::ProducerKey::new(&producer_session_id, StreamType::Camera),
-            producer_id,
+            .session_connection_id(&SessionId::Integer(2))
+            .expect("consumer session should exist");
+        let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(10));
+        let producer_id = install_test_published_producer(
+            &mut state,
+            &SessionId::Integer(1),
+            producer_connection_id,
+            StreamType::Camera,
+            routed_producer_id,
+            Some(TransportMediaId::new(11)),
         );
-        state.producers.insert(
-            producer_id,
-            super::super::shared::PublishedProducer {
-                owner_session_id: producer_session_id.clone(),
-                owner_connection_id: producer_connection_id,
-                stream_type: StreamType::Camera,
-                media_kind: MediaKind::Video,
-                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
-                routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(55)),
-                transport_media_id: Some(producer_media),
-                source_packet_selection: None,
-                active: true,
-            },
-        );
-
-        let consumer_media = TransportMediaId::default();
         state.consumer_index.insert(
             ConsumerKey {
-                consumer_session_id: consumer_session_id.clone(),
-                producer_session_id: producer_session_id.clone(),
+                consumer_session_id: SessionId::Integer(2),
+                producer_session_id: SessionId::Integer(1),
                 stream_type: StreamType::Camera,
             },
             ConsumerState {
-                routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(55)),
+                routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
                 consumer_connection_id,
                 source_connection_id: producer_connection_id,
-                source_media: TransportMediaId::default(),
-                consumer_media,
+                source_media: TransportMediaId::new(11),
+                consumer_media: TransportMediaId::new(21),
             },
         );
 
-        let outcome =
-            state.apply_disconnect_sessions(&[producer_session_id.clone(), missing_session_id]);
+        let outcome = state.apply_leave(&SessionId::Integer(2), consumer_connection_id);
 
-        assert_eq!(
-            outcome.transport_removals,
-            vec![
-                TransportMediaRemoval {
-                    session: SessionId::Integer(1),
-                    connection: producer_connection_id,
-                    transport_media: producer_media,
-                },
-                TransportMediaRemoval {
-                    session: consumer_session_id,
-                    connection: consumer_connection_id,
-                    transport_media: consumer_media,
-                },
-            ]
-        );
-        assert!(!state.has_session(&producer_session_id));
-        assert!(!state.consumer_index.contains_key(&ConsumerKey {
-            consumer_session_id: SessionId::Integer(2),
-            producer_session_id,
-            stream_type: StreamType::Camera,
-        }));
+        assert!(outcome.is_some());
+        assert_eq!(state.consumer_index.len(), 0);
+        assert_eq!(state.producers.len(), 1);
+        assert!(state.producers.contains_key(&producer_id));
     }
 
     #[test]
-    fn replacement_join_preserves_desired_download_states() {
+    fn stale_connection_cannot_broadcast() {
         let mut state = test_state();
-        let producer_session_id = SessionId::Integer(1);
-        let consumer_session_id = SessionId::Integer(2);
-        let (producer_sender, _producer_rx) = mpsc::unbounded_channel();
-        let (consumer_sender, _consumer_rx) = mpsc::unbounded_channel();
-        let (replacement_sender, _replacement_rx) = mpsc::unbounded_channel();
-
+        let (sender, _receiver) = mpsc::unbounded_channel();
         assert!(
             state
                 .apply_join(
-                    &producer_session_id,
+                    &SessionId::Integer(1),
                     None,
                     SessionPermissions::default(),
-                    producer_sender,
+                    sender,
                     false,
                 )
                 .is_ok()
         );
+
+        let fanout = state.broadcast_fanout(
+            &SessionId::Integer(1),
+            999,
+            serde_json::Value::String(String::from("hello")),
+        );
+
+        assert!(fanout.is_none());
+    }
+
+    #[test]
+    fn presence_update_returns_none_for_stale_connection() {
+        let mut state = test_state();
+        let (sender, _receiver) = mpsc::unbounded_channel();
         assert!(
             state
                 .apply_join(
-                    &consumer_session_id,
+                    &SessionId::Integer(1),
                     None,
                     SessionPermissions::default(),
-                    consumer_sender,
+                    sender,
                     false,
                 )
                 .is_ok()
         );
 
-        state.apply_download_state_update(
-            &consumer_session_id,
-            state
-                .session_connection_id(&consumer_session_id)
-                .unwrap_or(u64::MAX),
-            &producer_session_id,
-            &DownloadStates {
-                audio: Some(false),
-                ..DownloadStates::default()
-            },
+        let outcome = state.apply_presence_update(
+            &SessionId::Integer(1),
+            999,
+            &SessionInfo::default(),
+            false,
         );
 
-        assert!(
-            state
-                .apply_join(
-                    &consumer_session_id,
-                    Some(String::from("replacement")),
-                    SessionPermissions::default(),
-                    replacement_sender,
-                    false,
-                )
-                .is_ok()
-        );
+        assert!(outcome.is_none());
+    }
 
-        let desired_download_states = state
-            .sessions
-            .get(&consumer_session_id)
-            .and_then(|session| session.desired_download_states.get(&producer_session_id));
-        assert_eq!(
-            desired_download_states,
-            Some(&DownloadStates {
-                audio: Some(false),
-                ..DownloadStates::default()
-            }),
-        );
+    #[test]
+    fn disconnect_sessions_ignores_missing_members() {
+        let mut state = test_state();
+        let outcome = state.apply_disconnect_sessions(&[SessionId::Integer(1)]);
+
+        assert!(outcome.transport_removals.is_empty());
+        assert!(outcome.effects.close_requests.is_empty());
+        assert!(outcome.effects.fanouts.is_empty());
     }
 }

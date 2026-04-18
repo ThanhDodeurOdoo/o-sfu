@@ -10,10 +10,10 @@ use tracing::warn;
 
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 
+use super::super::session_negotiation::SessionTransportReady;
 use super::super::{
     Channel, ChannelJoinError, ChannelManager, SessionCleanupPolicy, SessionOutbound,
-    media_transaction::StagedPublishTransaction,
-    session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
+    media_transaction::StagedPublishTransaction, session_negotiation::SessionNegotiationUpdate,
     state::ConsumerBootstrapOrigin,
 };
 
@@ -157,7 +157,7 @@ impl Channel {
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_client_rtp_capabilities(session_id, connection_id, &capabilities)
+            state.set_client_rtp_capabilities_for_test(session_id, connection_id, &capabilities)
         };
         self.apply_negotiation_update_for_test(session_id, connection_id, update, transport_adapter)
             .await
@@ -202,7 +202,7 @@ impl Channel {
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
-            state.set_transport_ready(session_id, connection_id, readiness)
+            state.set_transport_ready_for_test(session_id, connection_id, readiness)
         };
         self.apply_negotiation_update_for_test(session_id, connection_id, update, transport_adapter)
             .await
@@ -237,7 +237,7 @@ impl Channel {
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_client_rtp_capabilities(session_id, connection_id, &capabilities)
+        state.set_client_rtp_capabilities_for_test(session_id, connection_id, &capabilities)
     }
 
     pub(super) async fn set_publish_transport_ready(
@@ -246,7 +246,11 @@ impl Channel {
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_transport_ready(session_id, connection_id, SessionTransportReady::Publish)
+        state.set_transport_ready_for_test(
+            session_id,
+            connection_id,
+            SessionTransportReady::Publish,
+        )
     }
 
     pub(super) async fn set_consume_transport_ready(
@@ -255,7 +259,11 @@ impl Channel {
     ) -> SessionNegotiationUpdate {
         let mut state = self.state.write().await;
         let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
-        state.set_transport_ready(session_id, connection_id, SessionTransportReady::Consume)
+        state.set_transport_ready_for_test(
+            session_id,
+            connection_id,
+            SessionTransportReady::Consume,
+        )
     }
 
     pub(super) async fn router_session_count(&self) -> usize {
@@ -407,7 +415,7 @@ impl Channel {
     ) -> Option<String> {
         let publish_prerequisites = {
             let state = self.state.read().await;
-            state.publish_prerequisites(session_id)?
+            state.publish_prerequisites_for_test(session_id)?
         };
         let publisher_connection_id = publish_prerequisites.connection_id();
         let router_capabilities = publish_prerequisites.router_capabilities();

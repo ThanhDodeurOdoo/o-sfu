@@ -1,3 +1,26 @@
+//! WebSocket Handshake and Session Establishment
+//!
+//! This module handles the transition from a raw, newly-upgraded WebSocket
+//! into an authenticated and fully established RTC session.
+//! (very similar flow that the odoo/sfu way)
+//!
+//! 1. **Receive Authentication**: Waits for the very first frame from the client, which
+//!    must be a valid `auth` message.
+//!
+//! 2. **Authentication**: Validates the JWT against either
+//!    the global key or a channel-specific key (like the old SFU),
+//!    to validate the  client's identity and permissions for the target channel.
+//!    (the JWT is signed by the Odoo server that owns the channel)
+//!
+//! 3. **Channel Admission**: Requests the `ChannelManager` to admit the client into
+//!    the `Channel`. This allocates a unique connection ID and sets up the
+//!    outbound message routing queues.
+//!
+//! 4. **Session Initialization**: the server send a complete state snapshot
+//!    (the `Welcome` message) back to the client, including the current peers and
+//!    channel features. It also initializes the `SessionProtocol`, wich coordinates
+//!    with the `TransportAdapter` to prepare the backend WebRTC transport.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,7 +80,7 @@ pub(super) async fn establish_session(
     let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
     let (channel, claims) = authenticate_session(state, writer, &auth_payload).await?;
     let (session_id, outbound_rx, channel, connection_id) =
-        join_authenticated_session(state, writer, channel, claims).await?;
+        join_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
     record_session_span(&channel, &session_id);
     let mut session_protocol = SessionProtocol::new(
@@ -267,7 +290,7 @@ async fn authenticate_session(
     }
 }
 
-async fn join_authenticated_session(
+async fn join_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
     channel: Arc<Channel>,
