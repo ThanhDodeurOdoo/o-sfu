@@ -12,7 +12,7 @@ use sha2::Sha256;
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 
-use crate::utils::secs_since_epoch;
+use crate::time::secs_since_epoch;
 
 pub use o_sfu_rfc::jwt::{JwtAudience, RegisteredJwtClaims};
 

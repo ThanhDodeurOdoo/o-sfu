@@ -11,11 +11,6 @@
 
 use std::fmt;
 
-/// WebRTC RTP profile name.
-///
-/// Reference: RFC 8834 section 4.2.
-pub const RTP_PROFILE_SAVPF: &str = "RTP/SAVPF";
-
 /// ICE portocol registries used by WebRTC signaling.
 pub mod ice {
     /// ICE component IDs for RTP and RTCP.

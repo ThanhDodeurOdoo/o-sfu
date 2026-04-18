@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::utils::rfc3339_now;
+use crate::time::rfc3339_now;
 
 use super::Channel;
 

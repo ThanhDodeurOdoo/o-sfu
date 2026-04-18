@@ -16,6 +16,8 @@ use super::{
     dtls, sdp,
     state::{ParsedRemoteIceCredentials, RtcSessionState},
 };
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use crate::rfc::webrtc;
 use crate::runtime::transport_adapter::TransportAdapterError;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::{SessionTransportBootstrap, TransportIceCandidate};
@@ -202,12 +204,14 @@ fn validate_ice_candidates(
 #[cfg(any(test, feature = "internal-benchmarks"))]
 fn candidate_to_sdp_line(candidate: &TransportIceCandidate) -> String {
     format!(
-        "candidate:{} {CANDIDATE_COMPONENT_ID_RTP} {} {} {} {} typ {}",
+        "{}{} {CANDIDATE_COMPONENT_ID_RTP} {} {} {} {} {} {}",
+        webrtc::ice::candidate_attribute::PREFIX,
         candidate.foundation,
         candidate.protocol.as_str(),
         candidate.priority,
         candidate.ip,
         candidate.port,
+        webrtc::ice::candidate_attribute::TYPE_LABEL,
         candidate.candidate_type.as_str(),
     )
 }
