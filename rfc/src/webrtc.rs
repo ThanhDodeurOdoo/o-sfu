@@ -38,6 +38,14 @@ pub mod ice {
         pub const RELAYED: &str = "relay";
     }
 
+    /// ICE candidate attribute grammar tokens used by SDP candidate lines.
+    ///
+    /// Reference: RFC 5245 section 15.1.
+    pub mod candidate_attribute {
+        pub const PREFIX: &str = "candidate:";
+        pub const TYPE_LABEL: &str = "typ";
+    }
+
     /// Recommended ICE type-preference values.
     ///
     /// Reference: RFC 8445 section 5.1.2.2.
@@ -154,6 +162,7 @@ impl fmt::Display for IceCandidateType {
 pub mod media_kind {
     pub const AUDIO: &str = "audio";
     pub const VIDEO: &str = "video";
+    pub const APPLICATION: &str = "application";
 }
 
 /// RTCP feedback type and parameter tokens used by current WebRTC capability paylods.
@@ -212,6 +221,38 @@ pub mod sdp {
         ///
         /// References: RFC 4145, RFC 5763.
         pub const SETUP: &str = "setup";
+    }
+
+    pub mod transport_protocol {
+        /// `m=<media> <port> UDP/TLS/RTP/SAVPF ...`
+        ///
+        /// Reference: RFC 8829 section 5.8.
+        pub const UDP_TLS_RTP_SAVPF: &str = "UDP/TLS/RTP/SAVPF";
+
+        /// `m=<media> <port> UDP/TLS/RTP/SAVP ...`
+        ///
+        /// Reference: RFC 8829 section 5.8.
+        pub const UDP_TLS_RTP_SAVP: &str = "UDP/TLS/RTP/SAVP";
+
+        /// `m=<media> <port> RTP/SAVPF ...`
+        ///
+        /// Reference: RFC 8829 section 5.8.
+        pub const RTP_SAVPF: &str = "RTP/SAVPF";
+
+        /// `m=<media> <port> RTP/SAVP ...`
+        ///
+        /// Reference: RFC 8829 section 5.8.
+        pub const RTP_SAVP: &str = "RTP/SAVP";
+
+        /// `m=<media> <port> UDP/DTLS/SCTP ...`
+        ///
+        /// Reference: RFC 8841.
+        pub const UDP_DTLS_SCTP: &str = "UDP/DTLS/SCTP";
+
+        /// `m=<media> <port> TCP/DTLS/SCTP ...`
+        ///
+        /// Reference: RFC 8841.
+        pub const TCP_DTLS_SCTP: &str = "TCP/DTLS/SCTP";
     }
 
     pub mod setup_role {

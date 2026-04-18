@@ -1,17 +1,18 @@
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
-use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT};
+use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
+
+use crate::utils::secs_since_epoch;
 
 pub use o_sfu_rfc::jwt::{JwtAudience, RegisteredJwtClaims};
 
@@ -144,9 +145,7 @@ where
 }
 
 fn validate_registered_claims(claims: &RegisteredJwtClaims) -> Result<(), AuthenticationError> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
+    let now = secs_since_epoch();
     if claims.exp.is_some_and(|exp| exp <= now) {
         return Err(AuthenticationError::TokenExpired);
     }
@@ -215,19 +214,18 @@ fn pad_base64(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde::Serialize;
     use serde_json::json;
 
     use super::{
         AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, JwtAudience,
-        RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, sign, sign_hs256, verify,
+        RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, secs_since_epoch, sign,
+        sign_hs256, verify,
     };
     use o_sfu_protocol::shared::{SessionId, SessionPermissions};
-    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT};
+    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 
     const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 
@@ -375,9 +373,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_expired_token() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs());
+        let now = secs_since_epoch();
         let claims = HttpChannelClaims {
             registered: RegisteredJwtClaims {
                 exp: Some(now.saturating_sub(1)),
@@ -400,9 +396,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_token_when_exp_matches_current_second() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs());
+        let now = secs_since_epoch();
         let claims = HttpChannelClaims {
             registered: RegisteredJwtClaims {
                 exp: Some(now),

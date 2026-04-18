@@ -1,21 +1,17 @@
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
+use crate::rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
 const MEDIA_DESCRIPTION_PREFIX: &str = "m=";
-const SUPPORTED_TRANSPORT_PROTOCOL: &str = "UDP/TLS/RTP/SAVPF";
 const VALID_BUT_UNSUPPORTED_TRANSPORT_PROTOCOLS: [&str; 5] = [
-    "UDP/TLS/RTP/SAVP",
-    "RTP/SAVPF",
-    "RTP/SAVP",
-    "UDP/DTLS/SCTP",
-    "TCP/DTLS/SCTP",
+    webrtc::sdp::transport_protocol::UDP_TLS_RTP_SAVP,
+    webrtc::sdp::transport_protocol::RTP_SAVPF,
+    webrtc::sdp::transport_protocol::RTP_SAVP,
+    webrtc::sdp::transport_protocol::UDP_DTLS_SCTP,
+    webrtc::sdp::transport_protocol::TCP_DTLS_SCTP,
 ];
 const EXPECTED_MEDIA_LINE_FORMAT: &str = "<media> <port> <proto> <fmt>...";
-
-const MEDIA_KIND_AUDIO: &str = "audio";
-const MEDIA_KIND_VIDEO: &str = "video";
-const MEDIA_KIND_APPLICATION: &str = "application";
 
 const SDP_REPLAY_CONTEXT_HINT: &str = "raw SDP offer payload";
 
@@ -290,9 +286,9 @@ fn parse_media_kind(
     rfc_reference: RfcReference,
 ) -> SdpParseResult<ParsedMediaKind> {
     let media_kind = match token {
-        MEDIA_KIND_AUDIO => ParsedMediaKind::Audio,
-        MEDIA_KIND_VIDEO => ParsedMediaKind::Video,
-        MEDIA_KIND_APPLICATION => ParsedMediaKind::Application,
+        webrtc::media_kind::AUDIO => ParsedMediaKind::Audio,
+        webrtc::media_kind::VIDEO => ParsedMediaKind::Video,
+        webrtc::media_kind::APPLICATION => ParsedMediaKind::Application,
         _ => {
             let diagnostic = unsupported_feature(
                 "SDP media kind is valid but not supported yet",
@@ -332,7 +328,9 @@ fn parse_transport_protocol(
     line: &str,
 ) -> SdpParseResult<ParsedTransportProtocol> {
     let protocol = match token {
-        SUPPORTED_TRANSPORT_PROTOCOL => ParsedTransportProtocol::UdpTlsRtpSavpf,
+        webrtc::sdp::transport_protocol::UDP_TLS_RTP_SAVPF => {
+            ParsedTransportProtocol::UdpTlsRtpSavpf
+        }
         known_transport if VALID_BUT_UNSUPPORTED_TRANSPORT_PROTOCOLS.contains(&known_transport) => {
             let diagnostic = unsupported_feature(
                 "SDP transport protocol is valid but not supported yet",
@@ -348,7 +346,7 @@ fn parse_transport_protocol(
         _ => {
             let diagnostic = invalid_input(
                 "SDP media description has an invalid transport protocol token",
-                String::from(SUPPORTED_TRANSPORT_PROTOCOL),
+                String::from(webrtc::sdp::transport_protocol::UDP_TLS_RTP_SAVPF),
                 token.to_owned(),
                 Some(line_number),
                 Some(line),

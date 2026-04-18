@@ -5,9 +5,6 @@ use crate::rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
-const CANDIDATE_PREFIX: &str = "candidate:";
-const CANDIDATE_TYPE_TOKEN: &str = "typ";
-
 const ICE_REPLAY_CONTEXT_HINT: &str = "raw ICE candidate line";
 
 const RFC_8445_SECTION_5_1_1: RfcReference = RfcReference::new(
@@ -75,7 +72,7 @@ pub(super) fn parse_ice_candidate(raw_candidate: &str) -> IceParseResult<ParsedI
     trace!(candidate = %raw_candidate, "parsing incoming ICE candidate");
     let normalized = raw_candidate.trim();
     let normalized = normalized
-        .strip_prefix(CANDIDATE_PREFIX)
+        .strip_prefix(webrtc::ice::candidate_attribute::PREFIX)
         .unwrap_or(normalized);
     let tokens = normalized.split_whitespace().collect::<Vec<_>>();
     if tokens.len() < 8 {
@@ -322,12 +319,12 @@ fn parse_port(token: &str, raw_candidate: &str) -> IceParseResult<u16> {
 }
 
 fn ensure_type_label(token: &str, raw_candidate: &str) -> IceParseResult<()> {
-    if token == CANDIDATE_TYPE_TOKEN {
+    if token == webrtc::ice::candidate_attribute::TYPE_LABEL {
         return Ok(());
     }
     let diagnostic = invalid_input(
         "ICE candidate is missing `typ` token before candidate type",
-        String::from("typ"),
+        String::from(webrtc::ice::candidate_attribute::TYPE_LABEL),
         token.to_owned(),
         RFC_5245_SECTION_15_1,
         raw_candidate,

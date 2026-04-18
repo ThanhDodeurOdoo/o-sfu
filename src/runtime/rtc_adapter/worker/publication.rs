@@ -14,8 +14,9 @@ use str0m::{
 use tokio::sync::oneshot;
 use tracing::warn;
 
-use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
+use crate::{
+    rfc::rtp as rfc_rtp,
+    runtime::transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
 };
 
 use super::super::{
@@ -86,11 +87,11 @@ pub(super) fn refresh_negotiated_producer_parameters(
                     formats.push(
                         RouterMediaFormat::new(
                             media_kind,
-                            "rtx",
+                            rfc_rtp::codec_name::RTX,
                             *resend_payload_type,
                             params.spec().clock_rate.get(),
                         )
-                        .with_parameter("apt", params.pt().to_string()),
+                        .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, params.pt().to_string()),
                     );
                 }
             }
