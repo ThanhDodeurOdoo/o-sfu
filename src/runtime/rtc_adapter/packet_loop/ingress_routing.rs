@@ -68,7 +68,19 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
     }
 }
 
-// TODO: needs documentation:
+/// Routes an incoming UDP datagram to its owning RTC session.
+///
+/// This function implements a tiered routing strategy to minimize CPU usage on the
+/// hot-path:
+///
+/// 1. **Index Match**: Checks if the source address is already pinned to a session
+///    in the `remote_addr_demux` cache.
+/// 2. **Negative Cache Check**: Drops the packet if a recent scan already proved
+///    that no session accepts packets from this source.
+/// 3. **Recovery Scan**: If the source is unknown, it probes the packet (e.g., for
+///    ICE username fragments or STUN attributes) to identify the target session.
+/// 4. **Pinning**: Once a session is matched, the source address is pinned to that
+///    session to enable O(1) routing for subsequent packets.
 pub(super) fn route_packet_to_matching_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

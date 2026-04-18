@@ -1,4 +1,17 @@
-//! Runtime transport adapter facade for the `rtc` WebRTC backend.
+//! Facades for the RTC transport adapter.
+//!
+//! ### Key Structures
+//!
+//! * [`RtcTransportAdapter`]: The central handle for an RTC worker shard. It own
+//!   the relay registry and the handle to the background worker loop.
+//! * [`RtcTransportNegotiationFacade`]: Handles SDP-related operations like creating
+//!   offers and applying answers.
+//! * [`RtcTransportMediaFacade`]: Handles media-level operations like adding/removing
+//!   send/recv tracks and controlling producer/consumer activity
+//! * [`RtcTransportSessionFacade`]: Handles session-level lifeccyle like closing
+//!   sessions and draining workers.
+//! * [`RtcTransportObservabilityFacade`]: Provide read-only access to transport
+//!   health, bitrates, and active speaker information.
 
 use std::{
     fmt,

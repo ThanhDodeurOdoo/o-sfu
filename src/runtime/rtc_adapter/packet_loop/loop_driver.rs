@@ -57,7 +57,20 @@ enum NextLoopInput {
     },
 }
 
-// TODO: needs documentation:
+/// The main entry point for the media packet processing loop.
+///
+/// This function runs indefinitely (until the `shutdown_token` is cancelled),
+/// orchestrating the high-frequency tasks of the RTC adapter:
+///
+/// 1. **Command Processing**: Drains control commands that modify the topology or state.
+/// 2. **Media Pumping**: Drains media from all active sessions and relay channels.
+/// 3. **Packet Transmission**: Flushes all pending transmissions (media, keyframe requests)
+///    to the underlying UDP socket.
+/// 4. **Socket Reception**: Waits for incoming UDP datagrams and routes them to the
+///    appropriate session.
+///
+/// This loop is "biased" towards control commands and shutdown to ensure the
+/// SFU remains responsive to management even under heavy media load.
 pub(crate) async fn run_packet_loop(
     config: PacketLoopConfig,
     bitrate_state: Arc<Mutex<RtcBitrateState>>,

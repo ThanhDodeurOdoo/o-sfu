@@ -1,3 +1,25 @@
+//! Lifecycle and communication runtime for the RTC transport adapter.
+//!
+//! This module implements the internal machinery for managing the life of a
+//! background packet loop worker and dispatching commands to it.
+//!
+//! ### Worker Bootstrapping
+//!
+//! Workers are started lazily via [`RtcTransportAdapter::ensure_packet_loop_started`].
+//! The first call to any facade method that requires worker interaction will
+//! trigger the spawning of the background tokio task that runs the packet loop.
+//!
+//! ### Command Dispatching
+//!
+//! Communication with the worker follows a request/response pattern:
+//! 1. The facade method constructs a command (e.g., `RtcWorkerCommand::CreateInitialSessionOffer`).
+//! 2. It creates a `oneshot` channel for the response.
+//! 3. It sends the command + the response sender to the worker via an `mpsc` channel.
+//! 4. It waits for the response on the `oneshot` receiver.
+//!
+//! This pattern allows the facade methods to be `async` and return values from
+//! the worker while keeping the worker itself synchronous and focused on the
+//! media hot-path.
 use std::{
     sync::{Arc, Mutex, atomic::Ordering},
     time::Instant,
