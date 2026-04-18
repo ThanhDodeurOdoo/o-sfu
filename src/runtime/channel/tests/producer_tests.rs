@@ -1862,6 +1862,127 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
     }
 }
 
+#[tokio::test]
+async fn staged_negotiated_publish_rollback_cleans_transport_media_without_committing_state() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        channel
+            .stage_negotiated_publish_for_test(
+                &session_id,
+                connection_id,
+                StreamType::Camera,
+                &adapter,
+            )
+            .await
+    );
+    assert_eq!(
+        channel
+            .staged_publish_count(&session_id, connection_id)
+            .await,
+        1
+    );
+
+    assert!(
+        channel
+            .rollback_staged_publish_for_test(
+                &session_id,
+                connection_id,
+                StreamType::Camera,
+                &adapter,
+            )
+            .await
+    );
+
+    assert_eq!(
+        channel
+            .staged_publish_count(&session_id, connection_id)
+            .await,
+        0
+    );
+    assert_eq!(channel.producer_count().await, 0);
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+
+    let events = fake.snapshot_events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            FakeWebRtcEvent::PublishMediaRequested { session_id: owner, .. }
+                if *owner == session_id
+        )),
+        "staging should declare producer media on the transport"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            FakeWebRtcEvent::MediaRemoved { session_id: owner, .. }
+                if *owner == session_id
+        )),
+        "rolling back a staged publish should remove the staged transport media"
+    );
+}
+
+#[tokio::test]
+async fn staged_negotiated_publish_commit_moves_through_channel_owned_transaction() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        channel
+            .stage_negotiated_publish_for_test(
+                &session_id,
+                connection_id,
+                StreamType::Camera,
+                &adapter,
+            )
+            .await
+    );
+    assert_eq!(
+        channel
+            .staged_publish_count(&session_id, connection_id)
+            .await,
+        1
+    );
+
+    channel
+        .commit_staged_publishes_for_test(&session_id, connection_id, &adapter)
+        .await;
+
+    assert_eq!(
+        channel
+            .staged_publish_count(&session_id, connection_id)
+            .await,
+        0
+    );
+    assert!(
+        channel
+            .is_stream_published(&session_id, StreamType::Camera)
+            .await
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert_bootstrap_for_stream(&drain_outbound(&mut subscriber_rx), StreamType::Camera);
+    assert!(
+        !fake.snapshot_events().iter().any(|event| matches!(
+            event,
+            FakeWebRtcEvent::MediaRemoved { session_id: owner, .. }
+                if *owner == session_id
+        )),
+        "successful commit should not compensate the staged producer media"
+    );
+}
+
 fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),

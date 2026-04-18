@@ -8,7 +8,7 @@ use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
     Channel,
-    media_transaction::{PublishTransaction, UnpublishTransaction},
+    media_transaction::{StagedPublishTransaction, UnpublishTransaction},
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget},
 };
 
@@ -28,18 +28,18 @@ impl Channel {
         publish: NegotiatedPublish,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
-        let pending_publish = {
+        let validated_descriptor = {
             let state = self.state.read().await;
-            state.prepare_published_track(
+            state.validate_publish_descriptor(
                 session_id,
                 publish.connection_id,
                 publish.stream_type,
                 publish.media_kind,
-                publish.consumable_rtp_parameters,
             )?
         };
-        PublishTransaction::new(session_id.clone(), publish.connection_id, pending_publish)
-            .commit(self, publish.transport_media_id, transport_adapter)
+        StagedPublishTransaction::new(validated_descriptor, publish.transport_media_id)
+            .into_commit_snapshot(publish.consumable_rtp_parameters)
+            .commit(self, transport_adapter)
             .await
     }
 
@@ -121,14 +121,13 @@ impl Channel {
                 })
                 .ok()?;
 
-        let pending_publish = {
+        let validated_descriptor = {
             let state = self.state.read().await;
-            state.prepare_published_track(
+            state.validate_publish_descriptor(
                 session_id,
                 publisher_connection_id,
                 stream_type,
                 media_kind,
-                consumable_rtp_parameters,
             )?
         };
         let transport_media_id = match transport_adapter
@@ -151,8 +150,9 @@ impl Channel {
             }
         };
 
-        PublishTransaction::new(session_id.clone(), publisher_connection_id, pending_publish)
-            .commit(self, transport_media_id, transport_adapter)
+        StagedPublishTransaction::new(validated_descriptor, transport_media_id)
+            .into_commit_snapshot(consumable_rtp_parameters)
+            .commit(self, transport_adapter)
             .await
     }
 
@@ -316,5 +316,46 @@ impl Channel {
         )
         .commit(self, transport_adapter)
         .await
+    }
+
+    #[cfg(test)]
+    pub async fn stage_negotiated_publish_for_test(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        self.stage_negotiated_publish(session_id, connection_id, stream_type, transport_adapter)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn rollback_staged_publish_for_test(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        self.rollback_staged_publish(session_id, connection_id, stream_type, transport_adapter)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn commit_staged_publishes_for_test(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        self.commit_staged_publishes(session_id, connection_id, transport_adapter)
+            .await;
+    }
+
+    #[cfg(test)]
+    pub async fn staged_publish_count(&self, session_id: &SessionId, connection_id: u64) -> usize {
+        self.staged_publish_count_for_connection(session_id, connection_id)
+            .await
     }
 }

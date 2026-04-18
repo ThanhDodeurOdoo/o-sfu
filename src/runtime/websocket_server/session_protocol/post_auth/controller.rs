@@ -5,6 +5,7 @@ use o_sfu_protocol::{
     shared::SessionId,
     signaling::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
 };
+use tokio::runtime::Handle;
 
 use crate::runtime::{
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
@@ -227,5 +228,25 @@ impl PostAuthSessionProtocol {
             batch_len += 1;
         }
         Ok(batch_len)
+    }
+}
+
+impl Drop for PostAuthSessionProtocol {
+    fn drop(&mut self) {
+        let channel = Arc::clone(&self.channel);
+        let transport_adapter = self.transport_adapter.clone();
+        let session_id = self.session_id.clone();
+        let connection_id = self.connection_id;
+        if let Ok(runtime_handle) = Handle::try_current() {
+            runtime_handle.spawn(async move {
+                channel
+                    .rollback_staged_publishes_for_connection(
+                        &session_id,
+                        connection_id,
+                        &transport_adapter,
+                    )
+                    .await;
+            });
+        }
     }
 }

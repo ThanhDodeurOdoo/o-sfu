@@ -38,6 +38,14 @@ pub(in crate::runtime::channel) struct PublishPrerequisites {
 }
 
 #[derive(Debug, Clone)]
+pub(in crate::runtime::channel) struct ValidatedPublishDescriptor {
+    owner_session_id: SessionId,
+    owner_connection_id: u64,
+    stream_type: StreamType,
+    media_kind: RouterMediaKind,
+}
+
+#[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PreparedPublishedTrack {
     owner_session_id: SessionId,
     owner_connection_id: u64,
@@ -75,14 +83,13 @@ impl ChannelState {
         })
     }
 
-    pub(in crate::runtime::channel) fn prepare_published_track(
+    pub(in crate::runtime::channel) fn validate_publish_descriptor(
         &self,
         session_id: &SessionId,
         publisher_connection_id: u64,
         stream_type: StreamType,
         media_kind: RouterMediaKind,
-        consumable_rtp_parameters: RouterRtpParameters,
-    ) -> Option<PreparedPublishedTrack> {
+    ) -> Option<ValidatedPublishDescriptor> {
         let Some(session) = self.sessions.get(session_id) else {
             warn!(
                 ?session_id,
@@ -111,12 +118,11 @@ impl ChannelState {
             );
             return None;
         }
-        Some(PreparedPublishedTrack {
+        Some(ValidatedPublishDescriptor {
             owner_session_id: session_id.clone(),
             owner_connection_id: publisher_connection_id,
             stream_type,
             media_kind,
-            consumable_rtp_parameters,
         })
     }
 
@@ -399,6 +405,37 @@ impl PublishPrerequisites {
 
     pub(in crate::runtime::channel) fn router_capabilities(&self) -> MediaCapabilities {
         self.router_capabilities.clone()
+    }
+}
+
+impl ValidatedPublishDescriptor {
+    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> u64 {
+        self.owner_connection_id
+    }
+
+    pub(in crate::runtime::channel) const fn stream_type(&self) -> StreamType {
+        self.stream_type
+    }
+
+    pub(in crate::runtime::channel) const fn media_kind(&self) -> RouterMediaKind {
+        self.media_kind
+    }
+
+    pub(in crate::runtime::channel) fn owner_session_id(&self) -> &SessionId {
+        &self.owner_session_id
+    }
+
+    pub(in crate::runtime::channel) fn into_prepared_track(
+        self,
+        consumable_rtp_parameters: RouterRtpParameters,
+    ) -> PreparedPublishedTrack {
+        PreparedPublishedTrack {
+            owner_session_id: self.owner_session_id,
+            owner_connection_id: self.owner_connection_id,
+            stream_type: self.stream_type,
+            media_kind: self.media_kind,
+            consumable_rtp_parameters,
+        }
     }
 }
 

@@ -21,4 +21,6 @@ pub(in crate::runtime::channel) use self::bootstrap::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
     PreparedConsumerBootstrap,
 };
-pub(in crate::runtime::channel) use self::producer::PreparedPublishedTrack;
+pub(in crate::runtime::channel) use self::producer::{
+    PreparedPublishedTrack, ValidatedPublishDescriptor,
+};

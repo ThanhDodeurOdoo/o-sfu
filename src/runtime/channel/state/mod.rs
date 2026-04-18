@@ -25,7 +25,7 @@ mod source_packet_policy;
 pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
-    PreparedConsumerBootstrap, PreparedPublishedTrack,
+    PreparedConsumerBootstrap, PreparedPublishedTrack, ValidatedPublishDescriptor,
 };
 pub(in crate::runtime::channel) use self::membership::LifecycleEffects;
 pub(in crate::runtime::channel) use self::membership::{

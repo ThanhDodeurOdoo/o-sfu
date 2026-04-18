@@ -1,0 +1,404 @@
+use o_sfu_router::RtpParameters as RouterRtpParameters;
+use str0m::media::{Mid, Rid};
+use tokio::sync::oneshot;
+
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
+};
+
+use super::super::super::{
+    commands::{RelayCleanup, RemoteSourceControl},
+    demux::{MediaRouteDestination, MediaRouteEntry},
+    media_registry::RegisteredMediaHandle,
+    relay_registry::{RelayRegistry, RelayTargetId},
+    route_control::{PacketLayerGate, aggregate_packet_gates},
+    state::RtcBootstrapState,
+};
+use super::types::RouteSourceKind;
+
+enum RouteSourceAccess {
+    Existing,
+    Register(Option<RemoteSourceControl>),
+}
+
+pub(crate) fn respond_set_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: Option<PacketLayerGate>,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_source_packet_gate(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        packet_gate,
+    ));
+}
+
+pub(crate) fn respond_set_producer_active(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    active: bool,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_producer_active(
+        state,
+        session_key,
+        transport_media_id,
+        active,
+    ));
+}
+
+pub(crate) fn respond_set_consumer_active(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_consumer_active(
+        state,
+        consumer_session_key,
+        consumer_transport_media_id,
+        source_session_key,
+        source_transport_media_id,
+        active,
+    ));
+}
+
+pub(crate) fn respond_set_remote_source_route_active(
+    state: &RtcBootstrapState,
+    relay_registry: &RelayRegistry,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    active: bool,
+) {
+    if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_none() {
+        return;
+    }
+    relay_registry.set_source_target_active(source_transport_media_id, target_id, active);
+}
+
+pub(crate) fn respond_set_remote_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    packet_gate: PacketLayerGate,
+) {
+    if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_none() {
+        return;
+    }
+    state
+        .route_control
+        .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
+}
+
+pub(super) fn consumer_packet_gate(
+    consumer_rtp_parameters: &RouterRtpParameters,
+) -> PacketLayerGate {
+    let mut selected_rid: Option<Rid> = None;
+    for encoding in consumer_rtp_parameters.encodings() {
+        let Some(rid) = encoding.rid().map(Rid::from) else {
+            return PacketLayerGate::Open;
+        };
+        if let Some(current_rid) = selected_rid.as_ref() {
+            if current_rid != &rid {
+                return PacketLayerGate::Open;
+            }
+        } else {
+            selected_rid = Some(rid);
+        }
+    }
+    selected_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
+}
+
+pub(super) fn ensure_route_source_registered(
+    state: &mut RtcBootstrapState,
+    route_owner_session_key: &TransportSessionKey,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    remote_source_control: Option<RemoteSourceControl>,
+) -> Result<RouteSourceKind, TransportAdapterError> {
+    ensure_route_source(
+        state,
+        route_owner_session_key,
+        source_session_key,
+        source_transport_media_id,
+        RouteSourceAccess::Register(remote_source_control),
+    )
+}
+
+pub(super) fn register_consumer_route(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    consumer_mid: Mid,
+    source_transport_media_id: TransportMediaId,
+    route_source: RouteSourceKind,
+    consumer_rtp_parameters: &RouterRtpParameters,
+) {
+    state
+        .media_route_index
+        .entry(source_transport_media_id)
+        .or_insert_with(|| MediaRouteEntry {
+            source_active: true,
+            destinations: Vec::new(),
+        })
+        .destinations
+        .push(MediaRouteDestination {
+            dest_session: consumer_session_key.clone(),
+            dest_transport_media_id: consumer_transport_media_id,
+            dest_mid: consumer_mid,
+            active: true,
+            packet_gate: consumer_packet_gate(consumer_rtp_parameters),
+        });
+    refresh_source_packet_gate(state, source_transport_media_id);
+    if matches!(route_source, RouteSourceKind::Remote) {
+        update_remote_route_active(state, source_transport_media_id, true);
+    }
+}
+
+pub(super) fn remove_consumer_route(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_transport_media_id: TransportMediaId,
+) -> Option<RelayCleanup> {
+    let relay_cleanup = state
+        .remote_source_registration(source_transport_media_id)
+        .map(|registration| {
+            RelayCleanup::new(
+                registration.source_session_key().clone(),
+                source_transport_media_id,
+            )
+        });
+    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
+        state.prune_remote_source_if_unrouted(source_transport_media_id);
+        return relay_cleanup;
+    };
+    let (removed_active_route, remove_route_entry) = {
+        let Some(position) = route_entry.destinations.iter().position(|destination| {
+            destination.dest_session == *consumer_session_key
+                && destination.dest_transport_media_id == consumer_transport_media_id
+        }) else {
+            return relay_cleanup;
+        };
+        let removed_active_route = route_entry
+            .destinations
+            .get(position)
+            .is_some_and(|destination| destination.active);
+        route_entry.destinations.remove(position);
+        (removed_active_route, route_entry.destinations.is_empty())
+    };
+    if removed_active_route {
+        update_remote_route_active(state, source_transport_media_id, false);
+    }
+    if remove_route_entry {
+        state.media_route_index.remove(&source_transport_media_id);
+    }
+    refresh_source_packet_gate(state, source_transport_media_id);
+    state.prune_remote_source_if_unrouted(source_transport_media_id);
+    relay_cleanup
+}
+
+pub(crate) fn refresh_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) {
+    let local_packet_gate = state
+        .media_route_index
+        .get(&source_transport_media_id)
+        .and_then(local_source_packet_gate);
+    state
+        .route_control
+        .set_local_packet_gate(source_transport_media_id, local_packet_gate.clone());
+    if let Some(remote_source_registration) =
+        state.remote_source_registration(source_transport_media_id)
+    {
+        remote_source_registration.source_control().set_packet_gate(
+            remote_source_registration.source_session_key().clone(),
+            source_transport_media_id,
+            local_packet_gate.unwrap_or(PacketLayerGate::Block),
+        );
+    }
+}
+
+pub(super) fn owned_local_producer_mid(
+    state: &RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> Option<Mid> {
+    ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id).ok()
+}
+
+fn worker_set_producer_active(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    active: bool,
+) -> Result<(), TransportAdapterError> {
+    ensure_owned_local_producer_mid(state, session_key, transport_media_id)?;
+    let route_entry = state
+        .media_route_index
+        .get_mut(&transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    route_entry.source_active = active;
+    Ok(())
+}
+
+fn worker_set_source_packet_gate(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: Option<PacketLayerGate>,
+) -> Result<(), TransportAdapterError> {
+    ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
+    state
+        .route_control
+        .set_source_packet_gate(source_transport_media_id, packet_gate);
+    Ok(())
+}
+
+fn worker_set_consumer_active(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+) -> Result<(), TransportAdapterError> {
+    ensure_route_source(
+        state,
+        consumer_session_key,
+        source_session_key,
+        source_transport_media_id,
+        RouteSourceAccess::Existing,
+    )?;
+    match state
+        .mid_registry
+        .get(&consumer_transport_media_id.as_u64())
+    {
+        Some(RegisteredMediaHandle::Consumer {
+            session_key,
+            source_transport_media_id: consumer_source_transport_media_id,
+            ..
+        }) if session_key == consumer_session_key
+            && *consumer_source_transport_media_id == source_transport_media_id => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    let mut route_changed = false;
+    {
+        let route_entry = state
+            .media_route_index
+            .get_mut(&source_transport_media_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let destination = route_entry
+            .destinations
+            .iter_mut()
+            .find(|destination| {
+                destination.dest_session == *consumer_session_key
+                    && destination.dest_transport_media_id == consumer_transport_media_id
+            })
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        if destination.active != active {
+            destination.active = active;
+            route_changed = true;
+        }
+    }
+    if !route_changed {
+        return Ok(());
+    }
+    refresh_source_packet_gate(state, source_transport_media_id);
+    update_remote_route_active(state, source_transport_media_id, active);
+    Ok(())
+}
+
+fn ensure_route_source(
+    state: &mut RtcBootstrapState,
+    route_owner_session_key: &TransportSessionKey,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    access: RouteSourceAccess,
+) -> Result<RouteSourceKind, TransportAdapterError> {
+    if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
+        ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
+        return Ok(RouteSourceKind::Local);
+    }
+    match access {
+        RouteSourceAccess::Existing => {
+            match state.remote_source_registration(source_transport_media_id) {
+                Some(registration) if registration.source_session_key() == source_session_key => {
+                    Ok(RouteSourceKind::Remote)
+                }
+                Some(_) => Err(TransportAdapterError::InvalidInput),
+                None => Err(TransportAdapterError::TransportUnavailable),
+            }
+        }
+        RouteSourceAccess::Register(remote_source_control) => {
+            let Some(remote_source_control) = remote_source_control else {
+                return Err(TransportAdapterError::InvalidInput);
+            };
+            state.register_remote_source(
+                source_transport_media_id,
+                source_session_key,
+                remote_source_control,
+            )?;
+            Ok(RouteSourceKind::Remote)
+        }
+    }
+}
+
+fn update_remote_route_active(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+) {
+    if let Some(remote_source_registration) =
+        state.remote_source_registration(source_transport_media_id)
+    {
+        remote_source_registration
+            .source_control()
+            .set_route_active(
+                remote_source_registration.source_session_key().clone(),
+                source_transport_media_id,
+                active,
+            );
+    }
+}
+
+fn ensure_owned_local_producer_mid(
+    state: &RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> Result<Mid, TransportAdapterError> {
+    match state.media_handle(source_transport_media_id) {
+        Some(RegisteredMediaHandle::Producer { session_key, mid })
+            if session_key == source_session_key =>
+        {
+            Ok(*mid)
+        }
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            Err(TransportAdapterError::InvalidInput)
+        }
+        None => Err(TransportAdapterError::TransportUnavailable),
+    }
+}
+
+fn local_source_packet_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> {
+    aggregate_packet_gates(
+        route_entry
+            .destinations
+            .iter()
+            .filter(|destination| destination.active)
+            .map(|destination| &destination.packet_gate),
+    )
+}

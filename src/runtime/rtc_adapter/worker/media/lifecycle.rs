@@ -1,5 +1,8 @@
 use o_sfu_router::RtpParameters as RouterRtpParameters;
-use str0m::media::{Direction, MediaKind, Mid};
+use str0m::{
+    media::{Direction, MediaKind, Mid, Rid},
+    rtp::Ssrc,
+};
 use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
@@ -9,17 +12,12 @@ use crate::runtime::transport_adapter::{
 
 use super::super::super::{
     commands::{RemoteSourceControl, RemoveMediaOutcome},
-    demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
 };
 use super::{
-    helpers::{
-        consumer_packet_gate, primary_encoding_identity, relay_cleanup_for_source, transport_mid,
-    },
-    ownership::ensure_route_source_registered,
-    route_control::refresh_source_packet_gate,
-    types::{AddSendMediaRequest, RouteSourceKind},
+    control::{ensure_route_source_registered, register_consumer_route, remove_consumer_route},
+    types::AddSendMediaRequest,
 };
 
 pub(crate) fn respond_remove_media(
@@ -116,10 +114,6 @@ fn worker_remove_media(
             mid,
             source_transport_media_id,
         } => {
-            let relay_cleanup = relay_cleanup_for_source(state, source_transport_media_id);
-            let remote_source_registration = state
-                .remote_source_registration(source_transport_media_id)
-                .cloned();
             let should_remove_media = !state.session_has_mid(&session_key, mid);
             if let Some(session_state) = state.sessions.get_mut(&session_key)
                 && should_remove_media
@@ -130,35 +124,12 @@ fn worker_remove_media(
                     session_state.rtc.direct_api().remove_media(mid);
                 }
             }
-            if let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) {
-                if let Some(position) = route_entry.destinations.iter().position(|destination| {
-                    destination.dest_session == session_key
-                        && destination.dest_transport_media_id == transport_media_id
-                }) {
-                    let destination_was_active = route_entry
-                        .destinations
-                        .get(position)
-                        .is_some_and(|destination| destination.active);
-                    if destination_was_active
-                        && let Some(remote_source_registration) =
-                            remote_source_registration.as_ref()
-                    {
-                        remote_source_registration
-                            .source_control()
-                            .set_route_active(
-                                remote_source_registration.source_session_key().clone(),
-                                source_transport_media_id,
-                                false,
-                            );
-                    }
-                    route_entry.destinations.remove(position);
-                }
-                if route_entry.destinations.is_empty() {
-                    state.media_route_index.remove(&source_transport_media_id);
-                }
-            }
-            refresh_source_packet_gate(state, source_transport_media_id);
-            state.prune_remote_source_if_unrouted(source_transport_media_id);
+            let relay_cleanup = remove_consumer_route(
+                state,
+                &session_key,
+                transport_media_id,
+                source_transport_media_id,
+            );
             state.mark_session_dirty(&session_key);
             relay_cleanup.map_or_else(
                 || Ok(RemoveMediaOutcome::without_relay_cleanup()),
@@ -333,22 +304,15 @@ fn worker_add_send_media(
         mid,
         source_transport_media_id,
     });
-    state
-        .media_route_index
-        .entry(source_transport_media_id)
-        .or_insert_with(|| MediaRouteEntry {
-            source_active: true,
-            destinations: Vec::new(),
-        })
-        .destinations
-        .push(MediaRouteDestination {
-            dest_session: consumer_session_key.clone(),
-            dest_transport_media_id: transport_media_id,
-            dest_mid: mid,
-            active: true,
-            packet_gate: consumer_packet_gate(consumer_rtp_parameters),
-        });
-    refresh_source_packet_gate(state, source_transport_media_id);
+    register_consumer_route(
+        state,
+        consumer_session_key,
+        transport_media_id,
+        mid,
+        source_transport_media_id,
+        route_source,
+        consumer_rtp_parameters,
+    );
     debug!(
         consumer_session_id = ?consumer_session_key.session_id(),
         consumer_media_worker_id = consumer_session_key.media_worker_id(),
@@ -360,18 +324,6 @@ fn worker_add_send_media(
         ?media_kind,
         "declared send-only media and registered media route for consumer"
     );
-    if matches!(route_source, RouteSourceKind::Remote)
-        && let Some(remote_source_registration) =
-            state.remote_source_registration(source_transport_media_id)
-    {
-        remote_source_registration
-            .source_control()
-            .set_route_active(
-                remote_source_registration.source_session_key().clone(),
-                source_transport_media_id,
-                true,
-            );
-    }
     Ok(transport_media_id)
 }
 
@@ -418,4 +370,17 @@ fn declare_direct_send_media(
     let (ssrc, rid) = primary_encoding_identity(consumer_rtp_parameters)
         .unwrap_or_else(|| (api.new_ssrc(), None));
     api.declare_stream_tx(ssrc, None, mid, rid);
+}
+
+fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
+    rtp_parameters.mid().map(Into::into)
+}
+
+fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ssrc, Option<Rid>)> {
+    let encoding = rtp_parameters
+        .encodings()
+        .find(|encoding| encoding.ssrc().is_some() || encoding.rid().is_some())?;
+    let ssrc = encoding.ssrc().map(Ssrc::from)?;
+    let rid = encoding.rid().map(Into::into);
+    Some((ssrc, rid))
 }

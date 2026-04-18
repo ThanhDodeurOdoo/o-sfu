@@ -5,6 +5,7 @@ use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::super::super::{commands::RemoteSourceControl, relay_registry::RelayTargetId};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteSourceKind {
     Local,
     Remote,
@@ -28,7 +29,7 @@ pub(crate) struct RemoteKeyframeRequest<'a> {
 }
 
 impl RouteSourceKind {
-    pub(super) const fn label(&self) -> &'static str {
+    pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Local => "local",
             Self::Remote => "remote",

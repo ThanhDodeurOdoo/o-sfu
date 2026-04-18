@@ -16,7 +16,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use o_sfu_router::RouterId;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
@@ -32,6 +32,7 @@ use super::{
     definition::ChannelDefinition,
     events::ChannelEventMessage,
     lifecycle::SessionCloseReason,
+    media_transaction::PendingPublishTransactions,
     state::{ChannelState, RemoteTrackBootstrap},
 };
 
@@ -150,6 +151,7 @@ pub struct Channel {
     )]
     pub(super) recording_service: Arc<RecordingService>,
     pub(super) metrics: Arc<RuntimeMetrics>,
+    pub(super) pending_publish_transactions: Mutex<PendingPublishTransactions>,
     pub(super) state: RwLock<ChannelState>,
 }
 
@@ -175,6 +177,7 @@ impl Channel {
             definition,
             recording_service: Arc::clone(&recording_service),
             metrics,
+            pending_publish_transactions: Mutex::new(PendingPublishTransactions::default()),
             state: RwLock::new(ChannelState::new(
                 runtime_context.router,
                 runtime_policy.admission_policy,

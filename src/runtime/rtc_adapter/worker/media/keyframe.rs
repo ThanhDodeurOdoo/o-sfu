@@ -8,7 +8,7 @@ use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 use super::super::super::{
     relay_registry::RelayRegistry, route_control::KeyframeRequestDecision, state::RtcBootstrapState,
 };
-use super::ownership::owned_local_producer_mid;
+use super::control::owned_local_producer_mid;
 use super::types::RemoteKeyframeRequest;
 
 pub(crate) fn respond_request_remote_keyframe(

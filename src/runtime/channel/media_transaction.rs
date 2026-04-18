@@ -1,52 +1,176 @@
+use std::collections::BTreeMap;
+
 use tracing::warn;
 
-use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
+use crate::runtime::transport_adapter::{
+    RuntimeTransportAdapter, TransportAdapterError, TransportMediaId,
+};
 use o_sfu_protocol::shared::{SessionId, StreamType};
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 
 use super::{
     Channel, SessionOutbound,
     state::{
         ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
         PreparedConsumerBootstrap, PreparedPublishedTrack, TransportMediaRemoval,
+        ValidatedPublishDescriptor,
     },
 };
 
-#[derive(Debug)]
-pub(super) struct PublishTransaction {
-    session_id: SessionId,
-    connection_id: u64,
-    pending_publish: PreparedPublishedTrack,
+#[derive(Debug, Default)]
+pub(super) struct PendingPublishTransactions {
+    staged: BTreeMap<PendingPublishKey, StagedPublishTransaction>,
 }
 
-impl PublishTransaction {
-    pub(super) fn new(
-        session_id: SessionId,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PendingPublishKey {
+    session_id: SessionId,
+    connection_id: u64,
+    stream_type: StreamType,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct StagedPublishTransaction {
+    descriptor: ValidatedPublishDescriptor,
+    transport_media_id: TransportMediaId,
+}
+
+#[derive(Debug)]
+pub(super) struct PublishCommitSnapshot {
+    session_id: SessionId,
+    connection_id: u64,
+    prepared_track: PreparedPublishedTrack,
+    transport_media_id: TransportMediaId,
+}
+
+#[derive(Debug)]
+pub(super) enum StagedPublishCommitOutcome {
+    Committed(String),
+    LoadParametersFailed(TransportAdapterError),
+    PublishRejected,
+}
+
+impl PendingPublishTransactions {
+    pub(super) fn contains(
+        &self,
+        session_id: &SessionId,
         connection_id: u64,
-        pending_publish: PreparedPublishedTrack,
-    ) -> Self {
-        Self {
+        stream_type: StreamType,
+    ) -> bool {
+        self.staged.contains_key(&PendingPublishKey::new(
             session_id,
             connection_id,
-            pending_publish,
+            stream_type,
+        ))
+    }
+
+    pub(super) fn insert(&mut self, staged_publish: StagedPublishTransaction) {
+        self.staged.insert(staged_publish.key(), staged_publish);
+    }
+
+    pub(super) fn take(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+    ) -> Option<StagedPublishTransaction> {
+        self.staged.remove(&PendingPublishKey::new(
+            session_id,
+            connection_id,
+            stream_type,
+        ))
+    }
+
+    pub(super) fn take_for_connection(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> Vec<StagedPublishTransaction> {
+        let matching_keys = self
+            .staged
+            .keys()
+            .filter(|key| key.session_id == *session_id && key.connection_id == connection_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        matching_keys
+            .into_iter()
+            .filter_map(|key| self.staged.remove(&key))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn count_for_connection(&self, session_id: &SessionId, connection_id: u64) -> usize {
+        self.staged
+            .keys()
+            .filter(|key| key.session_id == *session_id && key.connection_id == connection_id)
+            .count()
+    }
+}
+
+impl PendingPublishKey {
+    pub(super) fn new(session_id: &SessionId, connection_id: u64, stream_type: StreamType) -> Self {
+        Self {
+            session_id: session_id.clone(),
+            connection_id,
+            stream_type,
+        }
+    }
+}
+
+impl StagedPublishTransaction {
+    pub(super) fn new(
+        descriptor: ValidatedPublishDescriptor,
+        transport_media_id: TransportMediaId,
+    ) -> Self {
+        Self {
+            descriptor,
+            transport_media_id,
         }
     }
 
+    fn key(&self) -> PendingPublishKey {
+        PendingPublishKey::new(
+            self.descriptor.owner_session_id(),
+            self.descriptor.owner_connection_id(),
+            self.descriptor.stream_type(),
+        )
+    }
+
+    pub(super) const fn transport_media_id(&self) -> TransportMediaId {
+        self.transport_media_id
+    }
+
+    pub(super) fn into_commit_snapshot(
+        self,
+        consumable_rtp_parameters: RouterRtpParameters,
+    ) -> PublishCommitSnapshot {
+        PublishCommitSnapshot {
+            session_id: self.descriptor.owner_session_id().clone(),
+            connection_id: self.descriptor.owner_connection_id(),
+            prepared_track: self
+                .descriptor
+                .into_prepared_track(consumable_rtp_parameters),
+            transport_media_id: self.transport_media_id,
+        }
+    }
+}
+
+impl PublishCommitSnapshot {
     pub(super) async fn commit(
         self,
         channel: &Channel,
-        transport_media_id: TransportMediaId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
         let consumer_targets = {
             let mut state = channel.state.write().await;
-            state.commit_published_track(self.pending_publish, transport_media_id)
+            state.commit_published_track(self.prepared_track, self.transport_media_id)
         };
         let Some((producer_id, consumer_targets)) = consumer_targets else {
             channel
                 .cleanup_transport_media(
                     &self.session_id,
                     self.connection_id,
-                    transport_media_id,
+                    self.transport_media_id,
                     transport_adapter,
                     "transport adapter failed to remove published transport media after channel commit failed",
                 )
@@ -215,6 +339,208 @@ impl UnpublishTransaction {
 }
 
 impl Channel {
+    pub(crate) async fn has_staged_publish(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+    ) -> bool {
+        self.pending_publish_transactions.lock().await.contains(
+            session_id,
+            connection_id,
+            stream_type,
+        )
+    }
+
+    pub(crate) async fn stage_negotiated_publish(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let media_kind = media_kind_for_stream_type(stream_type);
+        let validated_descriptor = {
+            let state = self.state.read().await;
+            state.validate_publish_descriptor(session_id, connection_id, stream_type, media_kind)
+        };
+        let Some(validated_descriptor) = validated_descriptor else {
+            return false;
+        };
+        if self.pending_publish_transactions.lock().await.contains(
+            session_id,
+            connection_id,
+            stream_type,
+        ) {
+            return false;
+        }
+        let session_key = self.transport_session_key(session_id, connection_id);
+        let transport_media_id = match transport_adapter
+            .publish_media(&session_key, media_kind, &pending_publish_parameters())
+            .await
+        {
+            Ok(transport_media_id) => transport_media_id,
+            Err(_error) => {
+                warn!(
+                    ?session_id,
+                    connection_id,
+                    ?stream_type,
+                    "failed to stage negotiated publish stream"
+                );
+                return false;
+            }
+        };
+        let duplicate_stage = {
+            let mut pending_publish_transactions = self.pending_publish_transactions.lock().await;
+            if pending_publish_transactions.contains(session_id, connection_id, stream_type) {
+                true
+            } else {
+                pending_publish_transactions.insert(StagedPublishTransaction::new(
+                    validated_descriptor,
+                    transport_media_id,
+                ));
+                false
+            }
+        };
+        if duplicate_stage {
+            self.cleanup_transport_media(
+                session_id,
+                connection_id,
+                transport_media_id,
+                transport_adapter,
+                "transport adapter failed to remove duplicated staged publish media",
+            )
+            .await;
+            return false;
+        }
+        true
+    }
+
+    pub(crate) async fn rollback_staged_publish(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        stream_type: StreamType,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> bool {
+        let staged_publish = self.pending_publish_transactions.lock().await.take(
+            session_id,
+            connection_id,
+            stream_type,
+        );
+        let Some(staged_publish) = staged_publish else {
+            return false;
+        };
+        self.cleanup_transport_media(
+            session_id,
+            connection_id,
+            staged_publish.transport_media_id(),
+            transport_adapter,
+            "transport adapter failed to remove staged publish media during rollback",
+        )
+        .await;
+        true
+    }
+
+    pub(crate) async fn rollback_staged_publishes_for_connection(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let staged_publishes = self
+            .pending_publish_transactions
+            .lock()
+            .await
+            .take_for_connection(session_id, connection_id);
+        for staged_publish in staged_publishes {
+            self.cleanup_transport_media(
+                session_id,
+                connection_id,
+                staged_publish.transport_media_id(),
+                transport_adapter,
+                "transport adapter failed to remove staged publish media during connection cleanup",
+            )
+            .await;
+        }
+    }
+
+    pub(crate) async fn commit_staged_publishes(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) {
+        let staged_publishes = self
+            .pending_publish_transactions
+            .lock()
+            .await
+            .take_for_connection(session_id, connection_id);
+        let session_key = self.transport_session_key(session_id, connection_id);
+        for staged_publish in staged_publishes {
+            let stream_type = staged_publish.descriptor.stream_type();
+            let transport_media_id = staged_publish.transport_media_id();
+            let commit_outcome = match transport_adapter
+                .negotiated_producer_parameters(&session_key, transport_media_id)
+                .await
+            {
+                Ok(rtp_parameters) => staged_publish
+                    .into_commit_snapshot(rtp_parameters)
+                    .commit(self, transport_adapter)
+                    .await
+                    .map_or(
+                        StagedPublishCommitOutcome::PublishRejected,
+                        StagedPublishCommitOutcome::Committed,
+                    ),
+                Err(error) => {
+                    self.cleanup_transport_media(
+                        session_id,
+                        connection_id,
+                        transport_media_id,
+                        transport_adapter,
+                        "transport adapter failed to remove staged publish media after negotiated parameter lookup failed",
+                    )
+                    .await;
+                    StagedPublishCommitOutcome::LoadParametersFailed(error)
+                }
+            };
+            match commit_outcome {
+                StagedPublishCommitOutcome::Committed(_producer_id) => {}
+                StagedPublishCommitOutcome::LoadParametersFailed(error) => {
+                    warn!(
+                        ?session_id,
+                        connection_id,
+                        ?stream_type,
+                        ?transport_media_id,
+                        ?error,
+                        "failed to load negotiated publish parameters during channel commit"
+                    );
+                }
+                StagedPublishCommitOutcome::PublishRejected => {
+                    warn!(
+                        ?session_id,
+                        connection_id,
+                        ?stream_type,
+                        ?transport_media_id,
+                        "channel rejected staged negotiated publish during commit"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn staged_publish_count_for_connection(
+        &self,
+        session_id: &SessionId,
+        connection_id: u64,
+    ) -> usize {
+        self.pending_publish_transactions
+            .lock()
+            .await
+            .count_for_connection(session_id, connection_id)
+    }
+
     pub(super) async fn prepare_consumer_bootstrap_transaction(
         &self,
         target: &PendingConsumerBootstrapTarget,
@@ -341,4 +667,15 @@ impl Channel {
             );
         }
     }
+}
+
+fn media_kind_for_stream_type(stream_type: StreamType) -> o_sfu_router::MediaKind {
+    match stream_type {
+        StreamType::Audio => o_sfu_router::MediaKind::Audio,
+        StreamType::Camera | StreamType::Screen => o_sfu_router::MediaKind::Video,
+    }
+}
+
+fn pending_publish_parameters() -> RouterRtpParameters {
+    RouterRtpParameters::new(vec![], vec![], vec![])
 }
