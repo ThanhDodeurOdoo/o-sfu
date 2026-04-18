@@ -11,27 +11,11 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT};
+
+pub use o_sfu_rfc::jwt::{JwtAudience, RegisteredJwtClaims};
 
 type HmacSha256 = Hmac<Sha256>;
-
-/// Registered JWT claims from RFC 7519 section 4.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RegisteredJwtClaims {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exp: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iat: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nbf: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iss: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub aud: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jti: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthenticationError {
@@ -64,12 +48,12 @@ impl Display for AuthenticationError {
 
 impl StdError for AuthenticationError {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct JwtHeader {
-    alg: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    typ: Option<String>,
-}
+/// Local skew guard for `iat`.
+///
+/// RFC 7519 defines `iat` as an informational registered claim, so this
+/// tolerance remains a runtime hardening policy rather than an RFC-mandated
+/// validity rule.
+const MAX_IAT_FUTURE_SKEW_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpChannelClaims {
@@ -110,8 +94,8 @@ where
 {
     let key = decode_base64(key_b64)?;
     let header = JwtHeader {
-        alg: "HS256".to_owned(),
-        typ: Some("JWT".to_owned()),
+        alg: ALGORITHM_HS256.to_owned(),
+        typ: Some(TYPE_JWT.to_owned()),
     };
     let header_json =
         serde_json::to_vec(&header).map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
@@ -141,7 +125,7 @@ where
     let header_bytes = decode_jwt_segment(header_b64)?;
     let header: JwtHeader = serde_json::from_slice(&header_bytes)
         .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
-    if header.alg != "HS256" {
+    if header.alg != ALGORITHM_HS256 {
         return Err(AuthenticationError::UnsupportedAlgorithm(header.alg));
     }
     let claims_bytes = decode_jwt_segment(claims_b64)?;
@@ -163,13 +147,16 @@ fn validate_registered_claims(claims: &RegisteredJwtClaims) -> Result<(), Authen
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
-    if claims.exp.is_some_and(|exp| exp < now) {
+    if claims.exp.is_some_and(|exp| exp <= now) {
         return Err(AuthenticationError::TokenExpired);
     }
     if claims.nbf.is_some_and(|nbf| nbf > now) {
         return Err(AuthenticationError::TokenNotYetValid);
     }
-    if claims.iat.is_some_and(|iat| iat > now + 60) {
+    if claims
+        .iat
+        .is_some_and(|iat| iat > now + MAX_IAT_FUTURE_SKEW_SECONDS)
+    {
         return Err(AuthenticationError::TokenIssuedInFuture);
     }
     Ok(())
@@ -236,10 +223,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, JwtHeader,
+        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, JwtAudience,
         RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, sign, sign_hs256, verify,
     };
     use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT};
 
     const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 
@@ -248,6 +236,10 @@ mod tests {
         let channel_claims = HttpChannelClaims {
             registered: RegisteredJwtClaims {
                 iss: Some("https://odoo.example.com".to_owned()),
+                aud: Some(JwtAudience::Multiple(vec![
+                    "urn:odoo:sfu".to_owned(),
+                    "urn:odoo:recording".to_owned(),
+                ])),
                 exp: Some(1_744_000_000),
                 ..RegisteredJwtClaims::default()
             },
@@ -255,6 +247,7 @@ mod tests {
         };
         let expected_channel_claims = json!({
             "iss": "https://odoo.example.com",
+            "aud": ["urn:odoo:sfu", "urn:odoo:recording"],
             "exp": 1_744_000_000,
             "key": "Y2hhbm5lbC1rZXk="
         });
@@ -406,6 +399,27 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_token_when_exp_matches_current_second() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs());
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims {
+                exp: Some(now),
+                ..RegisteredJwtClaims::default()
+            },
+            key: None,
+        };
+        let token = sign(&claims, TEST_AUTH_KEY);
+        assert!(token.is_ok());
+        let Some(token) = token.ok() else {
+            return;
+        };
+        let error = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY).err();
+        assert_eq!(error, Some(AuthenticationError::TokenExpired));
+    }
+
+    #[test]
     fn sign_emits_jose_base64url_segments() {
         let claims = HttpChannelClaims {
             registered: RegisteredJwtClaims::default(),
@@ -489,7 +503,7 @@ mod tests {
     ) -> Option<String> {
         let key = decode_base64(key_b64).ok()?;
         let header = JwtHeader {
-            alg: "HS256".to_owned(),
+            alg: ALGORITHM_HS256.to_owned(),
             typ: typ.map(str::to_owned),
         };
         let header_json = serde_json::to_vec(&header).ok()?;
@@ -506,5 +520,26 @@ mod tests {
         match encoding {
             SegmentEncoding::Jose => URL_SAFE_NO_PAD.encode(bytes),
         }
+    }
+
+    #[test]
+    fn sign_uses_rfc_header_constants() {
+        let claims = HttpChannelClaims {
+            registered: RegisteredJwtClaims::default(),
+            key: None,
+        };
+
+        let token = sign_token_for_test(
+            &claims,
+            TEST_AUTH_KEY,
+            Some(TYPE_JWT),
+            SegmentEncoding::Jose,
+        );
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        assert_eq!(verified.ok(), Some(claims));
     }
 }
