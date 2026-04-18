@@ -22,6 +22,8 @@ use tokio::time::sleep;
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 
+/// Deterministic fake transport events exposed only through the explicit
+/// transport-adapter test seam.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FakeWebRtcEvent {
     #[cfg(test)]
@@ -58,6 +60,7 @@ pub(crate) enum FakeWebRtcEvent {
     },
 }
 
+/// Deterministic transport backend for tests and feature-gated development.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FakeWebRtcAdapter {
     events: Arc<Mutex<Vec<FakeWebRtcEvent>>>,

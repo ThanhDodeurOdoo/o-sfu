@@ -12,19 +12,11 @@ mod service;
 mod session;
 mod stream_writer;
 #[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use media_source::into_media_source;
 pub(crate) use media_source::{MediaPacketSink, MediaSource, into_packet_sink};
 pub(crate) use media_tap::MediaTap;
-#[cfg(test)]
-pub(crate) use metadata::{RecordingFileMetadata, RecordingMetadata, RecordingSegment};
 pub(crate) use ortp_format::OrtpFileHeader;
-#[cfg(test)]
-pub(crate) use ortp_format::{OrtpCodec, OrtpFrameHeader};
-#[cfg(test)]
-pub(crate) use service::RecordingLifecycleState;
 pub(crate) use service::{RecordingRouterObserver, RecordingService};
-#[cfg(test)]
-pub(crate) use stream_writer::StreamWriter;

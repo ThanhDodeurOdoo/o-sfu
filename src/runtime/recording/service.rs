@@ -28,14 +28,7 @@ pub(crate) enum RecordingLifecycleState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RecordingTransitionError {
     action: RecordingAction,
-    state: RecordingLifecycleState,
-}
-
-impl RecordingTransitionError {
-    #[cfg(test)]
-    pub(crate) fn state(self) -> RecordingLifecycleState {
-        self.state
-    }
+    pub(super) state: RecordingLifecycleState,
 }
 
 impl RecordingLifecycleState {

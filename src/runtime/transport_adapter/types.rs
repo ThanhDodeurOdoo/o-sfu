@@ -1,9 +1,5 @@
 use std::{sync::Arc, time::Instant};
 
-#[cfg(test)]
-use crate::runtime::transport_connect::{
-    TransportConnectDtlsParameters, TransportConnectIceParameters,
-};
 use o_sfu_protocol::shared::SessionId;
 
 /// Channel-scoped transport-adapter session identity.
@@ -52,80 +48,11 @@ impl TransportSessionKey {
     }
 }
 
-/// Direction of a WebRTC transport from the client's perspective.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum TransportConnectDirection {
-    Upload,
-    Download,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportAdapterError {
     TransportUnavailable,
     InvalidInput,
     UnsupportedFeature,
-}
-
-/// Named request for connecting one transport direction with client auth data.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TransportConnectRequest<'a> {
-    direction: TransportConnectDirection,
-    dtls_parameters: &'a TransportConnectDtlsParameters,
-    ice_parameters: Option<&'a TransportConnectIceParameters>,
-    sdp_offer: Option<&'a str>,
-}
-
-#[cfg(test)]
-impl<'a> TransportConnectRequest<'a> {
-    #[must_use]
-    pub(crate) fn new(
-        direction: TransportConnectDirection,
-        dtls_parameters: &'a TransportConnectDtlsParameters,
-    ) -> Self {
-        Self {
-            direction,
-            dtls_parameters,
-            ice_parameters: None,
-            sdp_offer: None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn with_ice_parameters(
-        mut self,
-        ice_parameters: &'a TransportConnectIceParameters,
-    ) -> Self {
-        self.ice_parameters = Some(ice_parameters);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn with_sdp_offer(mut self, sdp_offer: &'a str) -> Self {
-        self.sdp_offer = Some(sdp_offer);
-        self
-    }
-
-    #[must_use]
-    pub(crate) const fn direction(self) -> TransportConnectDirection {
-        self.direction
-    }
-
-    #[must_use]
-    pub(crate) const fn dtls_parameters(self) -> &'a TransportConnectDtlsParameters {
-        self.dtls_parameters
-    }
-
-    #[must_use]
-    pub(crate) const fn ice_parameters(self) -> Option<&'a TransportConnectIceParameters> {
-        self.ice_parameters
-    }
-
-    #[must_use]
-    pub(crate) const fn sdp_offer(self) -> Option<&'a str> {
-        self.sdp_offer
-    }
 }
 
 /// Point-in-time bitrate measurement aggregated across one or more transport sessions.

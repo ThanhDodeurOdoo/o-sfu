@@ -69,14 +69,7 @@ fn validate_dtls_parameters_maps_unsupported_payload_to_unsupported_feature() {
 
 #[test]
 fn validate_bootstrap_payload_accepts_supported_candidate_shape() {
-    let payload = sample_bootstrap_payload(sample_candidate(TransportIceProtocol::Udp, 40_000));
+    let payload = sample_bootstrap_payload(sample_candidate(40_000));
     let result = validation::validate_bootstrap_payload(&payload);
     assert_eq!(result, Ok(()));
-}
-
-#[test]
-fn validate_bootstrap_payload_rejects_unsupported_candidate_shape() {
-    let payload = sample_bootstrap_payload(sample_candidate(TransportIceProtocol::Tcp, 9));
-    let result = validation::validate_bootstrap_payload(&payload);
-    assert_eq!(result, Err(TransportAdapterError::UnsupportedFeature));
 }

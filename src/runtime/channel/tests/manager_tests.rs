@@ -314,9 +314,9 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = ChannelManager::for_test();
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
-    let RuntimeTransportAdapter::Fake(fake) = &transport_adapter else {
-        panic!("test expects the fake transport adapter");
-    };
+    let fake = transport_adapter
+        .as_fake_adapter()
+        .expect("test expects the fake transport adapter");
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;

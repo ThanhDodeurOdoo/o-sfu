@@ -57,8 +57,6 @@ pub(crate) struct TransportIceCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportIceProtocol {
     Udp,
-    #[cfg(test)]
-    Tcp,
 }
 
 impl TransportIceProtocol {
@@ -66,8 +64,6 @@ impl TransportIceProtocol {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Udp => webrtc::IceTransport::Udp.as_str(),
-            #[cfg(test)]
-            Self::Tcp => "tcp",
         }
     }
 }

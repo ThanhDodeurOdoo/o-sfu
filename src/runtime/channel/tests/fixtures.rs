@@ -17,9 +17,10 @@ use crate::runtime::test_rtp_samples::{
     sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
     sample_video_rtp_parameters,
 };
-pub(super) use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, FakeWebRtcAdapter, FakeWebRtcEvent, RuntimeTransportAdapter,
+pub(super) use crate::runtime::transport_adapter::test_support::{
+    FakeWebRtcAdapter, FakeWebRtcEvent,
 };
+pub(super) use crate::runtime::transport_adapter::{ActiveSpeakerSource, RuntimeTransportAdapter};
 pub(super) use o_sfu_protocol::shared::{
     DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
 };

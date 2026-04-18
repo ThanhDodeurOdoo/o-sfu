@@ -12,9 +12,9 @@ use crate::{
         recording::MediaTap,
         transport_adapter::{
             RtcTransportAdapterConfig, SessionOffer, SourcePacketGate, TransportAdapterError,
-            TransportConnectDirection, TransportConnectRequest, TransportMediaId,
-            TransportSessionKey,
+            TransportMediaId, TransportSessionKey,
         },
+        transport_connect::{TransportConnectDirection, TransportConnectRequest},
     },
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;

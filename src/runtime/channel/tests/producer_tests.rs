@@ -8,9 +8,9 @@ use crate::runtime::channel::Channel;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
+use crate::runtime::transport_adapter::test_support::FakeWebRtcEvent;
 use crate::runtime::transport_adapter::{
-    FakeWebRtcEvent, RtcTransportAdapterShardSetConfig, SourcePacketGate, TransportMediaId,
-    TransportSessionKey,
+    RtcTransportAdapterShardSetConfig, SourcePacketGate, TransportMediaId, TransportSessionKey,
 };
 use o_sfu_router::MediaKind;
 use str0m::{Candidate, Rtc, change::SdpOffer};
@@ -915,9 +915,9 @@ async fn session_replacement_purges_all_published_stream_mappings() {
 async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter() {
     let (channel, _adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     let (fake_transport_adapter, _) = fake_adapter();
-    let RuntimeTransportAdapter::Fake(fake) = &fake_transport_adapter else {
-        panic!("expected fake transport adapter");
-    };
+    let fake = fake_transport_adapter
+        .as_fake_adapter()
+        .expect("expected fake transport adapter");
     fake.set_publish_media_delay(Some(Duration::from_millis(200)));
 
     let publish_task = tokio::spawn({

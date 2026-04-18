@@ -35,10 +35,8 @@ pub(super) use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         testing::decode_protocol_welcome_batch,
-        transport_adapter::{
-            FakeWebRtcAdapter, FakeWebRtcEvent, RtcTransportAdapterShardSetConfig,
-            RuntimeTransportAdapter,
-        },
+        transport_adapter::test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+        transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter},
     },
 };
 

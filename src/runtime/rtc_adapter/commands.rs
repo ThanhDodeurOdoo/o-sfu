@@ -10,13 +10,13 @@ use tokio::sync::{mpsc, oneshot};
 #[cfg(feature = "internal-benchmarks")]
 use std::net::SocketAddr;
 
-#[cfg(test)]
-use crate::runtime::transport_adapter::TransportConnectDirection;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
+#[cfg(test)]
+use crate::runtime::transport_connect::TransportConnectDirection;
 
 use super::relay_registry::RelayTargetId;
 use super::route_control::PacketLayerGate;

@@ -1,5 +1,6 @@
-use crate::runtime::transport_adapter::{
-    TransportConnectDirection, TransportMediaId, TransportSessionKey,
+use crate::runtime::{
+    transport_adapter::{TransportMediaId, TransportSessionKey},
+    transport_connect::TransportConnectDirection,
 };
 
 use super::super::route_control::PacketLayerGate;

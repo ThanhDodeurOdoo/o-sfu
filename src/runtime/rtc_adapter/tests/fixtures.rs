@@ -28,8 +28,7 @@ pub(super) use super::super::{
 };
 pub(super) use crate::{
     runtime::transport_adapter::{
-        ActiveSpeakerSource, TransportAdapterError, TransportConnectDirection,
-        TransportConnectRequest, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
     },
     runtime::transport_bootstrap::{
         SessionTransportBootstrap, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm,
@@ -39,8 +38,8 @@ pub(super) use crate::{
         TransportSctpParameters,
     },
     runtime::transport_connect::{
-        TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
-        TransportConnectIceParameters,
+        TransportConnectDirection, TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
+        TransportConnectIceParameters, TransportConnectRequest,
     },
 };
 pub(super) use o_sfu_protocol::shared::SessionId;
@@ -122,12 +121,12 @@ pub(super) fn sample_sha256_dtls_parameters_with_value(
     }
 }
 
-pub(super) fn sample_candidate(protocol: TransportIceProtocol, port: u16) -> TransportIceCandidate {
+pub(super) fn sample_candidate(port: u16) -> TransportIceCandidate {
     TransportIceCandidate {
         foundation: String::from("foundation"),
         priority: 2_113_937_151,
         ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-        protocol,
+        protocol: TransportIceProtocol::Udp,
         port,
         candidate_type: TransportIceCandidateType::Host,
     }

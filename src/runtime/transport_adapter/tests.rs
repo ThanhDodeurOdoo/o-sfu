@@ -16,9 +16,10 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
+        transport_adapter::test_support::FakeWebRtcAdapter,
         transport_adapter::{
-            ActiveSpeakerSource, FakeWebRtcAdapter, RtcTransportAdapterShardSetConfig,
-            TransportAdapterError, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, RtcTransportAdapterShardSetConfig, TransportAdapterError,
+            TransportMediaId, TransportSessionKey,
         },
     },
 };

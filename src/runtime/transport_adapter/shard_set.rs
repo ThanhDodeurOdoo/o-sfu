@@ -1,16 +1,12 @@
+#[cfg(test)]
+use std::iter;
 use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 
-#[cfg(test)]
-use crate::runtime::rtc_adapter::test_support::DebugRouteEntry;
 use crate::runtime::rtc_adapter::{RelayCleanup, RtcTransportAdapter};
 use crate::runtime::transport_adapter::config::RtcTransportAdapterShardSetConfig;
-#[cfg(test)]
-use crate::runtime::transport_adapter::types::TransportMediaId;
 use crate::runtime::transport_adapter::types::{
     ActiveSpeakerSource, TransportBitrateSnapshot, TransportSessionKey,
 };
-#[cfg(test)]
-use str0m::media::Mid;
 
 #[derive(Debug)]
 /// Process-local collection of RTC transport shards keyed by media-worker id.
@@ -122,64 +118,6 @@ impl RtcTransportAdapterShardSet {
         snapshot
     }
 
-    #[cfg(test)]
-    pub(super) async fn debug_route_entry(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_mid: Mid,
-    ) -> Option<DebugRouteEntry> {
-        self.shard_for_session(source_session_key)
-            .debug_route_entry(source_session_key, source_mid)
-            .await
-    }
-
-    #[cfg(test)]
-    pub(super) async fn debug_route_entry_by_consumer_mid(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_mid: Mid,
-    ) -> Option<DebugRouteEntry> {
-        if let Some(entry) = self
-            .primary_shard
-            .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
-            .await
-        {
-            return Some(entry);
-        }
-        for shard in &self.extra_shards {
-            if let Some(entry) = shard
-                .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
-                .await
-            {
-                return Some(entry);
-            }
-        }
-        None
-    }
-
-    #[cfg(test)]
-    pub(super) async fn debug_route_entry_by_media_id(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> Option<DebugRouteEntry> {
-        if let Some(entry) = self
-            .primary_shard
-            .debug_route_entry_by_media_id(source_transport_media_id)
-            .await
-        {
-            return Some(entry);
-        }
-        for shard in &self.extra_shards {
-            if let Some(entry) = shard
-                .debug_route_entry_by_media_id(source_transport_media_id)
-                .await
-            {
-                return Some(entry);
-            }
-        }
-        None
-    }
-
     fn shard_index_for_session(&self, session_key: &TransportSessionKey) -> usize {
         self.shard_index_for_media_worker_id(session_key.media_worker_id())
     }
@@ -201,5 +139,10 @@ impl RtcTransportAdapterShardSet {
             .get(shard_index.saturating_sub(1))
             .cloned()
             .unwrap_or_else(|| Arc::clone(&self.primary_shard))
+    }
+
+    #[cfg(test)]
+    pub(super) fn all_shards(&self) -> impl Iterator<Item = &Arc<RtcTransportAdapter>> {
+        iter::once(&self.primary_shard).chain(self.extra_shards.iter())
     }
 }

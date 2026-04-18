@@ -57,8 +57,7 @@ impl MediaTap {
         );
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_channel_active(&self, channel_runtime_id: u64) -> bool {
+    pub(super) fn has_active_channel(&self, channel_runtime_id: u64) -> bool {
         self.active_channels
             .read()
             .unwrap_or_else(PoisonError::into_inner)

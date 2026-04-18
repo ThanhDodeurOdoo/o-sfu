@@ -17,12 +17,12 @@ use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::metrics::RuntimeMetrics;
-#[cfg(test)]
-use crate::runtime::transport_adapter::TransportConnectDirection;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
+#[cfg(test)]
+use crate::runtime::transport_connect::TransportConnectDirection;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::super::{

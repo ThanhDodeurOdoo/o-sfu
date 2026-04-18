@@ -8,7 +8,10 @@ use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 use crate::runtime::{
     metrics::RuntimeMetrics,
     recording::{
-        MediaSource, MediaTap, RecordingLifecycleState, RecordingService, into_media_source,
+        MediaSource, MediaTap, RecordingService,
+        test_support::{
+            RecordingLifecycleState, into_media_source, is_channel_active, transition_error_state,
+        },
     },
     rtc_adapter::sample_forwarded_packet,
 };
@@ -57,20 +60,18 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
         service.snapshot().lifecycle,
         RecordingLifecycleState::Recording
     );
-    assert!(media_tap.is_channel_active(17));
+    assert!(is_channel_active(&media_tap, 17));
 
     let invalid_start = service.start();
     assert!(invalid_start.is_err());
     assert_eq!(
-        invalid_start
-            .err()
-            .map(super::super::service::RecordingTransitionError::state),
+        invalid_start.err().map(transition_error_state),
         Some(RecordingLifecycleState::Recording)
     );
 
     assert!(service.stop().is_ok());
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
-    assert!(!media_tap.is_channel_active(17));
+    assert!(!is_channel_active(&media_tap, 17));
 }
 
 #[test]
