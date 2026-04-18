@@ -104,8 +104,7 @@ pub(super) fn parse_dtls_parameters(
             RFC_4572_SECTION_5,
             &raw_json,
         );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
+        return Err(boxed_diagnostic(diagnostic));
     }
 
     let mut fingerprints = Vec::with_capacity(raw_dtls_parameters.fingerprints.len());
@@ -127,8 +126,7 @@ fn parse_role(role_token: &str, raw_json: &str) -> DtlsParseResult<ParsedDtlsRol
             RFC_5763_SECTION_5,
             raw_json,
         );
-        log_diagnostic(&diagnostic);
-        Box::new(diagnostic)
+        boxed_diagnostic(diagnostic)
     })
 }
 
@@ -161,8 +159,7 @@ fn parse_fingerprint_algorithm(
             RFC_4572_SECTION_5,
             raw_json,
         );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
+        return Err(boxed_diagnostic(diagnostic));
     }
     let diagnostic = invalid_input(
         "DTLS fingerprint algorithm token is invalid",
@@ -172,8 +169,7 @@ fn parse_fingerprint_algorithm(
         RFC_4572_SECTION_5,
         raw_json,
     );
-    log_diagnostic(&diagnostic);
-    Err(Box::new(diagnostic))
+    Err(boxed_diagnostic(diagnostic))
 }
 
 fn validate_sha256_fingerprint(value_token: &str, raw_json: &str) -> DtlsParseResult<()> {
@@ -187,8 +183,7 @@ fn validate_sha256_fingerprint(value_token: &str, raw_json: &str) -> DtlsParseRe
             RFC_4572_SECTION_5,
             raw_json,
         );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
+        return Err(boxed_diagnostic(diagnostic));
     }
     for segment in segments {
         let is_hex_byte =
@@ -202,8 +197,7 @@ fn validate_sha256_fingerprint(value_token: &str, raw_json: &str) -> DtlsParseRe
                 RFC_4572_SECTION_5,
                 raw_json,
             );
-            log_diagnostic(&diagnostic);
-            return Err(Box::new(diagnostic));
+            return Err(boxed_diagnostic(diagnostic));
         }
     }
     Ok(())
@@ -249,6 +243,11 @@ fn unsupported_feature(
         },
         raw_json.to_owned(),
     )
+}
+
+fn boxed_diagnostic(diagnostic: DtlsParseDiagnostic) -> Box<DtlsParseDiagnostic> {
+    log_diagnostic(&diagnostic);
+    Box::new(diagnostic)
 }
 
 fn log_diagnostic(diagnostic: &DtlsParseDiagnostic) {

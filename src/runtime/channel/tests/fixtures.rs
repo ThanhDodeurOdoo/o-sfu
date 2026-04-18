@@ -61,110 +61,58 @@ pub(super) fn fake_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>
     )
 }
 
-/// Set up a channel with two joined sessions that both have upload and download
-/// transports connected plus client RTP capabilities, ready for publish/consume tests.
-pub(super) async fn setup_two_ready_sessions() -> (
-    Arc<super::super::Channel>,
-    RuntimeTransportAdapter,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-) {
-    let manager = ChannelManager::for_test();
-    let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
-        .await;
-    let (tx1, rx1) = test_sender();
-    let (tx2, rx2) = test_sender();
-    channel
-        .join_session(
-            SessionId::Integer(1),
-            None,
-            SessionPermissions::default(),
-            tx1,
-        )
-        .await
-        .unwrap();
-    channel
-        .join_session(
-            SessionId::Integer(2),
-            None,
-            SessionPermissions::default(),
-            tx2,
-        )
-        .await
-        .unwrap();
-    let (adapter, _fake) = fake_adapter();
-    for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
-        channel.set_publish_transport_ready(session_id).await;
-        channel.set_consume_transport_ready(session_id).await;
-        channel
-            .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
-            .await;
-    }
-    (channel, adapter, rx1, rx2)
+#[derive(Clone, Copy)]
+struct ReadySessionScenarioOptions {
+    include_fake_adapter: bool,
+    publish_camera_before_subscriber_ready: bool,
 }
 
-pub(super) async fn setup_two_ready_sessions_with_fake() -> (
-    Arc<super::super::Channel>,
-    RuntimeTransportAdapter,
-    Arc<FakeWebRtcAdapter>,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-) {
-    let manager = ChannelManager::for_test();
-    let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
-        .await;
-    let (tx1, rx1) = test_sender();
-    let (tx2, rx2) = test_sender();
-    channel
-        .join_session(
-            SessionId::Integer(1),
-            None,
-            SessionPermissions::default(),
-            tx1,
-        )
-        .await
-        .unwrap();
-    channel
-        .join_session(
-            SessionId::Integer(2),
-            None,
-            SessionPermissions::default(),
-            tx2,
-        )
-        .await
-        .unwrap();
-    let (adapter, fake) = fake_adapter();
-    for session_id in &[SessionId::Integer(1), SessionId::Integer(2)] {
-        channel.set_publish_transport_ready(session_id).await;
-        channel.set_consume_transport_ready(session_id).await;
-        channel
-            .set_client_rtp_capabilities(session_id, test_client_rtp_capabilities())
-            .await;
-    }
-    (channel, adapter, fake, rx1, rx2)
+struct ReadySessionScenario {
+    channel: Arc<super::super::Channel>,
+    adapter: RuntimeTransportAdapter,
+    fake: Option<Arc<FakeWebRtcAdapter>>,
+    first_rx: mpsc::UnboundedReceiver<SessionOutbound>,
+    second_rx: mpsc::UnboundedReceiver<SessionOutbound>,
 }
 
-pub(super) async fn setup_late_join_bootstrap_scenario() -> (
-    Arc<super::super::Channel>,
-    RuntimeTransportAdapter,
-    Arc<FakeWebRtcAdapter>,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-) {
+impl ReadySessionScenarioOptions {
+    const fn two_ready_sessions() -> Self {
+        Self {
+            include_fake_adapter: false,
+            publish_camera_before_subscriber_ready: false,
+        }
+    }
+
+    const fn two_ready_sessions_with_fake() -> Self {
+        Self {
+            include_fake_adapter: true,
+            publish_camera_before_subscriber_ready: false,
+        }
+    }
+
+    const fn late_join_bootstrap() -> Self {
+        Self {
+            include_fake_adapter: true,
+            publish_camera_before_subscriber_ready: true,
+        }
+    }
+}
+
+async fn setup_ready_session_scenario(
+    options: ReadySessionScenarioOptions,
+) -> ReadySessionScenario {
     let manager = ChannelManager::for_test();
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (publisher_tx, publisher_rx) = test_sender();
-    let (subscriber_tx, subscriber_rx) = test_sender();
+    let (first_tx, first_rx) = test_sender();
+    let (second_tx, second_rx) = test_sender();
     channel
         .join_session(
             SessionId::Integer(1),
             None,
             SessionPermissions::default(),
-            publisher_tx,
+            first_tx,
         )
         .await
         .unwrap();
@@ -173,12 +121,18 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
             SessionId::Integer(2),
             None,
             SessionPermissions::default(),
-            subscriber_tx,
+            second_tx,
         )
         .await
         .unwrap();
 
-    let (transport_adapter, fake) = fake_adapter();
+    let (adapter, fake) = if options.include_fake_adapter {
+        let (adapter, fake) = fake_adapter();
+        (adapter, Some(fake))
+    } else {
+        (RuntimeTransportAdapter::fake_for_testing(), None)
+    };
+
     channel
         .set_publish_transport_ready(&SessionId::Integer(1))
         .await;
@@ -188,22 +142,92 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     channel
         .set_client_rtp_capabilities(&SessionId::Integer(1), test_client_rtp_capabilities())
         .await;
-    channel
-        .publish_track(
-            &SessionId::Integer(1),
-            StreamType::Camera,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &transport_adapter,
-        )
-        .await;
 
-    (
+    if options.publish_camera_before_subscriber_ready {
+        channel
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await;
+    }
+
+    if !options.publish_camera_before_subscriber_ready {
+        channel
+            .set_publish_transport_ready(&SessionId::Integer(2))
+            .await;
+        channel
+            .set_consume_transport_ready(&SessionId::Integer(2))
+            .await;
+        channel
+            .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
+            .await;
+    }
+
+    ReadySessionScenario {
         channel,
-        transport_adapter,
+        adapter,
         fake,
-        publisher_rx,
-        subscriber_rx,
+        first_rx,
+        second_rx,
+    }
+}
+
+/// Set up a channel with two joined sessions that both have upload and download
+/// transports connected plus client RTP capabilities, ready for publish/consume tests.
+pub(super) async fn setup_two_ready_sessions() -> (
+    Arc<super::super::Channel>,
+    RuntimeTransportAdapter,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+) {
+    let scenario =
+        setup_ready_session_scenario(ReadySessionScenarioOptions::two_ready_sessions()).await;
+    (
+        scenario.channel,
+        scenario.adapter,
+        scenario.first_rx,
+        scenario.second_rx,
+    )
+}
+
+pub(super) async fn setup_two_ready_sessions_with_fake() -> (
+    Arc<super::super::Channel>,
+    RuntimeTransportAdapter,
+    Arc<FakeWebRtcAdapter>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+) {
+    let scenario =
+        setup_ready_session_scenario(ReadySessionScenarioOptions::two_ready_sessions_with_fake())
+            .await;
+    (
+        scenario.channel,
+        scenario.adapter,
+        scenario.fake.unwrap(),
+        scenario.first_rx,
+        scenario.second_rx,
+    )
+}
+
+pub(super) async fn setup_late_join_bootstrap_scenario() -> (
+    Arc<super::super::Channel>,
+    RuntimeTransportAdapter,
+    Arc<FakeWebRtcAdapter>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+    mpsc::UnboundedReceiver<SessionOutbound>,
+) {
+    let scenario =
+        setup_ready_session_scenario(ReadySessionScenarioOptions::late_join_bootstrap()).await;
+    (
+        scenario.channel,
+        scenario.adapter,
+        scenario.fake.unwrap(),
+        scenario.first_rx,
+        scenario.second_rx,
     )
 }
 

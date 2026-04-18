@@ -170,8 +170,7 @@ pub(super) fn parse_offer_sdp(raw_sdp: &str) -> SdpParseResult<ParsedOfferSdp> {
             RFC_8866_SECTION_5_14,
             raw_sdp,
         );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
+        return Err(boxed_diagnostic(diagnostic));
     }
     Ok(ParsedOfferSdp { media_sections })
 }
@@ -212,13 +211,14 @@ fn extract_media_line_tokens<'a>(
     media_description: &'a str,
 ) -> SdpParseResult<MediaLineTokens<'a>> {
     let mut tokens = media_description.split_whitespace();
-    let media_kind_token = tokens.next();
-    let port_token = tokens.next();
-    let transport_protocol_token = tokens.next();
+    let media_kind_token =
+        required_media_line_token(tokens.next(), raw_sdp, line_number, line, media_description)?;
+    let port_token =
+        required_media_line_token(tokens.next(), raw_sdp, line_number, line, media_description)?;
+    let transport_protocol_token =
+        required_media_line_token(tokens.next(), raw_sdp, line_number, line, media_description)?;
     let formats = tokens.collect::<Vec<_>>();
-    let has_minimum_tokens =
-        media_kind_token.is_some() && port_token.is_some() && transport_protocol_token.is_some();
-    if !has_minimum_tokens || formats.is_empty() {
+    if formats.is_empty() {
         let diagnostic = invalid_input(
             "SDP media description line is incomplete",
             String::from(EXPECTED_MEDIA_LINE_FORMAT),
@@ -228,53 +228,33 @@ fn extract_media_line_tokens<'a>(
             RFC_8866_SECTION_5_14,
             raw_sdp,
         );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
+        return Err(boxed_diagnostic(diagnostic));
     }
-    let Some(media_kind_token) = media_kind_token else {
-        let diagnostic = invalid_input(
-            "SDP media description line is incomplete",
-            String::from(EXPECTED_MEDIA_LINE_FORMAT),
-            media_description.to_owned(),
-            Some(line_number),
-            Some(line),
-            RFC_8866_SECTION_5_14,
-            raw_sdp,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(port_token) = port_token else {
-        let diagnostic = invalid_input(
-            "SDP media description line is incomplete",
-            String::from(EXPECTED_MEDIA_LINE_FORMAT),
-            media_description.to_owned(),
-            Some(line_number),
-            Some(line),
-            RFC_8866_SECTION_5_14,
-            raw_sdp,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(transport_protocol_token) = transport_protocol_token else {
-        let diagnostic = invalid_input(
-            "SDP media description line is incomplete",
-            String::from(EXPECTED_MEDIA_LINE_FORMAT),
-            media_description.to_owned(),
-            Some(line_number),
-            Some(line),
-            RFC_8866_SECTION_5_14,
-            raw_sdp,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
     Ok(MediaLineTokens {
         media_kind_token,
         port_token,
         transport_protocol_token,
         formats,
+    })
+}
+
+fn required_media_line_token<'a>(
+    token: Option<&'a str>,
+    raw_sdp: &str,
+    line_number: usize,
+    line: &'a str,
+    media_description: &'a str,
+) -> SdpParseResult<&'a str> {
+    token.ok_or_else(|| {
+        boxed_diagnostic(invalid_input(
+            "SDP media description line is incomplete",
+            String::from(EXPECTED_MEDIA_LINE_FORMAT),
+            media_description.to_owned(),
+            Some(line_number),
+            Some(line),
+            RFC_8866_SECTION_5_14,
+            raw_sdp,
+        ))
     })
 }
 
@@ -298,8 +278,7 @@ fn parse_media_kind(
                 rfc_reference,
                 raw_sdp,
             );
-            log_diagnostic(&diagnostic);
-            return Err(Box::new(diagnostic));
+            return Err(boxed_diagnostic(diagnostic));
         }
     };
     Ok(media_kind)
@@ -316,8 +295,7 @@ fn parse_port(token: &str, raw_sdp: &str, line_number: usize, line: &str) -> Sdp
             RFC_8866_SECTION_5_14,
             raw_sdp,
         );
-        log_diagnostic(&diagnostic);
-        Box::new(diagnostic)
+        boxed_diagnostic(diagnostic)
     })
 }
 
@@ -340,8 +318,7 @@ fn parse_transport_protocol(
                 RFC_8829_SECTION_5_8,
                 raw_sdp,
             );
-            log_diagnostic(&diagnostic);
-            return Err(Box::new(diagnostic));
+            return Err(boxed_diagnostic(diagnostic));
         }
         _ => {
             let diagnostic = invalid_input(
@@ -353,8 +330,7 @@ fn parse_transport_protocol(
                 RFC_8829_SECTION_5_8,
                 raw_sdp,
             );
-            log_diagnostic(&diagnostic);
-            return Err(Box::new(diagnostic));
+            return Err(boxed_diagnostic(diagnostic));
         }
     };
     Ok(protocol)
@@ -404,6 +380,11 @@ fn unsupported_feature(
         },
         raw_sdp.to_owned(),
     )
+}
+
+fn boxed_diagnostic(diagnostic: SdpParseDiagnostic) -> Box<SdpParseDiagnostic> {
+    log_diagnostic(&diagnostic);
+    Box::new(diagnostic)
 }
 
 fn log_diagnostic(diagnostic: &SdpParseDiagnostic) {

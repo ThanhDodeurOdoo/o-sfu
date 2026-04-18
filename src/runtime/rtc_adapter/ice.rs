@@ -6,6 +6,8 @@ use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
 const ICE_REPLAY_CONTEXT_HINT: &str = "raw ICE candidate line";
+const EXPECTED_CANDIDATE_FORMAT: &str =
+    "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>";
 
 const RFC_8445_SECTION_5_1_1: RfcReference = RfcReference::new(
     "RFC 8445",
@@ -75,123 +77,14 @@ pub(super) fn parse_ice_candidate(raw_candidate: &str) -> IceParseResult<ParsedI
         .strip_prefix(webrtc::ice::candidate_attribute::PREFIX)
         .unwrap_or(normalized);
     let tokens = normalized.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() < 8 {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    }
-    let Some(foundation_token) = tokens.first() else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(component_id_token) = tokens.get(1) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(transport_token) = tokens.get(2) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(priority_token) = tokens.get(3) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(address_token) = tokens.get(4) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(port_token) = tokens.get(5) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(candidate_label_token) = tokens.get(6) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
-    let Some(candidate_type_token) = tokens.get(7) else {
-        let diagnostic = invalid_input(
-            "ICE candidate line is incomplete",
-            String::from(
-                "<foundation> <component-id> <transport> <priority> <connection-address> <port> typ <type>",
-            ),
-            normalized.to_owned(),
-            RFC_5245_SECTION_15_1,
-            raw_candidate,
-        );
-        log_diagnostic(&diagnostic);
-        return Err(Box::new(diagnostic));
-    };
+    let foundation_token = required_token(&tokens, 0, normalized, raw_candidate)?;
+    let component_id_token = required_token(&tokens, 1, normalized, raw_candidate)?;
+    let transport_token = required_token(&tokens, 2, normalized, raw_candidate)?;
+    let priority_token = required_token(&tokens, 3, normalized, raw_candidate)?;
+    let address_token = required_token(&tokens, 4, normalized, raw_candidate)?;
+    let port_token = required_token(&tokens, 5, normalized, raw_candidate)?;
+    let candidate_label_token = required_token(&tokens, 6, normalized, raw_candidate)?;
+    let candidate_type_token = required_token(&tokens, 7, normalized, raw_candidate)?;
     let extension_tokens = tokens.get(8..).unwrap_or(&[]);
 
     let foundation = (*foundation_token).to_owned();
@@ -211,6 +104,23 @@ pub(super) fn parse_ice_candidate(raw_candidate: &str) -> IceParseResult<ParsedI
         address,
         port,
         candidate_type,
+    })
+}
+
+fn required_token<'a>(
+    tokens: &'a [&str],
+    index: usize,
+    normalized_candidate: &str,
+    raw_candidate: &str,
+) -> IceParseResult<&'a str> {
+    tokens.get(index).copied().ok_or_else(|| {
+        boxed_diagnostic(invalid_input(
+            "ICE candidate line is incomplete",
+            String::from(EXPECTED_CANDIDATE_FORMAT),
+            normalized_candidate.to_owned(),
+            RFC_5245_SECTION_15_1,
+            raw_candidate,
+        ))
     })
 }
 
@@ -260,8 +170,7 @@ fn parse_transport(token: &str, raw_candidate: &str) -> IceParseResult<webrtc::I
                 RFC_8445_SECTION_5_1_1,
                 raw_candidate,
             );
-            log_diagnostic(&diagnostic);
-            Err(Box::new(diagnostic))
+            Err(boxed_diagnostic(diagnostic))
         }
         None => {
             let diagnostic = invalid_input(
@@ -271,8 +180,7 @@ fn parse_transport(token: &str, raw_candidate: &str) -> IceParseResult<webrtc::I
                 RFC_8445_SECTION_5_1_1,
                 raw_candidate,
             );
-            log_diagnostic(&diagnostic);
-            Err(Box::new(diagnostic))
+            Err(boxed_diagnostic(diagnostic))
         }
     }
 }
@@ -286,8 +194,7 @@ fn parse_priority(token: &str, raw_candidate: &str) -> IceParseResult<u32> {
             RFC_8445_SECTION_5_1_1,
             raw_candidate,
         );
-        log_diagnostic(&diagnostic);
-        Box::new(diagnostic)
+        boxed_diagnostic(diagnostic)
     })
 }
 
@@ -299,8 +206,7 @@ fn parse_address(token: &str, raw_candidate: &str) -> IceParseResult<IpAddr> {
             RFC_5245_SECTION_15_1,
             raw_candidate,
         );
-        log_diagnostic(&diagnostic);
-        Box::new(diagnostic)
+        boxed_diagnostic(diagnostic)
     })
 }
 
@@ -329,8 +235,7 @@ fn ensure_type_label(token: &str, raw_candidate: &str) -> IceParseResult<()> {
         RFC_5245_SECTION_15_1,
         raw_candidate,
     );
-    log_diagnostic(&diagnostic);
-    Err(Box::new(diagnostic))
+    Err(boxed_diagnostic(diagnostic))
 }
 
 fn parse_candidate_type(
@@ -345,8 +250,7 @@ fn parse_candidate_type(
                 RFC_5245_SECTION_15_1,
                 raw_candidate,
             );
-            log_diagnostic(&diagnostic);
-            Err(Box::new(diagnostic))
+            Err(boxed_diagnostic(diagnostic))
         },
         Ok,
     )
@@ -362,8 +266,7 @@ fn ensure_supported_extensions(tokens: &[&str], raw_candidate: &str) -> IceParse
         RFC_5245_SECTION_15_1,
         raw_candidate,
     );
-    log_diagnostic(&diagnostic);
-    Err(Box::new(diagnostic))
+    Err(boxed_diagnostic(diagnostic))
 }
 
 fn invalid_input(
@@ -402,6 +305,11 @@ fn unsupported_feature(
         },
         raw_candidate.to_owned(),
     )
+}
+
+fn boxed_diagnostic(diagnostic: IceParseDiagnostic) -> Box<IceParseDiagnostic> {
+    log_diagnostic(&diagnostic);
+    Box::new(diagnostic)
 }
 
 fn log_diagnostic(diagnostic: &IceParseDiagnostic) {

@@ -200,16 +200,18 @@ impl ChannelState {
                 )) {
                     return None;
                 }
-                Some(PendingConsumerBootstrapTarget {
-                    consumer_session_id: peer_session_id.clone(),
-                    consumer_connection_id: peer_session.connection_id,
-                    producer_session_id: producer_session_id.clone(),
-                    producer_connection_id,
-                    producer_id,
-                    stream_type,
-                    media_kind,
-                    transport_media_id,
-                })
+                Some(PendingConsumerBootstrapTarget::new(
+                    peer_session_id.clone(),
+                    peer_session.connection_id,
+                    super::bootstrap::ConsumerBootstrapProducerSnapshot::pending(
+                        producer_session_id.clone(),
+                        producer_connection_id,
+                        producer_id,
+                        stream_type,
+                        media_kind,
+                        transport_media_id,
+                    ),
+                ))
             })
             .collect()
     }
