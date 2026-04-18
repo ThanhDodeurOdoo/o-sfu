@@ -17,8 +17,8 @@ use super::{
     helpers::{
         consumer_packet_gate, primary_encoding_identity, relay_cleanup_for_source, transport_mid,
     },
+    ownership::ensure_route_source_registered,
     route_control::refresh_source_packet_gate,
-    route_source::ensure_route_source_registered,
     types::{AddSendMediaRequest, RouteSourceKind},
 };
 
@@ -73,7 +73,8 @@ pub(crate) fn respond_resolve_media_mid(
     let _ = response.send(Ok(resolved_mid));
 }
 
-// TODO: needs documentation:
+/// Remove one registered transport media handle and reconcile every dependent
+/// SDP, route, and remote-source side effect that still points at it.
 fn worker_remove_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -207,7 +208,7 @@ fn worker_stage_native_media_removal(
     Ok(())
 }
 
-// TODO: needs documentation:
+/// Declare one recv-only media line owned by the publishing session.
 fn worker_add_recv_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -284,7 +285,8 @@ fn worker_stage_native_recv_media(
     Ok(mid)
 }
 
-// TODO: needs documentation:
+/// Declare one send-only media line for a consumer route and register the
+/// corresponding route-source ownership in the worker bootstrap state.
 fn worker_add_send_media(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,

@@ -1,4 +1,3 @@
-// TODO: needs documentation:
 //! Channel runtime layer: membership, bootstrap orchestration, and channel-local state.
 //!
 //! Internal modules:
@@ -23,6 +22,7 @@ mod definition;
 mod directory;
 mod events;
 mod factory;
+mod lifecycle;
 mod manager;
 mod media;
 mod media_transaction;
@@ -44,6 +44,7 @@ pub(crate) use controller::{
     ChannelRuntimePolicy, ChannelSessionStatsSnapshot, TrackBindingUpdate,
 };
 pub(crate) use events::ChannelEventMessage;
+pub(crate) use lifecycle::{ChannelSessionPermissions, SessionCloseReason};
 pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;

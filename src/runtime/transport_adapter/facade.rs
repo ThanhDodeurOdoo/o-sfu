@@ -15,13 +15,34 @@ use tracing::warn;
 
 /// Runtime boundary between signaling/session orchestration and transport-specific behavior.
 ///
-/// Implementations provide transport bootstrap payloads and transport connection handling
-/// without leaking concrete WebRTC library details into the signaling flow.
+/// The enum remains only as the transport selector. Semantic responsibilities are
+/// surfaced through `negotiation()`, `media()`, `sessions()`, and `observability()`
+/// so the selector itself does not keep growing as a catch-all facade.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeTransportAdapter {
     #[cfg(any(test, feature = "testing-transport"))]
     Fake(Arc<FakeWebRtcAdapter>),
     Rtc(Arc<RtcTransportAdapterShardSet>),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimeTransportNegotiation<'a> {
+    adapter: &'a RuntimeTransportAdapter,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimeTransportMedia<'a> {
+    adapter: &'a RuntimeTransportAdapter,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimeTransportSessions<'a> {
+    adapter: &'a RuntimeTransportAdapter,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimeTransportObservability<'a> {
+    adapter: &'a RuntimeTransportAdapter,
 }
 
 impl RuntimeTransportAdapter {
@@ -30,17 +51,209 @@ impl RuntimeTransportAdapter {
         Self::Rtc(Arc::new(RtcTransportAdapterShardSet::new(config)))
     }
 
-    /// Create the first server-authored SDP offer for the protocol signaling path.
+    #[must_use]
+    pub(crate) const fn negotiation(&self) -> RuntimeTransportNegotiation<'_> {
+        RuntimeTransportNegotiation { adapter: self }
+    }
+
+    #[must_use]
+    pub(crate) const fn media(&self) -> RuntimeTransportMedia<'_> {
+        RuntimeTransportMedia { adapter: self }
+    }
+
+    #[must_use]
+    pub(crate) const fn sessions(&self) -> RuntimeTransportSessions<'_> {
+        RuntimeTransportSessions { adapter: self }
+    }
+
+    #[must_use]
+    pub(crate) const fn observability(&self) -> RuntimeTransportObservability<'_> {
+        RuntimeTransportObservability { adapter: self }
+    }
+
     pub(crate) async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        let result = match self {
+        self.negotiation()
+            .create_initial_session_offer(session_key)
+            .await
+    }
+
+    pub(crate) async fn create_session_renegotiation_offer(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        self.negotiation()
+            .create_session_renegotiation_offer(session_key)
+            .await
+    }
+
+    pub(crate) async fn apply_session_answer(
+        &self,
+        session_key: &TransportSessionKey,
+        answer_sdp: &str,
+    ) -> Result<(), TransportAdapterError> {
+        self.negotiation()
+            .apply_session_answer(session_key, answer_sdp)
+            .await
+    }
+
+    pub(crate) fn negotiated_client_rtp_capabilities(
+        &self,
+        answer_sdp: &str,
+        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+    ) -> Result<MediaCapabilities, TransportAdapterError> {
+        self.negotiation()
+            .negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
+    }
+
+    pub(crate) async fn close_session(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<(), TransportAdapterError> {
+        self.sessions().close_session(session_key).await
+    }
+
+    pub(crate) async fn remove_media(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        self.media()
+            .remove_media(session_key, transport_media_id)
+            .await
+    }
+
+    #[allow(
+        dead_code,
+        reason = "protocol publish commit wiring is staged separately from answered-SDP publication extraction"
+    )]
+    pub(crate) async fn negotiated_producer_parameters(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Result<RouterRtpParameters, TransportAdapterError> {
+        self.media()
+            .negotiated_producer_parameters(session_key, transport_media_id)
+            .await
+    }
+
+    pub(crate) async fn publish_media(
+        &self,
+        session_key: &TransportSessionKey,
+        media_kind: MediaKind,
+        rtp_parameters: &RouterRtpParameters,
+    ) -> Result<TransportMediaId, TransportAdapterError> {
+        self.media()
+            .publish_media(session_key, media_kind, rtp_parameters)
+            .await
+    }
+
+    pub(crate) async fn consume_media(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        media_kind: MediaKind,
+        source_session_key: &TransportSessionKey,
+        source_media_id: TransportMediaId,
+        consumer_rtp_parameters: &RouterRtpParameters,
+    ) -> Result<TransportMediaId, TransportAdapterError> {
+        self.media()
+            .consume_media(
+                consumer_session_key,
+                media_kind,
+                source_session_key,
+                source_media_id,
+                consumer_rtp_parameters,
+            )
+            .await
+    }
+
+    pub(crate) fn transport_bitrate_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportBitrateSnapshot {
+        self.observability()
+            .transport_bitrate_snapshot(session_keys)
+    }
+
+    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
+        self.observability().active_speaker_source_snapshot().await
+    }
+
+    pub(crate) fn session_transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
+        self.observability().session_transport_health(session_key)
+    }
+
+    pub(crate) async fn set_producer_active(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        self.media()
+            .set_producer_active(session_key, transport_media_id, active)
+            .await
+    }
+
+    pub(crate) async fn set_consumer_active(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        active: bool,
+    ) -> Result<(), TransportAdapterError> {
+        self.media()
+            .set_consumer_active(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+                active,
+            )
+            .await
+    }
+
+    pub(crate) async fn transport_media_mid(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Option<String> {
+        self.media()
+            .transport_media_mid(session_key, transport_media_id)
+            .await
+    }
+
+    pub(crate) async fn set_source_packet_gate(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: Option<SourcePacketGate>,
+    ) -> Result<(), TransportAdapterError> {
+        self.media()
+            .set_source_packet_gate(source_session_key, source_transport_media_id, packet_gate)
+            .await
+    }
+}
+
+impl RuntimeTransportNegotiation<'_> {
+    pub(crate) async fn create_initial_session_offer(
+        self,
+        session_key: &TransportSessionKey,
+    ) -> Result<SessionOffer, TransportAdapterError> {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => adapter.create_initial_session_offer(session_key).await,
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
+                adapter.create_initial_session_offer(session_key).await
+            }
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
+                    .negotiation()
                     .create_initial_session_offer(session_key)
                     .await
             }
@@ -55,21 +268,21 @@ impl RuntimeTransportAdapter {
         result
     }
 
-    /// Create a follow-up renegotiation offer for the protocol signaling path.
     pub(crate) async fn create_session_renegotiation_offer(
-        &self,
+        self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .create_session_renegotiation_offer(session_key)
                     .await
             }
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
+                    .negotiation()
                     .create_session_renegotiation_offer(session_key)
                     .await
             }
@@ -84,18 +297,20 @@ impl RuntimeTransportAdapter {
         result
     }
 
-    /// Apply the remote answer to the outstanding protocol session offer.
     pub(crate) async fn apply_session_answer(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<(), TransportAdapterError> {
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => adapter.apply_session_answer(session_key, answer_sdp).await,
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
+                adapter.apply_session_answer(session_key, answer_sdp).await
+            }
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
+                    .negotiation()
                     .apply_session_answer(session_key, answer_sdp)
                     .await
             }
@@ -112,20 +327,24 @@ impl RuntimeTransportAdapter {
     }
 
     pub(crate) fn negotiated_client_rtp_capabilities(
-        &self,
+        self,
         answer_sdp: &str,
         offered_router_capabilities: &o_sfu_router::RtpCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         #[cfg(not(any(test, feature = "testing-transport")))]
         let _ = offered_router_capabilities;
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(_adapter) => FakeWebRtcAdapter::project_answered_client_rtp_capabilities(
-                answer_sdp,
-                offered_router_capabilities,
-            ),
-            Self::Rtc(_adapter) => client_rtp_capabilities_from_answer(answer_sdp)
-                .ok_or(TransportAdapterError::InvalidInput),
+            RuntimeTransportAdapter::Fake(_adapter) => {
+                FakeWebRtcAdapter::project_answered_client_rtp_capabilities(
+                    answer_sdp,
+                    offered_router_capabilities,
+                )
+            }
+            RuntimeTransportAdapter::Rtc(_adapter) => {
+                client_rtp_capabilities_from_answer(answer_sdp)
+                    .ok_or(TransportAdapterError::InvalidInput)
+            }
         };
         if let Err(error) = &result {
             warn!(
@@ -136,18 +355,20 @@ impl RuntimeTransportAdapter {
         }
         result
     }
+}
 
-    /// Release transport-adapter state for a disconnected session.
+impl RuntimeTransportSessions<'_> {
     pub(crate) async fn close_session(
-        &self,
+        self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => adapter.close_session(session_key).await,
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => adapter.close_session(session_key).await,
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 let session_shard = adapter.shard_for_session(session_key);
                 let close_outcome = session_shard
+                    .sessions()
                     .close_session_with_outcome(session_key)
                     .await?;
                 adapter.release_relay_cleanup(&session_shard, close_outcome.relay_cleanup());
@@ -163,19 +384,23 @@ impl RuntimeTransportAdapter {
         }
         result
     }
+}
 
-    /// Remove a previously declared media line owned by `session_id`.
+impl RuntimeTransportMedia<'_> {
     pub(crate) async fn remove_media(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => adapter.remove_media(session_key, transport_media_id).await,
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
+                adapter.remove_media(session_key, transport_media_id).await
+            }
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 let session_shard = adapter.shard_for_session(session_key);
                 let remove_outcome = session_shard
+                    .media()
                     .remove_media_with_outcome(session_key, transport_media_id)
                     .await?;
                 if let Some(cleanup) = remove_outcome.relay_cleanup() {
@@ -201,43 +426,44 @@ impl RuntimeTransportAdapter {
         reason = "protocol publish commit wiring is staged separately from answered-SDP publication extraction"
     )]
     pub(crate) async fn negotiated_producer_parameters(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        match self {
+        match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
             }
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
+                    .media()
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
             }
         }
     }
 
-    /// Declare a media line for receiving RTP from a producer session.
     pub(crate) async fn publish_media(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .publish_media(session_key, media_kind, rtp_parameters)
                     .await
             }
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
+                    .media()
                     .add_recv_media(
                         session_key,
                         signaling_to_str0m_media_kind(media_kind),
@@ -258,18 +484,18 @@ impl RuntimeTransportAdapter {
         result
     }
 
-    /// Declare a media line for sending RTP to a consumer session, routed from a producer.
     pub(crate) async fn consume_media(
-        &self,
+        self,
         consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
         source_session_key: &TransportSessionKey,
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        let result = match self {
+        ensure_same_channel_runtime(consumer_session_key, source_session_key)?;
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .consume_media(
                         consumer_session_key,
@@ -279,25 +505,25 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
-            Self::Rtc(adapter) => {
-                if consumer_session_key.channel_runtime_id()
-                    != source_session_key.channel_runtime_id()
-                {
-                    return Err(TransportAdapterError::InvalidInput);
-                }
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 let relay_route =
                     adapter.relay_registration_shards(consumer_session_key, source_session_key);
                 let remote_source_control = relay_route
                     .as_ref()
                     .map(|(source_shard, consumer_shard)| {
-                        source_shard.remote_source_control(consumer_shard)
+                        source_shard
+                            .media()
+                            .remote_source_control(consumer_shard.as_ref())
                     })
                     .transpose()?;
                 if let Some((source_shard, consumer_shard)) = &relay_route {
-                    source_shard.activate_relay_route(source_media_id, consumer_shard)?;
+                    source_shard
+                        .media()
+                        .activate_relay_route(source_media_id, consumer_shard.as_ref())?;
                 }
                 let consumer_shard = adapter.shard_for_session(consumer_session_key);
                 let add_result = consumer_shard
+                    .media()
                     .add_send_media(
                         consumer_session_key,
                         signaling_to_str0m_media_kind(media_kind),
@@ -309,9 +535,15 @@ impl RuntimeTransportAdapter {
                     .await;
                 if let Some((source_shard, consumer_shard)) = relay_route {
                     if add_result.is_ok() {
-                        source_shard.set_relay_route_active(source_media_id, &consumer_shard, true);
+                        source_shard.media().set_relay_route_active(
+                            source_media_id,
+                            consumer_shard.as_ref(),
+                            true,
+                        );
                     } else {
-                        source_shard.deactivate_relay_route(source_media_id, &consumer_shard);
+                        source_shard
+                            .media()
+                            .deactivate_relay_route(source_media_id, consumer_shard.as_ref());
                     }
                 }
                 add_result
@@ -331,55 +563,23 @@ impl RuntimeTransportAdapter {
         result
     }
 
-    pub(crate) fn transport_bitrate_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> TransportBitrateSnapshot {
-        match self {
-            #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(_adapter) => TransportBitrateSnapshot::default(),
-            Self::Rtc(adapter) => adapter.transport_bitrate_snapshot(session_keys),
-        }
-    }
-
-    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        match self {
-            #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => adapter.active_speaker_source_snapshot().await,
-            Self::Rtc(adapter) => adapter.active_speaker_source_snapshot().await,
-        }
-    }
-
-    pub(crate) fn session_transport_health(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Option<TransportSessionHealth> {
-        match self {
-            #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(_adapter) => None,
-            Self::Rtc(adapter) => adapter
-                .shard_for_session(session_key)
-                .session_transport_health(session_key),
-        }
-    }
-
-    /// Update whether a producer media line is allowed to forward packets.
     pub(crate) async fn set_producer_active(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .set_producer_active(session_key, transport_media_id, active)
                     .await
             }
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(session_key)
+                    .media()
                     .set_producer_active(session_key, transport_media_id, active)
                     .await
             }
@@ -396,18 +596,18 @@ impl RuntimeTransportAdapter {
         result
     }
 
-    /// Update whether one consumer route is allowed to forward packets.
     pub(crate) async fn set_consumer_active(
-        &self,
+        self,
         consumer_session_key: &TransportSessionKey,
         consumer_transport_media_id: TransportMediaId,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        let result = match self {
+        ensure_same_channel_runtime(consumer_session_key, source_session_key)?;
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .set_consumer_active(
                         consumer_session_key,
@@ -418,14 +618,10 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
-            Self::Rtc(adapter) => {
-                if consumer_session_key.channel_runtime_id()
-                    != source_session_key.channel_runtime_id()
-                {
-                    return Err(TransportAdapterError::InvalidInput);
-                }
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(consumer_session_key)
+                    .media()
                     .set_consumer_active(
                         consumer_session_key,
                         consumer_transport_media_id,
@@ -451,15 +647,16 @@ impl RuntimeTransportAdapter {
     }
 
     pub(crate) async fn transport_media_mid(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        match self {
+        match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(_adapter) => None,
-            Self::Rtc(adapter) => adapter
+            RuntimeTransportAdapter::Fake(_adapter) => None,
+            RuntimeTransportAdapter::Rtc(adapter) => adapter
                 .shard_for_session(session_key)
+                .media()
                 .transport_media_mid(transport_media_id)
                 .await
                 .ok()
@@ -467,17 +664,16 @@ impl RuntimeTransportAdapter {
         }
     }
 
-    /// Apply a generic packet-routing gate to one published media source.
     pub(crate) async fn set_source_packet_gate(
-        &self,
+        self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<SourcePacketGate>,
     ) -> Result<(), TransportAdapterError> {
         let has_packet_gate = packet_gate.is_some();
-        let result = match self {
+        let result = match self.adapter {
             #[cfg(any(test, feature = "testing-transport"))]
-            Self::Fake(adapter) => {
+            RuntimeTransportAdapter::Fake(adapter) => {
                 adapter
                     .set_source_packet_gate(
                         source_session_key,
@@ -486,9 +682,10 @@ impl RuntimeTransportAdapter {
                     )
                     .await
             }
-            Self::Rtc(adapter) => {
+            RuntimeTransportAdapter::Rtc(adapter) => {
                 adapter
                     .shard_for_session(source_session_key)
+                    .media()
                     .set_source_packet_gate(
                         source_session_key,
                         source_transport_media_id,
@@ -508,6 +705,55 @@ impl RuntimeTransportAdapter {
         }
         result
     }
+}
+
+impl RuntimeTransportObservability<'_> {
+    pub(crate) fn transport_bitrate_snapshot(
+        self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportBitrateSnapshot {
+        match self.adapter {
+            #[cfg(any(test, feature = "testing-transport"))]
+            RuntimeTransportAdapter::Fake(_adapter) => TransportBitrateSnapshot::default(),
+            RuntimeTransportAdapter::Rtc(adapter) => {
+                adapter.transport_bitrate_snapshot(session_keys)
+            }
+        }
+    }
+
+    pub(crate) async fn active_speaker_source_snapshot(self) -> Vec<ActiveSpeakerSource> {
+        match self.adapter {
+            #[cfg(any(test, feature = "testing-transport"))]
+            RuntimeTransportAdapter::Fake(adapter) => {
+                adapter.active_speaker_source_snapshot().await
+            }
+            RuntimeTransportAdapter::Rtc(adapter) => adapter.active_speaker_source_snapshot().await,
+        }
+    }
+
+    pub(crate) fn session_transport_health(
+        self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
+        match self.adapter {
+            #[cfg(any(test, feature = "testing-transport"))]
+            RuntimeTransportAdapter::Fake(_adapter) => None,
+            RuntimeTransportAdapter::Rtc(adapter) => adapter
+                .shard_for_session(session_key)
+                .observability()
+                .session_transport_health(session_key),
+        }
+    }
+}
+
+fn ensure_same_channel_runtime(
+    consumer_session_key: &TransportSessionKey,
+    source_session_key: &TransportSessionKey,
+) -> Result<(), TransportAdapterError> {
+    if consumer_session_key.channel_runtime_id() == source_session_key.channel_runtime_id() {
+        return Ok(());
+    }
+    Err(TransportAdapterError::InvalidInput)
 }
 
 fn signaling_to_str0m_media_kind(kind: MediaKind) -> Str0mMediaKind {

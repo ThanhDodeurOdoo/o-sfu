@@ -4,7 +4,7 @@ use axum::extract::ws::Message;
 use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 
 use crate::runtime::{
-    channel::{Channel, SessionOutbound},
+    channel::{Channel, SessionCloseReason, SessionOutbound},
     metrics::RuntimeMetrics,
     transport_adapter::RuntimeTransportAdapter,
 };
@@ -77,7 +77,7 @@ impl SessionProtocol {
         outbound: SessionOutbound,
     ) -> Result<usize, WebSocketCloseCode> {
         match outbound {
-            SessionOutbound::Close(code) => Err(code),
+            SessionOutbound::Close(reason) => Err(map_session_close_reason(reason)),
             SessionOutbound::Message(message) => {
                 self.0.send_outbound_message(writer, message).await
             }
@@ -87,6 +87,14 @@ impl SessionProtocol {
             SessionOutbound::TrackBindingUpdate(update) => {
                 self.0.send_track_binding_update(writer, update).await
             }
+        }
+    }
+}
+
+fn map_session_close_reason(reason: SessionCloseReason) -> WebSocketCloseCode {
+    match reason {
+        SessionCloseReason::Replaced | SessionCloseReason::RemovedByRuntime => {
+            WebSocketCloseCode::Kicked
         }
     }
 }

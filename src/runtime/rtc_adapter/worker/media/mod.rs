@@ -1,6 +1,7 @@
 mod helpers;
 mod keyframe;
 mod lifecycle;
+mod ownership;
 mod route_control;
 mod route_source;
 #[cfg(test)]

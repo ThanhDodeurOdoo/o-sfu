@@ -6,9 +6,9 @@ use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::super::super::{
-    media_registry::RegisteredMediaHandle, relay_registry::RelayRegistry,
-    route_control::KeyframeRequestDecision, state::RtcBootstrapState,
+    relay_registry::RelayRegistry, route_control::KeyframeRequestDecision, state::RtcBootstrapState,
 };
+use super::ownership::owned_local_producer_mid;
 use super::types::RemoteKeyframeRequest;
 
 pub(crate) fn respond_request_remote_keyframe(
@@ -42,20 +42,11 @@ pub(crate) fn request_keyframe_for_source(
     kind: KeyframeRequestKind,
     now: Instant,
 ) {
-    let Some(handle) = state
-        .mid_registry
-        .get(&source_transport_media_id.as_u64())
-        .cloned()
+    let Some(mid) = owned_local_producer_mid(state, source_session_key, source_transport_media_id)
     else {
         return;
     };
-    let RegisteredMediaHandle::Producer { session_key, mid } = handle else {
-        return;
-    };
-    if &session_key != source_session_key {
-        return;
-    }
-    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+    let Some(session_state) = state.sessions.get_mut(source_session_key) else {
         return;
     };
     if session_state
@@ -75,7 +66,7 @@ pub(crate) fn request_keyframe_for_source(
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
         return;
     }
-    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+    let Some(session_state) = state.sessions.get_mut(source_session_key) else {
         return;
     };
     let mut direct_api = session_state.rtc.direct_api();
@@ -83,6 +74,6 @@ pub(crate) fn request_keyframe_for_source(
         return;
     };
     stream_rx.request_keyframe(kind);
-    state.mark_session_dirty(&session_key);
+    state.mark_session_dirty(source_session_key);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
 }

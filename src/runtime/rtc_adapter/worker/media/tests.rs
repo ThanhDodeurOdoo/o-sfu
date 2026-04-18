@@ -1,11 +1,12 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Instant};
 
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
 use str0m::rtp::Ssrc;
 use tokio::sync::oneshot;
 
 use super::{
-    RemoteKeyframeRequest, respond_request_remote_keyframe, respond_set_source_packet_gate,
+    RemoteKeyframeRequest, request_keyframe_for_source, respond_request_remote_keyframe,
+    respond_set_remote_source_packet_gate, respond_set_source_packet_gate,
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::metrics::RuntimeMetrics;
@@ -162,6 +163,57 @@ fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
         response_tx,
     );
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert_eq!(
+        state
+            .route_control
+            .effective_packet_gate(source_transport_media_id),
+        None
+    );
+}
+
+#[test]
+fn request_keyframe_ignores_wrong_source_owner() {
+    let source_session = TransportSessionKey::new(131, 0, 132, SessionId::Integer(133));
+    let wrong_session = TransportSessionKey::new(131, 0, 134, SessionId::Integer(135));
+    let source_mid = Mid::from("cam-up");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id =
+        prepare_source_session(&mut state, &source_session, source_mid, 99_999);
+
+    request_keyframe_for_source(
+        &mut state,
+        &metrics,
+        &wrong_session,
+        source_transport_media_id,
+        None,
+        KeyframeRequestKind::Pli,
+        Instant::now(),
+    );
+
+    assert!(!state.dirty_sessions.contains(&source_session));
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_route_control_forwarded, 0);
+    assert_eq!(snapshot.rtc_route_control_absorbed, 0);
+}
+
+#[test]
+fn remote_source_packet_gate_ignores_wrong_source_owner() {
+    let source_session = TransportSessionKey::new(141, 0, 142, SessionId::Integer(143));
+    let wrong_session = TransportSessionKey::new(141, 0, 144, SessionId::Integer(145));
+    let source_mid = Mid::from("cam-up");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id =
+        prepare_source_session(&mut state, &source_session, source_mid, 101_010);
+
+    respond_set_remote_source_packet_gate(
+        &mut state,
+        &wrong_session,
+        source_transport_media_id,
+        RelayTargetId::new(9),
+        PacketLayerGate::Rid("hi".into()),
+    );
+
     assert_eq!(
         state
             .route_control

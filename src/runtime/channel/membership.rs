@@ -6,9 +6,12 @@ use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
-    Channel, ChannelJoinError, SessionOutbound,
+    Channel, ChannelJoinError, ChannelSessionPermissions, SessionOutbound,
     session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
-    state::TransportMediaRemoval,
+    state::{
+        DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome, LifecycleEffects,
+        TransportMediaRemoval,
+    },
 };
 #[cfg(test)]
 use crate::runtime::transport_adapter::TransportMediaId;
@@ -25,6 +28,44 @@ impl SessionCleanupPolicy {
     const fn removes_transport_media(self) -> bool {
         matches!(self, Self::StateAndTransportMedia)
     }
+}
+
+enum SessionTransition<'a> {
+    Join {
+        session_id: &'a SessionId,
+        label: Option<String>,
+        permissions: ChannelSessionPermissions,
+        sender: mpsc::UnboundedSender<SessionOutbound>,
+        emit_joined_fanout: bool,
+    },
+    Leave {
+        session_id: &'a SessionId,
+        connection_id: u64,
+    },
+    Close {
+        session_id: &'a SessionId,
+        connection_id: u64,
+    },
+    Disconnect {
+        session_ids: &'a [SessionId],
+    },
+}
+
+enum SessionTransitionResult {
+    Joined(u64),
+    Applied,
+    Missing,
+}
+
+enum SessionTransitionOutcome {
+    Join(JoinSessionOutcome),
+    Leave(LeaveSessionOutcome),
+    Close {
+        outcome: Option<LeaveSessionOutcome>,
+        session_id: SessionId,
+        connection_id: u64,
+    },
+    Disconnect(DisconnectSessionsOutcome),
 }
 
 impl Channel {
@@ -67,7 +108,8 @@ impl Channel {
         .await
     }
 
-    // TODO: needs documentation:
+    /// Run the room-owned join transition and perform the deferred cleanup only
+    /// after the state lock has been released.
     async fn join_session_with_cleanup(
         &self,
         session_id: SessionId,
@@ -77,26 +119,22 @@ impl Channel {
         transport_adapter: Option<&RuntimeTransportAdapter>,
         cleanup_policy: SessionCleanupPolicy,
     ) -> Result<u64, ChannelJoinError> {
-        let outcome = {
-            let mut state = self.state.write().await;
-            state.apply_join(
-                &session_id,
-                label,
-                permissions,
-                sender,
-                cleanup_policy.removes_transport_media(),
-            )?
+        let SessionTransitionResult::Joined(connection_id) = self
+            .run_session_transition(
+                SessionTransition::Join {
+                    session_id: &session_id,
+                    label,
+                    permissions: permissions.into(),
+                    sender,
+                    emit_joined_fanout: cleanup_policy.removes_transport_media(),
+                },
+                transport_adapter,
+                cleanup_policy,
+            )
+            .await?
+        else {
+            return Err(ChannelJoinError::RouterState);
         };
-        self.cleanup_transport_removals(
-            transport_adapter,
-            &outcome.transport_removals,
-            cleanup_policy,
-        )
-        .await;
-        self.sync_source_packet_selection_policy(transport_adapter)
-            .await;
-        let connection_id = outcome.connection_id;
-        outcome.emit();
         Ok(connection_id)
     }
 
@@ -134,17 +172,16 @@ impl Channel {
         transport_adapter: &RuntimeTransportAdapter,
         cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
-        let removed_active_session = self
-            .leave_session_with_cleanup(
+        self.run_session_transition(
+            SessionTransition::Close {
                 session_id,
                 connection_id,
-                Some(transport_adapter),
-                cleanup_policy,
-            )
-            .await;
-        self.close_transport_session(session_id, connection_id, transport_adapter)
-            .await;
-        removed_active_session
+            },
+            Some(transport_adapter),
+            cleanup_policy,
+        )
+        .await
+        .is_ok_and(|result| !matches!(result, SessionTransitionResult::Missing))
     }
 
     async fn leave_session_with_cleanup(
@@ -154,23 +191,16 @@ impl Channel {
         transport_adapter: Option<&RuntimeTransportAdapter>,
         cleanup_policy: SessionCleanupPolicy,
     ) -> bool {
-        let outcome = {
-            let mut state = self.state.write().await;
-            state.apply_leave(session_id, connection_id)
-        };
-        let Some(outcome) = outcome else {
-            return false;
-        };
-        self.cleanup_transport_removals(
+        self.run_session_transition(
+            SessionTransition::Leave {
+                session_id,
+                connection_id,
+            },
             transport_adapter,
-            &outcome.transport_removals,
             cleanup_policy,
         )
-        .await;
-        self.sync_source_packet_selection_policy(transport_adapter)
-            .await;
-        outcome.emit();
-        true
+        .await
+        .is_ok_and(|result| !matches!(result, SessionTransitionResult::Missing))
     }
 
     pub(crate) async fn broadcast_runtime(
@@ -309,19 +339,14 @@ impl Channel {
         transport_adapter: Option<&RuntimeTransportAdapter>,
         cleanup_policy: SessionCleanupPolicy,
     ) {
-        let outcome = {
-            let mut state = self.state.write().await;
-            state.apply_disconnect_sessions(session_ids)
-        };
-        self.cleanup_transport_removals(
-            transport_adapter,
-            &outcome.transport_removals,
-            cleanup_policy,
-        )
-        .await;
-        self.sync_source_packet_selection_policy(transport_adapter)
-            .await;
-        outcome.emit();
+        let _ = self
+            .run_session_transition(
+                SessionTransition::Disconnect { session_ids },
+                transport_adapter,
+                cleanup_policy,
+            )
+            .await
+            .ok();
     }
 
     pub(super) async fn cleanup_transport_removals(
@@ -373,7 +398,161 @@ impl Channel {
         }
     }
 
-    // TODO: needs documentation:
+    async fn run_session_transition(
+        &self,
+        transition: SessionTransition<'_>,
+        transport_adapter: Option<&RuntimeTransportAdapter>,
+        cleanup_policy: SessionCleanupPolicy,
+    ) -> Result<SessionTransitionResult, ChannelJoinError> {
+        let Some(outcome) = self.apply_state_transition(transition).await? else {
+            return Ok(SessionTransitionResult::Missing);
+        };
+        Ok(self
+            .finalize_session_transition(outcome, transport_adapter, cleanup_policy)
+            .await)
+    }
+
+    async fn apply_state_transition(
+        &self,
+        transition: SessionTransition<'_>,
+    ) -> Result<Option<SessionTransitionOutcome>, ChannelJoinError> {
+        let outcome = match transition {
+            SessionTransition::Join {
+                session_id,
+                label,
+                permissions,
+                sender,
+                emit_joined_fanout,
+            } => {
+                let outcome = {
+                    let mut state = self.state.write().await;
+                    state.apply_join(session_id, label, permissions, sender, emit_joined_fanout)?
+                };
+                SessionTransitionOutcome::Join(outcome)
+            }
+            SessionTransition::Leave {
+                session_id,
+                connection_id,
+            } => {
+                let outcome = {
+                    let mut state = self.state.write().await;
+                    state.apply_leave(session_id, connection_id)
+                };
+                let Some(outcome) = outcome else {
+                    return Ok(None);
+                };
+                SessionTransitionOutcome::Leave(outcome)
+            }
+            SessionTransition::Close {
+                session_id,
+                connection_id,
+            } => {
+                let outcome = {
+                    let mut state = self.state.write().await;
+                    state.apply_leave(session_id, connection_id)
+                };
+                SessionTransitionOutcome::Close {
+                    outcome,
+                    session_id: session_id.clone(),
+                    connection_id,
+                }
+            }
+            SessionTransition::Disconnect { session_ids } => {
+                let outcome = {
+                    let mut state = self.state.write().await;
+                    state.apply_disconnect_sessions(session_ids)
+                };
+                SessionTransitionOutcome::Disconnect(outcome)
+            }
+        };
+        Ok(Some(outcome))
+    }
+
+    async fn finalize_session_transition(
+        &self,
+        outcome: SessionTransitionOutcome,
+        transport_adapter: Option<&RuntimeTransportAdapter>,
+        cleanup_policy: SessionCleanupPolicy,
+    ) -> SessionTransitionResult {
+        match outcome {
+            SessionTransitionOutcome::Join(outcome) => {
+                self.cleanup_transport_removals(
+                    transport_adapter,
+                    &outcome.transport_removals,
+                    cleanup_policy,
+                )
+                .await;
+                self.sync_source_packet_selection_policy(transport_adapter)
+                    .await;
+                let connection_id = outcome.connection_id;
+                Self::emit_lifecycle_effects(outcome.effects);
+                SessionTransitionResult::Joined(connection_id)
+            }
+            SessionTransitionOutcome::Leave(outcome) => {
+                self.cleanup_transport_removals(
+                    transport_adapter,
+                    &outcome.transport_removals,
+                    cleanup_policy,
+                )
+                .await;
+                self.sync_source_packet_selection_policy(transport_adapter)
+                    .await;
+                Self::emit_lifecycle_effects(outcome.effects);
+                SessionTransitionResult::Applied
+            }
+            SessionTransitionOutcome::Close {
+                outcome,
+                session_id,
+                connection_id,
+            } => {
+                let had_state = outcome.is_some();
+                if let Some(outcome) = outcome {
+                    self.cleanup_transport_removals(
+                        transport_adapter,
+                        &outcome.transport_removals,
+                        cleanup_policy,
+                    )
+                    .await;
+                    Self::emit_lifecycle_effects(outcome.effects);
+                }
+                if let Some(transport_adapter) = transport_adapter {
+                    self.close_transport_session(&session_id, connection_id, transport_adapter)
+                        .await;
+                }
+                if had_state {
+                    self.sync_source_packet_selection_policy(transport_adapter)
+                        .await;
+                }
+                SessionTransitionResult::Applied
+            }
+            SessionTransitionOutcome::Disconnect(outcome) => {
+                self.cleanup_transport_removals(
+                    transport_adapter,
+                    &outcome.transport_removals,
+                    cleanup_policy,
+                )
+                .await;
+                self.sync_source_packet_selection_policy(transport_adapter)
+                    .await;
+                Self::emit_lifecycle_effects(outcome.effects);
+                SessionTransitionResult::Applied
+            }
+        }
+    }
+
+    fn emit_lifecycle_effects(effects: LifecycleEffects) {
+        for close_request in effects.close_requests {
+            let _ = close_request
+                .sender
+                .send(SessionOutbound::Close(close_request.reason));
+        }
+        for fanout in effects.fanouts {
+            fanout.emit();
+        }
+    }
+
+    /// Record the browser-advertised RTP capabilities for one live connection
+    /// and trigger any consumer bootstrap that becomes newly legal.
     pub(crate) async fn apply_client_rtp_capabilities(
         &self,
         session_id: &SessionId,
@@ -434,7 +613,8 @@ impl Channel {
         .await
     }
 
-    // TODO: needs documentation:
+    /// Commit the answer-derived negotiated capability set for one live
+    /// connection and trigger any consumer bootstrap that depends on it.
     pub(crate) async fn apply_session_negotiated(
         &self,
         session_id: &SessionId,

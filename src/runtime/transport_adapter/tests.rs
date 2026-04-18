@@ -1,6 +1,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
+    time::Instant,
 };
 
 use o_sfu_router::{
@@ -16,8 +17,8 @@ use crate::{
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::{
-            FakeWebRtcAdapter, RtcTransportAdapterShardSetConfig, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, FakeWebRtcAdapter, RtcTransportAdapterShardSetConfig,
+            TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -71,6 +72,7 @@ async fn publish_audio(
     rtp_parameters: &RtpParameters,
 ) -> Option<TransportMediaId> {
     let result = adapter
+        .media()
         .publish_media(session_key, MediaKind::Audio, rtp_parameters)
         .await;
     assert!(result.is_ok());
@@ -85,6 +87,7 @@ async fn consume_audio(
     rtp_parameters: &RtpParameters,
 ) -> Option<TransportMediaId> {
     let result = adapter
+        .media()
         .consume_media(
             consumer_session_key,
             MediaKind::Audio,
@@ -184,8 +187,9 @@ fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
         RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
     let offered = sample_router_capabilities();
 
-    let projected =
-        adapter.negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
+    let projected = adapter
+        .negotiation()
+        .negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
 
     assert_eq!(projected, Ok(offered));
 }
@@ -195,8 +199,9 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
     let adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
 
-    let projected =
-        adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
+    let projected = adapter
+        .negotiation()
+        .negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
 
     assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
 }
@@ -212,7 +217,7 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
         Arc::new(RuntimeMetrics::default()),
     ));
 
-    let projected = adapter.negotiated_client_rtp_capabilities(
+    let projected = adapter.negotiation().negotiated_client_rtp_capabilities(
         "v=0\r\ns=invalid-answer\r\n",
         &sample_router_capabilities(),
     );
@@ -273,6 +278,46 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
     assert!((46_000..=46_001).contains(&first_port));
     assert!((46_002..=46_003).contains(&second_port));
     assert_eq!(same_shard_port, first_port);
+}
+
+#[tokio::test]
+async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
+    let fake = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
+    let session_key = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
+    let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
+    fake.set_active_speaker_source_snapshot(vec![speaker_source]);
+
+    let offer = adapter
+        .negotiation()
+        .create_initial_session_offer(&session_key)
+        .await;
+    assert!(offer.is_ok());
+    assert_eq!(
+        adapter.negotiation().negotiated_client_rtp_capabilities(
+            "v=0\r\ns=fake-answer\r\n",
+            &sample_router_capabilities()
+        ),
+        Ok(sample_router_capabilities())
+    );
+
+    let media_id = adapter
+        .media()
+        .publish_media(
+            &session_key,
+            MediaKind::Audio,
+            &sample_audio_rtp_parameters("aud-up", 40_000),
+        )
+        .await;
+    assert!(media_id.is_ok());
+    assert_eq!(
+        adapter
+            .observability()
+            .active_speaker_source_snapshot()
+            .await,
+        vec![speaker_source]
+    );
+    assert!(adapter.sessions().close_session(&session_key).await.is_ok());
 }
 
 #[tokio::test]

@@ -27,4 +27,8 @@ pub(in crate::runtime::channel) use self::media::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
     PreparedConsumerBootstrap, PreparedPublishedTrack,
 };
+pub(in crate::runtime::channel) use self::membership::LifecycleEffects;
+pub(in crate::runtime::channel) use self::membership::{
+    DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome,
+};
 pub(in crate::runtime::channel) use self::shared::{ChannelState, TransportMediaRemoval};

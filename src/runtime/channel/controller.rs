@@ -20,7 +20,7 @@ use tokio::sync::RwLock;
 
 use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
-    signaling::{PeerSnapshot, WebSocketCloseCode},
+    signaling::PeerSnapshot,
 };
 
 use crate::config::RuntimeFeatureFlags;
@@ -31,6 +31,7 @@ use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessio
 use super::{
     definition::ChannelDefinition,
     events::ChannelEventMessage,
+    lifecycle::SessionCloseReason,
     state::{ChannelState, RemoteTrackBootstrap},
 };
 
@@ -46,7 +47,7 @@ pub enum SessionOutbound {
     Message(ChannelEventMessage),
     Request(Box<ChannelEventRequest>),
     TrackBindingUpdate(TrackBindingUpdate),
-    Close(WebSocketCloseCode),
+    Close(SessionCloseReason),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,7 +140,6 @@ pub(crate) struct ChannelSessionStatsSnapshot {
     pub(crate) screen_count: u64,
 }
 
-// TODO: needs documentation:
 /// A single discussion channel owning immutable room metadata plus mutable
 /// session, recording, and routing state.
 pub struct Channel {

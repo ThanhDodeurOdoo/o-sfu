@@ -12,8 +12,11 @@ use crate::runtime::transport_adapter::types::{
 #[cfg(test)]
 use str0m::media::Mid;
 
-// TODO: needs documentation:
 #[derive(Debug)]
+/// Process-local collection of RTC transport shards keyed by media-worker id.
+///
+/// The runtime-facing transport selector stays above this type; `ShardSet`
+/// only owns shard assignment plus cross-shard relay cleanup fan-out.
 pub(crate) struct RtcTransportAdapterShardSet {
     primary_shard: Arc<RtcTransportAdapter>,
     extra_shards: Vec<Arc<RtcTransportAdapter>>,
@@ -83,6 +86,7 @@ impl RtcTransportAdapterShardSet {
                 continue;
             }
             source_shard
+                .media()
                 .deactivate_relay_route(cleanup.source_transport_media_id(), target_shard.as_ref());
         }
     }

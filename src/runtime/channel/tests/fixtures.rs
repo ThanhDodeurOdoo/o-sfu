@@ -9,8 +9,8 @@ pub(super) use tokio::{task::yield_now, time::timeout};
 
 pub(super) use super::super::{
     ChannelAdmissionPolicy, ChannelConfig, ChannelEventMessage, ChannelEventRequest,
-    ChannelJoinError, ChannelManager, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound,
-    topology::ChannelTopology,
+    ChannelJoinError, ChannelManager, ChannelManagerJoinError, JoinSessionRequest,
+    SessionCloseReason, SessionOutbound, topology::ChannelTopology,
 };
 use crate::runtime::test_rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
@@ -20,9 +20,8 @@ use crate::runtime::test_rtp_samples::{
 pub(super) use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, FakeWebRtcAdapter, FakeWebRtcEvent, RuntimeTransportAdapter,
 };
-pub(super) use o_sfu_protocol::{
-    shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
-    signaling::WebSocketCloseCode,
+pub(super) use o_sfu_protocol::shared::{
+    DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
 };
 
 /// Realistic client RTP capabilities (default codecs)

@@ -60,7 +60,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     assert_eq!(channel.router_session_count().await, 1);
     assert!(matches!(
         rx1.try_recv().ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::Replaced))
     ));
 
     let Some(first_connection) = first_connection.ok() else {
@@ -213,7 +213,7 @@ async fn replacing_a_session_notifies_remaining_peers() {
         .await;
     assert!(matches!(
         bob_old_rx.try_recv().ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::Replaced))
     ));
     let msg = alice_rx.try_recv();
     assert!(msg.is_ok());
@@ -282,7 +282,7 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
     );
     assert!(matches!(
         bob_old_rx.try_recv().ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::Replaced))
     ));
     assert!(matches!(
         alice_rx.try_recv().ok(),
@@ -921,13 +921,13 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
     assert!(msg1.is_ok());
     assert!(matches!(
         msg1.ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::RemovedByRuntime))
     ));
     let msg2 = rx2.try_recv();
     assert!(msg2.is_ok());
     assert!(matches!(
         msg2.ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::RemovedByRuntime))
     ));
 
     let departure1 = rx3.try_recv();
@@ -966,14 +966,14 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
     assert!(second_connection.is_ok());
     assert!(matches!(
         rx1.try_recv().ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::Replaced))
     ));
 
     channel.disconnect_sessions(&[SessionId::Integer(1)]).await;
 
     assert!(matches!(
         rx2.try_recv().ok(),
-        Some(SessionOutbound::Close(WebSocketCloseCode::Kicked))
+        Some(SessionOutbound::Close(SessionCloseReason::RemovedByRuntime))
     ));
     assert!(rx1.try_recv().is_err());
     assert_eq!(channel.session_count().await, 0);

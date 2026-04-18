@@ -1,14 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_protocol::{
-    shared::{SessionId, SessionInfo, SessionPermissions},
-    signaling::WebSocketCloseCode,
-};
+use o_sfu_protocol::shared::{SessionId, SessionInfo};
 use o_sfu_router::{MediaCapabilities, RouterError};
 use tracing::{debug, error, warn};
 
 use super::super::{
-    ChannelEventMessage, ChannelJoinError,
+    ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
     outbound::{MessageFanout, OutboundSender},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate, SessionTransportReady},
     topology::ChannelTopology,
@@ -18,40 +15,42 @@ use super::presence::SessionPresence;
 use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
 
 #[derive(Debug)]
-pub(in crate::runtime::channel) struct JoinSessionOutcome {
-    pub(in crate::runtime::channel) connection_id: u64,
-    replaced_sender: Option<OutboundSender>,
-    departure_fanout: Option<MessageFanout>,
-    joined_fanout: Option<MessageFanout>,
-    pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
+pub(in crate::runtime::channel) struct LifecycleEffects {
+    pub(in crate::runtime::channel) close_requests: Vec<SessionCloseRequest>,
+    pub(in crate::runtime::channel) fanouts: Vec<MessageFanout>,
 }
 
-impl JoinSessionOutcome {
-    pub(in crate::runtime::channel) fn emit(self) {
-        if let Some(sender) = self.replaced_sender {
-            let _ = sender.send(super::super::SessionOutbound::Close(
-                WebSocketCloseCode::Kicked,
-            ));
+impl LifecycleEffects {
+    fn push_fanout(&mut self, fanout: Option<MessageFanout>) {
+        if let Some(fanout) = fanout {
+            self.fanouts.push(fanout);
         }
-        if let Some(fanout) = self.departure_fanout {
-            fanout.emit();
-        }
-        if let Some(fanout) = self.joined_fanout {
-            fanout.emit();
+    }
+
+    fn push_close_request(&mut self, request: Option<SessionCloseRequest>) {
+        if let Some(request) = request {
+            self.close_requests.push(request);
         }
     }
 }
 
 #[derive(Debug)]
-pub(in crate::runtime::channel) struct LeaveSessionOutcome {
-    departure_fanout: MessageFanout,
+pub(in crate::runtime::channel) struct SessionCloseRequest {
+    pub(in crate::runtime::channel) sender: OutboundSender,
+    pub(in crate::runtime::channel) reason: SessionCloseReason,
+}
+
+#[derive(Debug)]
+pub(in crate::runtime::channel) struct JoinSessionOutcome {
+    pub(in crate::runtime::channel) connection_id: u64,
+    pub(in crate::runtime::channel) effects: LifecycleEffects,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
 
-impl LeaveSessionOutcome {
-    pub(in crate::runtime::channel) fn emit(self) {
-        self.departure_fanout.emit();
-    }
+#[derive(Debug)]
+pub(in crate::runtime::channel) struct LeaveSessionOutcome {
+    pub(in crate::runtime::channel) effects: LifecycleEffects,
+    pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
 
 #[derive(Debug)]
@@ -67,22 +66,8 @@ impl SessionInfoUpdateOutcome {
 
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct DisconnectSessionsOutcome {
-    kicked_senders: Vec<OutboundSender>,
-    departure_fanouts: Vec<MessageFanout>,
+    pub(in crate::runtime::channel) effects: LifecycleEffects,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
-}
-
-impl DisconnectSessionsOutcome {
-    pub(in crate::runtime::channel) fn emit(self) {
-        for sender in self.kicked_senders {
-            let _ = sender.send(super::super::SessionOutbound::Close(
-                WebSocketCloseCode::Kicked,
-            ));
-        }
-        for fanout in self.departure_fanouts {
-            fanout.emit();
-        }
-    }
 }
 
 impl ChannelState {
@@ -90,12 +75,12 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         connection_id: u64,
-        permissions: &SessionPermissions,
+        permissions: ChannelSessionPermissions,
         is_new: bool,
     ) -> Result<(), ChannelJoinError> {
         let mut topology = self.topology.clone();
         if topology
-            .apply_client_join(session_id, connection_id, permissions)
+            .apply_client_join(session_id, connection_id, permissions.router_permissions())
             .is_err()
         {
             error!(
@@ -134,7 +119,7 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         label: Option<String>,
-        permissions: SessionPermissions,
+        permissions: ChannelSessionPermissions,
         sender: OutboundSender,
         connection_id: u64,
     ) -> Option<OutboundSender> {
@@ -171,34 +156,44 @@ impl ChannelState {
         &mut self,
         session_id: &SessionId,
         label: Option<String>,
-        permissions: SessionPermissions,
+        permissions: impl Into<ChannelSessionPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
     ) -> Result<JoinSessionOutcome, ChannelJoinError> {
+        let permissions = permissions.into();
         let is_new = !self.sessions.contains_key(session_id);
         if is_new && self.sessions.len() >= self.admission_policy.max_sessions {
             return Err(ChannelJoinError::ChannelFull);
         }
         let connection_id = self.next_connection_id;
-        self.apply_join_topology(session_id, connection_id, &permissions, is_new)?;
+        self.apply_join_topology(session_id, connection_id, permissions, is_new)?;
         let transport_removals = self.join_transport_removals(session_id, is_new);
         self.next_connection_id = self.next_connection_id.saturating_add(1);
 
         let previous_sender =
             self.install_joined_session(session_id, label, permissions, sender, connection_id);
-        if previous_sender.is_some() {
+        let had_previous_sender = previous_sender.is_some();
+        if had_previous_sender {
             self.purge_session_media_state(session_id);
         }
 
-        let departure_fanout = previous_sender.as_ref().map(|_| {
+        let mut effects = LifecycleEffects {
+            close_requests: Vec::new(),
+            fanouts: Vec::new(),
+        };
+        effects.push_close_request(previous_sender.map(|sender| SessionCloseRequest {
+            sender,
+            reason: SessionCloseReason::Replaced,
+        }));
+        effects.push_fanout(had_previous_sender.then(|| {
             self.fanout_all_except(
                 &ChannelEventMessage::SessionDeparted {
                     session_id: session_id.clone(),
                 },
                 Some(session_id),
             )
-        });
-        let joined_fanout = if emit_joined_fanout {
+        }));
+        effects.push_fanout(if emit_joined_fanout {
             self.session_info_snapshot(session_id)
                 .map(|(joined_session_id, info)| {
                     self.fanout_all_except(
@@ -211,12 +206,10 @@ impl ChannelState {
                 })
         } else {
             None
-        };
+        });
         Ok(JoinSessionOutcome {
             connection_id,
-            replaced_sender: previous_sender,
-            joined_fanout,
-            departure_fanout,
+            effects,
             transport_removals,
         })
     }
@@ -272,9 +265,12 @@ impl ChannelState {
         self.sessions.remove(session_id);
         self.purge_session_media_state(session_id);
         Some(LeaveSessionOutcome {
-            departure_fanout: self.fanout_all(&ChannelEventMessage::SessionDeparted {
-                session_id: session_id.clone(),
-            }),
+            effects: LifecycleEffects {
+                close_requests: Vec::new(),
+                fanouts: vec![self.fanout_all(&ChannelEventMessage::SessionDeparted {
+                    session_id: session_id.clone(),
+                })],
+            },
             transport_removals,
         })
     }
@@ -334,8 +330,8 @@ impl ChannelState {
         session_ids: &[SessionId],
     ) -> DisconnectSessionsOutcome {
         let mut transport_removals = Vec::new();
-        let mut kicked_senders = Vec::new();
-        let mut departed = Vec::new();
+        let mut close_requests = Vec::new();
+        let mut fanouts = Vec::new();
         for session_id in session_ids {
             if !self.sessions.contains_key(session_id) {
                 continue;
@@ -352,21 +348,20 @@ impl ChannelState {
             );
             if let Some(session) = self.sessions.remove(session_id) {
                 self.purge_session_media_state(session_id);
-                kicked_senders.push(session.sender);
-                departed.push(session_id.clone());
+                close_requests.push(SessionCloseRequest {
+                    sender: session.sender,
+                    reason: SessionCloseReason::RemovedByRuntime,
+                });
+                fanouts.push(self.fanout_all(&ChannelEventMessage::SessionDeparted {
+                    session_id: session_id.clone(),
+                }));
             }
         }
-        let departure_fanouts = departed
-            .into_iter()
-            .map(|departed_id| {
-                self.fanout_all(&ChannelEventMessage::SessionDeparted {
-                    session_id: departed_id,
-                })
-            })
-            .collect();
         DisconnectSessionsOutcome {
-            kicked_senders,
-            departure_fanouts,
+            effects: LifecycleEffects {
+                close_requests,
+                fanouts,
+            },
             transport_removals,
         }
     }

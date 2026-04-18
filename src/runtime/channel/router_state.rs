@@ -5,14 +5,13 @@ use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
     MediaKind as RouterMediaKind, Producer as RouterProducer, ProducerId as RouterProducerId,
     Router, RouterError, RouterId, RtpCapabilities, Session as RouterSession,
-    SessionId as RouterSessionId, SessionPermissionFlags as RouterSessionPermissionFlags,
-    SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
-    Transport as RouterTransport, TransportDirection as RouterTransportDirection,
-    TransportId as RouterTransportId,
+    SessionId as RouterSessionId, SessionPermissions as RouterSessionPermissions,
+    StreamType as RouterStreamType, Transport as RouterTransport,
+    TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
 };
 
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
-use o_sfu_protocol::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
+use o_sfu_protocol::shared::SessionId;
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
 #[derive(Debug, Clone)]
@@ -72,7 +71,7 @@ impl ChannelRouterState {
         &mut self,
         session_id: &SessionId,
         router_session_seed: u64,
-        permissions: &SignalingSessionPermissions,
+        permissions: RouterSessionPermissions,
     ) -> Result<(), RouterError> {
         if self
             .router_session_ids_by_session_id
@@ -81,10 +80,8 @@ impl ChannelRouterState {
             return self.update_session_permissions(session_id, permissions);
         }
         let router_session_id = RouterSessionId(router_session_seed);
-        self.router.join_session(RouterSession::new(
-            router_session_id,
-            router_permissions(permissions),
-        ))?;
+        self.router
+            .join_session(RouterSession::new(router_session_id, permissions))?;
         self.router_session_ids_by_session_id
             .insert(session_id.clone(), router_session_id);
         Ok(())
@@ -205,7 +202,7 @@ impl ChannelRouterState {
     pub(super) fn update_session_permissions(
         &mut self,
         session_id: &SessionId,
-        permissions: &SignalingSessionPermissions,
+        permissions: RouterSessionPermissions,
     ) -> Result<(), RouterError> {
         let Some(router_session_id) = self
             .router_session_ids_by_session_id
@@ -215,7 +212,7 @@ impl ChannelRouterState {
             return Ok(());
         };
         self.router
-            .update_session_permissions(router_session_id, router_permissions(permissions))
+            .update_session_permissions(router_session_id, permissions)
     }
 
     /// Update the pause state of a producer in the pure router.
@@ -330,12 +327,4 @@ impl ChannelRouterState {
         self.next_consumer_id = self.next_consumer_id.saturating_add(1);
         consumer_id
     }
-}
-
-fn router_permissions(permissions: &SignalingSessionPermissions) -> RouterSessionPermissions {
-    RouterSessionPermissions::from_flags(RouterSessionPermissionFlags {
-        transcription: permissions.transcription.unwrap_or(false),
-        audio_recording: permissions.audio_recording.unwrap_or(false),
-        video_recording: permissions.video_recording.unwrap_or(false),
-    })
 }

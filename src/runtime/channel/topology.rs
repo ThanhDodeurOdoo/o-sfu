@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-#[cfg(test)]
 use o_sfu_router::SessionPermissions as RouterSessionPermissions;
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind,
@@ -19,7 +18,7 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::RecordingService;
 #[cfg(test)]
 use crate::runtime::recording::{MediaSource, MediaTap};
-use o_sfu_protocol::shared::{SessionId, SessionPermissions as SignalingSessionPermissions};
+use o_sfu_protocol::shared::SessionId;
 
 const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 
@@ -75,42 +74,66 @@ impl RoutedConsumerId {
     }
 }
 
-// TODO: needs documentation:
 #[derive(Debug, Clone)]
+/// Channel-local routing placement over one or more pure router instances.
+///
+/// The current implementation is single-router, but the type owns the session
+/// placement map and router-facing operations so future sharding does not leak
+/// into channel-state mutation code.
 pub(super) struct ChannelTopology {
     primary_router: RouterId,
     routers: BTreeMap<RouterId, ChannelRouterState>,
     session_home_router: BTreeMap<SessionId, RouterId>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct ChannelRouterObserverFactory {
+    recording_service: Arc<RecordingService>,
+}
+
+impl ChannelRouterObserverFactory {
+    #[must_use]
+    pub(super) fn new(recording_service: Arc<RecordingService>) -> Self {
+        Self { recording_service }
+    }
+
+    fn build_router_state(
+        &self,
+        router_id: RouterId,
+        router_rtp_capabilities: RtpCapabilities,
+    ) -> ChannelRouterState {
+        ChannelRouterState::new_with_recording_service(
+            router_id,
+            router_rtp_capabilities,
+            Arc::clone(&self.recording_service),
+        )
+    }
+}
+
 impl ChannelTopology {
     #[cfg(test)]
     pub(super) fn new(primary_router_id: RouterId) -> Self {
         let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
-        Self::new_with_recording_service(
+        Self::new_with_recording_observer_factory(
             primary_router_id,
             super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-            Arc::new(RecordingService::new(
+            &ChannelRouterObserverFactory::new(Arc::new(RecordingService::new(
                 0,
                 media_source,
                 Arc::new(RuntimeMetrics::default()),
-            )),
+            ))),
         )
     }
 
-    pub(super) fn new_with_recording_service(
+    pub(super) fn new_with_recording_observer_factory(
         primary_router_id: RouterId,
         router_rtp_capabilities: RtpCapabilities,
-        recording_service: Arc<RecordingService>,
+        router_observer_factory: &ChannelRouterObserverFactory,
     ) -> Self {
         let mut routers = BTreeMap::new();
         routers.insert(
             primary_router_id,
-            ChannelRouterState::new_with_recording_service(
-                primary_router_id,
-                router_rtp_capabilities,
-                recording_service,
-            ),
+            router_observer_factory.build_router_state(primary_router_id, router_rtp_capabilities),
         );
         Self {
             primary_router: primary_router_id,
@@ -130,7 +153,7 @@ impl ChannelTopology {
         &mut self,
         session_id: &SessionId,
         router_session_seed: u64,
-        permissions: &SignalingSessionPermissions,
+        permissions: RouterSessionPermissions,
     ) -> Result<(), RouterError> {
         let router_id = self
             .session_home_router
@@ -157,7 +180,7 @@ impl ChannelTopology {
         &mut self,
         session_id: &SessionId,
         router_session_seed: u64,
-        permissions: &SignalingSessionPermissions,
+        permissions: RouterSessionPermissions,
     ) -> Result<(), RouterError> {
         self.ensure_session(session_id, router_session_seed, permissions)?;
         self.ensure_session_transports(session_id)?;

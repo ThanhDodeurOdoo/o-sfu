@@ -7,7 +7,12 @@ fn topology_assigns_the_primary_router_to_joined_sessions() {
 
     assert!(
         topology
-            .apply_client_join(&session_id, 42, &SessionPermissions::default())
+            .apply_client_join(
+                &session_id,
+                42,
+                super::super::ChannelSessionPermissions::from(SessionPermissions::default())
+                    .router_permissions(),
+            )
             .is_ok()
     );
 
@@ -30,12 +35,22 @@ fn topology_rejoin_updates_permissions_without_duplicating_router_sessions() {
 
     assert!(
         topology
-            .apply_client_join(&session_id, 42, &initial_permissions)
+            .apply_client_join(
+                &session_id,
+                42,
+                super::super::ChannelSessionPermissions::from(initial_permissions)
+                    .router_permissions(),
+            )
             .is_ok()
     );
     assert!(
         topology
-            .apply_client_join(&session_id, 43, &replacement_permissions)
+            .apply_client_join(
+                &session_id,
+                43,
+                super::super::ChannelSessionPermissions::from(replacement_permissions)
+                    .router_permissions(),
+            )
             .is_ok()
     );
 
@@ -61,7 +76,12 @@ fn topology_returns_router_scoped_entity_handles() {
     for (seed, session_id) in [(10, &producer_session_id), (20, &consumer_session_id)] {
         assert!(
             topology
-                .apply_client_join(session_id, seed, &SessionPermissions::default())
+                .apply_client_join(
+                    session_id,
+                    seed,
+                    super::super::ChannelSessionPermissions::from(SessionPermissions::default())
+                        .router_permissions(),
+                )
                 .is_ok()
         );
     }

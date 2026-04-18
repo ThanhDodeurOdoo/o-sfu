@@ -1,20 +1,18 @@
-use o_sfu_protocol::shared::{
-    RecordingState, RecordingStateUpdate, SessionId, SessionPermissions, StopCode,
-};
+use o_sfu_protocol::shared::{RecordingState, RecordingStateUpdate, SessionId, StopCode};
 
-use super::super::{ChannelEventMessage, outbound::MessageFanout};
+use super::super::{ChannelEventMessage, ChannelSessionPermissions, outbound::MessageFanout};
 use super::shared::ChannelState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct RecordingRequestContext {
-    permissions: SessionPermissions,
+    permissions: ChannelSessionPermissions,
     recording_state: RecordingState,
 }
 
 impl RecordingRequestContext {
     #[must_use]
-    pub(in crate::runtime::channel) const fn permissions(&self) -> &SessionPermissions {
-        &self.permissions
+    pub(in crate::runtime::channel) const fn permissions(&self) -> ChannelSessionPermissions {
+        self.permissions
     }
 
     #[must_use]
@@ -31,7 +29,7 @@ impl ChannelState {
     ) -> Option<RecordingRequestContext> {
         let session = self.session_for_connection(session_id, connection_id)?;
         Some(RecordingRequestContext {
-            permissions: session.permissions.clone(),
+            permissions: session.permissions,
             recording_state: self.recording_state.clone(),
         })
     }

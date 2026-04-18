@@ -4,8 +4,7 @@ use std::{
 };
 
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
-    TransportSessionKey,
+    ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
 };
 use tokio::{
     runtime::Handle,
@@ -15,12 +14,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::super::{
-    commands::{RemoteSourceControl, RtcWorkerCommand},
+    commands::RtcWorkerCommand,
     packet_loop::{self, PacketLoopConfig},
-    relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, RelayTargetTransport},
+    relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
     state::TransportSessionHealth,
 };
-use super::facade::{RtcTransportAdapter, RtcWorkerHandle};
+use super::facade::{RtcTransportAdapter, RtcTransportObservabilityFacade, RtcWorkerHandle};
 
 impl RtcTransportAdapter {
     pub(crate) fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
@@ -30,7 +29,8 @@ impl RtcTransportAdapter {
         Ok(worker_handle.clone())
     }
 
-    // TODO: needs documentation:
+    /// Lazily boot the shard-local packet loop and return the handle that all
+    /// facade operations use to talk to the worker.
     pub(super) fn ensure_packet_loop_started(
         &self,
     ) -> Result<RtcWorkerHandle, TransportAdapterError> {
@@ -90,17 +90,6 @@ impl RtcTransportAdapter {
         Ok(worker_handle)
     }
 
-    pub(crate) fn remote_source_control(
-        &self,
-        target: &Self,
-    ) -> Result<RemoteSourceControl, TransportAdapterError> {
-        let worker_handle = self.ensure_packet_loop_started()?;
-        Ok(RemoteSourceControl::new(
-            worker_handle.command_tx,
-            target.relay_target_id,
-        ))
-    }
-
     pub(super) async fn request_worker<T, F>(
         &self,
         build_command: F,
@@ -136,7 +125,29 @@ impl RtcTransportAdapter {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+        self.observability()
+            .transport_bitrate_snapshot(session_keys)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_transport_health(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<TransportSessionHealth> {
+        self.observability().session_transport_health(session_key)
+    }
+
+    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
+        self.observability().active_speaker_source_snapshot().await
+    }
+}
+
+impl RtcTransportObservabilityFacade<'_> {
+    pub(crate) fn transport_bitrate_snapshot(
+        self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportBitrateSnapshot {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
             return TransportBitrateSnapshot::default();
         };
         let Ok(bitrate_state) = worker_handle.bitrate_state.lock() else {
@@ -146,60 +157,25 @@ impl RtcTransportAdapter {
     }
 
     pub(crate) fn session_transport_health(
-        &self,
+        self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        let worker_handle = self.worker_handle().ok().flatten()?;
+        let worker_handle = self.adapter.worker_handle().ok().flatten()?;
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
             return None;
         };
         snapshot_state.transport_health(session_key)
     }
 
-    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+    pub(crate) async fn active_speaker_source_snapshot(self) -> Vec<ActiveSpeakerSource> {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
             return Vec::new();
         };
-        self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
-        })
-        .await
-        .unwrap_or_default()
-    }
-
-    pub(crate) fn activate_relay_route(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-    ) -> Result<(), TransportAdapterError> {
-        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.relay_registry.activate_source_target(
-            source_transport_media_id,
-            target.relay_target_id,
-            RelayTargetTransport::from(mailbox),
-        );
-        Ok(())
-    }
-
-    pub(crate) fn deactivate_relay_route(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-    ) {
-        self.relay_registry
-            .deactivate_source_target(source_transport_media_id, target.relay_target_id);
-    }
-
-    pub(crate) fn set_relay_route_active(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-        active: bool,
-    ) {
-        self.relay_registry.set_source_target_active(
-            source_transport_media_id,
-            target.relay_target_id,
-            active,
-        );
+        self.adapter
+            .send_worker_command(&worker_handle, |response| {
+                RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
+            })
+            .await
+            .unwrap_or_default()
     }
 }

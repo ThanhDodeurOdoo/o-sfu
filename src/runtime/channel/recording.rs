@@ -1,9 +1,9 @@
 use o_sfu_protocol::{
-    shared::{RecordingState, SessionId, SessionPermissions, StopCode},
+    shared::{RecordingState, SessionId, StopCode},
     signaling::RecordingOptions,
 };
 
-use super::Channel;
+use super::{Channel, ChannelSessionPermissions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecordingPermissions {
@@ -20,7 +20,8 @@ impl RecordingPermissions {
 }
 
 impl Channel {
-    // TODO: needs documentation:
+    /// Validate and apply a recording-start request for one live session
+    /// without exposing recording-service details to the signaling edge.
     pub(crate) async fn start_recording_runtime(
         &self,
         session_id: &SessionId,
@@ -116,7 +117,7 @@ impl Channel {
             .await
     }
 
-    // TODO: needs documentation:
+    /// Validate and apply a recording-stop request for one live session.
     pub(crate) async fn stop_recording_runtime(
         &self,
         session_id: &SessionId,
@@ -175,19 +176,22 @@ impl Channel {
         self.stop_recording_runtime(session_id, connection_id).await
     }
 
-    fn recording_permissions(&self, permissions: &SessionPermissions) -> RecordingPermissions {
+    fn recording_permissions(
+        &self,
+        permissions: ChannelSessionPermissions,
+    ) -> RecordingPermissions {
         let feature_flags = self.feature_flags();
         let recording_enabled = self.recording_enabled();
         RecordingPermissions {
             audio: recording_enabled
                 && feature_flags.audio_recording
-                && permissions.audio_recording.unwrap_or(false),
+                && permissions.audio_recording(),
             video: recording_enabled
                 && feature_flags.video_recording
-                && permissions.video_recording.unwrap_or(false),
+                && permissions.video_recording(),
             transcription: recording_enabled
                 && feature_flags.transcription
-                && permissions.transcription.unwrap_or(false),
+                && permissions.transcription(),
         }
     }
 }

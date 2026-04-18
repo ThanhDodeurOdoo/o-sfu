@@ -93,7 +93,8 @@ impl Channel {
                 .await;
         }
     }
-    // TODO: needs documentation:
+    /// Publish one producer track through the channel-owned transaction that
+    /// keeps router state and transport media creation in sync.
     pub async fn publish_track(
         &self,
         session_id: &SessionId,
@@ -221,7 +222,8 @@ impl Channel {
         .await;
     }
 
-    // TODO: needs documentation:
+    /// Persist the subscriber's download intent and project the resulting route
+    /// activity changes onto the transport boundary.
     pub(crate) async fn update_subscription_runtime(
         &self,
         session_id: &SessionId,

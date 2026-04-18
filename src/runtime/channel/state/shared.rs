@@ -7,15 +7,13 @@ use o_sfu_router::{
 
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
-use o_sfu_protocol::shared::{
-    DownloadStates, RecordingState, SessionId, SessionPermissions, StreamType,
-};
+use o_sfu_protocol::shared::{DownloadStates, RecordingState, SessionId, StreamType};
 
 use super::super::{
-    ChannelAdmissionPolicy,
+    ChannelAdmissionPolicy, ChannelSessionPermissions,
     outbound::OutboundSender,
     session_negotiation::SessionNegotiation,
-    topology::{ChannelTopology, RoutedConsumerId, RoutedProducerId},
+    topology::{ChannelRouterObserverFactory, ChannelTopology, RoutedConsumerId, RoutedProducerId},
 };
 use super::ids::ProducerRuntimeId;
 use super::layout::SessionLayout;
@@ -34,7 +32,6 @@ const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
 ///
 /// The two-phase patterns (`prepare_*` / `commit_*`) allow async transport work
 /// to happen between phases without holding the state lock.
-// TODO: needs documentation:
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct ChannelState {
     pub(super) admission_policy: ChannelAdmissionPolicy,
@@ -94,7 +91,7 @@ pub(in crate::runtime::channel) struct ActiveSession {
     )]
     pub(super) label: Option<String>,
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
-    pub(super) permissions: SessionPermissions,
+    pub(super) permissions: ChannelSessionPermissions,
     pub(super) presence: SessionPresence,
     pub(super) layout: SessionLayout,
     pub(super) negotiation: SessionNegotiation,
@@ -170,10 +167,10 @@ impl ChannelState {
             producer_stream_types_by_transport_media_id: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             pending_consumer_bootstraps: BTreeSet::new(),
-            topology: ChannelTopology::new_with_recording_service(
+            topology: ChannelTopology::new_with_recording_observer_factory(
                 router_id,
                 router_rtp_capabilities,
-                recording_service,
+                &ChannelRouterObserverFactory::new(recording_service),
             ),
         }
     }
