@@ -1,7 +1,16 @@
 //! RTP capability matching between producers, routers, and consumers.
 //!
-//! These helpers keep codec and header-extension negotiation outside the pure
-//! router state machine while still using the same typed RTP domain model.
+//! - This module negotiates an internal typed RTP model (`MediaStream`,
+//!   `MediaFormat`, `HeaderExtension`, `StreamBinding`).
+//! - It is not a full SDP offer/answer engine.
+//! - Rules that depend on SDP sesion structure (m-line ordering, rejected
+//!   m-sections, extmap direction, BUNDLE-wide extmap id consistency, etc.)
+//!   must be enforced at the signaling / SDP edge, not here.
+//!
+//! why:
+//! - it keep router-core pure
+//! - Keep protocol-shaped negotiation details at the edge or in dedicated
+//!   adapters, instead of leaking SDP mecanics into the router model.
 
 use std::collections::BTreeSet;
 
@@ -74,7 +83,19 @@ impl ParseDiagnostic for RtpNegotiationError {
     }
 }
 
-/// Derive consumable media stream data from a producer stream and router capabilities.
+/// Derive the router-consumable stream from producer parameters
+///
+/// Algorithm:
+/// 1. Negotiate primary media codecs first.
+/// 2. Build a producer PT -> router PT mapping for surviving primary codecs.
+/// 3. Negotiate RTX only after the associated primary codec is known to survive.
+/// 4. Keep only router header extensions that the producer can actually supply.
+/// 5. Remap stream bindings so payload-type-bound bindings stay aligned with the
+///    negotiated primary payload types.
+///
+/// This split is intentional: RFC 4588 ties RTX to an alreadynegotiated
+/// primary codec via `apt`, so RTX cannot be validated correctly until the
+/// primary codec set is known.
 ///
 /// # Errors
 ///
@@ -87,16 +108,31 @@ pub fn derive_consumable_rtp_parameters(
     producer_parameters: &MediaStream,
     router_capabilities: &MediaCapabilities,
 ) -> Result<MediaStream, RtpNegotiationError> {
+    // Maps the producer's original primary payload type to the router-visible
+    // payload type chosen for the consumable stream.
+    //
+    // This exists for two reasons:
+    // - RTX `apt` must be rewritten to point at the negotiated primary PT.
+    // - payload-type-bound stream bindings must keep pointing at the negotiated PT,
+    //   not the producer's original PT.
     let mut mapped_media_payload_by_original_payload = Vec::<(PayloadType, PayloadType)>::new();
     let mut consumable_formats = Vec::new();
 
+    // Primary media codecs are the actual media contract.
+    // If a producer format has no router capability match, the router would not be
+    // able to describe or forward that media in its consumable model, so we reject
+    // the whole producer stream instead of silently dropping the codec.
     for producer_format in producer_parameters.formats() {
+        // RFC 4588 section 8.1 binds RTX to an already-negotiated primary payload type via `apt`,
+        // so media codecs must be matched before retransmission formats can be validated.
         if producer_format.codec().is_rtx() {
             continue;
         }
         let Some(capability_format) =
             find_matching_media_capability(producer_format, router_capabilities)
         else {
+            // RFC 3264 section 6 only allows formats that both sides support to survive
+            // negotiation, so a producer codec with no router capability match is rejected.
             return Err(RtpNegotiationError::UnsupportedProducerCodec {
                 codec_name: producer_format.codec().as_str().to_owned(),
                 payload_type: producer_format.payload_type(),
@@ -128,6 +164,7 @@ pub fn derive_consumable_rtp_parameters(
                 (*original == associated_payload_type).then_some(*mapped)
             })
         else {
+            // RFC 4588 section 8.1 makes RTX invalid without a negotiated associated payload type.
             return Err(RtpNegotiationError::MissingAssociatedMediaCodecForRtx {
                 payload_type: producer_format.payload_type(),
                 associated_payload_type: associated_payload_type.value(),
@@ -138,6 +175,10 @@ pub fn derive_consumable_rtp_parameters(
             mapped_associated_payload_type,
             router_capabilities,
         ) else {
+            // Unlike a primary media codec, RTX is an auxiliary retransmission format.
+            // If the router does not support this RTX pairing, the media stream can still
+            // remain valid without retransmission support, so we drop RTX rather than fail
+            // the whole negotiation.
             continue;
         };
         let mapped_payload_type = mapped_payload_type(capability_format, producer_format);
@@ -156,6 +197,8 @@ pub fn derive_consumable_rtp_parameters(
     let header_extensions = router_capabilities
         .header_extensions()
         .filter(|extension| {
+            // RFC 8285 negotiates header extensions by common support. Keep only producer-backed
+            // URIs here because the runtime only forward observed extension values
             producer_parameters
                 .header_extensions()
                 .any(|producer_extension| producer_extension.uri_kind() == extension.uri_kind())
@@ -176,7 +219,18 @@ pub fn derive_consumable_rtp_parameters(
     Ok(consumable)
 }
 
-/// Negotiate consumer media stream data from a consumable stream and consumer capabilities.
+/// Negotiates the consumer-facing stream from a consumable stream.
+///
+/// Algorithm:
+/// 1. Intersect header extensions.
+/// 2. Derive the BWE feedback policy from surviving extensions.
+/// 3. negotiate primary media codecs first
+/// 4. Admit RTX only when its primary codec survived
+/// 5. Filter bindings so they only reference negotiated payload types.
+///
+/// The output keeps consumable payload types rather than adopting arbtirary
+/// consumer capability PT numbers, because the consumable stream is already the
+/// router's negotiated forwarding model
 ///
 /// # Errors
 ///
@@ -193,6 +247,8 @@ pub fn negotiate_consumer_rtp_parameters(
     let mut negotiated_formats = consumable_parameters
         .formats()
         .filter_map(|format| {
+            // RFC 4588 section 8.1 requires a surviving primary codec before RTX can be
+            // admitted, so the first pass negotiates only non-RTX media formats.
             if format.codec().is_rtx() {
                 return None;
             }
@@ -210,6 +266,8 @@ pub fn negotiate_consumer_rtp_parameters(
         .collect::<Vec<_>>();
 
     if negotiated_formats.is_empty() {
+        // RFC 3264 section 6 requires at least one mutually acceptable media format for an
+        // accepted stream, so a consumer with no surviving media codec is incompatible.
         return Err(RtpNegotiationError::NoCompatibleConsumerCodec);
     }
 
@@ -226,7 +284,8 @@ pub fn negotiate_consumer_rtp_parameters(
             &negotiated_media_payload_types,
             consumer_capabilities,
         )?;
-        let feedback = intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
+        let feedback =
+            intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
         let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
         Some(clone_format_with_overrides(
             format,
@@ -270,6 +329,14 @@ pub fn can_consume(
     negotiate_consumer_rtp_parameters(consumable_parameters, consumer_capabilities).is_ok()
 }
 
+/// Payload-type policy:
+///
+/// - if the capability pins an explicit PT, that PT becomes authoritative in the
+///   negotiated stream
+/// - otherwise we preserve the source PT
+///
+/// This keeps PT assignment under capability control without forcing every
+/// capability entry to hardcode payload types.
 fn mapped_payload_type(
     capability_format: &MediaCodecCapability,
     producer_format: &MediaFormat,
@@ -279,6 +346,12 @@ fn mapped_payload_type(
         .unwrap_or(producer_format.payload_type_id())
 }
 
+/// Media capability matching intentionally ignores payload type.
+/// PT is negotiated output state, not an identity key for codec compatibility.
+///
+/// Compatibliity is instead based on the codec's media kind, codec name,
+/// clock rate, normalized channel count, and codec-specific critical fmtp
+/// parameters.
 fn find_matching_media_capability<'a>(
     producer_format: &MediaFormat,
     router_capabilities: &'a MediaCapabilities,
@@ -289,6 +362,11 @@ fn find_matching_media_capability<'a>(
     })
 }
 
+/// RTX matching has one extra constraint beyond ordinary codec matching:
+///
+/// the router RTX capability must be asociated with the already negotiated
+/// primary payload type, because RFC 4588 binds RTX to a specific primary PT
+/// through `apt`
 fn find_matching_rtx_capability<'a>(
     producer_format: &MediaFormat,
     mapped_associated_payload_type: PayloadType,
@@ -307,30 +385,38 @@ fn find_matching_rtx_capability<'a>(
     })
 }
 
+/// Consumer-side RTX matching works against the already-consumable stream.
+/// At this point the stream's `apt` must refer to a primary PT that survived
+/// consumer negotiation, otherwise forwarding RTX would create an orphan repair
+/// stream with no valid primary target
 fn find_matching_consumer_rtx_capability<'a>(
     format: &MediaFormat,
     negotiated_media_payload_types: &BTreeSet<PayloadType>,
     capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
     let associated_payload_type = parse_rtx_associated_payload(format).ok()?;
+    // RFC 4588 section 8.1 ties each RTX format to one negotiated primary payload type.
     if !negotiated_media_payload_types.contains(&associated_payload_type) {
         return None;
     }
-    capabilities
-        .codecs()
-        .find(|capability_format| {
-            capability_format.codec().is_rtx()
-                && codec_match_ignoring_payload_type(format, capability_format)
-                && capability_format.settings().any(|setting| {
-                    matches!(
-                        setting,
-                        CodecSetting::RtxAssociation(payload_type)
-                        if *payload_type == associated_payload_type
-                    )
-                })
-        })
+    capabilities.codecs().find(|capability_format| {
+        capability_format.codec().is_rtx()
+            && codec_match_ignoring_payload_type(format, capability_format)
+            && capability_format.settings().any(|setting| {
+                matches!(
+                    setting,
+                    CodecSetting::RtxAssociation(payload_type)
+                    if *payload_type == associated_payload_type
+                )
+            })
+    })
 }
 
+/// Returns whether two formats describe the same codec configuration, ignoring PT
+///
+/// In RTP/SDP, payload type is only a local number bound to a codec description;
+/// it is not itself the codec identity. Compatibility therefore comes from the
+/// semantic codec fields and any fmtp parameters that change the wire format
 fn codec_match_ignoring_payload_type(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
@@ -349,6 +435,12 @@ fn codec_match_ignoring_payload_type(
     critical_codec_settings_match(format, capability_format)
 }
 
+/// Only settings that actually affect wire compatibility are treated as hard
+/// negotiation keys here.
+///
+/// Receiver preferences or advisory parameters are intentionally not all treated
+/// as compatibility blockers, because this module is trying to answer "can the
+/// formats interoperate?" rather than "are all local preferences identical?"
 fn critical_codec_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
@@ -362,6 +454,9 @@ fn critical_codec_settings_match(
     }
 }
 
+/// `packetization-mode` is a hard compatibility key.
+/// Different packetization modes describe different RTP packetization behaviour,
+/// so mismatches are not just preferences
 fn h264_critical_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
@@ -380,9 +475,16 @@ fn h264_critical_settings_match(
             _ => None,
         })
         .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
+    // RFC 6184 section 8.2.2 requires packetization-mode compatibility, mismatched packetization
+    // modes describe different wire behaviors and are therefore rejected.
     if format_packetization_mode != capability_packetization_mode {
         return false;
     }
+    // `profile-level-id` is handled more carefully:
+    // - profile mismatch means incompatible bitstreams;
+    // - level is a decoder capability bound;
+    // - malformed tokens should not silently widen compatibility, so parse failure
+    //   falls back to literal equality instead of leting it pass
     match (
         format.settings().find_map(|setting| match setting {
             CodecSetting::H264ProfileLevelId(profile_level_id) => Some(profile_level_id.as_str()),
@@ -401,10 +503,21 @@ fn h264_critical_settings_match(
             rfc_rtp::h264::ProfileLevelId::parse(format_profile_level_id),
             rfc_rtp::h264::ProfileLevelId::parse(capability_profile_level_id),
         ) {
+            // RFC 6184 section 8.2.2 matches H264 by profile and allows a receiver to declare a
+            // higher supported level than the stream it accepts, so same-profile lower-or-equal
+            // stream levels are accepted here.
             (Some(format_profile_level_id), Some(capability_profile_level_id)) => {
+                // Same profile is required because different profiles define different
+                // bitstream constraints and decoding tools (e.g. baseline vs high).
+                //
+                // Level is a decoder capability bound. A receiver that advertises a higher
+                // level can accept streams encoded at a lower or equal level, so we allow
+                // format_level <= capability_level here.
                 format_profile_level_id.profile() == capability_profile_level_id.profile()
                     && format_profile_level_id.level() <= capability_profile_level_id.level()
             }
+            // If a profile-level-id token is malformed, fall back to exact equality so we do not
+            // silently widen compatibility beyond what the raw fmtp values literally express.
             _ => format_profile_level_id == capability_profile_level_id,
         },
         _ => true,
@@ -415,6 +528,12 @@ fn vp9_critical_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
 ) -> bool {
+    // for both "VP9_DEFAULT_PROFILE_ID" below:
+    //
+    // Important: omitted `profile-id` is not "any profile".
+    // RFC 9628 defines omission as Profile 0, so both sides must be normalized
+    // before comparison. Without that normalization, omission would accidentally
+    // behave like a wildcard and admit incompatible VP9 profiles.
     let format_profile_id = format
         .settings()
         .find_map(|setting| match setting {
@@ -429,9 +548,14 @@ fn vp9_critical_settings_match(
             _ => None,
         })
         .unwrap_or(rfc_rtp::fmtp::VP9_DEFAULT_PROFILE_ID);
+    // RFC 9628 section 4.2 defines omitted VP9 `profile-id` as Profile 0 rather than a wildcard,
+    // so both sides are normalized before comparing compatibility.
     format_profile_id == capability_profile_id
 }
 
+/// `apt` is not optional metadata for RTX.
+/// It is the linkage that says which primary payload type this repair stream
+/// protects. Without it, the RTX format is structurally invalid for negotiation.
 fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, RtpNegotiationError> {
     format
         .settings()
@@ -445,6 +569,12 @@ fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, Rtp
         })
 }
 
+/// Rebuild the format from the source while applying negotiated overrides.
+///
+/// We copy all original codec settings except RTX `apt`, because `apt` may need
+/// to be rewritten after payload-type remapping. RTCP feedback is also rebuilt
+/// from the negotiated intersection rather than just copied, so the result
+/// only advertises mutually supported feedback mechanisms.
 fn clone_format_with_overrides(
     source: &MediaFormat,
     payload_type: PayloadType,
@@ -506,6 +636,10 @@ fn clone_binding(source: &StreamBinding) -> StreamBinding {
     binding
 }
 
+/// Some bindings are payload-type-bound rather then only SSRC/RID-bound.
+/// When the router rewrites primary PTs, those bindings must be rewritten too
+/// otherwise the negotiated stream would containing bindings that still refer to
+/// the producer's private PT numbering.
 fn clone_binding_with_payload_mapping(
     source: &StreamBinding,
     mapped_media_payload_by_original_payload: &[(PayloadType, PayloadType)],
@@ -530,6 +664,9 @@ fn clone_binding_with_payload_mapping(
     binding
 }
 
+/// RTCP feedback is negotiated by common support, not by union.
+/// Advertising feedback that only one side supports would let later code assume
+/// a control signal is usable when the peer never negotiated it.
 fn intersect_feedback<'a>(
     format_feedback: impl Iterator<Item = &'a RtcpFeedback>,
     capability_feedback: impl Iterator<Item = &'a RtcpFeedback>,
@@ -541,6 +678,9 @@ fn intersect_feedback<'a>(
         .collect()
 }
 
+/// Channel count is only part of codec identity for audio.
+/// Video formats do not use RTP channel count semantics in this model, so we
+/// normalize all video channel counts away to avoid spurious mismatches.
 fn normalized_channels(media_kind: MediaKind, channels: Option<u16>) -> Option<u16> {
     if media_kind == MediaKind::Audio {
         Some(channels.unwrap_or(1))
@@ -549,6 +689,15 @@ fn normalized_channels(media_kind: MediaKind, channels: Option<u16>) -> Option<u
     }
 }
 
+/// This is intentionally a URI-level capability intersection only.
+///
+/// It does NOT perform full SDP extmap negotiation:
+/// - no direction filtering
+/// - no id collision checks
+/// - no BUNDLE-wide extmap consistency checks
+///
+/// Those rules belong to the SDP/signaling edge. This helper only answers
+/// whether the typed RTP model should keep an extension URI at all.
 fn negotiate_header_extensions(
     consumable_parameters: &MediaStream,
     consumer_capabilities: &MediaCapabilities,
@@ -559,6 +708,8 @@ fn negotiate_header_extensions(
         .collect::<BTreeSet<_>>();
     consumable_parameters
         .header_extensions()
+        // RFC 8285 extmaps are negotiated by common support. This helper intentionally keeps the
+        // router model at URI-intersection scope and leaves direction/id validation to the SDP edge.
         .filter(|extension| supported_uris.contains(extension.uri_kind()))
         .map(clone_header_extension)
         .collect()
@@ -571,6 +722,13 @@ enum BweFeedbackPolicy {
     DisableBoth,
 }
 
+/// Selects a local forwarding policy for mutually exclusive bandwidth-estimation
+/// feedback famillies
+///
+/// This is an implementation policy choice, not a pure codec-compatibility rule:
+/// - if transport-wide CC is available, prefer transport-cc
+/// - otherwise, if abs-send-time is available, prefer goog-remb
+/// - otherwise advertise neither
 fn bwe_feedback_policy(header_extensions: &[HeaderExtension]) -> BweFeedbackPolicy {
     if header_extensions.iter().any(|extension| {
         matches!(
@@ -589,6 +747,9 @@ fn bwe_feedback_policy(header_extensions: &[HeaderExtension]) -> BweFeedbackPoli
     BweFeedbackPolicy::DisableBoth
 }
 
+/// Negotiation may leave both transport-cc and goog-remb present in the raw
+/// RTCP feedback intersection. We filter here so downstream sender logic sees one
+/// coherent bandwidth-estimation mode instead of multiple competing ones.
 fn apply_bwe_feedback_policy(
     feedback: Vec<RtcpFeedback>,
     policy: BweFeedbackPolicy,
