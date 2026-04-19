@@ -1,28 +1,31 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::{net::TcpListener, task::JoinHandle, task::yield_now, time::timeout};
 
 use super::{
     RuntimeState, build_transport_adapter,
     channel::{
         ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig, ChannelRuntimePolicy,
-        rtp_capabilities::router_rtp_capabilities,
+        ConsumerRouteState, rtp_capabilities::router_rtp_capabilities,
     },
     http_server::app,
     metrics::RuntimeMetrics,
     recording::MediaTap,
 };
 use crate::config::Config;
+use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_protocol::signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
 pub struct TestServer {
     addr: SocketAddr,
+    channels: Arc<ChannelManager>,
     handle: JoinHandle<()>,
 }
+
+const TEST_POLL_DEADLINE: Duration = Duration::from_secs(3);
 
 impl TestServer {
     #[must_use]
@@ -33,6 +36,93 @@ impl TestServer {
     #[must_use]
     pub fn http_base_url(&self) -> String {
         format!("http://{}", self.addr)
+    }
+
+    pub async fn wait_for_channel_absence(&self, channel_uuid: &str) -> bool {
+        wait_for_test_predicate(|| async {
+            (self.channels.get_by_uuid(channel_uuid).await.is_none()).then_some(())
+        })
+        .await
+    }
+
+    pub async fn wait_for_consumer_route_active(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.wait_for_consumer_route_state(
+            channel_uuid,
+            consumer_session_id,
+            producer_session_id,
+            stream_type,
+            true,
+        )
+        .await
+    }
+
+    pub async fn wait_for_consumer_route_inactive(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.wait_for_consumer_route_state(
+            channel_uuid,
+            consumer_session_id,
+            producer_session_id,
+            stream_type,
+            false,
+        )
+        .await
+    }
+
+    pub async fn wait_for_consumer_route_absence(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        wait_for_test_predicate(|| async {
+            let channel = self.channels.get_by_uuid(channel_uuid).await?;
+            matches!(
+                channel
+                    .consumer_route_state(consumer_session_id, producer_session_id, stream_type)
+                    .await,
+                Some(ConsumerRouteState::Absent)
+            )
+            .then_some(())
+        })
+        .await
+    }
+
+    async fn wait_for_consumer_route_state(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+        expected_active: bool,
+    ) -> bool {
+        wait_for_test_predicate(|| async {
+            let channel = self.channels.get_by_uuid(channel_uuid).await?;
+            let expected_state = if expected_active {
+                ConsumerRouteState::Active
+            } else {
+                ConsumerRouteState::Inactive
+            };
+            matches!(
+                channel
+                    .consumer_route_state(consumer_session_id, producer_session_id, stream_type)
+                    .await,
+                Some(state) if state == expected_state
+            )
+            .then_some(())
+        })
+        .await
     }
 }
 
@@ -81,7 +171,11 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
             "test server should stop cleanly: {result:?}"
         );
     });
-    Ok(TestServer { addr, handle })
+    Ok(TestServer {
+        addr,
+        channels,
+        handle,
+    })
 }
 
 #[must_use]
@@ -94,4 +188,23 @@ pub fn decode_protocol_welcome_batch(payload: &str) -> Option<WelcomePayload> {
         | ServerEnvelope::Request { .. }
         | ServerEnvelope::Response { .. } => None,
     }
+}
+
+async fn wait_for_test_predicate<F, Fut>(mut predicate: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Option<()>>,
+{
+    timeout(TEST_POLL_DEADLINE, async {
+        loop {
+            if predicate().await.is_some() {
+                return Some(());
+            }
+            yield_now().await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+    .is_some()
 }

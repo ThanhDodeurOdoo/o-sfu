@@ -3,13 +3,20 @@ use tracing::error;
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
-use super::super::shared::{ChannelState, ConsumerKey, ConsumerState};
+use super::super::shared::{ChannelState, ConsumerKey, ConsumerState, ProducerKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct ConsumerRouteUpdate {
     consumer_state: ConsumerState,
     stream_type: StreamType,
     active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsumerRouteState {
+    Absent,
+    Inactive,
+    Active,
 }
 
 impl ChannelState {
@@ -78,6 +85,35 @@ impl ChannelState {
             .and_then(|session| session.desired_download_states.get(target_session_id))
             .and_then(|states| download_state_for_stream_type(states, stream_type))
             .unwrap_or(true)
+    }
+
+    pub(in crate::runtime::channel) fn consumer_route_state(
+        &self,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> Option<ConsumerRouteState> {
+        self.sessions.get(consumer_session_id)?;
+        let consumer_key = ConsumerKey::new(consumer_session_id, producer_session_id, stream_type);
+        if !self.consumer_index.contains_key(&consumer_key) {
+            return Some(ConsumerRouteState::Absent);
+        }
+        let Some(producer_id) = self
+            .producer_ids_by_owner_stream
+            .get(&ProducerKey::new(producer_session_id, stream_type))
+        else {
+            return Some(ConsumerRouteState::Absent);
+        };
+        let Some(producer) = self.producers.get(producer_id) else {
+            return Some(ConsumerRouteState::Absent);
+        };
+        let route_active = producer.active
+            && self.desired_download_active(consumer_session_id, producer_session_id, stream_type);
+        Some(if route_active {
+            ConsumerRouteState::Active
+        } else {
+            ConsumerRouteState::Inactive
+        })
     }
 }
 

@@ -58,4 +58,5 @@ pub(crate) use manager::JoinSessionRequest;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
 #[cfg(test)]
 pub(in crate::runtime::channel) use membership::SessionCleanup;
+pub(crate) use state::ConsumerRouteState;
 pub(crate) use state::RemoteTrackBootstrap;

@@ -21,6 +21,7 @@ pub(in crate::runtime::channel) use self::bootstrap::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
     PreparedConsumerBootstrap,
 };
+pub(crate) use self::download::ConsumerRouteState;
 pub(in crate::runtime::channel) use self::producer::{
     PreparedPublishedTrack, ValidatedPublishDescriptor,
 };

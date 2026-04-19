@@ -25,6 +25,7 @@ mod source_packet_policy;
 #[cfg(test)]
 mod test_support;
 
+pub(crate) use self::media::ConsumerRouteState;
 pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
     ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,

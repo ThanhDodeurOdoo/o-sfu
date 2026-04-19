@@ -10,7 +10,7 @@ use std::time::Duration;
 use o_sfu::public::http::IncomingBitRateStats;
 use o_sfu_protocol::{
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
-    signaling::{ServerMessage, ServerRequest},
+    signaling::{ServerMessage, ServerRequest, TrackBinding},
 };
 
 use crate::support::{
@@ -19,7 +19,10 @@ use crate::support::{
     protocol_full_stack::{ProtocolFakePeer, ProtocolLocalNetwork},
     test_config,
 };
-use tokio::time::{sleep, timeout};
+use tokio::{
+    task::yield_now,
+    time::{sleep, timeout},
+};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[test]
@@ -604,10 +607,11 @@ async fn assert_replacement_unpublish_and_republish_flow(
 ) {
     let mut source = FakeMediaSource::audio();
     let mut clock = FakeClock::default();
+    let harness = AudioRouteHarness::new(network, channel, &publisher_session_id);
     assert_published_audio_forwarding(
+        &harness,
         initial_publisher,
         subscriber,
-        &publisher_session_id,
         &mut source,
         &mut clock,
     )
@@ -622,50 +626,78 @@ async fn assert_replacement_unpublish_and_republish_flow(
     };
 
     assert_replacement_audio_forwarding(
+        &harness,
         initial_publisher,
         &mut replacement,
         subscriber,
-        &publisher_session_id,
         &mut source,
         &mut clock,
     )
     .await;
 
     assert_replacement_unpublish_and_republish_audio(
+        &harness,
         &mut replacement,
         subscriber,
-        &publisher_session_id,
         &mut source,
         &mut clock,
     )
     .await;
 }
 
+struct AudioRouteHarness<'a> {
+    network: &'a ProtocolLocalNetwork,
+    channel: &'a str,
+    publisher_session_id: &'a SessionId,
+}
+
+impl<'a> AudioRouteHarness<'a> {
+    const fn new(
+        network: &'a ProtocolLocalNetwork,
+        channel: &'a str,
+        publisher_session_id: &'a SessionId,
+    ) -> Self {
+        Self {
+            network,
+            channel,
+            publisher_session_id,
+        }
+    }
+}
+
 async fn assert_published_audio_forwarding(
+    harness: &AudioRouteHarness<'_>,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
-    publisher_session_id: &SessionId,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) {
     assert!(publisher.publish_track(source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(
+    let track_binding = assert_track_snapshot(
         subscriber,
-        publisher_session_id.clone(),
+        harness.publisher_session_id.clone(),
         StreamType::Audio,
         true,
     )
     .await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_consumer_route_active(
+        harness.network,
+        harness.channel,
+        subscriber,
+        harness.publisher_session_id,
+        track_binding.stream_type,
+    )
+    .await;
     assert_audio_packet_forwarded(publisher, subscriber, source, clock).await;
 }
 
 async fn assert_replacement_audio_forwarding(
+    harness: &AudioRouteHarness<'_>,
     initial_publisher: &mut ProtocolFakePeer,
     replacement: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
-    publisher_session_id: &SessionId,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) {
@@ -673,8 +705,8 @@ async fn assert_replacement_audio_forwarding(
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(subscriber, publisher_session_id.clone()).await;
-    assert_peer_joined_message_protocol(subscriber, publisher_session_id.clone()).await;
+    assert_departure_message_protocol(subscriber, harness.publisher_session_id.clone()).await;
+    assert_peer_joined_message_protocol(subscriber, harness.publisher_session_id.clone()).await;
     assert_audio_packet_dropped(initial_publisher, subscriber, source, clock).await;
     assert!(
         replacement
@@ -682,14 +714,13 @@ async fn assert_replacement_audio_forwarding(
             .await
             .is_some()
     );
-    assert_published_audio_forwarding(replacement, subscriber, publisher_session_id, source, clock)
-        .await;
+    assert_published_audio_forwarding(harness, replacement, subscriber, source, clock).await;
 }
 
 async fn assert_replacement_unpublish_and_republish_audio(
+    harness: &AudioRouteHarness<'_>,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
-    publisher_session_id: &SessionId,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) {
@@ -701,10 +732,16 @@ async fn assert_replacement_unpublish_and_republish_audio(
     );
     assert!(publisher.complete_next_negotiation().await.is_some());
     assert_empty_track_snapshot(subscriber).await;
-    drain_protocol_control_plane(subscriber, Duration::from_millis(150)).await;
+    assert_consumer_route_absent(
+        harness.network,
+        harness.channel,
+        subscriber,
+        harness.publisher_session_id,
+        StreamType::Audio,
+    )
+    .await;
     assert_audio_packet_dropped(publisher, subscriber, source, clock).await;
-    assert_published_audio_forwarding(publisher, subscriber, publisher_session_id, source, clock)
-        .await;
+    assert_published_audio_forwarding(harness, publisher, subscriber, source, clock).await;
 }
 
 #[tokio::test]
@@ -737,20 +774,60 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
         return;
     };
 
-    let mut source = FakeMediaSource::audio();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(
-        &mut subscriber,
-        SessionId::Integer(82),
-        StreamType::Audio,
-        true,
+    Box::pin(
+        assert_subscriber_replacement_preserves_download_mute_after_renegotiation(
+            &network,
+            &channel,
+            &mut publisher,
+            &mut subscriber,
+        ),
     )
     .await;
+}
+
+async fn assert_subscriber_replacement_preserves_download_mute_after_renegotiation(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+) {
+    let mut source = FakeMediaSource::audio();
+    let muted_stream_type =
+        mute_subscriber_audio_download(network, channel, publisher, subscriber, &mut source).await;
+    Box::pin(assert_replacement_subscriber_inherits_muted_audio_download(
+        network,
+        channel,
+        publisher,
+        subscriber,
+        muted_stream_type,
+        &mut source,
+    ))
+    .await;
+}
+
+async fn mute_subscriber_audio_download(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    source: &mut FakeMediaSource,
+) -> StreamType {
+    assert!(publisher.publish_track(source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding =
+        assert_track_snapshot(subscriber, SessionId::Integer(82), StreamType::Audio, true).await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_consumer_route_active(
+        network,
+        channel,
+        subscriber,
+        &SessionId::Integer(82),
+        track_binding.stream_type,
+    )
+    .await;
 
     let mut clock = FakeClock::default();
-    assert_audio_packet_forwarded(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+    assert_audio_packet_forwarded(publisher, subscriber, source, &mut clock).await;
 
     assert!(
         subscriber
@@ -764,10 +841,27 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
             .await
             .is_some()
     );
-    drain_protocol_control_plane(&mut subscriber, Duration::from_millis(150)).await;
+    assert_consumer_route_inactive(
+        network,
+        channel,
+        subscriber,
+        &SessionId::Integer(82),
+        track_binding.stream_type,
+    )
+    .await;
+    track_binding.stream_type
+}
 
+async fn assert_replacement_subscriber_inherits_muted_audio_download(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    muted_stream_type: StreamType,
+    source: &mut FakeMediaSource,
+) {
     let replacement = network
-        .connect_fake_peer(&channel, SessionId::Integer(83), TEST_CHANNEL_KEY)
+        .connect_fake_peer(channel, SessionId::Integer(83), TEST_CHANNEL_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(mut replacement) = replacement else {
@@ -778,15 +872,15 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
         subscriber.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(&mut publisher, SessionId::Integer(83)).await;
-    assert_peer_joined_message_protocol(&mut publisher, SessionId::Integer(83)).await;
+    assert_departure_message_protocol(publisher, SessionId::Integer(83)).await;
+    assert_peer_joined_message_protocol(publisher, SessionId::Integer(83)).await;
     assert!(
         replacement
             .wait_until_connected(Duration::from_secs(5))
             .await
             .is_some()
     );
-    assert_track_snapshot(
+    let replacement_track = assert_track_snapshot(
         &mut replacement,
         SessionId::Integer(82),
         StreamType::Audio,
@@ -794,9 +888,18 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
     )
     .await;
     assert!(replacement.complete_next_negotiation().await.is_some());
-    drain_protocol_control_plane(&mut replacement, Duration::from_millis(150)).await;
+    assert_consumer_route_inactive(
+        network,
+        channel,
+        &replacement,
+        &SessionId::Integer(82),
+        replacement_track.stream_type,
+    )
+    .await;
 
-    assert_audio_packet_dropped(&mut publisher, &mut replacement, &mut source, &mut clock).await;
+    assert_eq!(muted_stream_type, replacement_track.stream_type);
+    let mut clock = FakeClock::default();
+    assert_audio_packet_dropped(publisher, &mut replacement, source, &mut clock).await;
 }
 
 #[tokio::test]
@@ -990,7 +1093,13 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
         return;
     };
 
-    assert_audio_media_arrives_and_download_mute_stops_flow(&mut publisher, &mut subscriber).await;
+    assert_audio_media_arrives_and_download_mute_stops_flow(
+        &network,
+        &channel,
+        &mut publisher,
+        &mut subscriber,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1017,8 +1126,13 @@ async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
         return;
     };
 
-    assert_audio_media_arrives_and_explicit_unpublish_stops_flow(&mut publisher, &mut subscriber)
-        .await;
+    assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
+        &network,
+        &channel,
+        &mut publisher,
+        &mut subscriber,
+    )
+    .await;
 }
 
 async fn connect_audio_media_flow_peers(
@@ -1148,32 +1262,29 @@ async fn connect_two_isolated_audio_flows(
 }
 
 async fn assert_audio_media_arrives_and_download_mute_stops_flow(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(subscriber, SessionId::Integer(70), StreamType::Audio, true).await;
+    let track_binding =
+        assert_track_snapshot(subscriber, SessionId::Integer(70), StreamType::Audio, true).await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_consumer_route_active(
+        network,
+        channel,
+        subscriber,
+        &SessionId::Integer(70),
+        track_binding.stream_type,
+    )
+    .await;
 
     let mut clock = FakeClock::default();
-    let expected_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
-    assert!(expected_payload.is_some());
-    let Some(expected_payload) = expected_payload else {
-        return;
-    };
-
-    let received_packet = subscriber.read_rtp_packet(Duration::from_secs(2)).await;
-    assert!(received_packet.is_some());
-    let Some(received_packet) = received_packet else {
-        return;
-    };
-    assert!(!received_packet.mid.is_empty());
-    assert_eq!(
-        received_packet.payload.as_ref(),
-        expected_payload.as_slice()
-    );
+    let _forwarded_bytes =
+        assert_audio_packet_forwarded(publisher, subscriber, &mut source, &mut clock).await;
 
     assert!(
         subscriber
@@ -1187,38 +1298,41 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
             .await
             .is_some()
     );
-
-    drain_protocol_control_plane(subscriber, Duration::from_millis(150)).await;
-
-    let next_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
-    assert!(next_payload.is_some());
-    assert!(
-        subscriber
-            .read_rtp_packet(Duration::from_millis(300))
-            .await
-            .is_none()
-    );
+    assert_consumer_route_inactive(
+        network,
+        channel,
+        subscriber,
+        &SessionId::Integer(70),
+        track_binding.stream_type,
+    )
+    .await;
+    assert_audio_packet_dropped(publisher, subscriber, &mut source, &mut clock).await;
 }
 
 async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(subscriber, SessionId::Integer(70), StreamType::Audio, true).await;
+    let track_binding =
+        assert_track_snapshot(subscriber, SessionId::Integer(70), StreamType::Audio, true).await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_consumer_route_active(
+        network,
+        channel,
+        subscriber,
+        &SessionId::Integer(70),
+        track_binding.stream_type,
+    )
+    .await;
 
     let mut clock = FakeClock::default();
-    let first_payload = publisher.send_rtp_packet(&mut source, &mut clock).await;
-    assert!(first_payload.is_some());
-    assert!(
-        subscriber
-            .read_rtp_packet(Duration::from_secs(2))
-            .await
-            .is_some()
-    );
+    let _forwarded_bytes =
+        assert_audio_packet_forwarded(publisher, subscriber, &mut source, &mut clock).await;
 
     assert!(
         publisher
@@ -1228,16 +1342,15 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     );
     assert!(publisher.complete_next_negotiation().await.is_some());
     assert_empty_track_snapshot(subscriber).await;
-
-    drain_protocol_control_plane(subscriber, Duration::from_millis(150)).await;
-
-    let _ = publisher.send_rtp_packet(&mut source, &mut clock).await;
-    assert!(
-        subscriber
-            .read_rtp_packet(Duration::from_millis(300))
-            .await
-            .is_none()
-    );
+    assert_consumer_route_absent(
+        network,
+        channel,
+        subscriber,
+        &SessionId::Integer(70),
+        track_binding.stream_type,
+    )
+    .await;
+    assert_audio_packet_dropped(publisher, subscriber, &mut source, &mut clock).await;
 }
 
 async fn connect_camera_flow_peers(
@@ -1376,7 +1489,7 @@ async fn assert_track_snapshot(
     session_id: SessionId,
     stream_type: StreamType,
     active: bool,
-) {
+) -> TrackBinding {
     let message = subscriber.read_next_server_message().await;
     assert!(message.is_some());
     let Some(ServerMessage::Tracks(track_bindings)) = message else {
@@ -1389,6 +1502,7 @@ async fn assert_track_snapshot(
     assert_eq!(track_binding.session_id, session_id);
     assert_eq!(track_binding.stream_type, stream_type);
     assert_eq!(track_binding.active, active);
+    track_binding.clone()
 }
 
 async fn assert_empty_track_snapshot(subscriber: &mut ProtocolFakePeer) {
@@ -1400,14 +1514,6 @@ async fn assert_empty_track_snapshot(subscriber: &mut ProtocolFakePeer) {
     assert!(track_bindings.is_empty());
 }
 
-async fn drain_protocol_control_plane(subscriber: &mut ProtocolFakePeer, timeout_window: Duration) {
-    while subscriber
-        .read_server_message_with_timeout(timeout_window)
-        .await
-        .is_some()
-    {}
-}
-
 async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {
     assert!(
         timeout(
@@ -1416,6 +1522,63 @@ async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {
         )
         .await
         .is_err()
+    );
+}
+
+async fn assert_consumer_route_active(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
+    subscriber: &ProtocolFakePeer,
+    publisher_session_id: &SessionId,
+    stream_type: StreamType,
+) {
+    assert!(
+        network
+            .wait_for_consumer_route_active(
+                channel,
+                subscriber.session_id(),
+                publisher_session_id,
+                stream_type,
+            )
+            .await
+    );
+}
+
+async fn assert_consumer_route_inactive(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
+    subscriber: &ProtocolFakePeer,
+    publisher_session_id: &SessionId,
+    stream_type: StreamType,
+) {
+    assert!(
+        network
+            .wait_for_consumer_route_inactive(
+                channel,
+                subscriber.session_id(),
+                publisher_session_id,
+                stream_type,
+            )
+            .await
+    );
+}
+
+async fn assert_consumer_route_absent(
+    network: &ProtocolLocalNetwork,
+    channel: &str,
+    subscriber: &ProtocolFakePeer,
+    publisher_session_id: &SessionId,
+    stream_type: StreamType,
+) {
+    assert!(
+        network
+            .wait_for_consumer_route_absence(
+                channel,
+                subscriber.session_id(),
+                publisher_session_id,
+                stream_type,
+            )
+            .await
     );
 }
 
@@ -1433,7 +1596,7 @@ async fn stream_until_audio_bitrate_is_observable(
         if channel_stats.sessions_stats.incoming_bit_rate.audio > 0 {
             return Some(channel_stats.sessions_stats.incoming_bit_rate);
         }
-        sleep(Duration::from_millis(25)).await;
+        yield_now().await;
     }
     None
 }
@@ -1483,7 +1646,7 @@ async fn wait_for_transport_lifetime_metrics(
             if metrics.count >= expected_count {
                 return Some(metrics);
             }
-            sleep(Duration::from_millis(25)).await;
+            yield_now().await;
         }
     })
     .await
@@ -1501,7 +1664,7 @@ async fn wait_for_live_rtc_metrics(
             if metrics.connected_transport_sessions == expected_connected_sessions {
                 return Some(metrics);
             }
-            sleep(Duration::from_millis(25)).await;
+            yield_now().await;
         }
     })
     .await

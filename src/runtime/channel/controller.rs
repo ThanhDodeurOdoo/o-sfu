@@ -33,7 +33,7 @@ use super::{
     events::ChannelEventMessage,
     lifecycle::SessionCloseReason,
     media_transaction::PendingPublishTransactions,
-    state::{ChannelState, RemoteTrackBootstrap},
+    state::{ChannelState, ConsumerRouteState, RemoteTrackBootstrap},
 };
 
 #[derive(Debug, Clone)]
@@ -204,6 +204,19 @@ impl Channel {
     ) -> TransportSessionKey {
         self.definition
             .transport_session_key(session_id, connection_id)
+    }
+
+    pub(crate) async fn consumer_route_state(
+        &self,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> Option<ConsumerRouteState> {
+        self.state.read().await.consumer_route_state(
+            consumer_session_id,
+            producer_session_id,
+            stream_type,
+        )
     }
 
     #[must_use]

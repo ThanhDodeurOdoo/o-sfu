@@ -12,7 +12,7 @@ use o_sfu_protocol::{
     signaling::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
 };
 use reqwest::StatusCode;
-use tokio::time::{Duration, sleep};
+use tokio::time::Duration;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use o_sfu::{
@@ -490,7 +490,7 @@ async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integratio
     );
 
     assert!(first_client.close().await.is_some());
-    sleep(Duration::from_millis(20)).await;
+    assert!(server.wait_for_channel_absence(&first_channel).await);
 
     let second_channel = create_channel(&server, "issuer-a", None).await;
     assert!(second_channel.is_some());

@@ -3,10 +3,7 @@
     reason = "the protocol full-stack harness is shared by multiple RTC integration scenarios"
 )]
 
-use std::{
-    sync::atomic::{AtomicU16, Ordering},
-    time::Duration,
-};
+use std::time::Duration;
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
@@ -32,9 +29,6 @@ use super::{
     fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
     read_close_code, read_text_message, signed_connect_claims,
 };
-
-const RTC_NEGOTIATION_PORT_BASE: u16 = 57_000;
-static NEXT_RTC_NEGOTIATION_PORT: AtomicU16 = AtomicU16::new(RTC_NEGOTIATION_PORT_BASE);
 
 pub struct ProtocolLocalNetwork {
     server: TestServer,
@@ -95,7 +89,7 @@ impl ProtocolLocalNetwork {
             .ok()?;
 
         let welcome = decode_protocol_welcome_batch(&read_text_message(&mut websocket).await?)?;
-        let mut rtc_peer = FakeRtcPeer::bind(next_negotiation_port()).await?;
+        let mut rtc_peer = FakeRtcPeer::bind(0).await?;
         answer_next_server_request(&mut websocket, &mut rtc_peer).await?;
 
         Some(ProtocolFakePeer {
@@ -109,6 +103,61 @@ impl ProtocolLocalNetwork {
     #[must_use]
     pub fn server(&self) -> &TestServer {
         &self.server
+    }
+
+    pub async fn wait_for_consumer_route_active(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.server
+            .wait_for_consumer_route_active(
+                channel_uuid,
+                consumer_session_id,
+                producer_session_id,
+                stream_type,
+            )
+            .await
+    }
+
+    pub async fn wait_for_consumer_route_inactive(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.server
+            .wait_for_consumer_route_inactive(
+                channel_uuid,
+                consumer_session_id,
+                producer_session_id,
+                stream_type,
+            )
+            .await
+    }
+
+    pub async fn wait_for_consumer_route_absence(
+        &self,
+        channel_uuid: &str,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.server
+            .wait_for_consumer_route_absence(
+                channel_uuid,
+                consumer_session_id,
+                producer_session_id,
+                stream_type,
+            )
+            .await
+    }
+
+    pub async fn wait_for_channel_absence(&self, channel_uuid: &str) -> bool {
+        self.server.wait_for_channel_absence(channel_uuid).await
     }
 }
 
@@ -320,10 +369,6 @@ async fn answer_next_server_request(
         .await
         .ok()?;
     Some(())
-}
-
-fn next_negotiation_port() -> u16 {
-    NEXT_RTC_NEGOTIATION_PORT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {

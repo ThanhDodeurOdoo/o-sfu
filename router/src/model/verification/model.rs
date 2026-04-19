@@ -179,6 +179,23 @@ impl<K: Copy + Eq, V: Copy + Eq, const MAX_KEYS: usize, const MAX_VALUES: usize>
     }
 }
 
+/// Bounded proof-only representation of [`super::super::Router`].
+/// (the other underlying structs are the real ones)
+///
+/// Kani proofs target router transition semantics, not the
+/// implementation details of `BTreeMap`, `BTreeSet`, allocator behavior, or
+/// observer side effects. so the production router stays optimized for
+/// clarity and runtime behavior, while proofs use this small fixed-capacity
+/// representation to keep the state space tractable.
+/// (kani isn't too happy with "nondeterministic-size data structures involving heap allocations")
+///
+/// This type is intentionally allowed to differ from the production router only
+/// in proof-motivated representation details:
+///
+/// - storage is fixed-size arrays instead of unbounded maps/sets
+/// - reverse indexes use proof-native membership arrays
+///
+/// It shouldnt diverge on router semantics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProofRouterModel<
     const MAX_SESSIONS: usize,
