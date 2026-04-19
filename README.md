@@ -105,6 +105,18 @@ will adapt accordingly.
 channels will have multiple routers and the load will be sharded across them. In the long term an optional controller server will
 allow the SFUs to share shards between them.
 
+## Observability
+
+There is already groundwork done for observability with runtime/metrics, but there is still a lot to do (like connect to real end-oints), and build a deeper observability system, some random thoughts:
+- Metrics, logs, traces, and diagnostics must live at runtime boundaries, not in `router/`.
+- `router/` may expose events or state needed by outer layres, but it must not know about Prometheus, OTLP, log shipping, or collector protocols.
+- Call sites must speak in domain terms such as "join accepted", "offer applied", or "relay overload dropped", not in backend-specific terms such as "increment counter X".
+- No single type may simultaneously own metric storage, log formatting, OTLP export wiring, and subsystem-specific business semantics.
+- `/metrics` and `/v1/stats` keep distinct roles:
+  - `/metrics` is the authoritative low-cardinality time-series surface.
+  - `/v1/stats` remains a compatibility snapshot surface.
+
+
 ## crypto
 
 investigate chacha20 instead of classical dtls/srtp
