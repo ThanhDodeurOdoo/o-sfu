@@ -152,10 +152,7 @@ fn derive_consumable_parameters_maps_payload_types_and_rtx_association() {
         .collect::<Vec<_>>();
     assert_eq!(
         header_extension_uris,
-        vec![
-            webrtc::rtp_header_extension_uri::MID,
-            webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
-        ]
+        vec![webrtc::rtp_header_extension_uri::MID,]
     );
     let first_encoding = consumable.encodings().next();
     assert!(first_encoding.is_some());
@@ -362,4 +359,195 @@ fn consumer_negotiation_rejects_vp9_profile_mismatch() {
         Err(RtpNegotiationError::NoCompatibleConsumerCodec)
     );
     assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero() {
+    let consumable_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "VP9", 98, 90_000)
+                .with_parameter("profile-id", "2")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
+        vec![],
+        vec![RtpEncoding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_accepts_missing_vp9_profile_id_for_profile_zero() {
+    let consumable_parameters = RtpParameters::new(
+        vec![RtpCodecParameters::new(MediaKind::Video, "VP9", 98, 90_000)
+            .with_parameter("profile-id", "0")
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+        vec![RtpEncoding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    assert!(can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_accepts_h264_when_capability_level_is_higher() {
+    let consumable_parameters = RtpParameters::new(
+        vec![RtpCodecParameters::new(MediaKind::Video, "H264", 98, 90_000)
+            .with_parameter("packetization-mode", "1")
+            .with_parameter("profile-level-id", "42e01f")
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+        vec![RtpEncoding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
+            .with_parameter("packetization-mode", "1")
+            .with_parameter("profile-level-id", "42e032")
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    assert!(can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_rejects_h264_when_capability_level_is_lower() {
+    let consumable_parameters = RtpParameters::new(
+        vec![RtpCodecParameters::new(MediaKind::Video, "H264", 98, 90_000)
+            .with_parameter("packetization-mode", "1")
+            .with_parameter("profile-level-id", "42e032")
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+        vec![RtpEncoding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
+            .with_parameter("packetization-mode", "1")
+            .with_parameter("profile-level-id", "42e01f")
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_filters_rtx_bindings_when_consumer_apt_does_not_match() {
+    let consumable_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "VP8", 96, 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            RtpCodecParameters::new(MediaKind::Video, "rtx", 97, 90_000)
+                .with_parameter("apt", "96"),
+        ],
+        vec![],
+        vec![
+            RtpEncoding::new().with_ssrc(5678).with_codec_payload_type(96),
+            RtpEncoding::new().with_ssrc(5679).with_codec_payload_type(97),
+            RtpEncoding::new().with_rid("fallback"),
+        ],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_parameter("apt", "120"),
+        ],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    let Ok(negotiated) = negotiated_result else {
+        return;
+    };
+
+    let codecs = negotiated.codecs().collect::<Vec<_>>();
+    assert_eq!(codecs.len(), 1);
+    let Some(codec) = codecs.first() else {
+        return;
+    };
+    assert_eq!(codec.codec_name(), "VP8");
+    let encodings = negotiated.encodings().collect::<Vec<_>>();
+    assert_eq!(encodings.len(), 2);
+    let Some(first_encoding) = encodings.first() else {
+        return;
+    };
+    assert_eq!(first_encoding.payload_type(), Some(96));
+    let Some(second_encoding) = encodings.get(1) else {
+        return;
+    };
+    assert_eq!(second_encoding.rid(), Some("fallback"));
+}
+
+#[test]
+fn consumer_negotiation_accepts_media_when_rtx_is_listed_first() {
+    let consumable_parameters = RtpParameters::new(
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "rtx", 97, 90_000)
+                .with_parameter("apt", "96"),
+            RtpCodecParameters::new(MediaKind::Video, "VP8", 96, 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
+        vec![],
+        vec![RtpEncoding::new().with_ssrc(5678).with_codec_payload_type(96)],
+    );
+    let consumer_capabilities = RtpCapabilities::new(
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_parameter("apt", "96"),
+        ],
+        vec![],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    let Ok(negotiated) = negotiated_result else {
+        return;
+    };
+
+    let codecs = negotiated.codecs().collect::<Vec<_>>();
+    assert_eq!(codecs.len(), 2);
+    let Some(first_codec) = codecs.first() else {
+        return;
+    };
+    assert_eq!(first_codec.codec_name(), "VP8");
+    let Some(second_codec) = codecs.get(1) else {
+        return;
+    };
+    assert_eq!(second_codec.codec_name(), "rtx");
+    assert!(can_consume(&consumable_parameters, &consumer_capabilities));
 }

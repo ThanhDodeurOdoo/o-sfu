@@ -5,6 +5,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::rfc::rtp as rfc_rtp;
+
 use super::{
     CodecSetting, HeaderExtension, HeaderExtensionUri, MediaCapabilities, MediaCodec,
     MediaCodecCapability, MediaFormat, MediaKind, MediaStream, ParseDiagnostic,
@@ -153,6 +155,11 @@ pub fn derive_consumable_rtp_parameters(
 
     let header_extensions = router_capabilities
         .header_extensions()
+        .filter(|extension| {
+            producer_parameters
+                .header_extensions()
+                .any(|producer_extension| producer_extension.uri_kind() == extension.uri_kind())
+        })
         .map(clone_header_extension)
         .collect::<Vec<_>>();
     let bindings = producer_parameters
@@ -186,8 +193,10 @@ pub fn negotiate_consumer_rtp_parameters(
     let mut negotiated_formats = consumable_parameters
         .formats()
         .filter_map(|format| {
-            let capability_format =
-                find_matching_media_or_rtx_capability(format, consumer_capabilities)?;
+            if format.codec().is_rtx() {
+                return None;
+            }
+            let capability_format = find_matching_media_capability(format, consumer_capabilities)?;
             let feedback =
                 intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
             let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
@@ -199,17 +208,45 @@ pub fn negotiate_consumer_rtp_parameters(
             ))
         })
         .collect::<Vec<_>>();
-    negotiated_formats = drop_unpaired_rtx_formats(negotiated_formats);
 
-    if negotiated_formats
-        .first()
-        .is_none_or(|format| format.codec().is_rtx())
-    {
+    if negotiated_formats.is_empty() {
         return Err(RtpNegotiationError::NoCompatibleConsumerCodec);
     }
 
+    let negotiated_media_payload_types = negotiated_formats
+        .iter()
+        .map(MediaFormat::payload_type_id)
+        .collect::<BTreeSet<_>>();
+    negotiated_formats.extend(consumable_parameters.formats().filter_map(|format| {
+        if !format.codec().is_rtx() {
+            return None;
+        }
+        let capability_format = find_matching_consumer_rtx_capability(
+            format,
+            &negotiated_media_payload_types,
+            consumer_capabilities,
+        )?;
+        let feedback = intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
+        let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
+        Some(clone_format_with_overrides(
+            format,
+            format.payload_type_id(),
+            None,
+            &feedback,
+        ))
+    }));
+
+    let negotiated_payload_types = negotiated_formats
+        .iter()
+        .map(MediaFormat::payload_type_id)
+        .collect::<BTreeSet<_>>();
     let bindings = consumable_parameters
         .bindings()
+        .filter(|binding| {
+            binding
+                .payload_type_id()
+                .is_none_or(|payload_type| negotiated_payload_types.contains(&payload_type))
+        })
         .map(clone_binding)
         .collect::<Vec<_>>();
 
@@ -270,13 +307,28 @@ fn find_matching_rtx_capability<'a>(
     })
 }
 
-fn find_matching_media_or_rtx_capability<'a>(
+fn find_matching_consumer_rtx_capability<'a>(
     format: &MediaFormat,
+    negotiated_media_payload_types: &BTreeSet<PayloadType>,
     capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
+    let associated_payload_type = parse_rtx_associated_payload(format).ok()?;
+    if !negotiated_media_payload_types.contains(&associated_payload_type) {
+        return None;
+    }
     capabilities
         .codecs()
-        .find(|capability_format| codec_match_ignoring_payload_type(format, capability_format))
+        .find(|capability_format| {
+            capability_format.codec().is_rtx()
+                && codec_match_ignoring_payload_type(format, capability_format)
+                && capability_format.settings().any(|setting| {
+                    matches!(
+                        setting,
+                        CodecSetting::RtxAssociation(payload_type)
+                        if *payload_type == associated_payload_type
+                    )
+                })
+        })
 }
 
 fn codec_match_ignoring_payload_type(
@@ -320,14 +372,14 @@ fn h264_critical_settings_match(
             CodecSetting::H264PacketizationMode(mode) => Some(*mode),
             _ => None,
         })
-        .unwrap_or(0);
+        .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
     let capability_packetization_mode = capability_format
         .settings()
         .find_map(|setting| match setting {
             CodecSetting::H264PacketizationMode(mode) => Some(*mode),
             _ => None,
         })
-        .unwrap_or(0);
+        .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
     if format_packetization_mode != capability_packetization_mode {
         return false;
     }
@@ -345,9 +397,16 @@ fn h264_critical_settings_match(
                 _ => None,
             }),
     ) {
-        (Some(format_profile_level_id), Some(capability_profile_level_id)) => {
-            format_profile_level_id == capability_profile_level_id
-        }
+        (Some(format_profile_level_id), Some(capability_profile_level_id)) => match (
+            rfc_rtp::h264::ProfileLevelId::parse(format_profile_level_id),
+            rfc_rtp::h264::ProfileLevelId::parse(capability_profile_level_id),
+        ) {
+            (Some(format_profile_level_id), Some(capability_profile_level_id)) => {
+                format_profile_level_id.profile() == capability_profile_level_id.profile()
+                    && format_profile_level_id.level() <= capability_profile_level_id.level()
+            }
+            _ => format_profile_level_id == capability_profile_level_id,
+        },
         _ => true,
     }
 }
@@ -356,23 +415,21 @@ fn vp9_critical_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
 ) -> bool {
-    match (
-        format.settings().find_map(|setting| match setting {
+    let format_profile_id = format
+        .settings()
+        .find_map(|setting| match setting {
             CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
             _ => None,
-        }),
-        capability_format
-            .settings()
-            .find_map(|setting| match setting {
-                CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
-                _ => None,
-            }),
-    ) {
-        (Some(format_profile_id), Some(capability_profile_id)) => {
-            format_profile_id == capability_profile_id
-        }
-        _ => true,
-    }
+        })
+        .unwrap_or(rfc_rtp::fmtp::VP9_DEFAULT_PROFILE_ID);
+    let capability_profile_id = capability_format
+        .settings()
+        .find_map(|setting| match setting {
+            CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
+            _ => None,
+        })
+        .unwrap_or(rfc_rtp::fmtp::VP9_DEFAULT_PROFILE_ID);
+    format_profile_id == capability_profile_id
 }
 
 fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, RtpNegotiationError> {
@@ -549,29 +606,6 @@ fn apply_bwe_feedback_policy(
                 entry.kind(),
                 RtcpFeedbackKind::TransportCc | RtcpFeedbackKind::GoogRemb
             ),
-        })
-        .collect()
-}
-
-fn drop_unpaired_rtx_formats(formats: Vec<MediaFormat>) -> Vec<MediaFormat> {
-    let media_payload_types = formats
-        .iter()
-        .filter(|format| !format.codec().is_rtx())
-        .map(MediaFormat::payload_type_id)
-        .collect::<BTreeSet<_>>();
-    formats
-        .into_iter()
-        .filter(|format| {
-            if !format.codec().is_rtx() {
-                return true;
-            }
-            format.settings().any(|setting| {
-                matches!(
-                    setting,
-                    CodecSetting::RtxAssociation(payload_type)
-                    if media_payload_types.contains(payload_type)
-                )
-            })
         })
         .collect()
 }

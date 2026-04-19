@@ -195,10 +195,20 @@ pub mod fmtp {
     /// Reference: RFC 6184 section 8.1
     pub const H264_PROFILE_LEVEL_ID: &str = "profile-level-id";
 
+    /// Default H264 packetization mode when the parameter is omitted.
+    ///
+    /// Reference: RFC 6184 section 6.2.
+    pub const H264_DEFAULT_PACKETIZATION_MODE: u8 = 0;
+
     /// VP9 profile-id parameter.
     ///
     /// Reference: RFC 9628 section 4.2.
     pub const VP9_PROFILE_ID: &str = "profile-id";
+
+    /// Default VP9 profile when `profile-id` is omitted.
+    ///
+    /// Reference: RFC 9628 section 4.2.
+    pub const VP9_DEFAULT_PROFILE_ID: u8 = 0;
 
     /// Opus in-band FEC parameter
     ///
@@ -216,6 +226,188 @@ pub mod fmtp {
 
     /// Textual disabled flag accepted by current ORTC/WebRTC capability payloads
     pub const VALUE_FALSE: &str = "false";
+}
+
+/// H264 SDP and payload-format helpers derived from RFC 6184.
+pub mod h264 {
+    use std::cmp::Ordering;
+
+    /// Parsed H264 `profile-level-id` value.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ProfileLevelId {
+        profile: Profile,
+        level: LevelIdc,
+    }
+
+    impl ProfileLevelId {
+        /// Parse the RFC 6184 `profile-level-id` hex token.
+        #[must_use]
+        pub fn parse(value: &str) -> Option<Self> {
+            if value.len() != 6 {
+                return None;
+            }
+            let raw = u32::from_str_radix(value, 16).ok()?;
+            let bytes = raw.to_be_bytes();
+            let profile_idc = bytes[1];
+            let profile_iop = bytes[2];
+            let level = normalized_level_idc(profile_idc, profile_iop, bytes[3])?;
+            let profile = profile_from_bytes(profile_idc, profile_iop)?;
+            Some(Self { profile, level })
+        }
+
+        #[must_use]
+        pub const fn profile(self) -> Profile {
+            self.profile
+        }
+
+        #[must_use]
+        pub const fn level(self) -> LevelIdc {
+            self.level
+        }
+    }
+
+    /// H264 profiles defined by RFC 6184 section 8.1.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Profile {
+        Baseline,
+        ConstrainedBaseline,
+        Main,
+        Extended,
+        High,
+        High10,
+        High422,
+        High444Predictive,
+        High10Intra,
+        High422Intra,
+        High444Intra,
+        Cavlc444Intra,
+    }
+
+    /// H264 level identifiers ordered by decoder capability.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum LevelIdc {
+        Level1,
+        Level1B,
+        Level1_1,
+        Level1_2,
+        Level1_3,
+        Level2,
+        Level2_1,
+        Level2_2,
+        Level3,
+        Level3_1,
+        Level3_2,
+        Level4,
+        Level4_1,
+        Level4_2,
+        Level5,
+        Level5_1,
+        Level5_2,
+    }
+
+    impl LevelIdc {
+        #[must_use]
+        const fn ordinal(self) -> u8 {
+            match self {
+                Self::Level1 => 0,
+                Self::Level1B => 1,
+                Self::Level1_1 => 2,
+                Self::Level1_2 => 3,
+                Self::Level1_3 => 4,
+                Self::Level2 => 5,
+                Self::Level2_1 => 6,
+                Self::Level2_2 => 7,
+                Self::Level3 => 8,
+                Self::Level3_1 => 9,
+                Self::Level3_2 => 10,
+                Self::Level4 => 11,
+                Self::Level4_1 => 12,
+                Self::Level4_2 => 13,
+                Self::Level5 => 14,
+                Self::Level5_1 => 15,
+                Self::Level5_2 => 16,
+            }
+        }
+    }
+
+    impl PartialOrd for LevelIdc {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for LevelIdc {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.ordinal().cmp(&other.ordinal())
+        }
+    }
+
+    impl TryFrom<u8> for LevelIdc {
+        type Error = ();
+
+        fn try_from(value: u8) -> Result<Self, Self::Error> {
+            match value {
+                0 => Ok(Self::Level1B),
+                10 => Ok(Self::Level1),
+                11 => Ok(Self::Level1_1),
+                12 => Ok(Self::Level1_2),
+                13 => Ok(Self::Level1_3),
+                20 => Ok(Self::Level2),
+                21 => Ok(Self::Level2_1),
+                22 => Ok(Self::Level2_2),
+                30 => Ok(Self::Level3),
+                31 => Ok(Self::Level3_1),
+                32 => Ok(Self::Level3_2),
+                40 => Ok(Self::Level4),
+                41 => Ok(Self::Level4_1),
+                42 => Ok(Self::Level4_2),
+                50 => Ok(Self::Level5),
+                51 => Ok(Self::Level5_1),
+                52 => Ok(Self::Level5_2),
+                _ => Err(()),
+            }
+        }
+    }
+
+    const H264_LEVEL_1B_CONSTRAINT_SET3_FLAG: u8 = 0x10;
+    const H264_PROFILE_PATTERNS: &[(Profile, u8, u8, u8)] = &[
+        (Profile::ConstrainedBaseline, 0x42, 0b0100_1111, 0b0100_0000),
+        (Profile::ConstrainedBaseline, 0x4D, 0b1000_1111, 0b1000_0000),
+        (Profile::ConstrainedBaseline, 0x58, 0b1100_1111, 0b1100_0000),
+        (Profile::Baseline, 0x42, 0b0100_1111, 0b0000_0000),
+        (Profile::Baseline, 0x58, 0b1100_1111, 0b1000_0000),
+        (Profile::Main, 0x4D, 0b1010_1111, 0b0000_0000),
+        (Profile::Extended, 0x58, 0b1100_1111, 0b0000_0000),
+        (Profile::High, 0x64, 0b1111_1111, 0b0000_0000),
+        (Profile::High10, 0x6E, 0b1111_1111, 0b0000_0000),
+        (Profile::High422, 0x7A, 0b1111_1111, 0b0000_0000),
+        (Profile::High444Predictive, 0xF4, 0b1111_1111, 0b0000_0000),
+        (Profile::High10Intra, 0x6E, 0b1111_1111, 0b0001_0000),
+        (Profile::High422Intra, 0x7A, 0b1111_1111, 0b0001_0000),
+        (Profile::High444Intra, 0xF4, 0b1111_1111, 0b0001_0000),
+        (Profile::Cavlc444Intra, 0x2C, 0b1111_1111, 0b0001_0000),
+    ];
+
+    fn normalized_level_idc(profile_idc: u8, profile_iop: u8, level_idc: u8) -> Option<LevelIdc> {
+        if [0x42, 0x4D, 0x58].contains(&profile_idc) && level_idc == 11 {
+            return if (profile_iop & H264_LEVEL_1B_CONSTRAINT_SET3_FLAG) != 0 {
+                Some(LevelIdc::Level1B)
+            } else {
+                Some(LevelIdc::Level1)
+            };
+        }
+        LevelIdc::try_from(level_idc).ok()
+    }
+
+    fn profile_from_bytes(profile_idc: u8, profile_iop: u8) -> Option<Profile> {
+        H264_PROFILE_PATTERNS
+            .iter()
+            .find_map(|(profile, expected_profile_idc, mask, expected_bits)| {
+                (*expected_profile_idc == profile_idc
+                    && (profile_iop & *mask) == *expected_bits)
+                    .then_some(*profile)
+            })
+    }
 }
 
 /// Returns `true` if `payload_type` falls in the dynamic range (96–127).
@@ -279,5 +471,23 @@ pub mod header_extension {
             return None;
         }
         Some(TWO_BYTE_PROFILE_ID_BASE | u16::from(appbits))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::h264::{LevelIdc, Profile, ProfileLevelId};
+
+    #[test]
+    fn h264_profile_level_id_parses_profile_and_level() {
+        let parsed = ProfileLevelId::parse("42e01f");
+        assert_eq!(parsed.map(ProfileLevelId::profile), Some(Profile::ConstrainedBaseline));
+        assert_eq!(parsed.map(ProfileLevelId::level), Some(LevelIdc::Level3_1));
+    }
+
+    #[test]
+    fn h264_level_ordering_keeps_level_1b_between_level_1_and_level_1_1() {
+        assert!(LevelIdc::Level1 < LevelIdc::Level1B);
+        assert!(LevelIdc::Level1B < LevelIdc::Level1_1);
     }
 }
