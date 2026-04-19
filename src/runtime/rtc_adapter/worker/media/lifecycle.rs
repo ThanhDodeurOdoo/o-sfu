@@ -1,3 +1,16 @@
+//! Worker-local media lifecycle for one RTC shard.
+//!
+//! This module owns producer and consumer media declaration plus transport-handle
+//! teardown inside `RtcBootstrapState`. Route ownership and relay traking
+//! stay in `control.rs`, while offer/answer transitions remain in
+//! `worker/negotiation.rs`.
+//!
+//! The helpers here rely on two invariants:
+//! - worker commands are serialized through one mutable `RtcBootstrapState`
+//! - the signaling edge obeys the one-outstanding-offer rule and does not try
+//!   to hand out a second local offer while the previous one still awaits an
+//!   answer
+
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::{
     media::{Direction, MediaKind, Mid, Rid},
@@ -84,26 +97,17 @@ fn worker_remove_media(
     if handle.session_key() != session_key {
         return Err(TransportAdapterError::InvalidInput);
     }
+    stage_last_mid_removal_before_unregistering_handle(state, transport_media_id, &handle)?;
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
-            let should_remove_media = !state.session_has_mid(&session_key, mid);
             if let Some(session_state) = state.sessions.get_mut(&session_key) {
                 session_state
                     .sdp_negotiation
                     .negotiated_producer_parameters
                     .remove(&mid);
-            }
-            if let Some(session_state) = state.sessions.get_mut(&session_key)
-                && should_remove_media
-            {
-                if session_state.sdp_negotiation.initial_offer_applied {
-                    worker_stage_native_media_removal(session_state, mid)?;
-                } else {
-                    session_state.rtc.direct_api().remove_media(mid);
-                }
             }
             state.media_route_index.remove(&transport_media_id);
             state.mark_session_dirty(&session_key);
@@ -111,19 +115,9 @@ fn worker_remove_media(
         }
         RegisteredMediaHandle::Consumer {
             session_key,
-            mid,
             source_transport_media_id,
+            ..
         } => {
-            let should_remove_media = !state.session_has_mid(&session_key, mid);
-            if let Some(session_state) = state.sessions.get_mut(&session_key)
-                && should_remove_media
-            {
-                if session_state.sdp_negotiation.initial_offer_applied {
-                    worker_stage_native_media_removal(session_state, mid)?;
-                } else {
-                    session_state.rtc.direct_api().remove_media(mid);
-                }
-            }
             let relay_cleanup = remove_consumer_route(
                 state,
                 &session_key,
@@ -144,13 +138,67 @@ fn worker_remove_media(
     }
 }
 
+/// Stage or apply removal before the public transport-handle registry changes.
+///
+/// If removal cannot be represented in the session's live or staged SDP, the
+/// registry entry must remain intact so ownership and route bookeeping do not
+/// drift away from the RTC state
+fn stage_last_mid_removal_before_unregistering_handle(
+    state: &mut RtcBootstrapState,
+    transport_media_id: TransportMediaId,
+    handle: &RegisteredMediaHandle,
+) -> Result<(), TransportAdapterError> {
+    if session_has_other_mid_user(
+        state,
+        handle.session_key(),
+        handle.mid(),
+        transport_media_id,
+    ) {
+        return Ok(());
+    }
+    let session_state = state
+        .sessions
+        .get_mut(handle.session_key())
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    if session_state.sdp_negotiation.initial_offer_applied {
+        worker_stage_native_media_removal(session_state, handle.mid())
+    } else {
+        session_state.rtc.direct_api().remove_media(handle.mid());
+        Ok(())
+    }
+}
+
+fn session_has_other_mid_user(
+    state: &RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    mid: Mid,
+    excluded_transport_media_id: TransportMediaId,
+) -> bool {
+    state.mid_registry.iter().any(|(raw_id, handle)| {
+        *raw_id != excluded_transport_media_id.as_u64()
+            && handle.session_key() == session_key
+            && handle.mid() == mid
+    })
+}
+
+/// Returns whether the shard already handed out a local offer and is still
+/// waiting for the macthing answer. That state accepts queued removals, but it
+/// must reject new additions that would need a second concurrent offer
+fn offer_is_awaiting_answer(session_state: &RtcSessionState) -> bool {
+    session_state.sdp_negotiation.pending_offer.is_some()
+        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
+}
+
+/// "Removal" for negotiated media means preserving the existing MID and
+/// disabling the m-section with `inactive`, not rejecting it out of the SDP.
+///
+/// If an earlier offer is already in flight, removal is deferred into the next
+/// follow-up offer so the worker keeps the one-outstanding-offer contract.
 fn worker_stage_native_media_removal(
     session_state: &mut RtcSessionState,
     mid: Mid,
 ) -> Result<(), TransportAdapterError> {
-    if session_state.sdp_negotiation.pending_offer.is_some()
-        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
-    {
+    if offer_is_awaiting_answer(session_state) {
         session_state
             .sdp_negotiation
             .queued_removal_mids
@@ -180,6 +228,10 @@ fn worker_stage_native_media_removal(
 }
 
 /// Declare one recv-only media line owned by the publishing session.
+///
+/// Before the first answer lands, the RTC state can be updated directly because
+/// there is no committed negotiated description to keep in sync yet. After that
+/// point every addition must stage the next renegotiation offer first.
 fn worker_add_recv_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -220,14 +272,16 @@ fn worker_add_recv_media(
     Ok(transport_media_id)
 }
 
+/// Stage a producer-side recv-only media section inside the next local offer.
+///
+/// The pending receive identity is recorded separately so the worker can bind
+/// the concrete SSRC only once the remote answer commits the negotiation step.
 fn worker_stage_native_recv_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
 ) -> Result<Mid, TransportAdapterError> {
-    if session_state.sdp_negotiation.pending_offer.is_some()
-        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
-    {
+    if offer_is_awaiting_answer(session_state) {
         return Err(TransportAdapterError::InvalidInput);
     }
 
@@ -258,6 +312,11 @@ fn worker_stage_native_recv_media(
 
 /// Declare one send-only media line for a consumer route and register the
 /// corresponding route-source ownership in the worker bootstrap state.
+///
+/// Remote-source registration, consumer-media declaration, and route creation
+/// form one logical edge. If the consumer session is gone or media staging
+/// fails, any provisional remote-source registration is restored before the
+/// error escapes.
 fn worker_add_send_media(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,
@@ -267,6 +326,14 @@ fn worker_add_send_media(
     remote_source_control: Option<RemoteSourceControl>,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Result<TransportMediaId, TransportAdapterError> {
+    let previous_remote_source_registration = (source_session_key.media_worker_id()
+        != consumer_session_key.media_worker_id())
+    .then(|| {
+        state
+            .remote_source_registration(source_transport_media_id)
+            .cloned()
+    })
+    .flatten();
     let route_source = match ensure_route_source_registered(
         state,
         consumer_session_key,
@@ -288,11 +355,27 @@ fn worker_add_send_media(
             return Err(error);
         }
     };
+    let rollback_remote_source_registration = |state: &mut RtcBootstrapState| {
+        if matches!(route_source, super::types::RouteSourceKind::Remote) {
+            state.restore_remote_source_registration(
+                source_transport_media_id,
+                previous_remote_source_registration.clone(),
+            );
+        }
+    };
     let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
+        rollback_remote_source_registration(state);
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let mid = if session_state.sdp_negotiation.initial_offer_applied {
-        worker_stage_native_send_media(session_state, media_kind)?
+        match worker_stage_native_send_media(session_state, media_kind) {
+            Ok(mid) => mid,
+            Err(error) => {
+                let _ = session_state;
+                rollback_remote_source_registration(state);
+                return Err(error);
+            }
+        }
     } else {
         let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
         declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
@@ -327,13 +410,16 @@ fn worker_add_send_media(
     Ok(transport_media_id)
 }
 
+/// Stage one send-only consumer media section in the next local offer.
+///
+/// Additions are rejected while another offer already await an answer because
+/// a new MID canot be committed speculatively against an unresolved remote
+/// description.
 fn worker_stage_native_send_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
 ) -> Result<Mid, TransportAdapterError> {
-    if session_state.sdp_negotiation.pending_offer.is_some()
-        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
-    {
+    if offer_is_awaiting_answer(session_state) {
         warn!(
             ?media_kind,
             initial_offer_applied = session_state.sdp_negotiation.initial_offer_applied,
@@ -356,6 +442,9 @@ fn worker_stage_native_send_media(
     Ok(mid)
 }
 
+/// Direct send declaration needs a concrete SSRC in the live RTC state. When
+/// the negotiated parameters do not provide one yet, the worker allocates a
+/// shard-local SSRC and treats any RID as metadata on that stream identity.
 fn declare_direct_send_media(
     session_state: &mut RtcSessionState,
     mid: Mid,
@@ -376,6 +465,12 @@ fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
     rtp_parameters.mid().map(Into::into)
 }
 
+/// Return the first encoding identity that can be bound directly in the live
+/// RTC state.
+///
+/// RID-only encodings are intentionally ignored here because they are negotiable SDP
+/// metadata, but they do not identify a concrete inbound or outbound RTP stream
+/// until an SSRC exists.
 fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ssrc, Option<Rid>)> {
     let encoding = rtp_parameters
         .encodings()

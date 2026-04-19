@@ -172,12 +172,6 @@ impl RtcBootstrapState {
         Some(handle)
     }
 
-    pub(super) fn session_has_mid(&self, session_key: &TransportSessionKey, mid: Mid) -> bool {
-        self.mid_registry
-            .values()
-            .any(|handle| handle.session_key() == session_key && handle.mid() == mid)
-    }
-
     pub(super) fn session_has_registered_media(&self, session_key: &TransportSessionKey) -> bool {
         self.mid_registry
             .values()
@@ -189,14 +183,18 @@ impl RtcBootstrapState {
         source_transport_media_id: TransportMediaId,
         source_session_key: &TransportSessionKey,
         source_control: RemoteSourceControl,
-    ) -> Result<(), TransportAdapterError> {
+    ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
         match self.remote_source_registry.get(&source_transport_media_id) {
             Some(existing) if existing.source_session_key() == source_session_key => {
+                let previous = self
+                    .remote_source_registry
+                    .get(&source_transport_media_id)
+                    .cloned();
                 self.remote_source_registry.insert(
                     source_transport_media_id,
                     RemoteSourceRegistration::new(source_session_key.clone(), source_control),
                 );
-                Ok(())
+                Ok(previous)
             }
             Some(_existing) => Err(TransportAdapterError::InvalidInput),
             None => {
@@ -204,8 +202,23 @@ impl RtcBootstrapState {
                     source_transport_media_id,
                     RemoteSourceRegistration::new(source_session_key.clone(), source_control),
                 );
-                Ok(())
+                Ok(None)
             }
+        }
+    }
+
+    pub(super) fn restore_remote_source_registration(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        previous_registration: Option<RemoteSourceRegistration>,
+    ) {
+        if let Some(previous_registration) = previous_registration {
+            self.remote_source_registry
+                .insert(source_transport_media_id, previous_registration);
+        } else {
+            self.remote_source_registry
+                .remove(&source_transport_media_id);
+            self.route_control.forget_source(source_transport_media_id);
         }
     }
 

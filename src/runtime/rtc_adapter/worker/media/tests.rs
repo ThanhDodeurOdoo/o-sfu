@@ -1,23 +1,29 @@
 use std::{net::SocketAddr, time::Instant};
 
+use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
 use str0m::rtp::Ssrc;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::{
-    RemoteKeyframeRequest, request_keyframe_for_source, respond_request_remote_keyframe,
+    AddSendMediaRequest, RemoteKeyframeRequest, request_keyframe_for_source,
+    respond_add_send_media, respond_remove_media, respond_request_remote_keyframe,
     respond_set_remote_source_packet_gate, respond_set_source_packet_gate,
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::rtc_adapter::{
     bootstrap,
+    commands::RemoteSourceControl,
     media_registry::RegisteredMediaHandle,
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     route_control::PacketLayerGate,
     state::RtcBootstrapState,
 };
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
+};
 use o_sfu_protocol::shared::SessionId;
 
 fn prepare_source_session(
@@ -169,6 +175,88 @@ fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
             .effective_packet_gate(source_transport_media_id),
         None
     );
+}
+
+#[test]
+fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is_missing() {
+    let source_session = TransportSessionKey::new(151, 0, 152, SessionId::Integer(153));
+    let consumer_session = TransportSessionKey::new(151, 1, 154, SessionId::Integer(155));
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id = TransportMediaId::new(33);
+    let (command_tx, _command_rx) = mpsc::channel(1);
+    let remote_source_control = RemoteSourceControl::new(command_tx, RelayTargetId::new(10));
+    let consumer_rtp_parameters = RouterRtpParameters::new(vec![], vec![], vec![]);
+    let (response_tx, response_rx) = oneshot::channel();
+
+    respond_add_send_media(
+        &mut state,
+        AddSendMediaRequest {
+            consumer_session_key: &consumer_session,
+            media_kind: MediaKind::Video,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            remote_source_control: Some(remote_source_control),
+            consumer_rtp_parameters: &consumer_rtp_parameters,
+        },
+        response_tx,
+    );
+
+    assert_eq!(
+        response_rx.blocking_recv(),
+        Ok(Err(TransportAdapterError::TransportUnavailable))
+    );
+    assert!(
+        state
+            .remote_source_registration(source_transport_media_id)
+            .is_none()
+    );
+}
+
+#[test]
+fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
+    let session_key = TransportSessionKey::new(161, 0, 162, SessionId::Integer(163));
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_100));
+    let producer_mid = Mid::from("cam-up");
+    let mut state = RtcBootstrapState::default();
+
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.sessions,
+            &session_key,
+            candidate_addr,
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    let session_state = state.sessions.get_mut(&session_key);
+    assert!(session_state.is_some());
+    let Some(session_state) = session_state else {
+        return;
+    };
+    {
+        let mut direct_api = session_state.rtc.direct_api();
+        direct_api.declare_media(producer_mid, MediaKind::Video);
+        direct_api.remove_media(producer_mid);
+    }
+    session_state.sdp_negotiation.initial_offer_applied = true;
+
+    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: session_key.clone(),
+        mid: producer_mid,
+    });
+    let (response_tx, response_rx) = oneshot::channel();
+
+    respond_remove_media(&mut state, &session_key, transport_media_id, response_tx);
+
+    assert_eq!(
+        response_rx.blocking_recv(),
+        Ok(Err(TransportAdapterError::InvalidInput))
+    );
+    assert!(matches!(
+        state.media_handle(transport_media_id),
+        Some(RegisteredMediaHandle::Producer { session_key: stored_session_key, mid })
+            if stored_session_key == &session_key && *mid == producer_mid
+    ));
 }
 
 #[test]

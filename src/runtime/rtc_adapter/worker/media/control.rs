@@ -6,9 +6,9 @@
 //! - `route_control` keeps the effective local and relay packet gates
 //! - relay cleanup must be emitted when the last remote-backed route disappears
 //!
-//! `lifecycle.rs` owns media declaration and teardown againts `RtcSessionState`.
+//! `lifecycle.rs` owns media declaration and teardown against `RtcSessionState`.
 //! Once a producer or consumer handle exists, this module owns the routing-side
-//! bookkeeping that decide whether the source is valid, how one consumer route
+//! bookkeeping that decides whether the source is valid, how one consumer route
 //! is registered or removed and how packet-gate state is recomputed
 //!
 //! Small ownership graph:
@@ -381,7 +381,7 @@ fn ensure_route_source(
             let Some(remote_source_control) = remote_source_control else {
                 return Err(TransportAdapterError::InvalidInput);
             };
-            state.register_remote_source(
+            let _previous_registration = state.register_remote_source(
                 source_transport_media_id,
                 source_session_key,
                 remote_source_control,
