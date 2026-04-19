@@ -46,7 +46,7 @@ jobs:
         run: npm run lint
 
       - name: Run TypeScript checks
-        run: npm run typscript
+        run: npm run typecheck
 
       - name: Run client tests
         run: npm test
