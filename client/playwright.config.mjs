@@ -7,12 +7,21 @@ export default defineConfig({
     reporter: [["list"]],
     use: {
         baseURL: "http://127.0.0.1:4173",
-        browserName: "chromium",
         headless: true,
         screenshot: "only-on-failure",
         trace: "retain-on-failure",
         video: "retain-on-failure"
     },
+    projects: [
+        {
+            name: "chromium",
+            use: { browserName: "chromium" }
+        },
+        {
+            name: "firefox",
+            use: { browserName: "firefox" }
+        }
+    ],
     webServer: [
         {
             command: "node ./playwright/serve_client.mjs",

@@ -28,7 +28,7 @@ Run the regular workspace checks from the repository root:
 cargo fmt
 cargo check -p o-sfu
 cargo clippy --workspace --all-targets --all-features -- -D warnings # you can skip warnings during dev if they are too strict but 0 warnings accepted in PRs (it must be instead locally overriden explicitely and justified)
-cargo test --workspace
+cargo test --workspace --release
 npm --prefix client run verify # runs all checks for the client, see the package.json for individual checks
 ```
 

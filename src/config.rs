@@ -13,9 +13,9 @@ const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
-const DEFAULT_ENABLE_TRANSCRIPTION_FEATURE: bool = false;
-const DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE: bool = false;
-const DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE: bool = false;
+const DEFAULT_TRANSCRIPTION_FEATURE: bool = false;
+const DEFAULT_AUDIO_RECORDING_FEATURE: bool = false;
+const DEFAULT_VIDEO_RECORDING_FEATURE: bool = false;
 const DEFAULT_TRUST_PROXY_HEADERS: bool = false;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,9 +28,9 @@ pub struct RuntimeFeatureFlags {
 impl Default for RuntimeFeatureFlags {
     fn default() -> Self {
         Self {
-            transcription: DEFAULT_ENABLE_TRANSCRIPTION_FEATURE,
-            audio_recording: DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE,
-            video_recording: DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE,
+            transcription: DEFAULT_TRANSCRIPTION_FEATURE,
+            audio_recording: DEFAULT_AUDIO_RECORDING_FEATURE,
+            video_recording: DEFAULT_VIDEO_RECORDING_FEATURE,
         }
     }
 }
@@ -354,22 +354,22 @@ fn load_runtime_feature_flags(
     Ok(RuntimeFeatureFlags {
         transcription: parse_optional_env(
             &mut get_var,
-            "ENABLE_FEATURE_TRANSCRIPTION",
-            "ENABLE_FEATURE_TRANSCRIPTION must be either `true` or `false`",
+            "FEATURE_TRANSCRIPTION",
+            "FEATURE_TRANSCRIPTION must be either `true` or `false`",
         )?
-        .unwrap_or(DEFAULT_ENABLE_TRANSCRIPTION_FEATURE),
+        .unwrap_or(DEFAULT_TRANSCRIPTION_FEATURE),
         audio_recording: parse_optional_env(
             &mut get_var,
-            "ENABLE_FEATURE_AUDIO_RECORDING",
-            "ENABLE_FEATURE_AUDIO_RECORDING must be either `true` or `false`",
+            "FEATURE_AUDIO_RECORDING",
+            "FEATURE_AUDIO_RECORDING must be either `true` or `false`",
         )?
-        .unwrap_or(DEFAULT_ENABLE_AUDIO_RECORDING_FEATURE),
+        .unwrap_or(DEFAULT_AUDIO_RECORDING_FEATURE),
         video_recording: parse_optional_env(
             &mut get_var,
-            "ENABLE_FEATURE_VIDEO_RECORDING",
-            "ENABLE_FEATURE_VIDEO_RECORDING must be either `true` or `false`",
+            "FEATURE_VIDEO_RECORDING",
+            "FEATURE_VIDEO_RECORDING must be either `true` or `false`",
         )?
-        .unwrap_or(DEFAULT_ENABLE_VIDEO_RECORDING_FEATURE),
+        .unwrap_or(DEFAULT_VIDEO_RECORDING_FEATURE),
     })
 }
 
@@ -379,50 +379,50 @@ fn load_media_codec_flags(
     let default_flags = MediaCodecFlags::default();
     let opus = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_OPUS",
-        "ENABLE_CODEC_OPUS must be either `true` or `false`",
+        "CODEC_OPUS",
+        "CODEC_OPUS must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.opus_enabled());
     let g711_mu_law_enabled = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_PCMU",
-        "ENABLE_CODEC_PCMU must be either `true` or `false`",
+        "CODEC_PCMU",
+        "CODEC_PCMU must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.pcmu_enabled());
     let g711_a_law_enabled = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_PCMA",
-        "ENABLE_CODEC_PCMA must be either `true` or `false`",
+        "CODEC_PCMA",
+        "CODEC_PCMA must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.pcma_enabled());
     let vp8 = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_VP8",
-        "ENABLE_CODEC_VP8 must be either `true` or `false`",
+        "CODEC_VP8",
+        "CODEC_VP8 must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.vp8_enabled());
     let h264 = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_H264",
-        "ENABLE_CODEC_H264 must be either `true` or `false`",
+        "CODEC_H264",
+        "CODEC_H264 must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.h264_enabled());
     let h265 = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_H265",
-        "ENABLE_CODEC_H265 must be either `true` or `false`",
+        "CODEC_H265",
+        "CODEC_H265 must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.h265_enabled());
     let vp9 = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_VP9",
-        "ENABLE_CODEC_VP9 must be either `true` or `false`",
+        "CODEC_VP9",
+        "CODEC_VP9 must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.vp9_enabled());
     let av1 = parse_optional_env(
         &mut get_var,
-        "ENABLE_CODEC_AV1",
-        "ENABLE_CODEC_AV1 must be either `true` or `false`",
+        "CODEC_AV1",
+        "CODEC_AV1 must be either `true` or `false`",
     )?
     .unwrap_or(default_flags.av1_enabled());
     Ok(MediaCodecFlags::default()
@@ -551,9 +551,9 @@ mod tests {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
-            "ENABLE_FEATURE_TRANSCRIPTION"
-            | "ENABLE_FEATURE_AUDIO_RECORDING"
-            | "ENABLE_FEATURE_VIDEO_RECORDING" => Some("true".to_owned()),
+            "FEATURE_TRANSCRIPTION" | "FEATURE_AUDIO_RECORDING" | "FEATURE_VIDEO_RECORDING" => {
+                Some("true".to_owned())
+            }
             _ => None,
         });
         assert!(config.is_ok());
@@ -590,8 +590,8 @@ mod tests {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
-            "ENABLE_CODEC_OPUS" => Some("false".to_owned()),
-            "ENABLE_CODEC_H264" | "ENABLE_CODEC_AV1" => Some("true".to_owned()),
+            "CODEC_OPUS" => Some("false".to_owned()),
+            "CODEC_H264" | "CODEC_AV1" => Some("true".to_owned()),
             _ => None,
         });
         assert!(config.is_ok());
