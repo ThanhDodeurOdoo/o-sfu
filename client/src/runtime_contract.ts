@@ -412,6 +412,9 @@ function validateSessionId(value: unknown, context: string): SessionId {
     if (typeof value !== "string" && typeof value !== "number") {
         throw new Error(`${context} must be a string or number session ID`);
     }
+    if (typeof value === "number" && !Number.isFinite(value)) {
+        throw new Error(`${context} number session ID must be finite`);
+    }
     return value;
 }
 

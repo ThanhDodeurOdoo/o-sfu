@@ -9,6 +9,13 @@ import {
     wrapProtocolCoreBindings
 } from "../dist/runtime_contract.js";
 
+function assertThrowsMessage(callback, expectedMessage) {
+    assert.throws(callback, (error) => {
+        assert.equal(error?.message, expectedMessage);
+        return true;
+    });
+}
+
 function validCore(overrides = {}) {
     return {
         state: "disconnected",
@@ -97,9 +104,10 @@ test("wrapped protocol core rejects malformed host commands", () => {
         })
     );
 
-    assert.throws(() => core.connect("ws://example.test", "jwt", null), {
-        message: /protocol core connect\(\) command #0\.state is invalid/
-    });
+    assertThrowsMessage(
+        () => core.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.state is invalid: broken"
+    );
 });
 
 test("wrapped protocol core rejects malformed track bindings", () => {
@@ -116,9 +124,10 @@ test("wrapped protocol core rejects malformed track bindings", () => {
         })
     );
 
-    assert.throws(() => core.trackBinding("0"), {
-        message: /protocol core trackBinding\(\)\.active must be a boolean/
-    });
+    assertThrowsMessage(
+        () => core.trackBinding("0"),
+        "protocol core trackBinding().active must be a boolean"
+    );
 });
 
 test("wrapped protocol core validates replaceTrackBindings host commands", () => {
@@ -135,9 +144,38 @@ test("wrapped protocol core validates replaceTrackBindings host commands", () =>
         })
     );
 
-    assert.throws(() => core.connect("ws://example.test", "jwt", null), {
-        message: /protocol core connect\(\) command #0\.bindings\[0\]\.active must be a boolean/
-    });
+    assertThrowsMessage(
+        () => core.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.bindings[0].active must be a boolean"
+    );
+});
+
+test("wrapped protocol core rejects NaN and infinite numeric session IDs", () => {
+    const nanSessionIdCore = wrapProtocolCoreBindings(
+        validCore({
+            connect() {
+                return [{ kind: "removeSessionTracks", sessionId: Number.NaN }];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => nanSessionIdCore.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.sessionId number session ID must be finite"
+    );
+
+    const infiniteSessionIdCore = wrapProtocolCoreBindings(
+        validCore({
+            connect() {
+                return [{ kind: "removeSessionTracks", sessionId: Number.POSITIVE_INFINITY }];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => infiniteSessionIdCore.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.sessionId number session ID must be finite"
+    );
 });
 
 test("createProtocolCore validates factory output at runtime", () => {
@@ -153,9 +191,10 @@ test("createProtocolCore validates factory output at runtime", () => {
 
     try {
         const core = createProtocolCore();
-        assert.throws(() => core.features, {
-            message: /protocol core features\.transcription must be a boolean/
-        });
+        assertThrowsMessage(
+            () => core.features,
+            "protocol core features.transcription must be a boolean"
+        );
     } finally {
         configureProtocolCoreFactory(() => validCore());
     }

@@ -190,6 +190,13 @@ pub struct BundleSessionSnapshot {
     pub recording_state: RecordingState,
 }
 
+/// odoo/sfu `info_change` bundle payloads are string-keyed objects, so this
+/// snapshot shape cannot distinguish `SessionId::Integer(7)` from
+/// `SessionId::String("7")`. Mixed ID kinds remain accepted by the public API,
+/// but if two sessions in the same channel stringify to the same key then the
+/// later entry overwrites the earlier one in this snapshot view.
+/// we just assume that the API user will not mix integer and string session
+/// IDs in the same channel.
 pub type BundleSessionInfoSnapshotById = BTreeMap<String, SessionInfo>;
 
 #[must_use]
