@@ -16,79 +16,47 @@ MISSING FEATURES [Odoo SFU](https://github.com/odoo/sfu):
 - Local sharding
 - Multi-server sharding
 
-## Development
+Comments may be a bit lacking (although I added some for the most important parts in recent commits) because I don't want to write big comments when the code is still changing a lot (the code could get outdated and I forget to change the comments).
 
-Run the regular workspace checks from the repository root:
 
-```bash
-cargo fmt
-cargo check -p o-sfu
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-npm --prefix client run verify
-```
+## Env variables (based on odoo/sfu)
 
-## Container image
+| Variable                         | Default                        | Required | Implemented | Description                                                                        |
+| :------------------------------- | :----------------------------- | :------: | :---------: | :--------------------------------------------------------------------------------- |
+| `PUBLIC_IP`                      | -                              |   Yes    |      ✅      | Used to establish WebRTC connections to the server.                                |
+| `AUTH_KEY`                       | -                              |   Yes    |      ✅      | The base64 encoded encryption key used for JWT authentication.                     |
+| `BIND_ADDRESS`                   | `0.0.0.0:8080`                 |    No    |      ✅      | HTTP and WebSocket listening address.                                              |
+| `PROXY`                          | `false`                        |    No    |      ✅      | Set to true if behind a proxy to trust forwarding headers.                         |
+| `RTC_MIN_PORT`                   | `40000`                        |    No    |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                   |
+| `RTC_MAX_PORT`                   | `49999`                        |    No    |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                   |
+| `RTC_MEDIA_WORKER_COUNT`         | `1`                            |    No    |      ✅      | Number of RTC media workers to spawn.                                              |
+| `AUTHENTICATION_TIMEOUT_MS`      | `10000`                        |    No    |      ✅      | Timeout for session authentication in milliseconds.                                |
+| `SESSION_TIMEOUT_MS`             | `10000`                        |    No    |      ✅      | Timeout for idle sessions in milliseconds.                                         |
+| `PING_INTERVAL_MS`               | `60000`                        |    No    |      ✅      | Interval for signaling pings in milliseconds.                                      |
+| `CHANNEL_SIZE`                   | `100`                          |    No    |      ✅      | Maximum amount of concurrent users per channel.                                    |
+| `RUST_LOG`                       | `o_sfu=info,o_sfu_router=info` |    No    |      ✅      | SFU log level and filtering (standard `tracing-subscriber` env filter).            |
+| `ENABLE_FEATURE_TRANSCRIPTION`   | `false`                        |    No    |      ✅      | Enable transcription feature flags.                                                |
+| `ENABLE_FEATURE_AUDIO_RECORDING` | `false`                        |    No    |      ✅      | Enable audio recording feature flags.                                              |
+| `ENABLE_FEATURE_VIDEO_RECORDING` | `false`                        |    No    |      ✅      | Enable video recording feature flags.                                              |
+| `ENABLE_CODEC_OPUS`              | `true`                         |    No    |      ✅      | Enable Opus audio codec.                                                           |
+| `ENABLE_CODEC_PCMU`              | `false`                        |    No    |      ✅      | Enable G.711 mu-law audio codec.                                                   |
+| `ENABLE_CODEC_PCMA`              | `false`                        |    No    |      ✅      | Enable G.711 a-law audio codec.                                                    |
+| `ENABLE_CODEC_VP8`               | `true`                         |    No    |      ✅      | Enable VP8 video codec.                                                            |
+| `ENABLE_CODEC_H264`              | `false`                        |    No    |      ✅      | Enable H.264 video codec.                                                          |
+| `ENABLE_CODEC_H265`              | `false`                        |    No    |      ✅      | Enable H.265 video codec.                                                          |
+| `ENABLE_CODEC_VP9`               | `false`                        |    No    |      ✅      | Enable VP9 video codec.                                                            |
+| `ENABLE_CODEC_AV1`               | `false`                        |    No    |      ✅      | Enable AV1 video codec.                                                            |
+| `MAX_BUF_IN`                     | `0` (unlimited)                |    No    |      ❌      | Maximum incoming buffer size in bytes for SCTP messages per session.               |
+| `MAX_BUF_OUT`                    | `0` (unlimited)                |    No    |      ❌      | Maximum outgoing buffer size in bytes for SCTP messages per session.               |
+| `MAX_BITRATE_IN`                 | `8000000`                      |    No    |      ❌      | Maximum incoming bitrate in bps per session (upload).                              |
+| `MAX_BITRATE_OUT`                | `10000000`                     |    No    |      ❌      | Maximum outgoing bitrate in bps per session (download).                            |
+| `MAX_VIDEO_BITRATE`              | `4000000`                      |    No    |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                      |
+| `LOG_TIMESTAMP`                  | `true`                         |    No    |      ❌      | Prefix timestamps to log lines.                                                    |
+| `LOG_COLOR`                      | TTY detection                  |    No    |      ❌      | Colors log lines based on their level.                                             |
+| `DEBUG`                          | -                              |    No    |      ❌      | Used by the [debug](https://www.npmjs.com/package/debug) module (e.g., `DEBUG=*`). |
+| `WORKER_LOG_LEVEL`               | `none`                         |    No    |      ❌      | Mediasoup worker log level. Requires `DEBUG` to be active.                         |
+| `DATA_PATH`                      | `/tmp/odoo_sfu`                |    No    |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders).   |
 
-Build the server image from the repository root with:
-
-```bash
-docker build --tag o-sfu:local .
-```
-
-Run a local container by providing the auth key, the advertised RTC IP, and the UDP worker range:
-
-```bash
-docker run --rm \
-  -p 8080:8080 \
-  -p 40000-49999:40000-49999/udp \
-  -e AUTH_KEY=dev-secret \
-  -e PROXY=true \
-  -e PUBLIC_IP=203.0.113.10 \
-  o-sfu:local
-```
-
-The runtime always boots the RTC transport. The fake transport is
-available for test and development workflows with the cfg flag
-`cargo test -p o-sfu --features testing-transport`.
-
-parser/auth fuzzing is in `fuzz/` crate.
- Install `cargo-fuzz` separately:
-
-```bash
-rustup toolchain install nightly
-cargo install cargo-fuzz
-```
-
-Then run the current target from the repository root:
-
-```bash
-cargo +nightly fuzz run protocol_decode
-```
-
-If you only need to verify that the fuzz target still builds after changing the
-fuzz boundary, run:
-
-```bash
-cargo check --manifest-path fuzz/Cargo.toml
-```
-
-Kani proofs are not run by `cargo test`. Install Kani separately:
-
-```bash
-cargo install --locked kani-verifier
-cargo kani setup
-```
-
-Then run the proof harnesses with:
-
-```bash
-cargo kani -p o-sfu-router
-```
-
-## TODO cleanup later
-
--  write good comments, will do when code is a bit more stable
 
 ## random thoughts
 
