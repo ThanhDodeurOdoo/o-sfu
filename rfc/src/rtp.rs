@@ -400,13 +400,12 @@ pub mod h264 {
     }
 
     fn profile_from_bytes(profile_idc: u8, profile_iop: u8) -> Option<Profile> {
-        H264_PROFILE_PATTERNS
-            .iter()
-            .find_map(|(profile, expected_profile_idc, mask, expected_bits)| {
-                (*expected_profile_idc == profile_idc
-                    && (profile_iop & *mask) == *expected_bits)
+        H264_PROFILE_PATTERNS.iter().find_map(
+            |(profile, expected_profile_idc, mask, expected_bits)| {
+                (*expected_profile_idc == profile_idc && (profile_iop & *mask) == *expected_bits)
                     .then_some(*profile)
-            })
+            },
+        )
     }
 }
 
@@ -481,7 +480,10 @@ mod tests {
     #[test]
     fn h264_profile_level_id_parses_profile_and_level() {
         let parsed = ProfileLevelId::parse("42e01f");
-        assert_eq!(parsed.map(ProfileLevelId::profile), Some(Profile::ConstrainedBaseline));
+        assert_eq!(
+            parsed.map(ProfileLevelId::profile),
+            Some(Profile::ConstrainedBaseline)
+        );
         assert_eq!(parsed.map(ProfileLevelId::level), Some(LevelIdc::Level3_1));
     }
 

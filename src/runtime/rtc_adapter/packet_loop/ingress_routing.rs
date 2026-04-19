@@ -1,3 +1,19 @@
+//! UDP ingress routing for RTC sessions.
+//!
+//! This file performes best-effort routing on the hot path.
+//! All routing decisions here are **hints only**.
+//! `Rtc::accepts()` is the authoritative ownership check.
+//!
+//! strategy:
+//! 1. Fast path: route by pinned source address.
+//! 2. Guardrails: avoid repeated expensive scans via mis cache + rate limiting.
+//! 3. Recovery: probe packet to narrow candidate sessions
+//! 4. Final decision: defer to `Rtc::accepts()`.
+//!
+//! what we should keep to guarantee:
+//! - This module must stay aligned with `str0m` demux behavior.
+//! - It must never "accept" traffic that `Rtc::accepts()` would reject.
+
 use std::{
     net::SocketAddr,
     slice::Iter,
@@ -34,6 +50,11 @@ enum IndexedSessionRecoveryOutcome {
     Malformed,
 }
 
+/// Recovery probes only narrow the candidate session set.
+///
+/// This classification must stay aligned with `str0m`'s own UDP multiplexing so
+/// the packet loop never "recovers" traffic that the authoritative
+/// `Rtc::accepts()` / `Rtc::handle_input()` path would later reject.
 enum PacketIndexProbe {
     LocalIceUfrag(String),
     RemoteCandidateAddr(SocketAddr),
@@ -109,6 +130,12 @@ pub(super) fn route_packet_to_matching_session(
         }
         CachedRouteOutcome::NotMatched => {}
     }
+    // The recent-miss cache proves that no session accepted an identical packet
+    // from this source recently. This avoids repeated recovery scans on noisy or
+    // hostile traffic
+    //
+    // IMPORTANT: this cache must be cleared on any topology or ICE change, or we
+    // risk hiding newly valide routes behind stale negative results.
     if routing_state.should_skip_scan(miss_key, packet) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
         trace!(
@@ -118,6 +145,9 @@ pub(super) fn route_packet_to_matching_session(
         return;
     }
     let now = Instant::now();
+    // This is purely a defensive mechanism against unknown-source traffic.
+    // It is not part of ICE or RTP correctness.
+    // Legitimate traffic should have been learned via STUN before hitting this path.
     if routing_state.should_rate_limit_source(source_addr, now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         trace!(
@@ -134,6 +164,8 @@ pub(super) fn route_packet_to_matching_session(
         packet,
         now,
     };
+    // Fast path: with a single session, routing degenerates to a single `accepts()` check.
+    // No indexing or probing is required.
     if state.sessions.len() == 1 {
         route_packet_by_single_session(state, routing_state, miss_key, &route);
         return;
@@ -168,6 +200,9 @@ fn route_packet_with_cached_session(
     };
     let now = Instant::now();
     let input = Input::Receive(now, receive);
+    // Cached source-address pins are not authoritative.
+    // ICE nomination, credentials, or remote candidates may have changef.
+    // We must revalidate every packet against `Rtc::accepts()` before trusting the pin.
     let accepts_input = session_state.rtc.accepts(&input);
     if !accepts_input {
         let _ = session_state;
@@ -187,6 +222,10 @@ fn route_packet_with_cached_session(
     let handle_result = session_state.rtc.handle_input(input);
     let _ = session_state;
     if handle_result.is_err() {
+        // NOTE: We still consider the packet "routed" even if `handle_input` fails.
+        // Routing answers "which session owns this packet", not "was the packet valid".
+        //
+        // This ensures we still update source-address pinning and avoid re-scanning.
         warn!(
             session_id = ?session_key.session_id(),
             media_worker_id = session_key.media_worker_id(),
@@ -224,6 +263,8 @@ fn matching_indexed_session_key_for_packet(
             return IndexedSessionRecoveryOutcome::Malformed;
         }
     };
+    // The probe only narrows the candidate session set.
+    // It is not authoritative: final ownership is decided by `Rtc::accepts()`.
     let packet_index_probe_description = packet_index_probe.describe();
     let candidate_session_keys = match packet_index_probe {
         PacketIndexProbe::LocalIceUfrag(local_ice_ufrag) => CandidateSessionKeys::Single(
@@ -248,10 +289,15 @@ fn matching_indexed_session_key_for_packet(
         let mut matched_session_key = None;
         for session_key in candidate_session_keys {
             let Some(session_state) = state.sessions.get(session_key) else {
+                // The demux index may contain stale entries after session teardown.
+                // We track and clean them here to keep the index consistent.
                 stale_session_keys.push(session_key.clone());
                 continue;
             };
             examined_sessions = examined_sessions.saturating_add(1);
+            // `Rtc::accepts()` is the authoritative demux decision.
+            // It accounts for ICE nomination, credentials, and candidate sets.
+            // The probe/index only reduces the number of sessions we test here.
             if session_state.rtc.accepts(&input) {
                 matched_session_key = Some(session_key.clone());
                 break;
@@ -260,6 +306,7 @@ fn matching_indexed_session_key_for_packet(
         matched_session_key
     };
     if let Some(matched_session_key) = matched_session_key {
+        // Cleanup must happen even on failed probes to prevent index drift.
         for stale_session_key in stale_session_keys {
             state
                 .remote_addr_demux
@@ -300,6 +347,8 @@ fn matching_indexed_session_key_for_packet(
     IndexedSessionRecoveryOutcome::NoMatch { examined_sessions }
 }
 
+/// Probe an unknown-source datagram using the same coarse multiplex rules as the
+/// transport layer before consulting the indexed recovery state.
 fn packet_index_probe(
     source_addr: SocketAddr,
     packet: &[u8],
@@ -308,18 +357,33 @@ fn packet_index_probe(
         return Err(IndexedSessionRecoveryOutcome::Malformed);
     };
     let packet_len = packet.len();
+    // NOTE: This classification intentionally matches str0m's internal demux behavior,
+    // not the full RFC 7983 range.
+    // uses byte0 < 2, which encodes the old RFC 5764 rule (0 or 1),
+    // rather than the current RFC 7983 rule (0..3)
+    // this is because str0m does not yet support RFC 7983 (will re-check upstream later)
+    //
+    // This function must remain a *subset* of str0m's classification, never a superset.
+    // Otherwise we would introduce false positives that cannot be accepted downstream.
     if byte0 < 2 && packet_len >= 20 {
         let message = StunMessage::parse(packet)
             .map_err(|_error| IndexedSessionRecoveryOutcome::Malformed)?;
         if let Some((local_ice_ufrag, _remote_ice_ufrag)) = message.split_username() {
+            // For inbound ICE checks, USERNAME is "remote:local".
+            // We use the local fragment to directly index the target session.
             return Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag.to_owned()));
         }
+        // STUN responses may not carry USERNAME, so we fall back to source-address recovery
         return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     if (20..64).contains(&byte0) {
+        // DTLS packets are identified by first-byte range
+        // We cannot extract routing information, so we fall back to address-based recovery.
         return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     if (128..192).contains(&byte0) && packet_len > 2 {
+        // RTP/RTCP packets also lack routing identifiers here.
+        // ICE must have already established the correct source tuple.
         return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     Err(IndexedSessionRecoveryOutcome::Malformed)
@@ -380,6 +444,9 @@ fn route_packet_to_session(
     } else {
         state.mark_session_dirty(session_key);
     }
+    // After successful routing, we pin the source address to this session.
+    // ICE guarantees that subsequent media flows use the same tuple
+    // If that change, the cached path will detect and invalidate the pin.
     let previous_session_key = state
         .remote_addr_demux
         .session_key_for_remote_addr(route.source_addr)
@@ -515,5 +582,71 @@ fn route_packet_by_recovery_index(
     };
     if route_packet_to_session(state, &session_key, route, "recovery-index") {
         routing_state.record_route_success(miss_key, route.packet, route.source_addr);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    use str0m::ice::{StunMessage, TransId};
+
+    use super::{PacketIndexProbe, packet_index_probe};
+
+    const STUN_TEST_PASSWORD: &[u8] = b"probe-password";
+
+    fn serialize_stun_message(
+        message: &StunMessage<'_>,
+        password: Option<&[u8]>,
+    ) -> Option<Vec<u8>> {
+        let mut buffer = [0_u8; 1024];
+        let len = message
+            .to_bytes(password, &mut buffer, |_key, _payloads| [0_u8; 20])
+            .ok()?;
+        buffer.get(..len).map(<[u8]>::to_vec)
+    }
+
+    #[test]
+    fn packet_index_probe_extracts_the_local_ice_ufrag_from_binding_requests() {
+        let packet = serialize_stun_message(
+            &StunMessage::binding_request(
+                "local-ufrag:remote-ufrag",
+                TransId::new(),
+                true,
+                1,
+                1,
+                false,
+            ),
+            Some(STUN_TEST_PASSWORD),
+        );
+
+        assert!(matches!(
+            packet
+                .as_deref()
+                .map(|packet| packet_index_probe(test_source_addr(), packet)),
+            Some(Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag)))
+                if local_ice_ufrag == "local-ufrag"
+        ));
+    }
+
+    #[test]
+    fn packet_index_probe_uses_the_source_addr_when_stun_has_no_username() {
+        let source_addr = test_source_addr();
+        let packet = serialize_stun_message(
+            &StunMessage::binding_reply(TransId::new(), source_addr),
+            Some(STUN_TEST_PASSWORD),
+        );
+
+        assert!(matches!(
+            packet
+                .as_deref()
+                .map(|packet| packet_index_probe(source_addr, packet)),
+            Some(Ok(PacketIndexProbe::RemoteCandidateAddr(probed_source_addr)))
+                if probed_source_addr == source_addr
+        ));
+    }
+
+    fn test_source_addr() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_321)
     }
 }

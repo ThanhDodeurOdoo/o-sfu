@@ -373,8 +373,10 @@ fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero() {
         vec![RtpEncoding::new().with_ssrc(5678)],
     );
     let consumer_capabilities = RtpCapabilities::new(
-        vec![RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
     );
 
@@ -390,15 +392,19 @@ fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero() {
 #[test]
 fn consumer_negotiation_accepts_missing_vp9_profile_id_for_profile_zero() {
     let consumable_parameters = RtpParameters::new(
-        vec![RtpCodecParameters::new(MediaKind::Video, "VP9", 98, 90_000)
-            .with_parameter("profile-id", "0")
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "VP9", 98, 90_000)
+                .with_parameter("profile-id", "0")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
         vec![RtpEncoding::new().with_ssrc(5678)],
     );
     let consumer_capabilities = RtpCapabilities::new(
-        vec![RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "VP9", 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
     );
 
@@ -411,18 +417,22 @@ fn consumer_negotiation_accepts_missing_vp9_profile_id_for_profile_zero() {
 #[test]
 fn consumer_negotiation_accepts_h264_when_capability_level_is_higher() {
     let consumable_parameters = RtpParameters::new(
-        vec![RtpCodecParameters::new(MediaKind::Video, "H264", 98, 90_000)
-            .with_parameter("packetization-mode", "1")
-            .with_parameter("profile-level-id", "42e01f")
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "H264", 98, 90_000)
+                .with_parameter("packetization-mode", "1")
+                .with_parameter("profile-level-id", "42e01f")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
         vec![RtpEncoding::new().with_ssrc(5678)],
     );
     let consumer_capabilities = RtpCapabilities::new(
-        vec![RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
-            .with_parameter("packetization-mode", "1")
-            .with_parameter("profile-level-id", "42e032")
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
+                .with_parameter("packetization-mode", "1")
+                .with_parameter("profile-level-id", "42e032")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
     );
 
@@ -435,18 +445,22 @@ fn consumer_negotiation_accepts_h264_when_capability_level_is_higher() {
 #[test]
 fn consumer_negotiation_rejects_h264_when_capability_level_is_lower() {
     let consumable_parameters = RtpParameters::new(
-        vec![RtpCodecParameters::new(MediaKind::Video, "H264", 98, 90_000)
-            .with_parameter("packetization-mode", "1")
-            .with_parameter("profile-level-id", "42e032")
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecParameters::new(MediaKind::Video, "H264", 98, 90_000)
+                .with_parameter("packetization-mode", "1")
+                .with_parameter("profile-level-id", "42e032")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
         vec![RtpEncoding::new().with_ssrc(5678)],
     );
     let consumer_capabilities = RtpCapabilities::new(
-        vec![RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
-            .with_parameter("packetization-mode", "1")
-            .with_parameter("profile-level-id", "42e01f")
-            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))],
+        vec![
+            RtpCodecCapability::new(MediaKind::Video, "H264", 90_000)
+                .with_parameter("packetization-mode", "1")
+                .with_parameter("profile-level-id", "42e01f")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+        ],
         vec![],
     );
 
@@ -470,8 +484,12 @@ fn consumer_negotiation_filters_rtx_bindings_when_consumer_apt_does_not_match() 
         ],
         vec![],
         vec![
-            RtpEncoding::new().with_ssrc(5678).with_codec_payload_type(96),
-            RtpEncoding::new().with_ssrc(5679).with_codec_payload_type(97),
+            RtpEncoding::new()
+                .with_ssrc(5678)
+                .with_codec_payload_type(96),
+            RtpEncoding::new()
+                .with_ssrc(5679)
+                .with_codec_payload_type(97),
             RtpEncoding::new().with_rid("fallback"),
         ],
     );
@@ -479,8 +497,7 @@ fn consumer_negotiation_filters_rtx_bindings_when_consumer_apt_does_not_match() 
         vec![
             RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_parameter("apt", "120"),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000).with_parameter("apt", "120"),
         ],
         vec![],
     );
@@ -520,14 +537,17 @@ fn consumer_negotiation_accepts_media_when_rtx_is_listed_first() {
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
         ],
         vec![],
-        vec![RtpEncoding::new().with_ssrc(5678).with_codec_payload_type(96)],
+        vec![
+            RtpEncoding::new()
+                .with_ssrc(5678)
+                .with_codec_payload_type(96),
+        ],
     );
     let consumer_capabilities = RtpCapabilities::new(
         vec![
             RtpCodecCapability::new(MediaKind::Video, "VP8", 90_000)
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_parameter("apt", "96"),
+            RtpCodecCapability::new(MediaKind::Video, "rtx", 90_000).with_parameter("apt", "96"),
         ],
         vec![],
     );
