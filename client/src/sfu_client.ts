@@ -27,24 +27,24 @@ import {
     BrowserRuntime,
     CLIENT_RECOVERABLE_CLOSE_CODE,
     type BrowserRuntimeHooks
-} from "./sfu_client/browser_runtime.js";
+} from "./internals/browser_runtime.js";
 import {
     EMPTY_FEATURES,
     type ConsumersCompat,
     type SfuClientDependencies
-} from "./sfu_client/browser_types.js";
-import { LocalUploads } from "./sfu_client/local_uploads.js";
-import { PendingRequests } from "./sfu_client/pending_requests.js";
-import { RemoteTracks } from "./sfu_client/remote_tracks.js";
+} from "./internals/browser_types.js";
+import { LocalUploads } from "./internals/local_uploads.js";
+import { PendingRequests } from "./internals/pending_requests.js";
+import { RemoteTracks } from "./internals/remote_tracks.js";
 import {
     cloneIceServers,
     normalizeWebSocketUrl,
     validateConnectOptions,
     validateDownloadStates,
     validateTrackForStreamType
-} from "./sfu_client/validation.js";
+} from "./internals/validation.js";
 
-export type { SfuClientDependencies } from "./sfu_client/browser_types.js";
+export type { SfuClientDependencies } from "./internals/browser_types.js";
 
 const CLIENT_LOG_SOURCE = "sfu_client";
 
