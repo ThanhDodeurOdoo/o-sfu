@@ -33,6 +33,8 @@ export type BrowserRuntimeHooks = {
 const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
 const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 
+export { CLIENT_RECOVERABLE_CLOSE_CODE };
+
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
     private readonly _createPeerConnection: (config: RTCConfiguration) => ClientPeerConnection;

@@ -23,7 +23,11 @@ import {
     type HostCommand,
     type ProtocolCoreBindings
 } from "./runtime_contract.js";
-import { BrowserRuntime, type BrowserRuntimeHooks } from "./sfu_client/browser_runtime.js";
+import {
+    BrowserRuntime,
+    CLIENT_RECOVERABLE_CLOSE_CODE,
+    type BrowserRuntimeHooks
+} from "./sfu_client/browser_runtime.js";
 import {
     EMPTY_FEATURES,
     type ConsumersCompat,
@@ -42,13 +46,16 @@ import {
 
 export type { SfuClientDependencies } from "./sfu_client/browser_types.js";
 
-const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
 const CLIENT_LOG_SOURCE = "sfu_client";
 
 export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public errors: Error[] = [];
     public recordingState: RecordingState = {};
+    /**
+     * Compatibility/debug view of the remote consumer map kept for Discuss
+     * diagnostics and the bundle contract (exposed to odoo).
+     */
     public readonly _consumers: ReadonlyMap<SessionId, ConsumersCompat>;
 
     private readonly _localUploads = new LocalUploads();

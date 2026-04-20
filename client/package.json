@@ -11,13 +11,12 @@
     "wasm:check-size": "node ./scripts/check_wasm_size.mjs",
     "build": "npm run wasm:build && tsc -p tsconfig.json && npm run wasm:check-size",
     "build:odoo": "npm run wasm:build && npm run wasm:check-size && node ./scripts/build_odoo_bundle.mjs",
-    "build:bundle": "npm run build:odoo",
     "test": "npm run test:unit",
     "test:unit": "npm run build && node --test ./test/**/*.mjs",
     "test:browser": "npm run build && playwright test",
     "test:browser:chromium": "npm run test:browser -- --project=chromium",
     "test:browser:firefox": "npm run test:browser -- --project=firefox",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run test:browser && npm run build:bundle"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run test:browser && npm run build:odoo"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
