@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
+use bitflags::bitflags;
 
 const DEFAULT_AUTHENTICATION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_CHANNEL_SIZE: usize = 100;
@@ -94,122 +95,121 @@ pub struct TraceExportConfig {
     pub otlp_endpoint: Option<String>,
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct MediaCodecSet: u16 {
+        const OPUS = 1 << 0;
+        const PCMU = 1 << 1;
+        const PCMA = 1 << 2;
+        const VP8 = 1 << 3;
+        const H264 = 1 << 4;
+        const H265 = 1 << 5;
+        const VP9 = 1 << 6;
+        const AV1 = 1 << 7;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaCodecFlags {
-    enabled: u16,
+    enabled: MediaCodecSet,
+}
+
+macro_rules! media_codec_accessors {
+    ($($enabled:ident => $with:ident => $flag:ident),+ $(,)?) => {
+        $(
+            #[must_use]
+            pub fn $enabled(self) -> bool {
+                self.enabled.contains(MediaCodecSet::$flag)
+            }
+
+            #[must_use]
+            pub fn $with(self, enabled: bool) -> Self {
+                self.with_flag(MediaCodecSet::$flag, enabled)
+            }
+        )+
+    };
 }
 
 impl MediaCodecFlags {
-    const OPUS: u16 = 1 << 0;
-    const PCMU: u16 = 1 << 1;
-    const PCMA: u16 = 1 << 2;
-    const VP8: u16 = 1 << 3;
-    const H264: u16 = 1 << 4;
-    const H265: u16 = 1 << 5;
-    const VP9: u16 = 1 << 6;
-    const AV1: u16 = 1 << 7;
-
     #[must_use]
-    const fn with_flag(mut self, flag: u16, enabled: bool) -> Self {
+    fn with_flag(mut self, flag: MediaCodecSet, enabled: bool) -> Self {
         if enabled {
-            self.enabled |= flag;
+            self.enabled.insert(flag);
         } else {
-            self.enabled &= !flag;
+            self.enabled.remove(flag);
         }
         self
     }
 
-    #[must_use]
-    const fn flag_enabled(self, flag: u16) -> bool {
-        self.enabled & flag != 0
-    }
-
-    #[must_use]
-    pub const fn opus_enabled(self) -> bool {
-        self.flag_enabled(Self::OPUS)
-    }
-
-    #[must_use]
-    pub const fn with_opus(self, enabled: bool) -> Self {
-        self.with_flag(Self::OPUS, enabled)
-    }
-
-    #[must_use]
-    pub const fn pcmu_enabled(self) -> bool {
-        self.flag_enabled(Self::PCMU)
-    }
-
-    #[must_use]
-    pub const fn with_pcmu(self, enabled: bool) -> Self {
-        self.with_flag(Self::PCMU, enabled)
-    }
-
-    #[must_use]
-    pub const fn pcma_enabled(self) -> bool {
-        self.flag_enabled(Self::PCMA)
-    }
-
-    #[must_use]
-    pub const fn with_pcma(self, enabled: bool) -> Self {
-        self.with_flag(Self::PCMA, enabled)
-    }
-
-    #[must_use]
-    pub const fn vp8_enabled(self) -> bool {
-        self.flag_enabled(Self::VP8)
-    }
-
-    #[must_use]
-    pub const fn with_vp8(self, enabled: bool) -> Self {
-        self.with_flag(Self::VP8, enabled)
-    }
-
-    #[must_use]
-    pub const fn h264_enabled(self) -> bool {
-        self.flag_enabled(Self::H264)
-    }
-
-    #[must_use]
-    pub const fn with_h264(self, enabled: bool) -> Self {
-        self.with_flag(Self::H264, enabled)
-    }
-
-    #[must_use]
-    pub const fn h265_enabled(self) -> bool {
-        self.flag_enabled(Self::H265)
-    }
-
-    #[must_use]
-    pub const fn with_h265(self, enabled: bool) -> Self {
-        self.with_flag(Self::H265, enabled)
-    }
-
-    #[must_use]
-    pub const fn vp9_enabled(self) -> bool {
-        self.flag_enabled(Self::VP9)
-    }
-
-    #[must_use]
-    pub const fn with_vp9(self, enabled: bool) -> Self {
-        self.with_flag(Self::VP9, enabled)
-    }
-
-    #[must_use]
-    pub const fn av1_enabled(self) -> bool {
-        self.flag_enabled(Self::AV1)
-    }
-
-    #[must_use]
-    pub const fn with_av1(self, enabled: bool) -> Self {
-        self.with_flag(Self::AV1, enabled)
-    }
+    media_codec_accessors!(
+        opus_enabled => with_opus => OPUS,
+        pcmu_enabled => with_pcmu => PCMU,
+        pcma_enabled => with_pcma => PCMA,
+        vp8_enabled => with_vp8 => VP8,
+        h264_enabled => with_h264 => H264,
+        h265_enabled => with_h265 => H265,
+        vp9_enabled => with_vp9 => VP9,
+        av1_enabled => with_av1 => AV1,
+    );
 }
 
 impl Default for MediaCodecFlags {
     fn default() -> Self {
-        Self { enabled: 0 }.with_opus(true).with_vp8(true)
+        Self {
+            enabled: MediaCodecSet::OPUS | MediaCodecSet::VP8,
+        }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+struct CodecEnvSpec {
+    flag: MediaCodecSet,
+    key: &'static str,
+    error_message: &'static str,
+}
+
+const CODEC_ENV_SPECS: [CodecEnvSpec; 8] = [
+    CodecEnvSpec {
+        flag: MediaCodecSet::OPUS,
+        key: "CODEC_OPUS",
+        error_message: "CODEC_OPUS must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::PCMU,
+        key: "CODEC_PCMU",
+        error_message: "CODEC_PCMU must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::PCMA,
+        key: "CODEC_PCMA",
+        error_message: "CODEC_PCMA must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::VP8,
+        key: "CODEC_VP8",
+        error_message: "CODEC_VP8 must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::H264,
+        key: "CODEC_H264",
+        error_message: "CODEC_H264 must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::H265,
+        key: "CODEC_H265",
+        error_message: "CODEC_H265 must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::VP9,
+        key: "CODEC_VP9",
+        error_message: "CODEC_VP9 must be either `true` or `false`",
+    },
+    CodecEnvSpec {
+        flag: MediaCodecSet::AV1,
+        key: "CODEC_AV1",
+        error_message: "CODEC_AV1 must be either `true` or `false`",
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtcPortRange {
@@ -458,64 +458,13 @@ fn load_runtime_feature_flags(
 fn load_media_codec_flags(
     mut get_var: impl FnMut(&str) -> Option<String>,
 ) -> Result<MediaCodecFlags> {
-    let default_flags = MediaCodecFlags::default();
-    let opus = parse_optional_env(
-        &mut get_var,
-        "CODEC_OPUS",
-        "CODEC_OPUS must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.opus_enabled());
-    let g711_mu_law_enabled = parse_optional_env(
-        &mut get_var,
-        "CODEC_PCMU",
-        "CODEC_PCMU must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.pcmu_enabled());
-    let g711_a_law_enabled = parse_optional_env(
-        &mut get_var,
-        "CODEC_PCMA",
-        "CODEC_PCMA must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.pcma_enabled());
-    let vp8 = parse_optional_env(
-        &mut get_var,
-        "CODEC_VP8",
-        "CODEC_VP8 must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.vp8_enabled());
-    let h264 = parse_optional_env(
-        &mut get_var,
-        "CODEC_H264",
-        "CODEC_H264 must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.h264_enabled());
-    let h265 = parse_optional_env(
-        &mut get_var,
-        "CODEC_H265",
-        "CODEC_H265 must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.h265_enabled());
-    let vp9 = parse_optional_env(
-        &mut get_var,
-        "CODEC_VP9",
-        "CODEC_VP9 must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.vp9_enabled());
-    let av1 = parse_optional_env(
-        &mut get_var,
-        "CODEC_AV1",
-        "CODEC_AV1 must be either `true` or `false`",
-    )?
-    .unwrap_or(default_flags.av1_enabled());
-    Ok(MediaCodecFlags::default()
-        .with_opus(opus)
-        .with_pcmu(g711_mu_law_enabled)
-        .with_pcma(g711_a_law_enabled)
-        .with_vp8(vp8)
-        .with_h264(h264)
-        .with_h265(h265)
-        .with_vp9(vp9)
-        .with_av1(av1))
+    let mut flags = MediaCodecFlags::default();
+    for spec in CODEC_ENV_SPECS {
+        if let Some(enabled) = parse_optional_env(&mut get_var, spec.key, spec.error_message)? {
+            flags = flags.with_flag(spec.flag, enabled);
+        }
+    }
+    Ok(flags)
 }
 
 fn load_telemetry_config(

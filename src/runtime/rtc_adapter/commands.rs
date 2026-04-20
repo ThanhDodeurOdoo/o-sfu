@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use std::net::SocketAddr;
 
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
 };
 
 use super::relay_registry::RelayTargetId;
@@ -159,46 +159,48 @@ impl RemoteSourceControl {
     }
 }
 
+pub(crate) type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
+
 pub(super) enum RtcWorkerCommand {
     CreateInitialSessionOffer {
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
+        response: RtcWorkerResponse<SessionOffer>,
     },
     CreateSessionRenegotiationOffer {
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
+        response: RtcWorkerResponse<SessionOffer>,
     },
     ActiveSpeakerSourceSnapshot {
-        response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
+        response: RtcWorkerResponse<Vec<ActiveSpeakerSource>>,
     },
     ApplySessionAnswer {
         session_key: TransportSessionKey,
         answer_sdp: String,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: RtcWorkerResponse<()>,
     },
     CloseSession {
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
+        response: RtcWorkerResponse<CloseSessionOutcome>,
     },
     RemoveMedia {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Result<RemoveMediaOutcome, TransportAdapterError>>,
+        response: RtcWorkerResponse<RemoveMediaOutcome>,
     },
     ResolveNegotiatedProducerParameters {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Result<RouterRtpParameters, TransportAdapterError>>,
+        response: RtcWorkerResponse<RouterRtpParameters>,
     },
     ResolveMediaMid {
         transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Result<Option<String>, TransportAdapterError>>,
+        response: RtcWorkerResponse<Option<String>>,
     },
     AddRecvMedia {
         session_key: TransportSessionKey,
         media_kind: MediaKind,
         rtp_parameters: RouterRtpParameters,
-        response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+        response: RtcWorkerResponse<TransportMediaId>,
     },
     AddSendMedia {
         consumer_session_key: TransportSessionKey,
@@ -207,7 +209,7 @@ pub(super) enum RtcWorkerCommand {
         source_transport_media_id: TransportMediaId,
         remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: RouterRtpParameters,
-        response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+        response: RtcWorkerResponse<TransportMediaId>,
     },
     RequestRemoteKeyframe {
         source_session_key: TransportSessionKey,
@@ -236,13 +238,13 @@ pub(super) enum RtcWorkerCommand {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<PacketLayerGate>,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: RtcWorkerResponse<()>,
     },
     SetProducerActive {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
         active: bool,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: RtcWorkerResponse<()>,
     },
     SetConsumerActive {
         consumer_session_key: TransportSessionKey,
@@ -250,12 +252,12 @@ pub(super) enum RtcWorkerCommand {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: RtcWorkerResponse<()>,
     },
     #[cfg(feature = "internal-benchmarks")]
     RememberRemoteAddr {
         source_addr: SocketAddr,
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
+        response: RtcWorkerResponse<()>,
     },
 }

@@ -14,7 +14,7 @@ pub(crate) use config::{
 pub(crate) use facade::RuntimeTransportAdapter;
 pub(crate) use types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    TransportBitrateSnapshot, TransportMediaId, TransportResult, TransportSessionKey,
 };
 
 #[cfg(test)]

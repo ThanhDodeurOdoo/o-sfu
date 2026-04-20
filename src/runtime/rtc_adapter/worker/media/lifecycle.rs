@@ -17,15 +17,14 @@ use str0m::{
     media::{Direction, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
-use tokio::sync::oneshot;
 use tracing::{debug, warn};
 
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
+    TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
 };
 
 use super::super::super::{
-    commands::{RemoteSourceControl, RemoveMediaOutcome},
+    commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
     media_registry::RegisteredMediaHandle,
     state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
 };
@@ -38,7 +37,7 @@ pub(crate) fn respond_remove_media(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
-    response: oneshot::Sender<Result<RemoveMediaOutcome, TransportAdapterError>>,
+    response: RtcWorkerResponse<RemoveMediaOutcome>,
 ) {
     let _ = response.send(worker_remove_media(state, session_key, transport_media_id));
 }
@@ -49,7 +48,7 @@ pub(crate) fn respond_add_recv_media(
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-    response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+    response: RtcWorkerResponse<TransportMediaId>,
 ) {
     let _ = response.send(worker_add_recv_media(
         state,
@@ -63,7 +62,7 @@ pub(crate) fn respond_add_recv_media(
 pub(crate) fn respond_add_send_media(
     state: &mut RtcBootstrapState,
     request: AddSendMediaRequest<'_>,
-    response: oneshot::Sender<Result<TransportMediaId, TransportAdapterError>>,
+    response: RtcWorkerResponse<TransportMediaId>,
 ) {
     let _ = response.send(worker_add_send_media(
         state,
@@ -79,7 +78,7 @@ pub(crate) fn respond_add_send_media(
 pub(crate) fn respond_resolve_media_mid(
     state: &RtcBootstrapState,
     transport_media_id: TransportMediaId,
-    response: oneshot::Sender<Result<Option<String>, TransportAdapterError>>,
+    response: RtcWorkerResponse<Option<String>>,
 ) {
     let resolved_mid = state
         .resolve_mid(transport_media_id)
@@ -241,7 +240,7 @@ fn worker_add_recv_media(
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-) -> Result<TransportMediaId, TransportAdapterError> {
+) -> TransportResult<TransportMediaId> {
     let Some(session_state) = state.sessions.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -291,7 +290,7 @@ fn worker_stage_native_recv_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-) -> Result<Mid, TransportAdapterError> {
+) -> TransportResult<Mid> {
     if offer_is_awaiting_answer(session_state) {
         return Err(TransportAdapterError::InvalidInput);
     }
@@ -336,7 +335,7 @@ fn worker_add_send_media(
     source_transport_media_id: TransportMediaId,
     remote_source_control: Option<RemoteSourceControl>,
     consumer_rtp_parameters: &RouterRtpParameters,
-) -> Result<TransportMediaId, TransportAdapterError> {
+) -> TransportResult<TransportMediaId> {
     let previous_remote_source_registration = (source_session_key.media_worker_id()
         != consumer_session_key.media_worker_id())
     .then(|| {
@@ -429,7 +428,7 @@ fn worker_add_send_media(
 fn worker_stage_native_send_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
-) -> Result<Mid, TransportAdapterError> {
+) -> TransportResult<Mid> {
     if offer_is_awaiting_answer(session_state) {
         warn!(
             ?media_kind,

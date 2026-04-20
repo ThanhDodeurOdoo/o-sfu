@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::super::{
-    commands::RtcWorkerCommand,
+    commands::{RtcWorkerCommand, RtcWorkerResponse},
     packet_loop::{self, PacketLoopConfig},
     relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
     state::TransportSessionHealth,
@@ -127,7 +127,7 @@ impl RtcTransportAdapter {
         build_command: F,
     ) -> Result<T, TransportAdapterError>
     where
-        F: FnOnce(oneshot::Sender<Result<T, TransportAdapterError>>) -> RtcWorkerCommand,
+        F: FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
     {
         let worker_handle = self.ensure_packet_loop_started()?;
         self.send_worker_command(&worker_handle, build_command)
@@ -140,7 +140,7 @@ impl RtcTransportAdapter {
         build_command: F,
     ) -> Result<T, TransportAdapterError>
     where
-        F: FnOnce(oneshot::Sender<Result<T, TransportAdapterError>>) -> RtcWorkerCommand,
+        F: FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
     {
         let (response_tx, response_rx) = oneshot::channel();
         worker_handle

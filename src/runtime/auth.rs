@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::error::Error as StdError;
-use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE};
@@ -8,6 +6,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use thiserror::Error;
 
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
@@ -18,36 +17,25 @@ pub use o_sfu_rfc::jwt::{JwtAudience, RegisteredJwtClaims};
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AuthenticationError {
+    #[error("invalid JWT format")]
     InvalidJwtFormat,
+    #[error("invalid base64 encoding")]
     InvalidBase64Encoding,
+    #[error("invalid JSON payload")]
     InvalidJsonPayload,
+    #[error("unsupported JWT algorithm: {0}")]
     UnsupportedAlgorithm(String),
+    #[error("invalid JWT signature")]
     InvalidSignature,
+    #[error("token expired")]
     TokenExpired,
+    #[error("token not valid yet")]
     TokenNotYetValid,
+    #[error("token issued in the future")]
     TokenIssuedInFuture,
 }
-
-impl Display for AuthenticationError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            Self::InvalidJwtFormat => formatter.write_str("invalid JWT format"),
-            Self::InvalidBase64Encoding => formatter.write_str("invalid base64 encoding"),
-            Self::InvalidJsonPayload => formatter.write_str("invalid JSON payload"),
-            Self::UnsupportedAlgorithm(algorithm) => {
-                write!(formatter, "unsupported JWT algorithm: {algorithm}")
-            }
-            Self::InvalidSignature => formatter.write_str("invalid JWT signature"),
-            Self::TokenExpired => formatter.write_str("token expired"),
-            Self::TokenNotYetValid => formatter.write_str("token not valid yet"),
-            Self::TokenIssuedInFuture => formatter.write_str("token issued in the future"),
-        }
-    }
-}
-
-impl StdError for AuthenticationError {}
 
 /// Local skew guard for `iat`.
 ///

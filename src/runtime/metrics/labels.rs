@@ -4,6 +4,23 @@ use std::time::Duration;
 
 use super::counter::{HistogramBucketLabel, MetricLabel};
 
+macro_rules! impl_metric_label {
+    ($label:ty { $($variant:ident => $index:expr),+ $(,)? }) => {
+        impl MetricLabel for $label {
+            const COUNT: usize = <[()]>::len(&[$(impl_metric_label!(@unit $variant)),+]);
+
+            fn as_index(self) -> usize {
+                match self {
+                    $(Self::$variant => $index),+
+                }
+            }
+        }
+    };
+    (@unit $_variant:ident) => {
+        ()
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WsSessionLoopExitReason {
     PeerClosed,
@@ -161,44 +178,26 @@ pub(super) enum RecordingActionOutcome {
     StopRejected,
 }
 
-impl MetricLabel for HttpRoute {
-    const COUNT: usize = 5;
+impl_metric_label!(HttpRoute {
+    Noop => 0,
+    Stats => 1,
+    Channel => 2,
+    Disconnect => 3,
+    Metrics => 4,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::Noop => 0,
-            Self::Stats => 1,
-            Self::Channel => 2,
-            Self::Disconnect => 3,
-            Self::Metrics => 4,
-        }
-    }
-}
+impl_metric_label!(HttpChannelResponseStatus {
+    Success => 0,
+    Unauthorized => 1,
+    Forbidden => 2,
+    BadRequest => 3,
+});
 
-impl MetricLabel for HttpChannelResponseStatus {
-    const COUNT: usize = 4;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::Success => 0,
-            Self::Unauthorized => 1,
-            Self::Forbidden => 2,
-            Self::BadRequest => 3,
-        }
-    }
-}
-
-impl MetricLabel for HttpDisconnectResponseStatus {
-    const COUNT: usize = 3;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::Success => 0,
-            Self::BadRequest => 1,
-            Self::UnprocessableEntity => 2,
-        }
-    }
-}
+impl_metric_label!(HttpDisconnectResponseStatus {
+    Success => 0,
+    BadRequest => 1,
+    UnprocessableEntity => 2,
+});
 
 impl MetricLabel for ControlPlaneDurationBucket {
     const COUNT: usize = 7;
@@ -240,221 +239,119 @@ impl HistogramBucketLabel for ControlPlaneDurationBucket {
     }
 }
 
-impl MetricLabel for WsConnectionStage {
-    const COUNT: usize = 3;
+impl_metric_label!(WsConnectionStage {
+    Accepted => 0,
+    CredentialsReceived => 1,
+    Joined => 2,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::Accepted => 0,
-            Self::CredentialsReceived => 1,
-            Self::Joined => 2,
-        }
-    }
-}
+impl_metric_label!(WebSocketCloseCode {
+    AuthTimeout => 0,
+    AuthFailed => 1,
+    ProtocolError => 2,
+    ChannelFull => 3,
+    Error => 4,
+    Clean => 5,
+    Leaving => 6,
+    Kicked => 7,
+});
 
-impl MetricLabel for WebSocketCloseCode {
-    const COUNT: usize = 8;
+impl_metric_label!(WsStartupFailureKind {
+    StartupSend => 0,
+    SessionInitialize => 1,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::AuthTimeout => 0,
-            Self::AuthFailed => 1,
-            Self::ProtocolError => 2,
-            Self::ChannelFull => 3,
-            Self::Error => 4,
-            Self::Clean => 5,
-            Self::Leaving => 6,
-            Self::Kicked => 7,
-        }
-    }
-}
+impl_metric_label!(WsSessionLoopExitReason {
+    PeerClosed => 0,
+    ReaderError => 1,
+    BusBreak => 2,
+    PingTimeout => 3,
+    TransportDisconnected => 4,
+    OutboundChannelClosed => 5,
+    OutboundCloseSignal => 6,
+    OutboundMessageSendFailure => 7,
+});
 
-impl MetricLabel for WsStartupFailureKind {
-    const COUNT: usize = 2;
+impl_metric_label!(WsBusDirection {
+    Received => 0,
+    Sent => 1,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::StartupSend => 0,
-            Self::SessionInitialize => 1,
-        }
-    }
-}
+impl_metric_label!(WsBusFailureKind {
+    InvalidInput => 0,
+    UnsupportedFeature => 1,
+    Send => 2,
+});
 
-impl MetricLabel for WsSessionLoopExitReason {
-    const COUNT: usize = 8;
+impl_metric_label!(WsBusClientFrameKind {
+    Request => 0,
+    Message => 1,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::PeerClosed => 0,
-            Self::ReaderError => 1,
-            Self::BusBreak => 2,
-            Self::PingTimeout => 3,
-            Self::TransportDisconnected => 4,
-            Self::OutboundChannelClosed => 5,
-            Self::OutboundCloseSignal => 6,
-            Self::OutboundMessageSendFailure => 7,
-        }
-    }
-}
+impl_metric_label!(RtpFlowDirection {
+    Ingress => 0,
+    Egress => 1,
+});
 
-impl MetricLabel for WsBusDirection {
-    const COUNT: usize = 2;
+impl_metric_label!(RtpForwardDestinationKind {
+    LocalRtc => 0,
+    Recording => 1,
+    IntraNodeRelay => 2,
+    InterNodeRelay => 3,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::Received => 0,
-            Self::Sent => 1,
-        }
-    }
-}
+impl_metric_label!(RtpRelayDropKind {
+    IntraNodeRelay => 0,
+    InterNodeRelay => 1,
+});
 
-impl MetricLabel for WsBusFailureKind {
-    const COUNT: usize = 3;
+impl_metric_label!(RtcDatagramRoutePath {
+    Indexed => 0,
+    Scan => 1,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::InvalidInput => 0,
-            Self::UnsupportedFeature => 1,
-            Self::Send => 2,
-        }
-    }
-}
+impl_metric_label!(RtcDatagramDropReason {
+    RecentMissCache => 0,
+    SourceRateLimited => 1,
+    NoSession => 2,
+    Malformed => 3,
+});
 
-impl MetricLabel for WsBusClientFrameKind {
-    const COUNT: usize = 2;
+impl_metric_label!(RtcRouteControlOutcome {
+    Absorbed => 0,
+    Forwarded => 1,
+    RouteGatedRelayDrop => 2,
+    LayerAllowed => 3,
+    LayerDropped => 4,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::Request => 0,
-            Self::Message => 1,
-        }
-    }
-}
+impl_metric_label!(TransportIceState {
+    New => 0,
+    Checking => 1,
+    Connected => 2,
+    Completed => 3,
+    Disconnected => 4,
+});
 
-impl MetricLabel for RtpFlowDirection {
-    const COUNT: usize = 2;
+impl_metric_label!(TransportHealthTransition {
+    UnsetToConnected => 0,
+    UnsetToDisconnected => 1,
+    ConnectedToDisconnected => 2,
+    DisconnectedToConnected => 3,
+    ConnectedToUnset => 4,
+    DisconnectedToUnset => 5,
+});
 
-    fn as_index(self) -> usize {
-        match self {
-            Self::Ingress => 0,
-            Self::Egress => 1,
-        }
-    }
-}
+impl_metric_label!(TransportSessionLifetimeBucket {
+    Le1Second => 0,
+    Le10Seconds => 1,
+    Le60Seconds => 2,
+    Le300Seconds => 3,
+});
 
-impl MetricLabel for RtpForwardDestinationKind {
-    const COUNT: usize = 4;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::LocalRtc => 0,
-            Self::Recording => 1,
-            Self::IntraNodeRelay => 2,
-            Self::InterNodeRelay => 3,
-        }
-    }
-}
-
-impl MetricLabel for RtpRelayDropKind {
-    const COUNT: usize = 2;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::IntraNodeRelay => 0,
-            Self::InterNodeRelay => 1,
-        }
-    }
-}
-
-impl MetricLabel for RtcDatagramRoutePath {
-    const COUNT: usize = 2;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::Indexed => 0,
-            Self::Scan => 1,
-        }
-    }
-}
-
-impl MetricLabel for RtcDatagramDropReason {
-    const COUNT: usize = 4;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::RecentMissCache => 0,
-            Self::SourceRateLimited => 1,
-            Self::NoSession => 2,
-            Self::Malformed => 3,
-        }
-    }
-}
-
-impl MetricLabel for RtcRouteControlOutcome {
-    const COUNT: usize = 5;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::Absorbed => 0,
-            Self::Forwarded => 1,
-            Self::RouteGatedRelayDrop => 2,
-            Self::LayerAllowed => 3,
-            Self::LayerDropped => 4,
-        }
-    }
-}
-
-impl MetricLabel for TransportIceState {
-    const COUNT: usize = 5;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::New => 0,
-            Self::Checking => 1,
-            Self::Connected => 2,
-            Self::Completed => 3,
-            Self::Disconnected => 4,
-        }
-    }
-}
-
-impl MetricLabel for TransportHealthTransition {
-    const COUNT: usize = 6;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::UnsetToConnected => 0,
-            Self::UnsetToDisconnected => 1,
-            Self::ConnectedToDisconnected => 2,
-            Self::DisconnectedToConnected => 3,
-            Self::ConnectedToUnset => 4,
-            Self::DisconnectedToUnset => 5,
-        }
-    }
-}
-
-impl MetricLabel for TransportSessionLifetimeBucket {
-    const COUNT: usize = 4;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::Le1Second => 0,
-            Self::Le10Seconds => 1,
-            Self::Le60Seconds => 2,
-            Self::Le300Seconds => 3,
-        }
-    }
-}
-
-impl MetricLabel for RecordingActionOutcome {
-    const COUNT: usize = 4;
-
-    fn as_index(self) -> usize {
-        match self {
-            Self::StartAccepted => 0,
-            Self::StartRejected => 1,
-            Self::StopAccepted => 2,
-            Self::StopRejected => 3,
-        }
-    }
-}
+impl_metric_label!(RecordingActionOutcome {
+    StartAccepted => 0,
+    StartRejected => 1,
+    StopAccepted => 2,
+    StopRejected => 3,
+});

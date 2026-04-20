@@ -1,5 +1,7 @@
-//! made public for tests
-//! so that runtime can remain mostly private
+//! Narrow helper surface for integration tests and fuzz targets.
+//!
+//! This module stays doc-hidden so runtime internals can keep moving without
+//! accidentally becoming a stable crate API.
 
 pub mod auth {
     pub use crate::runtime::auth::*;

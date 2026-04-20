@@ -8,7 +8,7 @@
 use std::str;
 
 use libfuzzer_sys::fuzz_target;
-use o_sfu::public::auth::{HttpDisconnectClaims, verify};
+use o_sfu::testing::auth::{HttpDisconnectClaims, verify};
 
 const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

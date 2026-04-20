@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use o_sfu_protocol::shared::SessionId;
+use thiserror::Error;
 
 /// Channel-scoped transport-adapter session identity.
 ///
@@ -48,10 +49,15 @@ impl TransportSessionKey {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) type TransportResult<T> = Result<T, TransportAdapterError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum TransportAdapterError {
+    #[error("transport unavailable")]
     TransportUnavailable,
+    #[error("invalid transport input")]
     InvalidInput,
+    #[error("unsupported transport feature")]
     UnsupportedFeature,
 }
 
