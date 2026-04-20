@@ -6,21 +6,22 @@
 //!
 //! role of the dir:
 //!
-//! * **Facade Implementation**: provide a set of scoped facades (`Negotiation`,
-//!   `Media`, `Session`, `Observability`) that define how callers interact with
-//!   the adapter while maintaining encapsulation.
+//! * **Backend Service Surface**: provide the concrete RTC backend methods the
+//!   runtime transport boundary uses for negotiation, media, session cleanup,
+//!   and observability without adding a second selector-facing service layer.
 //! * **Worker Lifecycle**: Manages the lazy bootstrapping and shutdown of the
 //!   [`packet_loop`] workers.
 //! * **Command Dispatch**: Translates facade method cals into `RtcWorkerCommand`
 //!   messages and handles the asynchronous coordination (request/response) with
 //!   the workers.
 //! * **Observability Bridge**: Projects the internal state of the packet loops
-//!   (bitrates, health, active speakers) back to the caller-facing facades.
+//!   (bitrates, health, active speakers, speaker-expiry deadlines) back to the
+//!   caller-facing backend surface.
 //!
 //! ### Sub-Modules
 //!
-//! * [`facade`]: Defines the public `RtcTransportAdapter` struc and its concern-scoped
-//!   facades.
+//! * [`facade`]: Defines the public `RtcTransportAdapter` struct plus the
+//!   concern-scoped backend methods that sit directly above the worker mailbox.
 //! * [`runtime`]: Implement the worker communication logic, lazy-boot orchestration,
 //!   and command-dispatching helpers.
 //! * [`test_support`]: test "utils"/public exports

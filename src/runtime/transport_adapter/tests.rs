@@ -1,13 +1,14 @@
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use o_sfu_router::{
     MediaCodecCapability, MediaKind, MediaKind as RouterMediaKind, RtpEncoding, RtpParameters,
 };
 use str0m::media::Mid;
+use tokio::time::timeout;
 
 use super::RuntimeTransportAdapter;
 use crate::{
@@ -45,7 +46,6 @@ fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> RtpParameters {
 async fn prepare_rtc_session(adapter: &RuntimeTransportAdapter, session_key: &TransportSessionKey) {
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(session_key)
             .await
             .is_ok()
@@ -67,7 +67,6 @@ async fn publish_audio(
     rtp_parameters: &RtpParameters,
 ) -> Option<TransportMediaId> {
     let result = adapter
-        .media()
         .publish_media(session_key, MediaKind::Audio, rtp_parameters)
         .await;
     assert!(result.is_ok());
@@ -82,7 +81,6 @@ async fn consume_audio(
     rtp_parameters: &RtpParameters,
 ) -> Option<TransportMediaId> {
     let result = adapter
-        .media()
         .consume_media(
             consumer_session_key,
             MediaKind::Audio,
@@ -191,9 +189,8 @@ fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
         RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
     let offered = sample_router_capabilities();
 
-    let projected = adapter
-        .negotiation()
-        .negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
+    let projected =
+        adapter.negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
 
     assert_eq!(projected, Ok(offered));
 }
@@ -203,9 +200,8 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
     let adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
 
-    let projected = adapter
-        .negotiation()
-        .negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
+    let projected =
+        adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
 
     assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
 }
@@ -222,7 +218,7 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
         Arc::new(RuntimeMetrics::default()),
     ));
 
-    let projected = adapter.negotiation().negotiated_client_rtp_capabilities(
+    let projected = adapter.negotiated_client_rtp_capabilities(
         "v=0\r\ns=invalid-answer\r\n",
         &sample_router_capabilities(),
     );
@@ -246,15 +242,12 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
     let same_shard_session = TransportSessionKey::new(12, 0, 1, SessionId::Integer(3));
 
     let first_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&first_channel_session)
         .await;
     let second_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&second_channel_session)
         .await;
     let same_shard_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&same_shard_session)
         .await;
     assert!(first_offer.is_ok());
@@ -293,13 +286,10 @@ async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
     let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
     fake.set_active_speaker_source_snapshot(vec![speaker_source]);
 
-    let offer = adapter
-        .negotiation()
-        .create_initial_session_offer(&session_key)
-        .await;
+    let offer = adapter.create_initial_session_offer(&session_key).await;
     assert!(offer.is_ok());
     assert_eq!(
-        adapter.negotiation().negotiated_client_rtp_capabilities(
+        adapter.negotiated_client_rtp_capabilities(
             "v=0\r\ns=fake-answer\r\n",
             &sample_router_capabilities()
         ),
@@ -307,7 +297,6 @@ async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
     );
 
     let media_id = adapter
-        .media()
         .publish_media(
             &session_key,
             MediaKind::Audio,
@@ -316,13 +305,28 @@ async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
         .await;
     assert!(media_id.is_ok());
     assert_eq!(
-        adapter
-            .observability()
-            .active_speaker_source_snapshot()
-            .await,
+        adapter.active_speaker_source_snapshot().await,
         vec![speaker_source]
     );
-    assert!(adapter.sessions().close_session(&session_key).await.is_ok());
+    assert!(adapter.close_session(&session_key).await.is_ok());
+}
+
+#[tokio::test]
+async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updates() {
+    let fake = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
+    let subscription = adapter.source_policy_subscription();
+
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        TransportMediaId::new(88),
+        Instant::now(),
+    )]);
+
+    assert!(
+        timeout(Duration::from_secs(1), subscription.wait_for_update())
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]

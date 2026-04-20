@@ -16,6 +16,8 @@ use o_sfu_router::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 
+use super::source_policy::SourcePolicySignal;
+
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 
 /// Deterministic fake transport events exposed only through the explicit
@@ -62,6 +64,7 @@ pub(crate) struct FakeWebRtcAdapter {
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     delays: Arc<Mutex<FakeWebRtcAdapterDelays>>,
+    source_policy_signal: Arc<SourcePolicySignal>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -162,6 +165,7 @@ impl FakeWebRtcAdapter {
                 *poisoned.into_inner() = sources;
             }
         }
+        self.source_policy_signal.mark_dirty();
     }
 }
 
@@ -175,6 +179,10 @@ impl FakeWebRtcAdapter {
             Ok(active_speaker_sources) => active_speaker_sources.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
+    }
+
+    pub(crate) fn source_policy_signal(&self) -> Arc<SourcePolicySignal> {
+        Arc::clone(&self.source_policy_signal)
     }
 
     pub(crate) fn project_answered_client_rtp_capabilities(
@@ -325,6 +333,7 @@ impl FakeWebRtcAdapter {
         consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
         source_session_key: &TransportSessionKey,
+        _source_media_id: TransportMediaId,
         _consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::ConsumeMediaRequested {

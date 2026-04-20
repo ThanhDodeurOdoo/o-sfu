@@ -519,6 +519,37 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
 }
 
 #[tokio::test]
+async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(9, 41, SessionId::Integer(41));
+    let rtp_parameters = sample_router_rtp_parameters("aud-up", 94_001);
+
+    assert!(
+        prepare_transport_session(&adapter, &session_key)
+            .await
+            .is_ok()
+    );
+
+    let media_id = adapter
+        .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
+        .await
+        .expect("audio media should register");
+    let observed_at = Instant::now();
+    observe_audio_activity(&adapter, media_id, Some(true), None, observed_at).await;
+
+    let next_deadline = adapter
+        .next_active_speaker_deadline()
+        .await
+        .expect("speaker activity should schedule a hold-window expiry");
+    assert!(next_deadline >= observed_at + Duration::from_millis(200));
+    assert!(next_deadline <= observed_at + Duration::from_millis(300));
+
+    sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(adapter.next_active_speaker_deadline().await, None);
+}
+
+#[tokio::test]
 async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
     let source_adapter = RtcTransportAdapter::default();
     let target_adapter = RtcTransportAdapter::default();

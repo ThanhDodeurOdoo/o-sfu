@@ -16,7 +16,8 @@ use super::{
     recording::MediaTap,
     rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
     transport_adapter::{
-        RtcTransportAdapterConfig, SessionBitrateLimits, TransportAdapterError, TransportSessionKey,
+        RtcTransportAdapterConfig, SessionBitrateLimits, SourcePolicySignal, TransportAdapterError,
+        TransportSessionKey,
     },
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
@@ -48,14 +49,17 @@ impl RtcUdpDemuxBenchmarkFixture {
         }
         let runtime = Builder::new_current_thread().enable_all().build().ok()?;
         let _runtime_guard = runtime.enter();
-        let adapter = RtcTransportAdapter::new(&RtcTransportAdapterConfig::new(
-            BENCHMARK_PUBLIC_IP,
-            SessionBitrateLimits::new(8_000_000, 10_000_000),
-            BENCHMARK_PORT_RANGE,
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ));
+        let adapter = RtcTransportAdapter::new(
+            &RtcTransportAdapterConfig::new(
+                BENCHMARK_PUBLIC_IP,
+                SessionBitrateLimits::new(8_000_000, 10_000_000),
+                BENCHMARK_PORT_RANGE,
+                MediaCodecFlags::default(),
+                Arc::new(MediaTap::default()),
+                Arc::new(RuntimeMetrics::default()),
+            ),
+            Arc::new(SourcePolicySignal::default()),
+        );
         let mut session_keys = Vec::with_capacity(session_count);
         let mut probe_addrs = Vec::with_capacity(session_count);
         for idx in 0..session_count {

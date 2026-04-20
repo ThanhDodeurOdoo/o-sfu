@@ -2257,7 +2257,6 @@ async fn bootstrap_real_rtc_session(
     session_key: &TransportSessionKey,
 ) -> SessionOffer {
     transport_adapter
-        .negotiation()
         .create_initial_session_offer(session_key)
         .await
         .expect("rtc session should produce an initial offer")

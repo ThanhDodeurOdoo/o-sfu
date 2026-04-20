@@ -205,6 +205,22 @@ impl RouteControlState {
         sources
     }
 
+    pub(super) fn next_active_speaker_deadline(&self, now: Instant) -> Option<Instant> {
+        self.sources
+            .values()
+            .filter_map(|source_control| {
+                source_control
+                    .source_audio_policy
+                    .as_ref()
+                    .and_then(|source_audio_policy| {
+                        source_audio_policy
+                            .active_until
+                            .filter(|deadline| *deadline > now)
+                    })
+            })
+            .min()
+    }
+
     #[cfg(test)]
     pub(super) fn set_packet_gate(
         &mut self,

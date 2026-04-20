@@ -35,8 +35,9 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     recording::MediaTap,
     transport_adapter::{
-        RtcTransportAdapterConfig, SessionOffer, SourcePacketGate, TransportAdapterError,
-        TransportMediaId, TransportSessionKey,
+        RtcTransportAdapterConfig, SessionOffer, SourcePacketGate, SourcePolicySignal,
+        SourcePolicyUpdateSubscription, TransportAdapterError, TransportMediaId,
+        TransportSessionKey,
     },
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
@@ -77,6 +78,7 @@ pub(crate) struct RtcTransportAdapter {
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) media_tap: Arc<MediaTap>,
     pub(super) relay_registry: Arc<RelayRegistry>,
+    pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
     pub(super) worker_handle: Mutex<Option<RtcWorkerHandle>>,
     pub(crate) packet_loop_started: Arc<AtomicBool>,
@@ -103,7 +105,10 @@ pub(crate) struct RtcTransportObservabilityFacade<'a> {
 }
 
 impl RtcTransportAdapter {
-    pub(crate) fn new(config: &RtcTransportAdapterConfig) -> Self {
+    pub(crate) fn new(
+        config: &RtcTransportAdapterConfig,
+        source_policy_signal: Arc<SourcePolicySignal>,
+    ) -> Self {
         Self {
             relay_target_id: RelayTargetId::new(
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
@@ -115,6 +120,7 @@ impl RtcTransportAdapter {
             codec_flags: config.codec_flags(),
             media_tap: config.media_tap(),
             relay_registry: Arc::new(RelayRegistry::default()),
+            source_policy_signal,
             metrics: config.metrics(),
             worker_handle: Mutex::new(None),
             packet_loop_started: Arc::new(AtomicBool::new(false)),
@@ -139,6 +145,14 @@ impl RtcTransportAdapter {
     #[must_use]
     pub(crate) const fn observability(&self) -> RtcTransportObservabilityFacade<'_> {
         RtcTransportObservabilityFacade { adapter: self }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "the shard set owns the lasting runtime subscription path and the single-shard helper remains available for targeted rtc adapter tests"
+    )]
+    pub(crate) fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
+        self.source_policy_signal.subscribe()
     }
 }
 

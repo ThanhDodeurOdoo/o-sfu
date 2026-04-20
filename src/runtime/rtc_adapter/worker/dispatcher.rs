@@ -95,6 +95,7 @@ fn handle_core_worker_command(
     match command {
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
+        | RtcWorkerCommand::NextActiveSpeakerDeadline { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
             handle_negotiation_command(state, context, command);
@@ -171,6 +172,9 @@ fn handle_negotiation_command(
         RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response } => {
             respond_active_speaker_source_snapshot(state, response);
         }
+        RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
+            respond_next_active_speaker_deadline(state, response);
+        }
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,
@@ -196,6 +200,16 @@ fn respond_active_speaker_source_snapshot(
 ) {
     let snapshot = state.active_speaker_source_snapshot(Instant::now());
     let _ = response.send(Ok(snapshot));
+}
+
+fn respond_next_active_speaker_deadline(
+    state: &RtcBootstrapState,
+    response: oneshot::Sender<Result<Option<Instant>, TransportAdapterError>>,
+) {
+    let deadline = state
+        .route_control
+        .next_active_speaker_deadline(Instant::now());
+    let _ = response.send(Ok(deadline));
 }
 
 fn handle_media_command(

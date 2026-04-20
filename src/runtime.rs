@@ -9,7 +9,7 @@
 //! |  `- session_protocol  -> authenticated signaling flow for one connected session
 //! |- channel              -> room allocation, membership, negotiation, and recording policy
 //! |- telemetry            -> runtime-owned tracing config and event-name conventions
-//! |- transport_adapter    -> runtime-facing transport facade
+//! |- transport_adapter    -> runtime-facing transport service boundary
 //! |  `- rtc_adapter       -> WebRTC worker and packet execution engine
 //! |- recording            -> shared media tap used by channel policy and transport execution
 //! `- metrics              -> process-global metrics state and Prometheus export snapshot
@@ -20,7 +20,7 @@ use std::{process, sync::Arc};
 use anyhow::Result;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
-use tokio::time::{self, Duration, MissedTickBehavior};
+use tokio::time::{self, Instant};
 use tracing::info;
 
 use crate::config::Config;
@@ -54,8 +54,6 @@ use telemetry::init_tracing;
 use transport_adapter::{
     RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
 };
-
-const SOURCE_PACKET_POLICY_SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Process-global application shell for the server process.
 ///
@@ -112,7 +110,7 @@ impl Runtime {
     }
 
     async fn run_until_stopped(self) -> Result<()> {
-        let source_packet_policy_sync = spawn_source_packet_policy_sync_task(
+        let source_packet_policy_sync = spawn_source_packet_policy_update_task(
             Arc::clone(&self.channels),
             self.transport_adapter.clone(),
         );
@@ -130,24 +128,28 @@ impl Runtime {
 }
 
 /// Channel state decides which producer layers should remain routable from room-level
-/// facts like membership and publication state, while the transport layer own the
-/// live packet gates that enforce those deciisons on RTP fanout. Keeping the sync in one
-/// background task avoids forcing every channel mutation to await transport updates while
-/// still ensuring the steady-state packet policy converges quickly.
-fn spawn_source_packet_policy_sync_task(
+/// facts like membership and publication state, while the transport layer owns the
+/// active-speaker observations that can change without any room mutation. This task
+/// waits on explicit transport-side updates plus the current active-speaker expiry
+/// deadline instead of polling the whole process on a fixed interval.
+fn spawn_source_packet_policy_update_task(
     channels: Arc<ChannelManager>,
     transport_adapter: RuntimeTransportAdapter,
 ) -> JoinHandle<()> {
-    info!(
-        interval_ms = SOURCE_PACKET_POLICY_SYNC_INTERVAL.as_millis(),
-        "booted source packet policy sync loop"
-    );
+    let updates = transport_adapter.source_policy_subscription();
+    info!("booted source packet policy update task");
     tokio::spawn(async move {
-        let mut interval = time::interval(SOURCE_PACKET_POLICY_SYNC_INTERVAL);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        interval.tick().await;
         loop {
-            interval.tick().await;
+            let next_deadline = transport_adapter.next_active_speaker_deadline().await;
+            match next_deadline {
+                Some(next_deadline) => {
+                    tokio::select! {
+                        () = updates.wait_for_update() => {}
+                        () = time::sleep_until(Instant::from_std(next_deadline)) => {}
+                    }
+                }
+                None => updates.wait_for_update().await,
+            }
             channels
                 .sync_source_packet_selection_policies(&transport_adapter)
                 .await;

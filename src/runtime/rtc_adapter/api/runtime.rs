@@ -109,6 +109,7 @@ impl RtcTransportAdapter {
                 codec_flags: self.codec_flags,
                 media_tap: Arc::clone(&self.media_tap),
                 relay_registry: Arc::clone(&self.relay_registry),
+                source_policy_signal: Arc::clone(&self.source_policy_signal),
                 metrics: Arc::clone(&self.metrics),
             },
             bitrate_state,
@@ -172,6 +173,10 @@ impl RtcTransportAdapter {
     pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         self.observability().active_speaker_source_snapshot().await
     }
+
+    pub(crate) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
+        self.observability().next_active_speaker_deadline().await
+    }
 }
 
 impl RtcTransportObservabilityFacade<'_> {
@@ -209,5 +214,16 @@ impl RtcTransportObservabilityFacade<'_> {
             })
             .await
             .unwrap_or_default()
+    }
+
+    pub(crate) async fn next_active_speaker_deadline(self) -> Option<Instant> {
+        let worker_handle = self.adapter.worker_handle().ok().flatten()?;
+        self.adapter
+            .send_worker_command(&worker_handle, |response| {
+                RtcWorkerCommand::NextActiveSpeakerDeadline { response }
+            })
+            .await
+            .ok()
+            .flatten()
     }
 }

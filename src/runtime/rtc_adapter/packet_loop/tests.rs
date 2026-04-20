@@ -27,7 +27,9 @@ use crate::runtime::rtc_adapter::{
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
     state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
 };
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::transport_adapter::{
+    SourcePolicySignal, TransportMediaId, TransportSessionKey,
+};
 use o_sfu_protocol::shared::SessionId;
 
 struct CountingSink {
@@ -431,7 +433,13 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
             b"payload",
         ));
 
-    record_incoming_stats(&mut state, &bitrate_state, &metrics, &mut buffers);
+    record_incoming_stats(
+        &mut state,
+        &bitrate_state,
+        &SourcePolicySignal::default(),
+        &metrics,
+        &mut buffers,
+    );
     super::super::forwarding_planner::populate_forward_routes(
         &state,
         &media_tap,

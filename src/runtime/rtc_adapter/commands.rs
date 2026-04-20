@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, oneshot};
 
 #[cfg(feature = "internal-benchmarks")]
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
@@ -172,6 +173,9 @@ pub(super) enum RtcWorkerCommand {
     },
     ActiveSpeakerSourceSnapshot {
         response: RtcWorkerResponse<Vec<ActiveSpeakerSource>>,
+    },
+    NextActiveSpeakerDeadline {
+        response: RtcWorkerResponse<Option<Instant>>,
     },
     ApplySessionAnswer {
         session_key: TransportSessionKey,

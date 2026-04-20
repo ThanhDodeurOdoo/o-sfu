@@ -29,7 +29,9 @@ use super::{
     session_drain::drain_ready_sessions,
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
+use crate::runtime::{
+    metrics::RuntimeMetrics, recording::MediaTap, transport_adapter::SourcePolicySignal,
+};
 
 pub(crate) struct PacketLoopConfig {
     pub(crate) public_ip: IpAddr,
@@ -39,6 +41,7 @@ pub(crate) struct PacketLoopConfig {
     pub(crate) codec_flags: MediaCodecFlags,
     pub(crate) media_tap: Arc<MediaTap>,
     pub(crate) relay_registry: Arc<RelayRegistry>,
+    pub(crate) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
 }
 
@@ -319,7 +322,13 @@ fn snapshot_and_pump(
         MAX_RELAY_PACKETS_PER_ITERATION,
     );
     flush_pending_keyframe_requests(state, &config.metrics, buffers);
-    record_incoming_stats(state, bitrate_state, &config.metrics, buffers);
+    record_incoming_stats(
+        state,
+        bitrate_state,
+        &config.source_policy_signal,
+        &config.metrics,
+        buffers,
+    );
     populate_forward_routes(
         state,
         &config.media_tap,

@@ -11,7 +11,7 @@ use crate::{
         recording::MediaTap,
         transport_adapter::{
             RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer, SourcePacketGate,
-            TransportAdapterError, TransportMediaId, TransportSessionKey,
+            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -492,13 +492,16 @@ impl RtcTransportMediaFacade<'_> {
 
 impl Default for RtcTransportAdapter {
     fn default() -> Self {
-        Self::new(&RtcTransportAdapterConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            SessionBitrateLimits::new(8_000_000, 10_000_000),
-            RtcPortRange::new(40_000, 49_999),
-            MediaCodecFlags::default(),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
+        Self::new(
+            &RtcTransportAdapterConfig::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                SessionBitrateLimits::new(8_000_000, 10_000_000),
+                RtcPortRange::new(40_000, 49_999),
+                MediaCodecFlags::default(),
+                Arc::new(MediaTap::default()),
+                Arc::new(RuntimeMetrics::default()),
+            ),
+            Arc::new(SourcePolicySignal::default()),
+        )
     }
 }

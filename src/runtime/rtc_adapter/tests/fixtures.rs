@@ -30,7 +30,7 @@ pub(super) use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::transport_adapter::{
         ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
-        TransportAdapterError, TransportMediaId, TransportSessionKey,
+        SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
     },
 };
 pub(super) use o_sfu_protocol::shared::SessionId;
@@ -83,14 +83,17 @@ pub(super) fn rtc_adapter_with_bitrate_limits(
     max_bitrate_in_bps: u64,
     max_bitrate_out_bps: u64,
 ) -> RtcTransportAdapter {
-    RtcTransportAdapter::new(&RtcTransportAdapterConfig::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
-        RtcPortRange::new(40_000, 49_999),
-        MediaCodecFlags::default(),
-        Arc::new(MediaTap::default()),
-        Arc::new(RuntimeMetrics::default()),
-    ))
+    RtcTransportAdapter::new(
+        &RtcTransportAdapterConfig::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
+            RtcPortRange::new(40_000, 49_999),
+            MediaCodecFlags::default(),
+            Arc::new(MediaTap::default()),
+            Arc::new(RuntimeMetrics::default()),
+        ),
+        Arc::new(SourcePolicySignal::default()),
+    )
 }
 
 pub(super) async fn prepare_transport_session(
