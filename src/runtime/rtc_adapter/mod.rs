@@ -15,11 +15,10 @@
 //! - `route_control`: transport-native control policy for keyed feedback absorption and gating
 //! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
-//! - `bootstrap`: socket binding, session RTC state initialization, transport payload construction
+//! - `bootstrap`: socket binding and session RTC state initialization for the real offer/answer path
 //! - `test_support`: runtime-owned re-exports for rtc-adapter test helpers that should not live on the production module root
 //! - `packet_loop/`: packet-loop driver, ingress routing, keyframe control, event observation, session draining, and forward flushing
 //! - `worker/media/`: media lifecycle plus one control owner for source validation, route ownership, and gate synchronization
-//! - `validation`: DTLS/SDP/ICE parameter validation and diagnostic mapping
 //! - `dtls`: DTLS parameter parsing (RFC 8122, RFC 4572)
 //! - `ice`: ICE candidate parsing (RFC 8839, RFC 8445)
 //! - `sdp`: SDP offer parsing (RFC 8866)
@@ -35,13 +34,13 @@ mod dtls;
 mod forwarded_packet;
 mod forwarding_destination;
 mod forwarding_planner;
-#[cfg(any(test, feature = "internal-benchmarks"))]
+#[cfg(test)]
 mod ice;
 mod local_forwarding;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;
-#[cfg(any(test, feature = "internal-benchmarks"))]
+#[cfg(test)]
 mod parse_diagnostic;
 mod relay_registry;
 mod route_control;
@@ -54,8 +53,6 @@ mod state;
 pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
-#[cfg(any(test, feature = "internal-benchmarks"))]
-mod validation;
 mod worker;
 
 pub(crate) use api::RtcTransportAdapter;

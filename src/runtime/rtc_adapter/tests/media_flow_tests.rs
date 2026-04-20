@@ -6,7 +6,7 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
     assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
     let session_key = transport_key(1, 15, SessionId::Integer(15));
-    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
+    let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started.load(Ordering::Acquire));
@@ -18,15 +18,17 @@ async fn rtc_metrics_track_live_transport_sessions_without_double_counting() {
     let session_key = transport_key(1, 16, SessionId::Integer(16));
 
     assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 0);
-    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
-    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
-
     assert!(
-        adapter
-            .create_initial_session_offer(&session_key)
+        prepare_transport_session(&adapter, &session_key)
             .await
             .is_ok()
     );
+    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
+
+    assert!(matches!(
+        adapter.create_initial_session_offer(&session_key).await,
+        Err(TransportAdapterError::InvalidInput)
+    ));
     assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
 
     assert!(adapter.close_session(&session_key).await.is_ok());
@@ -41,7 +43,7 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 18, SessionId::Integer(18));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
-    let bootstrap_result = bootstrap_transport(&adapter, &session_key).await;
+    let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
@@ -86,7 +88,11 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
     let session_key = transport_key(1, 182, SessionId::Integer(182));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 52_525);
 
-    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
+    assert!(
+        prepare_transport_session(&adapter, &session_key)
+            .await
+            .is_ok()
+    );
     assert!(
         adapter
             .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
@@ -108,12 +114,12 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_000);
 
     assert!(
-        bootstrap_transport(&adapter, &producer_session_key)
+        prepare_transport_session(&adapter, &producer_session_key)
             .await
             .is_ok()
     );
     assert!(
-        bootstrap_transport(&adapter, &consumer_session_key)
+        prepare_transport_session(&adapter, &consumer_session_key)
             .await
             .is_ok()
     );
@@ -181,7 +187,11 @@ async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
         &first_consumer_session_key,
         &second_consumer_session_key,
     ] {
-        assert!(bootstrap_transport(&adapter, session_key).await.is_ok());
+        assert!(
+            prepare_transport_session(&adapter, session_key)
+                .await
+                .is_ok()
+        );
     }
 
     let source_media_id = adapter
@@ -240,7 +250,11 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
     let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
 
     for session_key in [&producer_session_key, &consumer_session_key] {
-        assert!(bootstrap_transport(&adapter, session_key).await.is_ok());
+        assert!(
+            prepare_transport_session(&adapter, session_key)
+                .await
+                .is_ok()
+        );
     }
 
     let source_media_id = adapter
@@ -309,12 +323,12 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 92_000);
 
     assert!(
-        bootstrap_transport(&adapter, &producer_session_key)
+        prepare_transport_session(&adapter, &producer_session_key)
             .await
             .is_ok()
     );
     assert!(
-        bootstrap_transport(&adapter, &consumer_session_key)
+        prepare_transport_session(&adapter, &consumer_session_key)
             .await
             .is_ok()
     );
@@ -386,7 +400,11 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     let session_key = transport_key(1, 21, SessionId::Integer(21));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 77_777);
 
-    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
+    assert!(
+        prepare_transport_session(&adapter, &session_key)
+            .await
+            .is_ok()
+    );
     let transport_media_id = adapter
         .add_recv_media(&session_key, Str0mMediaKind::Video, &rtp_parameters)
         .await
@@ -418,7 +436,11 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     let session_key = transport_key(1, 22, SessionId::Integer(22));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 88_888);
 
-    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
+    assert!(
+        prepare_transport_session(&adapter, &session_key)
+            .await
+            .is_ok()
+    );
     let transport_media_id = adapter
         .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await
@@ -451,7 +473,11 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
     let second_rtp_parameters = sample_router_rtp_parameters("aud-up-2", 93_002);
 
     for session_key in [&first_session_key, &second_session_key] {
-        assert!(bootstrap_transport(&adapter, session_key).await.is_ok());
+        assert!(
+            prepare_transport_session(&adapter, session_key)
+                .await
+                .is_ok()
+        );
     }
 
     let first_media_id = adapter

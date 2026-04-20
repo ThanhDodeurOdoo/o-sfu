@@ -13,8 +13,6 @@ use super::types::{TransportAdapterError, TransportMediaId, TransportSessionKey}
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 #[cfg(test)]
 use crate::runtime::rtc_adapter::test_support::DebugRouteEntry;
-#[cfg(test)]
-use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use o_sfu_router::{MediaCapabilities, MediaKind, RtpParameters as RouterRtpParameters};
 #[cfg(test)]
 use str0m::media::Mid;
@@ -195,17 +193,6 @@ impl TestTransportBackend {
     ) -> Option<TransportSessionHealth> {
         None
     }
-
-    #[cfg(test)]
-    pub(crate) async fn transport_bootstrap_payload(
-        &self,
-        session_key: &TransportSessionKey,
-        router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
-        self.as_fake_adapter()
-            .transport_bootstrap_payload(session_key, router_capabilities)
-            .await
-    }
 }
 
 impl RuntimeTransportAdapter {
@@ -236,29 +223,6 @@ impl RuntimeTransportAdapter {
         match self {
             Self::Rtc(_) => None,
             Self::Test(adapter) => Some(adapter.as_fake_adapter()),
-        }
-    }
-
-    /// Build session transport bootstrap state for transport tests and benchmarks.
-    #[cfg(test)]
-    pub(crate) async fn transport_bootstrap_payload(
-        &self,
-        session_key: &TransportSessionKey,
-        router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
-        match self {
-            #[cfg(any(test, feature = "testing-transport"))]
-            Self::Test(adapter) => {
-                adapter
-                    .transport_bootstrap_payload(session_key, router_capabilities)
-                    .await
-            }
-            Self::Rtc(adapter) => {
-                adapter
-                    .shard_for_session(session_key)
-                    .transport_bootstrap_payload(session_key, router_capabilities)
-                    .await
-            }
         }
     }
 

@@ -41,16 +41,6 @@ pub(super) struct SdpInvalidContext {
 
 impl SdpInvalidContext {
     #[must_use]
-    pub(super) fn expected(&self) -> &str {
-        &self.expected
-    }
-
-    #[must_use]
-    pub(super) fn got(&self) -> &str {
-        &self.got
-    }
-
-    #[must_use]
     pub(super) fn line_number(&self) -> Option<usize> {
         self.line_number
     }

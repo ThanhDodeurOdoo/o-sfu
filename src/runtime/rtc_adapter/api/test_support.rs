@@ -1,7 +1,6 @@
 use std::{
-    collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Instant,
 };
 
@@ -14,104 +13,20 @@ use crate::{
             RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer, SourcePacketGate,
             TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
-        transport_connect::{TransportConnectDirection, TransportConnectRequest},
     },
 };
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid};
 use tokio::sync::oneshot;
-use tracing::debug;
 
 use super::super::{
     commands::{
         RemoteSourceControl,
         debug::{DebugRouteEntry, DebugRtcWorkerCommand},
     },
-    state::{
-        TransportSessionHealth,
-        test_support::{TransportLifecycleState, TransportStateKey},
-    },
-    validation,
+    state::TransportSessionHealth,
 };
 use super::facade::{RtcTransportAdapter, RtcTransportMediaFacade, RtcTransportSessionFacade};
-
-pub(super) type TransportLifecycleMirror =
-    Arc<Mutex<BTreeMap<TransportStateKey, TransportLifecycleState>>>;
-
-pub(super) fn new_transport_lifecycle_mirror() -> TransportLifecycleMirror {
-    Arc::new(Mutex::new(BTreeMap::new()))
-}
-
-pub(super) fn mark_bootstrap_sent(
-    adapter: &RtcTransportAdapter,
-    session_key: &TransportSessionKey,
-) -> Result<(), TransportAdapterError> {
-    let Ok(mut states) = adapter.transport_states.lock() else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    for direction in [
-        TransportConnectDirection::Upload,
-        TransportConnectDirection::Download,
-    ] {
-        states.insert(
-            TransportStateKey {
-                session_key: session_key.clone(),
-                direction,
-            },
-            TransportLifecycleState::BootstrapSent,
-        );
-    }
-    Ok(())
-}
-
-pub(super) fn clear_session_transport_states(
-    adapter: &RtcTransportAdapter,
-    session_key: &TransportSessionKey,
-) -> Result<(), TransportAdapterError> {
-    let Ok(mut transport_states) = adapter.transport_states.lock() else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    transport_states.retain(|key, _| key.session_key != *session_key);
-    Ok(())
-}
-
-fn ensure_connect_transition(
-    adapter: &RtcTransportAdapter,
-    session_key: &TransportSessionKey,
-    direction: TransportConnectDirection,
-) -> Result<(), TransportAdapterError> {
-    let key = TransportStateKey {
-        session_key: session_key.clone(),
-        direction,
-    };
-    let Ok(states) = adapter.transport_states.lock() else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    match states.get(&key) {
-        Some(TransportLifecycleState::BootstrapSent) => Ok(()),
-        Some(TransportLifecycleState::Connected) => Err(TransportAdapterError::InvalidInput),
-        None => Err(TransportAdapterError::TransportUnavailable),
-    }
-}
-
-fn mark_connected(
-    adapter: &RtcTransportAdapter,
-    session_key: &TransportSessionKey,
-    direction: TransportConnectDirection,
-) -> Result<(), TransportAdapterError> {
-    let key = TransportStateKey {
-        session_key: session_key.clone(),
-        direction,
-    };
-    let Ok(mut states) = adapter.transport_states.lock() else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    let Some(state) = states.get_mut(&key) else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    *state = TransportLifecycleState::Connected;
-    Ok(())
-}
 
 impl RtcTransportAdapter {
     pub(crate) async fn create_initial_session_offer(
@@ -140,38 +55,6 @@ impl RtcTransportAdapter {
         self.negotiation()
             .apply_session_answer(session_key, answer_sdp)
             .await
-    }
-
-    pub(crate) async fn connect_transport(
-        &self,
-        session_key: &TransportSessionKey,
-        request: TransportConnectRequest<'_>,
-    ) -> Result<(), TransportAdapterError> {
-        if let Some(sdp_offer) = request.sdp_offer() {
-            validation::validate_sdp_offer(sdp_offer)?;
-        }
-        let parsed_dtls_parameters = validation::parse_dtls_parameters(request.dtls_parameters())?;
-        let remote_ice_credentials =
-            validation::parse_remote_ice_credentials(request.ice_parameters())?;
-        ensure_connect_transition(self, session_key, request.direction())?;
-        debug!(
-            direction = ?request.direction(),
-            session_id = ?session_key.session_id(),
-            media_worker_id = session_key.media_worker_id(),
-            "validated DTLS parameters and transport lifecycle state before rtc transport connect"
-        );
-        self.request_worker(|response| {
-            super::super::commands::RtcWorkerCommand::ConnectTransport {
-                session_key: session_key.clone(),
-                direction: request.direction(),
-                parsed_dtls_parameters,
-                remote_ice_credentials,
-                response,
-            }
-        })
-        .await?;
-        mark_connected(self, session_key, request.direction())?;
-        Ok(())
     }
 
     pub(crate) async fn close_session(

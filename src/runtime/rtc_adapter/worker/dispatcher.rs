@@ -18,8 +18,6 @@ use tokio::sync::oneshot;
 
 #[cfg(test)]
 use super::super::commands::debug::DebugRtcWorkerCommand;
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use super::compat;
 #[cfg(test)]
 use super::debug;
 use super::{
@@ -95,40 +93,6 @@ fn handle_core_worker_command(
     command: RtcWorkerCommand,
 ) {
     match command {
-        #[cfg(any(test, feature = "internal-benchmarks"))]
-        RtcWorkerCommand::BuildBootstrap {
-            session_key,
-            router_capabilities,
-            response,
-        } => compat::respond_build_bootstrap(
-            state,
-            context.snapshot_state,
-            compat::WorkerBootstrapConfig::new(
-                context.public_ip,
-                context.max_bitrate_out_bps,
-                context.rtc_port_range,
-                context.codec_flags,
-            ),
-            &session_key,
-            &router_capabilities,
-            context.metrics,
-            response,
-        ),
-        #[cfg(test)]
-        RtcWorkerCommand::ConnectTransport {
-            session_key,
-            direction,
-            parsed_dtls_parameters,
-            remote_ice_credentials,
-            response,
-        } => compat::respond_connect_transport(
-            state,
-            &session_key,
-            direction,
-            &parsed_dtls_parameters,
-            remote_ice_credentials.as_ref(),
-            response,
-        ),
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }

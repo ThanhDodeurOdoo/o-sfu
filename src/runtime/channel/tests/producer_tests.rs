@@ -10,7 +10,7 @@ use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use crate::runtime::transport_adapter::test_support::FakeWebRtcEvent;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SourcePacketGate,
+    RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SourcePacketGate,
     TransportMediaId, TransportSessionKey,
 };
 use o_sfu_router::MediaKind;
@@ -1705,16 +1705,11 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         .channel
         .transport_session_key(&scenario.publisher_session_id, publisher_connection_id);
     let mut publisher_remote = build_remote_rtc(55_101);
-    let initial_offer = scenario
-        .transport_adapter
-        .create_initial_session_offer(&publisher_session_key)
-        .await
-        .expect("publisher should get an initial rtc offer");
     apply_offer_answer(
         &scenario.transport_adapter,
         &publisher_session_key,
         &mut publisher_remote,
-        initial_offer.into_sdp(),
+        scenario.publisher_initial_offer.into_sdp(),
     )
     .await;
 
@@ -1775,6 +1770,7 @@ struct RealRtcRefreshScenario {
     transport_adapter: RuntimeTransportAdapter,
     publisher_session_id: SessionId,
     subscriber_session_id: SessionId,
+    publisher_initial_offer: SessionOffer,
     subscriber_session_key: TransportSessionKey,
     publisher_rx: mpsc::UnboundedReceiver<SessionOutbound>,
     subscriber_rx: mpsc::UnboundedReceiver<SessionOutbound>,
@@ -1814,18 +1810,16 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
     let subscriber_session_key =
         channel.transport_session_key(&subscriber_session_id, subscriber_connection_id);
 
-    bootstrap_real_rtc_session(&transport_adapter, &publisher_session_key).await;
-    bootstrap_real_rtc_session(&transport_adapter, &subscriber_session_key).await;
+    let publisher_initial_offer =
+        bootstrap_real_rtc_session(&transport_adapter, &publisher_session_key).await;
+    let subscriber_initial_offer =
+        bootstrap_real_rtc_session(&transport_adapter, &subscriber_session_key).await;
     let mut subscriber_remote = build_remote_rtc(55_100);
-    let initial_offer = transport_adapter
-        .create_initial_session_offer(&subscriber_session_key)
-        .await
-        .expect("subscriber should get an initial rtc offer");
     apply_offer_answer(
         &transport_adapter,
         &subscriber_session_key,
         &mut subscriber_remote,
-        initial_offer.into_sdp(),
+        subscriber_initial_offer.into_sdp(),
     )
     .await;
 
@@ -1855,6 +1849,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
         transport_adapter,
         publisher_session_id,
         subscriber_session_id,
+        publisher_initial_offer,
         subscriber_session_key,
         publisher_rx,
         subscriber_rx,
@@ -1998,16 +1993,12 @@ fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
 async fn bootstrap_real_rtc_session(
     transport_adapter: &RuntimeTransportAdapter,
     session_key: &TransportSessionKey,
-) {
-    assert!(
-        transport_adapter
-            .transport_bootstrap_payload(
-                session_key,
-                &o_sfu_router::RtpCapabilities::new(vec![], vec![])
-            )
-            .await
-            .is_ok()
-    );
+) -> SessionOffer {
+    transport_adapter
+        .negotiation()
+        .create_initial_session_offer(session_key)
+        .await
+        .expect("rtc session should produce an initial offer")
 }
 
 fn assert_bootstrap_for_stream(messages: &[SessionOutbound], stream_type: StreamType) {

@@ -15,12 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use str0m::IceCreds;
 use str0m::Rtc;
 use str0m::change::SdpPendingOffer;
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use str0m::config::Fingerprint;
 use str0m::media::{Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::net::UdpSocket;
@@ -54,16 +50,6 @@ pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     pub(super) started_at: Instant,
     pub(super) local_ice_ufrag: String,
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(super) local_ice_credentials: IceCreds,
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(super) local_dtls_fingerprint: Fingerprint,
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(super) transport_ids: SessionTransportIds,
-    #[cfg(test)]
-    pub(super) remote_dtls_fingerprint: Option<String>,
-    #[cfg(test)]
-    pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
     #[cfg(test)]
     pub(super) max_bitrate_in_bps: Option<u64>,
     #[cfg(test)]
@@ -87,30 +73,6 @@ pub(super) struct SessionSdpNegotiationState {
 pub(super) struct PendingRecvStream {
     pub(super) ssrc: Ssrc,
     pub(super) rid: Option<Rid>,
-}
-
-#[cfg(any(test, feature = "internal-benchmarks"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SessionTransportIds {
-    pub(super) upload: String,
-    pub(super) download: String,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ParsedRemoteIceCredentials {
-    pub(super) username_fragment: String,
-    pub(super) password: String,
-}
-
-#[cfg(test)]
-impl ParsedRemoteIceCredentials {
-    pub(super) fn as_ice_creds(&self) -> IceCreds {
-        IceCreds {
-            ufrag: self.username_fragment.clone(),
-            pass: self.password.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Default)]

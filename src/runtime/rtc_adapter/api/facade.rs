@@ -22,8 +22,6 @@ use std::{
     },
 };
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use super::super::validation;
 use super::super::{
     commands::{
         CloseSessionOutcome, CloseSessionState, RemoteSourceControl, RemoveMediaOutcome,
@@ -32,11 +30,7 @@ use super::super::{
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     state::{RtcBitrateState, RtcSnapshotState},
 };
-#[cfg(test)]
-use super::test_support::TransportLifecycleMirror;
 use crate::config::{MediaCodecFlags, RtcPortRange};
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use crate::runtime::{
     metrics::RuntimeMetrics,
     recording::MediaTap,
@@ -85,8 +79,6 @@ pub(crate) struct RtcTransportAdapter {
     pub(super) relay_registry: Arc<RelayRegistry>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
     pub(super) worker_handle: Mutex<Option<RtcWorkerHandle>>,
-    #[cfg(test)]
-    pub(super) transport_states: TransportLifecycleMirror,
     pub(crate) packet_loop_started: Arc<AtomicBool>,
 }
 
@@ -125,8 +117,6 @@ impl RtcTransportAdapter {
             relay_registry: Arc::new(RelayRegistry::default()),
             metrics: config.metrics(),
             worker_handle: Mutex::new(None),
-            #[cfg(test)]
-            transport_states: super::test_support::new_transport_lifecycle_mirror(),
             packet_loop_started: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -150,40 +140,9 @@ impl RtcTransportAdapter {
     pub(crate) const fn observability(&self) -> RtcTransportObservabilityFacade<'_> {
         RtcTransportObservabilityFacade { adapter: self }
     }
-
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(crate) async fn transport_bootstrap_payload(
-        &self,
-        session_key: &TransportSessionKey,
-        router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
-        self.negotiation()
-            .transport_bootstrap_payload(session_key, router_capabilities)
-            .await
-    }
 }
 
 impl RtcTransportNegotiationFacade<'_> {
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(crate) async fn transport_bootstrap_payload(
-        self,
-        session_key: &TransportSessionKey,
-        router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
-        let payload = self
-            .adapter
-            .request_worker(|response| RtcWorkerCommand::BuildBootstrap {
-                session_key: session_key.clone(),
-                router_capabilities: router_capabilities.clone(),
-                response,
-            })
-            .await?;
-        validation::validate_bootstrap_payload(&payload)?;
-        #[cfg(test)]
-        super::test_support::mark_bootstrap_sent(self.adapter, session_key)?;
-        Ok(payload)
-    }
-
     pub(crate) async fn create_initial_session_offer(
         self,
         session_key: &TransportSessionKey,
@@ -230,8 +189,6 @@ impl RtcTransportSessionFacade<'_> {
         self,
         session_key: &TransportSessionKey,
     ) -> Result<CloseSessionOutcome, TransportAdapterError> {
-        #[cfg(test)]
-        super::test_support::clear_session_transport_states(self.adapter, session_key)?;
         let Some(worker_handle) = self.adapter.worker_handle()? else {
             return Ok(CloseSessionOutcome::new(
                 CloseSessionState::SessionClosed,

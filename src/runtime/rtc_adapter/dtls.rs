@@ -1,10 +1,8 @@
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
+use serde::Serialize;
 use tracing::{error, trace, warn};
 
-use crate::{
-    rfc::webrtc as rfc_webrtc,
-    runtime::transport_connect::{TransportConnectDtlsFingerprint, TransportConnectDtlsParameters},
-};
+use crate::rfc::webrtc as rfc_webrtc;
 use o_sfu_router::RfcReference;
 
 const ROLE_PATH: &str = "$.role";
@@ -48,6 +46,18 @@ pub(super) struct DtlsUnsupportedContext {
 
 pub(super) type ParsedDtlsRole = rfc_webrtc::DtlsRole;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RawDtlsFingerprint {
+    pub(super) algorithm: String,
+    pub(super) value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RawDtlsParameters {
+    pub(super) role: String,
+    pub(super) fingerprints: Vec<RawDtlsFingerprint>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ParsedDtlsFingerprint {
     algorithm: rfc_webrtc::DtlsFingerprintAlgorithm,
@@ -72,20 +82,8 @@ impl ParsedDtlsParameters {
     }
 }
 
-impl ParsedDtlsFingerprint {
-    #[must_use]
-    pub(super) fn algorithm(&self) -> rfc_webrtc::DtlsFingerprintAlgorithm {
-        self.algorithm
-    }
-
-    #[must_use]
-    pub(super) fn value(&self) -> &str {
-        &self.value
-    }
-}
-
 pub(super) fn parse_dtls_parameters(
-    raw_dtls_parameters: &TransportConnectDtlsParameters,
+    raw_dtls_parameters: &RawDtlsParameters,
 ) -> DtlsParseResult<ParsedDtlsParameters> {
     let raw_json =
         serde_json::to_string(raw_dtls_parameters).unwrap_or_else(|_error| String::from("{}"));
@@ -131,7 +129,7 @@ fn parse_role(role_token: &str, raw_json: &str) -> DtlsParseResult<ParsedDtlsRol
 }
 
 fn parse_fingerprint(
-    fingerprint: &TransportConnectDtlsFingerprint,
+    fingerprint: &RawDtlsFingerprint,
     raw_json: &str,
 ) -> DtlsParseResult<ParsedDtlsFingerprint> {
     let algorithm = parse_fingerprint_algorithm(fingerprint.algorithm.as_str(), raw_json)?;
@@ -280,21 +278,14 @@ fn log_diagnostic(diagnostic: &DtlsParseDiagnostic) {
 mod tests {
     use o_sfu_router::ParseDiagnosticKind;
 
-    use super::{ParsedDtlsRole, parse_dtls_parameters};
-    use crate::runtime::transport_connect::{
-        TransportConnectDtlsFingerprint, TransportConnectDtlsParameters,
-    };
+    use super::{ParsedDtlsRole, RawDtlsFingerprint, RawDtlsParameters, parse_dtls_parameters};
 
     const VALID_SHA256_FINGERPRINT: &str = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
 
-    fn sample_dtls_parameters(
-        role: &str,
-        algorithm: &str,
-        value: &str,
-    ) -> TransportConnectDtlsParameters {
-        TransportConnectDtlsParameters {
+    fn sample_dtls_parameters(role: &str, algorithm: &str, value: &str) -> RawDtlsParameters {
+        RawDtlsParameters {
             role: role.to_owned(),
-            fingerprints: vec![TransportConnectDtlsFingerprint {
+            fingerprints: vec![RawDtlsFingerprint {
                 algorithm: algorithm.to_owned(),
                 value: value.to_owned(),
             }],
@@ -315,7 +306,7 @@ mod tests {
 
     #[test]
     fn parse_dtls_parameters_rejects_empty_fingerprints_array() {
-        let dtls_parameters = TransportConnectDtlsParameters {
+        let dtls_parameters = RawDtlsParameters {
             role: String::from("client"),
             fingerprints: vec![],
         };

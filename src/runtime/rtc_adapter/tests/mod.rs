@@ -11,5 +11,4 @@ mod fixtures;
 mod lifecycle_tests;
 mod media_flow_tests;
 mod negotiation_tests;
-mod transport_connect_tests;
-mod validation_tests;
+mod shared_payload_tests;

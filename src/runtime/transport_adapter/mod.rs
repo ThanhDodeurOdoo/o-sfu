@@ -1,7 +1,5 @@
 #[cfg(any(test, feature = "testing-transport"))]
 mod fake;
-#[cfg(test)]
-mod fake_bootstrap;
 
 mod config;
 mod facade;

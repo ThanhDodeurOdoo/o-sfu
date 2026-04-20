@@ -1,8 +1,6 @@
 #[cfg(test)]
 pub(crate) mod debug;
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use o_sfu_router::RtpCapabilities;
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
@@ -13,15 +11,9 @@ use std::net::SocketAddr;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
-#[cfg(test)]
-use crate::runtime::transport_connect::TransportConnectDirection;
 
 use super::relay_registry::RelayTargetId;
 use super::route_control::PacketLayerGate;
-#[cfg(test)]
-use super::{dtls, state::ParsedRemoteIceCredentials};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CloseSessionState {
@@ -168,12 +160,6 @@ impl RemoteSourceControl {
 }
 
 pub(super) enum RtcWorkerCommand {
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    BuildBootstrap {
-        session_key: TransportSessionKey,
-        router_capabilities: RtpCapabilities,
-        response: oneshot::Sender<Result<SessionTransportBootstrap, TransportAdapterError>>,
-    },
     CreateInitialSessionOffer {
         session_key: TransportSessionKey,
         response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
@@ -188,14 +174,6 @@ pub(super) enum RtcWorkerCommand {
     ApplySessionAnswer {
         session_key: TransportSessionKey,
         answer_sdp: String,
-        response: oneshot::Sender<Result<(), TransportAdapterError>>,
-    },
-    #[cfg(test)]
-    ConnectTransport {
-        session_key: TransportSessionKey,
-        direction: TransportConnectDirection,
-        parsed_dtls_parameters: dtls::ParsedDtlsParameters,
-        remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
         response: oneshot::Sender<Result<(), TransportAdapterError>>,
     },
     CloseSession {

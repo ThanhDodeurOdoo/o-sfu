@@ -26,10 +26,6 @@ use crate::{
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
 
-fn empty_router_capabilities() -> RouterRtpCapabilities {
-    RouterRtpCapabilities::new(vec![], vec![])
-}
-
 fn sample_router_capabilities() -> RouterRtpCapabilities {
     RouterRtpCapabilities::new(
         vec![
@@ -46,24 +42,22 @@ fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> RtpParameters {
         .with_mid(String::from(mid))
 }
 
-async fn bootstrap_rtc_session(
-    adapter: &RuntimeTransportAdapter,
-    session_key: &TransportSessionKey,
-) {
+async fn prepare_rtc_session(adapter: &RuntimeTransportAdapter, session_key: &TransportSessionKey) {
     assert!(
         adapter
-            .transport_bootstrap_payload(session_key, &empty_router_capabilities())
+            .negotiation()
+            .create_initial_session_offer(session_key)
             .await
             .is_ok()
     );
 }
 
-async fn bootstrap_rtc_sessions(
+async fn prepare_rtc_sessions(
     adapter: &RuntimeTransportAdapter,
     session_keys: &[&TransportSessionKey],
 ) {
     for session_key in session_keys {
-        bootstrap_rtc_session(adapter, session_key).await;
+        prepare_rtc_session(adapter, session_key).await;
     }
 }
 
@@ -183,6 +177,14 @@ fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> Runtim
     ))
 }
 
+fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
+    offer_sdp
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("a=candidate:"))
+        .and_then(|candidate| candidate.split_whitespace().nth(5))
+        .and_then(|port| port.parse::<u16>().ok())
+}
+
 #[test]
 fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
     let adapter =
@@ -243,41 +245,40 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
     let second_channel_session = TransportSessionKey::new(11, 1, 1, SessionId::Integer(2));
     let same_shard_session = TransportSessionKey::new(12, 0, 1, SessionId::Integer(3));
 
-    let first_payload = adapter
-        .transport_bootstrap_payload(&first_channel_session, &empty_router_capabilities())
+    let first_offer = adapter
+        .negotiation()
+        .create_initial_session_offer(&first_channel_session)
         .await;
-    let second_payload = adapter
-        .transport_bootstrap_payload(&second_channel_session, &empty_router_capabilities())
+    let second_offer = adapter
+        .negotiation()
+        .create_initial_session_offer(&second_channel_session)
         .await;
-    let same_shard_payload = adapter
-        .transport_bootstrap_payload(&same_shard_session, &empty_router_capabilities())
+    let same_shard_offer = adapter
+        .negotiation()
+        .create_initial_session_offer(&same_shard_session)
         .await;
-    assert!(first_payload.is_ok());
-    assert!(second_payload.is_ok());
-    assert!(same_shard_payload.is_ok());
-    let Some(first_payload) = first_payload.ok() else {
+    assert!(first_offer.is_ok());
+    assert!(second_offer.is_ok());
+    assert!(same_shard_offer.is_ok());
+    let Some(first_offer) = first_offer.ok() else {
         return;
     };
-    let Some(second_payload) = second_payload.ok() else {
+    let Some(second_offer) = second_offer.ok() else {
         return;
     };
-    let Some(same_shard_payload) = same_shard_payload.ok() else {
+    let Some(same_shard_offer) = same_shard_offer.ok() else {
         return;
     };
 
-    let Some(first_candidate) = first_payload.download_transport.ice_candidates.first() else {
+    let Some(first_port) = first_candidate_port(&first_offer.into_sdp()) else {
         return;
     };
-    let Some(second_candidate) = second_payload.download_transport.ice_candidates.first() else {
+    let Some(second_port) = first_candidate_port(&second_offer.into_sdp()) else {
         return;
     };
-    let Some(same_shard_candidate) = same_shard_payload.download_transport.ice_candidates.first()
-    else {
+    let Some(same_shard_port) = first_candidate_port(&same_shard_offer.into_sdp()) else {
         return;
     };
-    let first_port = first_candidate.port;
-    let second_port = second_candidate.port;
-    let same_shard_port = same_shard_candidate.port;
 
     assert!((46_000..=46_001).contains(&first_port));
     assert!((46_002..=46_003).contains(&second_port));
@@ -332,8 +333,8 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 41_000);
     let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 42_000);
 
-    bootstrap_rtc_session(&adapter, &source_session).await;
-    bootstrap_rtc_session(&adapter, &consumer_session).await;
+    prepare_rtc_session(&adapter, &source_session).await;
+    prepare_rtc_session(&adapter, &consumer_session).await;
 
     let Some(source_media_id) =
         publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
@@ -430,7 +431,7 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
     let first_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-1", 52_000);
     let second_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-2", 53_000);
 
-    bootstrap_rtc_sessions(
+    prepare_rtc_sessions(
         &adapter,
         &[
             &source_session,
@@ -520,7 +521,7 @@ async fn rtc_adapter_rejects_stale_session_removal_without_dropping_consumer_han
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
     let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 55_000);
 
-    bootstrap_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
+    prepare_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
 
     let Some(source_media_id) =
         publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
@@ -579,7 +580,7 @@ async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes(
     let local_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-local", 62_000);
     let remote_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-remote", 63_000);
 
-    bootstrap_rtc_sessions(
+    prepare_rtc_sessions(
         &adapter,
         &[
             &source_session,

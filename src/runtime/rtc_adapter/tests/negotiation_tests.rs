@@ -322,7 +322,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let consumer_session_key = transport_key(1, 37, SessionId::Integer(37));
 
     assert!(
-        bootstrap_transport(&adapter, &source_session_key)
+        prepare_transport_session(&adapter, &source_session_key)
             .await
             .is_ok()
     );
@@ -395,7 +395,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     let consumer_session_key = transport_key(1, 40, SessionId::Integer(40));
 
     assert!(
-        bootstrap_transport(&adapter, &source_session_key)
+        prepare_transport_session(&adapter, &source_session_key)
             .await
             .is_ok()
     );
@@ -797,7 +797,7 @@ async fn setup_queued_removal_sources(
     source_session_key: &TransportSessionKey,
 ) -> (TransportMediaId, TransportMediaId) {
     assert!(
-        bootstrap_transport(adapter, source_session_key)
+        prepare_transport_session(adapter, source_session_key)
             .await
             .is_ok()
     );

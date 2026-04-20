@@ -16,14 +16,11 @@ use super::{
     recording::MediaTap,
     rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
     transport_adapter::{
-        RtcTransportAdapterConfig, SessionBitrateLimits, TransportAdapterError,
-        TransportSessionKey,
+        RtcTransportAdapterConfig, SessionBitrateLimits, TransportAdapterError, TransportSessionKey,
     },
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use o_sfu_protocol::shared::SessionId;
-use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
-
 const BENCHMARK_PUBLIC_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const BENCHMARK_PORT_RANGE: RtcPortRange = RtcPortRange::new(40_000, 49_999);
 const BENCHMARK_CHANNEL_RUNTIME_ID: u64 = 1;
@@ -67,12 +64,12 @@ impl RtcUdpDemuxBenchmarkFixture {
             session_keys.push(session_key);
             probe_addrs.push(remote_addr);
         }
-        let router_capabilities = RouterRtpCapabilities::new(vec![], vec![]);
         runtime
             .block_on(async {
                 for session_key in &session_keys {
-                    let _payload = adapter
-                        .transport_bootstrap_payload(session_key, &router_capabilities)
+                    let _offer = adapter
+                        .negotiation()
+                        .create_initial_session_offer(session_key)
                         .await?;
                 }
                 Ok::<(), TransportAdapterError>(())

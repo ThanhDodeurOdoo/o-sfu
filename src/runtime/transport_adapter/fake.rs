@@ -4,14 +4,10 @@ use std::{
     time::Duration,
 };
 
-#[cfg(test)]
-use super::fake_bootstrap;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
     TransportSessionKey,
 };
-#[cfg(test)]
-use crate::runtime::transport_bootstrap::SessionTransportBootstrap;
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{
     MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind, RtcpFeedback,
@@ -26,8 +22,6 @@ const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n"
 /// transport-adapter test seam.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FakeWebRtcEvent {
-    #[cfg(test)]
-    BootstrapRequested,
     SessionClosed {
         session_id: SessionId,
     },
@@ -229,22 +223,6 @@ impl FakeWebRtcAdapter {
         _answer_sdp: &str,
     ) -> Result<(), TransportAdapterError> {
         Ok(())
-    }
-
-    #[allow(
-        clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
-    )]
-    #[cfg(test)]
-    pub(crate) async fn transport_bootstrap_payload(
-        &self,
-        _session_key: &TransportSessionKey,
-        router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<SessionTransportBootstrap, TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::BootstrapRequested);
-        Ok(fake_bootstrap::transport_bootstrap_payload(
-            router_capabilities,
-        ))
     }
 
     #[allow(

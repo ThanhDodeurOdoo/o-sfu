@@ -41,10 +41,6 @@ pub(crate) mod test_rtp_samples;
 #[doc(hidden)]
 pub mod testing;
 mod transport_adapter;
-#[cfg(any(test, feature = "internal-benchmarks"))]
-mod transport_bootstrap;
-#[cfg(test)]
-mod transport_connect;
 pub(crate) mod websocket_server;
 
 use channel::ChannelAdmissionPolicy;

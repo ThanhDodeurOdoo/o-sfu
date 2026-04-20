@@ -323,8 +323,8 @@ mod tests {
             metrics::RuntimeMetrics,
             recording::MediaTap,
             transport_adapter::{
-                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
-                SessionBitrateLimits, TransportSessionKey,
+                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+                TransportSessionKey,
             },
         },
     };
