@@ -1,0 +1,19 @@
+[package]
+name = "o-sfu-telemetry"
+description = "Telemetry attribute macros for o-sfu"
+
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "parsing"] }
+
+[lints]
+workspace = true

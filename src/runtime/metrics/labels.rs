@@ -1,6 +1,8 @@
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
-use super::counter::MetricLabel;
+use std::time::Duration;
+
+use super::counter::{HistogramBucketLabel, MetricLabel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WsSessionLoopExitReason {
@@ -15,7 +17,7 @@ pub(crate) enum WsSessionLoopExitReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HttpRoute {
+pub(crate) enum HttpRoute {
     Noop,
     Stats,
     Channel,
@@ -36,6 +38,17 @@ pub(super) enum HttpDisconnectResponseStatus {
     Success,
     BadRequest,
     UnprocessableEntity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ControlPlaneDurationBucket {
+    Le10Millis,
+    Le50Millis,
+    Le100Millis,
+    Le250Millis,
+    Le500Millis,
+    Le1Second,
+    Le5Seconds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +197,46 @@ impl MetricLabel for HttpDisconnectResponseStatus {
             Self::BadRequest => 1,
             Self::UnprocessableEntity => 2,
         }
+    }
+}
+
+impl MetricLabel for ControlPlaneDurationBucket {
+    const COUNT: usize = 7;
+
+    fn as_index(self) -> usize {
+        match self {
+            Self::Le10Millis => 0,
+            Self::Le50Millis => 1,
+            Self::Le100Millis => 2,
+            Self::Le250Millis => 3,
+            Self::Le500Millis => 4,
+            Self::Le1Second => 5,
+            Self::Le5Seconds => 6,
+        }
+    }
+}
+
+impl HistogramBucketLabel for ControlPlaneDurationBucket {
+    fn from_duration(duration: Duration) -> Self {
+        if duration <= Duration::from_millis(10) {
+            return Self::Le10Millis;
+        }
+        if duration <= Duration::from_millis(50) {
+            return Self::Le50Millis;
+        }
+        if duration <= Duration::from_millis(100) {
+            return Self::Le100Millis;
+        }
+        if duration <= Duration::from_millis(250) {
+            return Self::Le250Millis;
+        }
+        if duration <= Duration::from_millis(500) {
+            return Self::Le500Millis;
+        }
+        if duration <= Duration::from_secs(1) {
+            return Self::Le1Second;
+        }
+        Self::Le5Seconds
     }
 }
 

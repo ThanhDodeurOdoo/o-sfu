@@ -4,9 +4,9 @@ use crate::runtime::rtc_adapter::TransportSessionHealth;
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::{
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind,
-    RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot, TransportIceState,
-    WsSessionLoopExitReason,
+    HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
+    TransportIceState, WsSessionLoopExitReason,
 };
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
@@ -93,14 +93,35 @@ fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapsh
     assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
 }
 
+fn assert_control_plane_latency_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.http_inflight.noop, 1);
+    assert_eq!(snapshot.http_inflight.metrics, 0);
+    assert_eq!(snapshot.http_request_duration.noop.le_50_millis, 1);
+    assert_eq!(snapshot.http_request_duration.noop.le_10_millis, 0);
+    assert_eq!(snapshot.http_request_duration.noop.count, 1);
+    assert_eq!(snapshot.http_request_duration.noop.sum_micros, 25_000);
+    assert_eq!(snapshot.ws_handshake_duration.le_100_millis, 1);
+    assert_eq!(snapshot.ws_handshake_duration.count, 1);
+    assert_eq!(snapshot.ws_handshake_duration.sum_micros, 80_000);
+    assert_eq!(snapshot.ws_auth_duration.le_10_millis, 1);
+    assert_eq!(snapshot.ws_auth_duration.count, 1);
+    assert_eq!(snapshot.ws_auth_duration.sum_micros, 8_000);
+    assert_eq!(snapshot.ws_session_initialize_duration.le_250_millis, 1);
+    assert_eq!(snapshot.ws_session_initialize_duration.le_100_millis, 0);
+    assert_eq!(snapshot.ws_session_initialize_duration.count, 1);
+    assert_eq!(snapshot.ws_session_initialize_duration.sum_micros, 120_000);
+}
+
 #[test]
 fn metrics_snapshot_tracks_http_and_websocket_counters() {
     let metrics = RuntimeMetrics::default();
+    metrics.add_http_inflight_requests(HttpRoute::Noop, 1);
     metrics.record_http_channel_request();
     metrics.record_http_channel_unauthorized();
     metrics.record_http_disconnect_request();
     metrics.record_http_disconnect_unprocessable_entity();
     metrics.record_http_metrics_request();
+    metrics.record_http_request_duration(HttpRoute::Noop, Duration::from_millis(25));
     metrics.record_ws_connection_accepted();
     metrics.record_ws_handshake_credentials_received();
     metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::AuthTimeout));
@@ -114,6 +135,9 @@ fn metrics_snapshot_tracks_http_and_websocket_counters() {
     metrics.record_ws_bus_client_message();
     metrics.record_ws_bus_batch_sent(2);
     metrics.record_ws_bus_send_failure();
+    metrics.record_ws_handshake_duration(Duration::from_millis(80));
+    metrics.record_ws_auth_duration(Duration::from_millis(8));
+    metrics.record_ws_session_initialize_duration(Duration::from_millis(120));
 
     let snapshot = metrics.snapshot();
 
@@ -141,6 +165,7 @@ fn metrics_snapshot_tracks_http_and_websocket_counters() {
     assert_eq!(snapshot.ws_bus_batches_sent, 1);
     assert_eq!(snapshot.ws_bus_envelopes_sent, 2);
     assert_eq!(snapshot.ws_bus_send_failures, 1);
+    assert_control_plane_latency_metrics(&snapshot);
 }
 
 #[test]

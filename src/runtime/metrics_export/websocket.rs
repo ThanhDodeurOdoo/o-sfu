@@ -1,8 +1,9 @@
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
+use crate::runtime::metrics::{DurationHistogramSnapshot, RuntimeMetricsSnapshot};
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::shared::{
-    LabeledValue, append_counter, append_labeled_counter_family, close_code_label,
+    HistogramBucketValue, LabeledValue, append_counter, append_histogram,
+    append_labeled_counter_family, close_code_label,
 };
 
 pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
@@ -57,6 +58,30 @@ pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &Runti
                 snapshot.ws_session_initialize_failures,
             ),
         ],
+    );
+    append_histogram(
+        output,
+        "osfu_ws_handshake_duration_seconds",
+        "Websocket handshake duration from upgrade to session readiness or rejection.",
+        &duration_histogram_buckets(&snapshot.ws_handshake_duration),
+        snapshot.ws_handshake_duration.sum_micros,
+        snapshot.ws_handshake_duration.count,
+    );
+    append_histogram(
+        output,
+        "osfu_ws_auth_duration_seconds",
+        "Websocket authentication duration from first auth wait through token validation.",
+        &duration_histogram_buckets(&snapshot.ws_auth_duration),
+        snapshot.ws_auth_duration.sum_micros,
+        snapshot.ws_auth_duration.count,
+    );
+    append_histogram(
+        output,
+        "osfu_ws_session_initialize_duration_seconds",
+        "Websocket session initialization duration after channel admission.",
+        &duration_histogram_buckets(&snapshot.ws_session_initialize_duration),
+        snapshot.ws_session_initialize_duration.sum_micros,
+        snapshot.ws_session_initialize_duration.count,
     );
 }
 
@@ -148,4 +173,16 @@ pub(super) fn append_ws_bus_metrics(output: &mut String, snapshot: &RuntimeMetri
             LabeledValue::new("message", snapshot.ws_bus_client_messages),
         ],
     );
+}
+
+fn duration_histogram_buckets(snapshot: &DurationHistogramSnapshot) -> [HistogramBucketValue; 7] {
+    [
+        HistogramBucketValue::new("0.01", snapshot.le_10_millis),
+        HistogramBucketValue::new("0.05", snapshot.le_50_millis),
+        HistogramBucketValue::new("0.1", snapshot.le_100_millis),
+        HistogramBucketValue::new("0.25", snapshot.le_250_millis),
+        HistogramBucketValue::new("0.5", snapshot.le_500_millis),
+        HistogramBucketValue::new("1", snapshot.le_1_second),
+        HistogramBucketValue::new("5", snapshot.le_5_seconds),
+    ]
 }

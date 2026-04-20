@@ -2,12 +2,43 @@ use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::catalog::RuntimeMetrics;
 use super::labels::{
-    HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
-    RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition, TransportIceState,
-    TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
-    WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+    ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute,
+    RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+    RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition,
+    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DurationHistogramSnapshot {
+    pub le_10_millis: u64,
+    pub le_50_millis: u64,
+    pub le_100_millis: u64,
+    pub le_250_millis: u64,
+    pub le_500_millis: u64,
+    pub le_1_second: u64,
+    pub le_5_seconds: u64,
+    pub count: u64,
+    pub sum_micros: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HttpInflightSnapshot {
+    pub noop: i64,
+    pub stats: i64,
+    pub channel: i64,
+    pub disconnect: i64,
+    pub metrics: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HttpRequestDurationSnapshot {
+    pub noop: DurationHistogramSnapshot,
+    pub stats: DurationHistogramSnapshot,
+    pub channel: DurationHistogramSnapshot,
+    pub disconnect: DurationHistogramSnapshot,
+    pub metrics: DurationHistogramSnapshot,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(
@@ -27,6 +58,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub http_disconnect_success: u64,
     pub http_disconnect_bad_request: u64,
     pub http_disconnect_unprocessable_entity: u64,
+    pub http_inflight: HttpInflightSnapshot,
+    pub http_request_duration: HttpRequestDurationSnapshot,
     pub ws_connections_accepted: u64,
     pub ws_handshake_credentials_received: u64,
     pub ws_handshake_rejected_timeout: u64,
@@ -56,6 +89,9 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub ws_bus_batches_sent: u64,
     pub ws_bus_envelopes_sent: u64,
     pub ws_bus_send_failures: u64,
+    pub ws_handshake_duration: DurationHistogramSnapshot,
+    pub ws_auth_duration: DurationHistogramSnapshot,
+    pub ws_session_initialize_duration: DurationHistogramSnapshot,
     pub active_channels: i64,
     pub active_sessions: i64,
     pub active_recording_channels: i64,
@@ -248,7 +284,13 @@ impl RuntimeMetrics {
     )]
     pub(crate) fn snapshot(&self) -> RuntimeMetricsSnapshot {
         let http = self.snapshot_http();
+        let http_inflight = self.snapshot_http_inflight();
+        let http_request_duration = self.snapshot_http_request_duration();
         let websocket = self.snapshot_websocket();
+        let ws_handshake_duration = snapshot_duration_histogram(&self.ws_handshake_duration);
+        let ws_auth_duration = snapshot_duration_histogram(&self.ws_auth_duration);
+        let ws_session_initialize_duration =
+            snapshot_duration_histogram(&self.ws_session_initialize_duration);
         let live = self.snapshot_live();
         let recording = self.snapshot_recording();
         let rtp = self.snapshot_rtp();
@@ -268,6 +310,8 @@ impl RuntimeMetrics {
             http_disconnect_success: http.disconnect_success,
             http_disconnect_bad_request: http.disconnect_bad_request,
             http_disconnect_unprocessable_entity: http.disconnect_unprocessable_entity,
+            http_inflight,
+            http_request_duration,
             ws_connections_accepted: websocket.connections_accepted,
             ws_handshake_credentials_received: websocket.handshake_credentials_received,
             ws_handshake_rejected_timeout: websocket.handshake_rejected_timeout,
@@ -302,6 +346,9 @@ impl RuntimeMetrics {
             ws_bus_batches_sent: websocket.bus_batches_sent,
             ws_bus_envelopes_sent: websocket.bus_envelopes_sent,
             ws_bus_send_failures: websocket.bus_send_failures,
+            ws_handshake_duration,
+            ws_auth_duration,
+            ws_session_initialize_duration,
             active_channels: live.channels,
             active_sessions: live.sessions,
             active_recording_channels: live.recording_channels,
@@ -403,6 +450,41 @@ impl RuntimeMetrics {
             disconnect_unprocessable_entity: self
                 .http_disconnect_responses
                 .load(HttpDisconnectResponseStatus::UnprocessableEntity),
+        }
+    }
+
+    fn snapshot_http_inflight(&self) -> HttpInflightSnapshot {
+        HttpInflightSnapshot {
+            noop: self.http_inflight_requests.load(HttpRoute::Noop),
+            stats: self.http_inflight_requests.load(HttpRoute::Stats),
+            channel: self.http_inflight_requests.load(HttpRoute::Channel),
+            disconnect: self.http_inflight_requests.load(HttpRoute::Disconnect),
+            metrics: self.http_inflight_requests.load(HttpRoute::Metrics),
+        }
+    }
+
+    fn snapshot_http_request_duration(&self) -> HttpRequestDurationSnapshot {
+        HttpRequestDurationSnapshot {
+            noop: snapshot_duration_histogram_for_route(
+                &self.http_request_duration,
+                HttpRoute::Noop,
+            ),
+            stats: snapshot_duration_histogram_for_route(
+                &self.http_request_duration,
+                HttpRoute::Stats,
+            ),
+            channel: snapshot_duration_histogram_for_route(
+                &self.http_request_duration,
+                HttpRoute::Channel,
+            ),
+            disconnect: snapshot_duration_histogram_for_route(
+                &self.http_request_duration,
+                HttpRoute::Disconnect,
+            ),
+            metrics: snapshot_duration_histogram_for_route(
+                &self.http_request_duration,
+                HttpRoute::Metrics,
+            ),
         }
     }
 
@@ -637,5 +719,38 @@ impl RuntimeMetrics {
                 .rtc_route_control
                 .load(RtcRouteControlOutcome::LayerDropped),
         }
+    }
+}
+
+fn snapshot_duration_histogram(
+    histogram: &super::counter::Histogram<ControlPlaneDurationBucket>,
+) -> DurationHistogramSnapshot {
+    DurationHistogramSnapshot {
+        le_10_millis: histogram.load_bucket(ControlPlaneDurationBucket::Le10Millis),
+        le_50_millis: histogram.load_bucket(ControlPlaneDurationBucket::Le50Millis),
+        le_100_millis: histogram.load_bucket(ControlPlaneDurationBucket::Le100Millis),
+        le_250_millis: histogram.load_bucket(ControlPlaneDurationBucket::Le250Millis),
+        le_500_millis: histogram.load_bucket(ControlPlaneDurationBucket::Le500Millis),
+        le_1_second: histogram.load_bucket(ControlPlaneDurationBucket::Le1Second),
+        le_5_seconds: histogram.load_bucket(ControlPlaneDurationBucket::Le5Seconds),
+        count: histogram.load_count(),
+        sum_micros: histogram.load_sum_micros(),
+    }
+}
+
+fn snapshot_duration_histogram_for_route(
+    histogram: &super::counter::HistogramFamily<HttpRoute, ControlPlaneDurationBucket>,
+    route: HttpRoute,
+) -> DurationHistogramSnapshot {
+    DurationHistogramSnapshot {
+        le_10_millis: histogram.load_bucket(route, ControlPlaneDurationBucket::Le10Millis),
+        le_50_millis: histogram.load_bucket(route, ControlPlaneDurationBucket::Le50Millis),
+        le_100_millis: histogram.load_bucket(route, ControlPlaneDurationBucket::Le100Millis),
+        le_250_millis: histogram.load_bucket(route, ControlPlaneDurationBucket::Le250Millis),
+        le_500_millis: histogram.load_bucket(route, ControlPlaneDurationBucket::Le500Millis),
+        le_1_second: histogram.load_bucket(route, ControlPlaneDurationBucket::Le1Second),
+        le_5_seconds: histogram.load_bucket(route, ControlPlaneDurationBucket::Le5Seconds),
+        count: histogram.load_count(route),
+        sum_micros: histogram.load_sum_micros(route),
     }
 }

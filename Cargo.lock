@@ -1184,6 +1184,7 @@ dependencies = [
  "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",
+ "o-sfu-telemetry",
  "reqwest",
  "serde",
  "serde_json",
@@ -1223,6 +1224,15 @@ name = "o-sfu-router"
 version = "0.3.0"
 dependencies = [
  "o-sfu-rfc",
+]
+
+[[package]]
+name = "o-sfu-telemetry"
+version = "0.3.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

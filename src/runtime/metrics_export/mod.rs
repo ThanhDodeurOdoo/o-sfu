@@ -35,7 +35,7 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
         runtime::metrics::{
-            RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+            HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
             RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
         },
         runtime::rtc_adapter::TransportSessionHealth,
@@ -47,9 +47,24 @@ mod tests {
         assert!(rendered.contains("# TYPE osfu_http_noop_requests_total counter"));
         assert!(rendered.contains("osfu_http_noop_requests_total 1"));
         assert!(rendered.contains("osfu_http_metrics_requests_total 1"));
+        assert!(rendered.contains("# TYPE osfu_http_inflight_requests gauge"));
+        assert!(rendered.contains("osfu_http_inflight_requests{route=\"noop\"} 1"));
+        assert!(rendered.contains("# TYPE osfu_http_request_duration_seconds histogram"));
+        assert!(
+            rendered.contains(
+                "osfu_http_request_duration_seconds_bucket{route=\"noop\",le=\"0.05\"} 1"
+            )
+        );
+        assert!(rendered.contains("osfu_http_request_duration_seconds_count{route=\"noop\"} 1"));
         assert!(
             rendered
                 .contains("osfu_ws_handshake_rejections_total{close_code=\"protocol_error\"} 1")
+        );
+        assert!(rendered.contains("# TYPE osfu_ws_handshake_duration_seconds histogram"));
+        assert!(rendered.contains("osfu_ws_handshake_duration_seconds_bucket{le=\"0.1\"} 1"));
+        assert!(rendered.contains("osfu_ws_auth_duration_seconds_count 1"));
+        assert!(
+            rendered.contains("osfu_ws_session_initialize_duration_seconds_bucket{le=\"0.25\"} 1")
         );
         assert!(
             rendered
@@ -105,11 +120,16 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         metrics.record_http_noop_request();
         metrics.record_http_metrics_request();
+        metrics.add_http_inflight_requests(HttpRoute::Noop, 1);
+        metrics.record_http_request_duration(HttpRoute::Noop, Duration::from_millis(25));
         metrics.record_ws_connection_accepted();
         metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::ProtocolError));
         metrics.record_ws_session_loop_exit(WsSessionLoopExitReason::TransportDisconnected);
         metrics.record_ws_bus_batch_received(2);
         metrics.record_ws_bus_send_failure();
+        metrics.record_ws_handshake_duration(Duration::from_millis(80));
+        metrics.record_ws_auth_duration(Duration::from_millis(8));
+        metrics.record_ws_session_initialize_duration(Duration::from_millis(120));
         metrics.add_active_channels(1);
         metrics.add_active_sessions(2);
         metrics.add_active_recording_channels(1);

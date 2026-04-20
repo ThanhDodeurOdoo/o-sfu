@@ -1,6 +1,6 @@
 [workspace]
 exclude = ["fuzz"]
-members = ["protocol", "rfc", "router"]
+members = ["protocol", "rfc", "router", "telemetry"]
 resolver = "3"
 
 [workspace.package]
@@ -118,6 +118,7 @@ hmac.workspace = true
 o-sfu-protocol.workspace = true
 o-sfu-rfc.workspace = true
 o-sfu-router.workspace = true
+o-sfu-telemetry = { path = "telemetry" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

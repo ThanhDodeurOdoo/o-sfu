@@ -57,6 +57,29 @@ impl HistogramBucketValue {
     }
 }
 
+pub(super) struct LabeledHistogramValue<'a> {
+    label_value: &'static str,
+    buckets: &'a [HistogramBucketValue],
+    sum_micros: u64,
+    count: u64,
+}
+
+impl<'a> LabeledHistogramValue<'a> {
+    pub(super) const fn new(
+        label_value: &'static str,
+        buckets: &'a [HistogramBucketValue],
+        sum_micros: u64,
+        count: u64,
+    ) -> Self {
+        Self {
+            label_value,
+            buckets,
+            sum_micros,
+            count,
+        }
+    }
+}
+
 pub(super) fn append_counter(output: &mut String, name: &str, help: &str, value: u64) {
     output.push_str("# HELP ");
     output.push_str(name);
@@ -208,6 +231,61 @@ pub(super) fn append_histogram(
     output.push_str("_count ");
     append_u64(output, count);
     output.push('\n');
+}
+
+pub(super) fn append_labeled_histogram_family(
+    output: &mut String,
+    name: &str,
+    help: &str,
+    label_name: &str,
+    values: &[LabeledHistogramValue<'_>],
+) {
+    output.push_str("# HELP ");
+    output.push_str(name);
+    output.push(' ');
+    output.push_str(help);
+    output.push('\n');
+    output.push_str("# TYPE ");
+    output.push_str(name);
+    output.push_str(" histogram\n");
+    for value in values {
+        for bucket in value.buckets {
+            output.push_str(name);
+            output.push_str("_bucket{");
+            output.push_str(label_name);
+            output.push_str("=\"");
+            output.push_str(value.label_value);
+            output.push_str("\",le=\"");
+            output.push_str(bucket.upper_bound);
+            output.push_str("\"} ");
+            append_u64(output, bucket.value);
+            output.push('\n');
+        }
+        output.push_str(name);
+        output.push_str("_bucket{");
+        output.push_str(label_name);
+        output.push_str("=\"");
+        output.push_str(value.label_value);
+        output.push_str("\",le=\"+Inf\"} ");
+        append_u64(output, value.count);
+        output.push('\n');
+        output.push_str(name);
+        output.push_str("_sum{");
+        output.push_str(label_name);
+        output.push_str("=\"");
+        output.push_str(value.label_value);
+        output.push_str("\"} ");
+        append_seconds_from_micros(output, value.sum_micros);
+        output.push('\n');
+        output.push_str(name);
+        output.push_str("_count{");
+        output.push_str(label_name);
+        output.push_str("=\"");
+        output.push_str(value.label_value);
+        output.push_str("\"} ");
+        append_u64(output, value.count);
+        output.push('\n');
+    }
 }
 
 fn append_u64(output: &mut String, value: u64) {

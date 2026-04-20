@@ -75,7 +75,9 @@ allow the SFUs to share shards between them.
 
 ## Observability
 
-There is some already groundwork done for observability with `runtime/metrics`, and a `o-sfu/telemetry/` dir for optional Prometheus, Grafana, Alertmanager, and collector defaults.
+There is some already groundwork done for observability with `runtime/metrics`,
+
+https://github.com/ThanhDodeurOdoo/o-sfu-telemetry now host the optional Prometheus, Grafana, Alertmanager, and collector examples.
 - Metrics, logs, traces, and diagnostics must live at runtime boundaries, not in `router/`.
 - `router/` may expose events or state needed by outer layres, but it must not know about Prometheus, OTLP, log shipping, or collector protocols.
 - Call sites must speak in domain terms such as "join accepted", "offer applied", or "relay overload dropped", not in backend-specific terms such as "increment counter X".
@@ -83,7 +85,6 @@ There is some already groundwork done for observability with `runtime/metrics`, 
 - `/metrics` and `/v1/stats` keep distinct roles:
   - `/metrics` is the authoritative low-cardinality time-series surface.
   - `/v1/stats` remains a compatibility snapshot surface.
-- `telemetry/` is deployer-facing reference material only; production teams may reuse it, adapt it, or replace it.
 
 
 ## crypto

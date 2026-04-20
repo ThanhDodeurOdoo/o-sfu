@@ -1,15 +1,25 @@
+//! Defines the process-local metric catalog for runtime observability
+//!
+//! This module is the single place where `o-sfu` declares the metric families
+//! it exports and the typed recording helpers that runtime edges are allowed to
+//! call. having catalog centralized makes the `/metrics` schema explicit
+//! and prevents HTTP, websocket, transport, and media code from inventing
+//! adoc counters, gauges, etc...
+
 use std::time::Duration;
 
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
-use super::counter::{Counter, CounterFamily, UpDownCounter};
+use super::counter::{
+    Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
+};
 use super::labels::{
-    HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute, RecordingActionOutcome,
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection,
-    RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition, TransportIceState,
-    TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
-    WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+    ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute,
+    RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+    RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition,
+    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
 };
 
 #[derive(Debug, Default)]
@@ -17,6 +27,8 @@ pub(crate) struct RuntimeMetrics {
     pub(super) http_requests: CounterFamily<HttpRoute>,
     pub(super) http_channel_responses: CounterFamily<HttpChannelResponseStatus>,
     pub(super) http_disconnect_responses: CounterFamily<HttpDisconnectResponseStatus>,
+    pub(super) http_inflight_requests: UpDownCounterFamily<HttpRoute>,
+    pub(super) http_request_duration: HistogramFamily<HttpRoute, ControlPlaneDurationBucket>,
     pub(super) ws_connections: CounterFamily<WsConnectionStage>,
     pub(super) ws_handshake_rejections: CounterFamily<WebSocketCloseCode>,
     pub(super) ws_handshake_rejections_other: Counter,
@@ -28,6 +40,9 @@ pub(crate) struct RuntimeMetrics {
     pub(super) ws_bus_parse_failures: Counter,
     pub(super) ws_bus_failures: CounterFamily<WsBusFailureKind>,
     pub(super) ws_bus_client_frames: CounterFamily<WsBusClientFrameKind>,
+    pub(super) ws_handshake_duration: Histogram<ControlPlaneDurationBucket>,
+    pub(super) ws_auth_duration: Histogram<ControlPlaneDurationBucket>,
+    pub(super) ws_session_initialize_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) active_channels: UpDownCounter,
     pub(super) active_sessions: UpDownCounter,
     pub(super) active_recording_channels: UpDownCounter,
@@ -109,6 +124,14 @@ impl RuntimeMetrics {
     pub(crate) fn record_http_disconnect_unprocessable_entity(&self) {
         self.http_disconnect_responses
             .increment(HttpDisconnectResponseStatus::UnprocessableEntity);
+    }
+
+    pub(crate) fn add_http_inflight_requests(&self, route: HttpRoute, delta: i64) {
+        self.http_inflight_requests.add(route, delta);
+    }
+
+    pub(crate) fn record_http_request_duration(&self, route: HttpRoute, duration: Duration) {
+        self.http_request_duration.observe(route, duration);
     }
 
     pub(crate) fn record_ws_connection_accepted(&self) {
@@ -196,6 +219,18 @@ impl RuntimeMetrics {
 
     pub(crate) fn record_ws_bus_send_failure(&self) {
         self.ws_bus_failures.increment(WsBusFailureKind::Send);
+    }
+
+    pub(crate) fn record_ws_handshake_duration(&self, duration: Duration) {
+        self.ws_handshake_duration.observe(duration);
+    }
+
+    pub(crate) fn record_ws_auth_duration(&self, duration: Duration) {
+        self.ws_auth_duration.observe(duration);
+    }
+
+    pub(crate) fn record_ws_session_initialize_duration(&self, duration: Duration) {
+        self.ws_session_initialize_duration.observe(duration);
     }
 
     pub(crate) fn add_active_channels(&self, delta: i64) {

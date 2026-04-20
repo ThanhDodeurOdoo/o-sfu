@@ -22,6 +22,7 @@ use crate::{
             CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery, DISCONNECT_PATH,
             IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
+        metrics::HttpRoute,
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
         telemetry, websocket_server,
     },
@@ -62,13 +63,21 @@ pub(crate) fn app(state: RuntimeState) -> Router {
         .with_state(state)
 }
 
+#[o_sfu_telemetry::measure_http_request(
+    metrics = "state.metrics",
+    request = "record_http_noop_request",
+    route = "HttpRoute::Noop"
+)]
 async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
-    state.metrics.record_http_noop_request();
     axum::Json(NoopResponse::ok())
 }
 
+#[o_sfu_telemetry::measure_http_request(
+    metrics = "state.metrics",
+    request = "record_http_stats_request",
+    route = "HttpRoute::Stats"
+)]
 async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
-    state.metrics.record_http_stats_request();
     axum::Json(
         state
             .channels
@@ -80,8 +89,12 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     )
 }
 
+#[o_sfu_telemetry::measure_http_request(
+    metrics = "state.metrics",
+    request = "record_http_metrics_request",
+    route = "HttpRoute::Metrics"
+)]
 async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
-    state.metrics.record_http_metrics_request();
     (
         [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
         render_prometheus(&state.metrics),
@@ -95,13 +108,17 @@ async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
 ///
 /// Query parameters (defined in [`CreateChannelQuery`]) specify whether the channel
 /// should have WebRTC enabled and optional webhook endpoints for recordings.
+#[o_sfu_telemetry::measure_http_request(
+    metrics = "state.metrics",
+    request = "record_http_channel_request",
+    route = "HttpRoute::Channel"
+)]
 async fn channel(
     State(state): State<RuntimeState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Query(query): Query<CreateChannelQuery>,
 ) -> Response {
-    state.metrics.record_http_channel_request();
     let Some(token) = authorization_token(&headers) else {
         state.metrics.record_http_channel_unauthorized();
         return StatusCode::UNAUTHORIZED.into_response();
@@ -153,8 +170,12 @@ async fn channel(
 ///
 /// The request body is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
+#[o_sfu_telemetry::measure_http_request(
+    metrics = "state.metrics",
+    request = "record_http_disconnect_request",
+    route = "HttpRoute::Disconnect"
+)]
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
-    state.metrics.record_http_disconnect_request();
     let Ok(token) = str::from_utf8(&body) else {
         state.metrics.record_http_disconnect_bad_request();
         return StatusCode::BAD_REQUEST.into_response();

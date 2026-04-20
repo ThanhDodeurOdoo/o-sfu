@@ -1,10 +1,14 @@
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::{marker::PhantomData, time::Duration};
 
 pub(super) trait MetricLabel: Copy {
     const COUNT: usize;
 
     fn as_index(self) -> usize;
+}
+
+pub(super) trait HistogramBucketLabel: MetricLabel {
+    fn from_duration(duration: Duration) -> Self;
 }
 
 #[derive(Debug, Default)]
@@ -48,6 +52,39 @@ impl UpDownCounter {
 }
 
 #[derive(Debug)]
+pub(super) struct UpDownCounterFamily<L: MetricLabel> {
+    counters: Box<[UpDownCounter]>,
+    _label: PhantomData<L>,
+}
+
+impl<L: MetricLabel> Default for UpDownCounterFamily<L> {
+    fn default() -> Self {
+        let counters = (0..L::COUNT)
+            .map(|_| UpDownCounter::default())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            counters,
+            _label: PhantomData,
+        }
+    }
+}
+
+impl<L: MetricLabel> UpDownCounterFamily<L> {
+    pub(super) fn add(&self, label: L, delta: i64) {
+        if let Some(counter) = self.counters.get(label.as_index()) {
+            counter.add(delta);
+        }
+    }
+
+    pub(super) fn load(&self, label: L) -> i64 {
+        self.counters
+            .get(label.as_index())
+            .map_or(0, UpDownCounter::load)
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct CounterFamily<L: MetricLabel> {
     counters: Box<[Counter]>,
     _label: PhantomData<L>,
@@ -81,5 +118,97 @@ impl<L: MetricLabel> CounterFamily<L> {
 
     pub(super) fn load(&self, label: L) -> u64 {
         self.counters.get(label.as_index()).map_or(0, Counter::load)
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct Histogram<B: HistogramBucketLabel> {
+    buckets: Box<[Counter]>,
+    count: Counter,
+    sum_micros: Counter,
+    _bucket: PhantomData<B>,
+}
+
+impl<B: HistogramBucketLabel> Default for Histogram<B> {
+    fn default() -> Self {
+        let buckets = (0..B::COUNT)
+            .map(|_| Counter::default())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            buckets,
+            count: Counter::default(),
+            sum_micros: Counter::default(),
+            _bucket: PhantomData,
+        }
+    }
+}
+
+impl<B: HistogramBucketLabel> Histogram<B> {
+    pub(super) fn observe(&self, duration: Duration) {
+        self.count.increment();
+        self.sum_micros
+            .add_u64(u64::try_from(duration.as_micros()).unwrap_or(u64::MAX));
+        let bucket_index = B::from_duration(duration).as_index();
+        for counter in self.buckets.iter().skip(bucket_index) {
+            counter.increment();
+        }
+    }
+
+    pub(super) fn load_bucket(&self, bucket: B) -> u64 {
+        self.buckets.get(bucket.as_index()).map_or(0, Counter::load)
+    }
+
+    pub(super) fn load_count(&self) -> u64 {
+        self.count.load()
+    }
+
+    pub(super) fn load_sum_micros(&self) -> u64 {
+        self.sum_micros.load()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct HistogramFamily<L: MetricLabel, B: HistogramBucketLabel> {
+    histograms: Box<[Histogram<B>]>,
+    _label: PhantomData<L>,
+}
+
+impl<L: MetricLabel, B: HistogramBucketLabel> Default for HistogramFamily<L, B> {
+    fn default() -> Self {
+        let histograms = (0..L::COUNT)
+            .map(|_| Histogram::default())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            histograms,
+            _label: PhantomData,
+        }
+    }
+}
+
+impl<L: MetricLabel, B: HistogramBucketLabel> HistogramFamily<L, B> {
+    pub(super) fn observe(&self, label: L, duration: Duration) {
+        if let Some(histogram) = self.histograms.get(label.as_index()) {
+            histogram.observe(duration);
+        }
+    }
+
+    pub(super) fn load_bucket(&self, label: L, bucket: B) -> u64 {
+        self.histograms
+            .get(label.as_index())
+            .map_or(0, |histogram| histogram.load_bucket(bucket))
+    }
+
+    pub(super) fn load_count(&self, label: L) -> u64 {
+        self.histograms
+            .get(label.as_index())
+            .map_or(0, Histogram::load_count)
+    }
+
+    pub(super) fn load_sum_micros(&self, label: L) -> u64 {
+        self.histograms
+            .get(label.as_index())
+            .map_or(0, Histogram::load_sum_micros)
     }
 }

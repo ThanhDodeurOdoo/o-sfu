@@ -21,8 +21,7 @@
 //!    channel features. It also initializes the `SessionProtocol`, wich coordinates
 //!    with the `TransportAdapter` to prepare the backend WebRTC transport.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
@@ -73,13 +72,16 @@ struct LegacyChannelScopedConnectClaims {
 /// Returning `None` means the caller should stop processing the socket imediately. In
 /// rejection cases this function is also responsible for sending the appropriate close
 /// frame so callrs do not duplicate handshake failure handling.
+#[o_sfu_telemetry::measure_duration(
+    metrics = "state.metrics",
+    record = "record_ws_handshake_duration"
+)]
 pub(super) async fn establish_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
 ) -> Option<ConnectedSession> {
-    let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
-    let (channel, claims) = authenticate_session(state, writer, &auth_payload).await?;
+    let (channel, claims) = authenticate_handshake_session(state, writer, reader).await?;
     let (session_id, outbound_rx, channel, connection_id) =
         join_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
@@ -153,6 +155,16 @@ async fn receive_auth_or_reject(
             .await
         }
     }
+}
+
+#[o_sfu_telemetry::measure_duration(metrics = "state.metrics", record = "record_ws_auth_duration")]
+async fn authenticate_handshake_session(
+    state: &RuntimeState,
+    writer: &mut WsWriter,
+    reader: &mut WsReader,
+) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
+    let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
+    authenticate_session(state, writer, &auth_payload).await
 }
 
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
@@ -353,6 +365,10 @@ fn record_session_span(channel: &Channel, session_id: &SessionId) {
     );
 }
 
+#[o_sfu_telemetry::measure_duration(
+    metrics = "state.metrics",
+    record = "record_ws_session_initialize_duration"
+)]
 async fn initialize_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
