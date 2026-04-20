@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde-wasm-bindgen",
@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-rfc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "serde",
@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-router"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "o-sfu-rfc",
 ]
