@@ -391,10 +391,12 @@ pub(super) async fn real_rtc_route_activity(
 ) -> Option<RealRtcRouteActivity> {
     let _source_connection_id = channel
         .test_api()
+        .inspect()
         .session_connection_id(&source_session_id)
         .await?;
     let consumer_connection_id = channel
         .test_api()
+        .inspect()
         .session_connection_id(&consumer_session_id)
         .await?;
     let consumer_session_key =

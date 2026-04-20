@@ -118,6 +118,7 @@ async fn publish_until_ready(
         loop {
             if let Some(producer_id) = channel
                 .test_api()
+                .media()
                 .publish_track(
                     &SessionId::Integer(81),
                     stream_type,

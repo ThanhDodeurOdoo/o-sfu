@@ -172,7 +172,11 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         .is_some()
     );
 
-    let connection_id = channel.test_api().session_connection_id(&session_id).await;
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;

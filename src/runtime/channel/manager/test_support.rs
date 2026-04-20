@@ -63,6 +63,7 @@ impl ChannelManager {
                 let session_count_before = channel.session_count().await;
                 let join_result = channel
                     .test_api()
+                    .lifecycle()
                     .join_session_without_transport_cleanup(
                         request.session_id,
                         request.label,
@@ -97,6 +98,7 @@ impl ChannelManager {
                 let session_count_before = channel.session_count().await;
                 let did_remove_active_session = channel
                     .test_api()
+                    .lifecycle()
                     .leave_session_without_transport_cleanup(
                         session_id,
                         connection_id,
@@ -130,6 +132,7 @@ impl ChannelManager {
                 let session_count_before = channel.session_count().await;
                 channel
                     .test_api()
+                    .lifecycle()
                     .disconnect_sessions_without_transport_cleanup(session_ids, transport_adapter)
                     .await;
                 (channel, session_count_before)

@@ -72,11 +72,13 @@ async fn build_recording_channel_with(
     let (tx2, rx2) = test_sender();
     channel
         .test_api()
+        .lifecycle()
         .join_session(SessionId::Integer(1), None, publisher_permissions, tx1)
         .await
         .expect("recording publisher should join");
     channel
         .test_api()
+        .lifecycle()
         .join_session(SessionId::Integer(2), None, observer_permissions, tx2)
         .await
         .expect("recording observer should join");
@@ -116,6 +118,7 @@ async fn recording_start_and_stop_update_channel_state_for_all_sessions() {
     assert!(
         channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -147,6 +150,7 @@ async fn recording_start_and_stop_update_channel_state_for_all_sessions() {
     assert!(
         channel
             .test_api()
+            .lifecycle()
             .stop_recording(&SessionId::Integer(1))
             .await
     );
@@ -176,6 +180,7 @@ async fn recording_allows_transcription_toggle_but_rejects_new_media_while_activ
     assert!(
         channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -191,6 +196,7 @@ async fn recording_allows_transcription_toggle_but_rejects_new_media_while_activ
     assert!(
         channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -215,6 +221,7 @@ async fn recording_allows_transcription_toggle_but_rejects_new_media_while_activ
     assert!(
         !channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -242,12 +249,14 @@ async fn stale_replaced_connection_cannot_start_or_stop_recording() {
     let (channel, metrics, _publisher_rx, mut observer_rx) = build_recording_channel().await;
     let stale_connection_id = channel
         .test_api()
+        .inspect()
         .session_connection_id(&SessionId::Integer(1))
         .await
         .expect("recording publisher should have a connection id");
     let (replacement_tx, mut replacement_rx) = test_sender();
     let replacement_connection_id = channel
         .test_api()
+        .lifecycle()
         .join_session(
             SessionId::Integer(1),
             Some(String::from("replacement")),
@@ -355,6 +364,7 @@ async fn recording_start_rejects_sessions_without_recording_permissions() {
     assert!(
         !channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -449,6 +459,7 @@ async fn recording_start_rejects_requests_for_disabled_features() {
         assert!(
             !channel
                 .test_api()
+                .lifecycle()
                 .start_recording(&SessionId::Integer(1), options)
                 .await,
             "{feature_name} recording should stay disabled at runtime"
@@ -492,6 +503,7 @@ async fn recording_start_rejects_channels_without_recording_address() {
     assert!(
         !channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -535,6 +547,7 @@ async fn recording_stop_rejects_sessions_without_stop_authority() {
     assert!(
         channel
             .test_api()
+            .lifecycle()
             .start_recording(
                 &SessionId::Integer(1),
                 RecordingOptions {
@@ -551,6 +564,7 @@ async fn recording_stop_rejects_sessions_without_stop_authority() {
     assert!(
         !channel
             .test_api()
+            .lifecycle()
             .stop_recording(&SessionId::Integer(2))
             .await
     );

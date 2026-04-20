@@ -19,11 +19,13 @@ async fn publish_video_stream(
 ) {
     channel
         .test_api()
+        .negotiation()
         .apply_publish_transport_ready(session_id, connection_id, transport_adapter)
         .await;
     assert!(
         channel
             .test_api()
+            .media()
             .publish_track(
                 session_id,
                 stream_type,
@@ -80,6 +82,7 @@ async fn stats_returns_live_channel_data() {
     let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
     let alice_join = channel
         .test_api()
+        .lifecycle()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -89,6 +92,7 @@ async fn stats_returns_live_channel_data() {
         .await;
     let bob_join = channel
         .test_api()
+        .lifecycle()
         .join_session(
             SessionId::Integer(2),
             None,

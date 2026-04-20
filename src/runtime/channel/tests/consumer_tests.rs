@@ -7,6 +7,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
     // Session 1 publishes a camera track.
     channel
         .test_api()
+        .media()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -23,6 +24,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
     // Session 2 sends CONSUMPTION_CHANGE: pause camera from session 1.
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -42,6 +44,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
     // Session 2 sends CONSUMPTION_CHANGE: resume camera from session 1.
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -65,6 +68,7 @@ async fn consumption_change_updates_transport_route_activity() {
 
     channel
         .test_api()
+        .media()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -78,6 +82,7 @@ async fn consumption_change_updates_transport_route_activity() {
 
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -110,6 +115,7 @@ async fn consumption_change_ignores_nonexistent_consumer() {
     // No tracks published. CONSUMPTION_CHANGE should be a no-op.
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -132,6 +138,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
 
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -146,6 +153,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
 
     channel
         .test_api()
+        .media()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -177,6 +185,7 @@ async fn consumption_change_handles_multiple_stream_types() {
     // Session 1 publishes both camera and audio.
     channel
         .test_api()
+        .media()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -187,6 +196,7 @@ async fn consumption_change_handles_multiple_stream_types() {
         .await;
     channel
         .test_api()
+        .media()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Audio,
@@ -202,6 +212,7 @@ async fn consumption_change_handles_multiple_stream_types() {
     // Session 2 pauses both in one message.
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -225,6 +236,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
     // Session 1 publishes camera, which creates a consumer for session 2.
     channel
         .test_api()
+        .media()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -240,6 +252,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
     let connection_id = 0; // first join gets connection_id 0
     channel
         .test_api()
+        .lifecycle()
         .leave_session(&SessionId::Integer(1), connection_id)
         .await;
 
@@ -247,6 +260,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
     // producer should be a no-op (the consumer index entry was cleaned up).
     channel
         .test_api()
+        .media()
         .update_subscription(
             &SessionId::Integer(2),
             &SessionId::Integer(1),
@@ -262,6 +276,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
     // Similarly, a production change for session 1 should be a no-op.
     channel
         .test_api()
+        .media()
         .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
