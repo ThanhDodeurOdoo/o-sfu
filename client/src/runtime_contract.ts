@@ -11,7 +11,6 @@ import {
     type SessionInfo,
     type StreamType
 } from "./public_api.js";
-import { requireDefaultProtocolCoreFactory } from "./default_protocol_core_factory.js";
 import type { TrackBinding } from "./protocol.js";
 
 export const NEGOTIATION_KIND = {
@@ -102,12 +101,22 @@ export interface ProtocolCoreBindings {
     trackBinding(mid: string): TrackBinding | null | undefined;
 }
 
-export type ProtocolCoreFactory = () => ProtocolCoreBindings;
+export type ProtocolCoreProvider = () => ProtocolCoreBindings;
 
-let protocolCoreFactory: ProtocolCoreFactory | undefined;
+let defaultProtocolCoreProvider: ProtocolCoreProvider | undefined;
+let protocolCoreProvider: ProtocolCoreProvider | undefined;
 
-export function configureProtocolCoreFactory(factory: ProtocolCoreFactory): void {
-    protocolCoreFactory = factory;
+/**
+ * Registers the entrypoint-owned default protocol-core provider. Browser
+ * bundles install this once so `createProtocolCore()` can stay decoupled from a
+ * specific WASM bootstrap path.
+ */
+export function configureDefaultProtocolCoreProvider(provider: ProtocolCoreProvider): void {
+    defaultProtocolCoreProvider = provider;
+}
+
+export function configureProtocolCoreProvider(provider: ProtocolCoreProvider): void {
+    protocolCoreProvider = provider;
 }
 
 export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
@@ -192,7 +201,18 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
 }
 
 export function createProtocolCore(): ProtocolCoreBindings {
-    return wrapProtocolCoreBindings((protocolCoreFactory ?? requireDefaultProtocolCoreFactory())());
+    return wrapProtocolCoreBindings(
+        (protocolCoreProvider ?? requireDefaultProtocolCoreProvider())()
+    );
+}
+
+function requireDefaultProtocolCoreProvider(): ProtocolCoreProvider {
+    if (!defaultProtocolCoreProvider) {
+        throw new Error(
+            "default protocol core provider is not configured; import the package entrypoint or configure one explicitly"
+        );
+    }
+    return defaultProtocolCoreProvider;
 }
 
 function validateHostCommands(value: unknown, context: string): HostCommand[] {

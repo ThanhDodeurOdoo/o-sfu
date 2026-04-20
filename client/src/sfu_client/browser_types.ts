@@ -1,6 +1,6 @@
 import type { TrackBinding } from "../protocol.js";
 import type { StreamType } from "../public_api.js";
-import type { ProtocolCoreFactory } from "../runtime_contract.js";
+import type { ProtocolCoreProvider } from "../runtime_contract.js";
 
 export type MediaTrack = MediaStreamTrack;
 
@@ -98,7 +98,7 @@ export interface ClientPeerConnection {
 export interface SfuClientDependencies {
     clearTimer?: (handle: TimerHandle) => void;
     createPeerConnection?: (config: RTCConfiguration) => ClientPeerConnection;
-    createProtocolCore?: ProtocolCoreFactory;
+    createProtocolCore?: ProtocolCoreProvider;
     createWebSocket?: (url: string) => ClientWebSocket;
     setTimer?: (callback: () => void, ms: number) => TimerHandle;
 }

@@ -67,6 +67,7 @@ class FakePeerConnection {
             answerSdp = "answer-sdp",
             autoConnect = true,
             gatheredAnswerSdp = null,
+            preCompleteAnswerSdp = null,
             peerConnectionStats = undefined
         } = {}
     ) {
@@ -77,6 +78,7 @@ class FakePeerConnection {
         this.config = config;
         this.gatheredAnswerSdp = gatheredAnswerSdp;
         this.iceGatheringState = "new";
+        this.currentLocalDescription = null;
         this.localDescriptions = [];
         this.localDescription = null;
         this.onconnectionstatechange = null;
@@ -84,6 +86,7 @@ class FakePeerConnection {
         this.onicegatheringstatechange = null;
         this.ontrack = null;
         this.peerConnectionStats = peerConnectionStats;
+        this.preCompleteAnswerSdp = preCompleteAnswerSdp;
         this.remoteDescriptions = [];
         this.transceivers = [
             {
@@ -115,6 +118,7 @@ class FakePeerConnection {
 
     async setLocalDescription(description) {
         this.localDescription = description;
+        this.currentLocalDescription = description;
         this.localDescriptions.push(description);
         this.transceivers.forEach((transceiver) => {
             if (transceiver.sender.track) {
@@ -126,10 +130,34 @@ class FakePeerConnection {
         if (this.gatheredAnswerSdp) {
             this.iceGatheringState = "gathering";
             queueMicrotask(() => {
+                if (this.preCompleteAnswerSdp) {
+                    this.localDescription = {
+                        ...description,
+                        sdp: this.preCompleteAnswerSdp
+                    };
+                    this.currentLocalDescription = this.localDescription;
+                    this.onicecandidate?.({
+                        candidate: {
+                            candidate: "candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
+                        }
+                    });
+                    queueMicrotask(() => {
+                        this.localDescription = {
+                            ...description,
+                            sdp: this.gatheredAnswerSdp
+                        };
+                        this.currentLocalDescription = this.localDescription;
+                        this.iceGatheringState = "complete";
+                        this.onicegatheringstatechange?.();
+                        this.onicecandidate?.({ candidate: null });
+                    });
+                    return;
+                }
                 this.localDescription = {
                     ...description,
                     sdp: this.gatheredAnswerSdp
                 };
+                this.currentLocalDescription = this.localDescription;
                 this.iceGatheringState = "complete";
                 this.onicecandidate?.({
                     candidate: {
@@ -157,6 +185,18 @@ class FakePeerConnection {
                 currentDirection: null,
                 direction: "recvonly",
                 mid: "2",
+                receiver: { track: { kind: "video" } },
+                sender: new FakeSender()
+            });
+        }
+        if (
+            description.sdp.includes("a=mid:3") &&
+            !this.transceivers.some((transceiver) => transceiver.mid === "3")
+        ) {
+            this.transceivers.push({
+                currentDirection: null,
+                direction: "recvonly",
+                mid: "3",
                 receiver: { track: { kind: "video" } },
                 sender: new FakeSender()
             });
@@ -298,7 +338,18 @@ class FakeProtocolCore {
                         kind: "applyNegotiation",
                         negotiationKind: "offer",
                         requestId: "7",
-                        sdp: "offer-sdp"
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+                            "a=mid:0",
+                            "a=recvonly",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                            "a=mid:1",
+                            "a=recvonly"
+                        ].join("\r\n")
                     },
                     ...this._replaceTrackBindings()
                 ];
@@ -309,7 +360,18 @@ class FakeProtocolCore {
                         kind: "applyNegotiation",
                         negotiationKind: "offer",
                         requestId: "8",
-                        sdp: "offer-sdp"
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+                            "a=mid:0",
+                            "a=recvonly",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                            "a=mid:1",
+                            "a=recvonly"
+                        ].join("\r\n")
                     },
                     {
                         kind: "attachTrack",
@@ -331,6 +393,26 @@ class FakeProtocolCore {
                             "t=0 0",
                             "m=video 9 UDP/TLS/RTP/SAVPF 96",
                             "a=mid:2",
+                            "a=recvonly"
+                        ].join("\r\n")
+                    }
+                ];
+            case "renegotiate-with-pending-camera-and-screen":
+                return [
+                    {
+                        kind: "applyNegotiation",
+                        negotiationKind: "renegotiate",
+                        requestId: "11",
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                            "a=mid:2",
+                            "a=recvonly",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                            "a=mid:3",
                             "a=recvonly"
                         ].join("\r\n")
                     }
@@ -807,7 +889,7 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
     assert.equal(client._consumers.get(42).camera.track, track);
 });
 
-test("offer waits for candidate-bearing local description before replying", async () => {
+test("offer waits for the ICE-complete local description before replying", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];
     const peerConnections = [];
@@ -1733,6 +1815,139 @@ test("renegotiation binds a newly published local track before answering", async
         requestId: "9",
         sdp: "answer-sdp"
     });
+});
+
+test("initial offer binds a pending local track before answering", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config, { autoConnect: false });
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const track = {
+        enabled: true,
+        id: "camera-track-pending-offer",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    client.publish("camera", track);
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[1].sender.track, track);
+    assert.equal(
+        peerConnections[0].answerSnapshots.at(-1)[1].senderTrack,
+        track,
+        "the browser must bind the pending upload before generating the initial answer"
+    );
+});
+
+test("offer waits for ice gathering completion before submitting the final answer", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config, {
+                autoConnect: false,
+                gatheredAnswerSdp: "gathered-answer-sdp",
+                preCompleteAnswerSdp: "candidate-answer-sdp"
+            });
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    assert.deepEqual(core.submittedAnswers, [
+        {
+            negotiationKind: "offer",
+            requestId: "7",
+            sdp: "gathered-answer-sdp"
+        }
+    ]);
+});
+
+test("renegotiation binds pending camera and screen tracks to distinct offer-ordered mids", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const cameraTrack = {
+        enabled: true,
+        id: "camera-track-distinct-mid",
+        kind: "video",
+        muted: false
+    };
+    const screenTrack = {
+        enabled: true,
+        id: "screen-track-distinct-mid",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    client.publish("camera", cameraTrack);
+    await tick();
+    client.publish("screen", screenTrack);
+    await tick();
+    sockets[0].emitMessage("renegotiate-with-pending-camera-and-screen");
+    await tick();
+
+    assert.equal(peerConnections[0].transceivers[2].sender.track, cameraTrack);
+    assert.equal(peerConnections[0].transceivers[3].sender.track, screenTrack);
+    assert.equal(peerConnections[0].answerSnapshots.at(-1)[2].senderTrack, cameraTrack);
+    assert.equal(peerConnections[0].answerSnapshots.at(-1)[3].senderTrack, screenTrack);
 });
 
 test("getStats exposes compatibility-shaped transport and producer stats", async () => {

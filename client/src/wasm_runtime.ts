@@ -1,5 +1,8 @@
-import { configureDefaultProtocolCoreFactory } from "./default_protocol_core_factory.js";
-import type { ProtocolCoreBindings, ProtocolCoreFactory } from "./runtime_contract.js";
+import {
+    configureDefaultProtocolCoreProvider,
+    type ProtocolCoreBindings,
+    type ProtocolCoreProvider
+} from "./runtime_contract.js";
 
 type GeneratedProtocolModule = {
     default: (
@@ -18,10 +21,10 @@ const GENERATED_WASM_URL = new URL("../generated/o_sfu_protocol_bg.wasm", import
 
 const generatedProtocolModule = await initializeGeneratedProtocolModule();
 
-export const defaultProtocolCoreFactory: ProtocolCoreFactory = () =>
+export const defaultProtocolCoreProvider: ProtocolCoreProvider = () =>
     new generatedProtocolModule.ProtocolCoreWasm();
 
-configureDefaultProtocolCoreFactory(defaultProtocolCoreFactory);
+configureDefaultProtocolCoreProvider(defaultProtocolCoreProvider);
 
 async function initializeGeneratedProtocolModule(): Promise<GeneratedProtocolModule> {
     const module = (await import(GENERATED_MODULE_URL.href)) as GeneratedProtocolModule;

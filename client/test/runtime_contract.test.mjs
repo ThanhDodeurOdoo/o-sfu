@@ -4,7 +4,7 @@ import test from "node:test";
 import {
     NEGOTIATION_KIND,
     PENDING_REQUEST_KIND,
-    configureProtocolCoreFactory,
+    configureProtocolCoreProvider,
     createProtocolCore,
     wrapProtocolCoreBindings
 } from "../dist/runtime_contract.js";
@@ -178,8 +178,8 @@ test("wrapped protocol core rejects NaN and infinite numeric session IDs", () =>
     );
 });
 
-test("createProtocolCore validates factory output at runtime", () => {
-    configureProtocolCoreFactory(() =>
+test("createProtocolCore validates provider output at runtime", () => {
+    configureProtocolCoreProvider(() =>
         validCore({
             get features() {
                 return {
@@ -196,6 +196,6 @@ test("createProtocolCore validates factory output at runtime", () => {
             "protocol core features.transcription must be a boolean"
         );
     } finally {
-        configureProtocolCoreFactory(() => validCore());
+        configureProtocolCoreProvider(() => validCore());
     }
 });

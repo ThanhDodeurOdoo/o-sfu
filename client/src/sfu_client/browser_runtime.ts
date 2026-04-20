@@ -13,7 +13,7 @@ import type {
     SfuClientDependencies,
     TimerHandle
 } from "./browser_types.js";
-import type { LocalUploads } from "./local_uploads.js";
+import type { LocalUploads, UploadSlot } from "./local_uploads.js";
 import type { PendingRequests } from "./pending_requests.js";
 import type { RemoteTracks } from "./remote_tracks.js";
 
@@ -402,23 +402,23 @@ export class BrowserRuntime {
             sdp,
             type: "offer"
         });
-        if (negotiationKind === "renegotiate") {
-            const pendingAttachment = await localUploads.attachPendingRenegotiationTracks(
-                this._peerConnection,
-                uploadEligibleMidsFromOfferSdp(sdp)
-            );
+        const pendingAttachment = await localUploads.attachPendingTracks(
+            this._peerConnection,
+            uploadSlotsFromOfferSdp(sdp)
+        );
+        if (pendingAttachment.attached.length > 0 || pendingAttachment.skipped.length > 0) {
             for (const attachment of pendingAttachment.attached) {
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.DEBUG,
-                    `attached pending ${attachment.streamType} track to renegotiation mid ${attachment.mid}`
+                    `attached pending ${attachment.streamType} track to ${negotiationKind} mid ${attachment.mid}`
                 );
             }
             for (const streamType of pendingAttachment.skipped) {
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.WARN,
-                    `no eligible renegotiation mid was available for pending ${streamType} track`
+                    `no eligible ${negotiationKind} mid was available for pending ${streamType} track`
                 );
             }
         }
@@ -457,10 +457,7 @@ export class BrowserRuntime {
         if (!initialSdp) {
             throw new Error("peer connection local description is missing after createAnswer");
         }
-        if (
-            this.localDescriptionHasCandidate(initialSdp) ||
-            peerConnection.iceGatheringState === "complete"
-        ) {
+        if (peerConnection.iceGatheringState === "complete") {
             return initialSdp;
         }
 
@@ -468,15 +465,12 @@ export class BrowserRuntime {
             const previousIceCandidate = peerConnection.onicecandidate;
             const previousIceGatheringStateChange = peerConnection.onicegatheringstatechange;
 
-            const finalizeIfReady = () => {
+            const finalizeIfReady = (candidate: { candidate: string } | null | undefined) => {
                 const sdp = peerConnection.localDescription?.sdp;
                 if (!sdp) {
                     return;
                 }
-                if (
-                    !this.localDescriptionHasCandidate(sdp) &&
-                    peerConnection.iceGatheringState !== "complete"
-                ) {
+                if (candidate !== null && peerConnection.iceGatheringState !== "complete") {
                     return;
                 }
                 peerConnection.onicecandidate = previousIceCandidate;
@@ -486,18 +480,18 @@ export class BrowserRuntime {
 
             peerConnection.onicecandidate = (event) => {
                 previousIceCandidate?.(event);
-                finalizeIfReady();
+                finalizeIfReady(event.candidate);
             };
             peerConnection.onicegatheringstatechange = () => {
                 previousIceGatheringStateChange?.();
-                finalizeIfReady();
+                if (peerConnection.iceGatheringState === "complete") {
+                    finalizeIfReady(undefined);
+                }
             };
-            finalizeIfReady();
+            if (peerConnection.iceGatheringState === "complete") {
+                finalizeIfReady(undefined);
+            }
         });
-    }
-
-    private localDescriptionHasCandidate(sdp: string): boolean {
-        return /(?:^|\r\n)a=candidate:/.test(sdp);
     }
 
     private localDescriptionHasOnlyInactiveMedia(sdp: string): boolean {
@@ -546,13 +540,21 @@ function orderedStreamTypes(): StreamType[] {
     return ["audio", "camera", "screen"];
 }
 
-function uploadEligibleMidsFromOfferSdp(sdp: string): Set<string> {
-    const eligibleMids = new Set<string>();
+function uploadSlotsFromOfferSdp(sdp: string): UploadSlot[] {
+    const uploadSlots: UploadSlot[] = [];
     const mediaSections = sdp
         .split(/\r?\nm=/)
         .map((section, index) => (index === 0 ? section : `m=${section}`))
         .filter((section) => section.startsWith("m="));
     for (const section of mediaSections) {
+        const mediaKind = section.startsWith("m=audio ")
+            ? "audio"
+            : section.startsWith("m=video ")
+              ? "video"
+              : null;
+        if (!mediaKind) {
+            continue;
+        }
         const direction = section.match(
             /(?:^|\r\n)a=(sendrecv|sendonly|recvonly|inactive)(?:\r?\n|$)/
         )?.[1];
@@ -561,10 +563,10 @@ function uploadEligibleMidsFromOfferSdp(sdp: string): Set<string> {
         }
         const mid = section.match(/(?:^|\r\n)a=mid:([^\r\n]+)(?:\r?\n|$)/)?.[1];
         if (mid) {
-            eligibleMids.add(mid);
+            uploadSlots.push({ kind: mediaKind, mid });
         }
     }
-    return eligibleMids;
+    return uploadSlots;
 }
 
 function emitRuntimeLog(

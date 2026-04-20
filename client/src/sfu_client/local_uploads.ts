@@ -17,6 +17,11 @@ export type PendingRenegotiationAttachmentResult = {
     skipped: StreamType[];
 };
 
+export type UploadSlot = {
+    kind: "audio" | "video";
+    mid: string;
+};
+
 export class LocalUploads {
     private _localTracks = new Map<StreamType, MediaTrack | null>();
     private _senderMidByType = new Map<StreamType, string>();
@@ -67,13 +72,10 @@ export class LocalUploads {
             return;
         }
         const knownMid = this._senderMidByType.get(streamType);
-        const transceiver = peerConnection
-            .getTransceivers()
-            .find((candidate) =>
-                knownMid
-                    ? candidate.mid === knownMid
-                    : candidate.sender.track?.kind === STREAM_KIND[streamType]
-            );
+        const transceivers = peerConnection.getTransceivers();
+        const transceiver = knownMid
+            ? transceivers.find((candidate) => candidate.mid === knownMid)
+            : uniqueSenderKindTransceiver(transceivers, STREAM_KIND[streamType]);
         if (transceiver) {
             await transceiver.sender.replaceTrack(null);
             updateTransceiverDirection(transceiver, null);
@@ -81,9 +83,9 @@ export class LocalUploads {
         this._senderMidByType.delete(streamType);
     }
 
-    async attachPendingRenegotiationTracks(
+    async attachPendingTracks(
         peerConnection: ClientPeerConnection | null,
-        eligibleMids: Set<string>
+        uploadSlots: UploadSlot[]
     ): Promise<PendingRenegotiationAttachmentResult> {
         if (!peerConnection) {
             return { attached: [], skipped: [] };
@@ -102,30 +104,34 @@ export class LocalUploads {
             return (
                 typeof mid === "string" &&
                 mid.length > 0 &&
-                eligibleMids.has(mid) &&
+                uploadSlots.some((slot) => slot.mid === mid) &&
                 !knownMids.has(mid) &&
                 transceiver.direction === "recvonly" &&
                 transceiver.currentDirection === null &&
                 transceiver.sender.track == null
             );
         });
+        const transceiverMidSet = new Set(
+            candidateTransceivers.map((transceiver) => transceiver.mid)
+        );
+        const remainingSlots = uploadSlots.filter((slot) => transceiverMidSet.has(slot.mid));
         const attached: PendingRenegotiationAttachment[] = [];
         const skipped: StreamType[] = [];
         for (const streamType of pendingTracks) {
-            const transceiverIndex = candidateTransceivers.findIndex(
-                (transceiver) => transceiver.receiver?.track?.kind === STREAM_KIND[streamType]
+            const slotIndex = remainingSlots.findIndex(
+                (slot) => slot.kind === STREAM_KIND[streamType]
             );
-            if (transceiverIndex < 0) {
+            if (slotIndex < 0) {
                 skipped.push(streamType);
                 continue;
             }
-            const [transceiver] = candidateTransceivers.splice(transceiverIndex, 1);
-            if (!transceiver || !transceiver.mid) {
+            const [slot] = remainingSlots.splice(slotIndex, 1);
+            if (!slot) {
                 skipped.push(streamType);
                 continue;
             }
-            await this.attachTrack(peerConnection, transceiver.mid, streamType);
-            attached.push({ mid: transceiver.mid, streamType });
+            await this.attachTrack(peerConnection, slot.mid, streamType);
+            attached.push({ mid: slot.mid, streamType });
         }
         return { attached, skipped };
     }
@@ -133,6 +139,16 @@ export class LocalUploads {
 
 function orderedStreamTypes(): StreamType[] {
     return ["audio", "camera", "screen"];
+}
+
+function uniqueSenderKindTransceiver(
+    transceivers: ReturnType<ClientPeerConnection["getTransceivers"]>,
+    kind: "audio" | "video"
+): (typeof transceivers)[number] | undefined {
+    const matchingTransceivers = transceivers.filter(
+        (candidate) => candidate.sender.track?.kind === kind
+    );
+    return matchingTransceivers.length === 1 ? matchingTransceivers[0] : undefined;
 }
 
 function updateTransceiverDirection(
