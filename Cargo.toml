@@ -145,6 +145,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "query",
 ] }
 tower = { version = "0.5", features = ["util"] }
+trybuild = "1.0.116"
 
 [[bench]]
 harness = false

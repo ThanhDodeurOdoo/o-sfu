@@ -43,3 +43,48 @@ impl SourcePolicySignal {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::{task::yield_now, time::timeout};
+
+    use super::SourcePolicySignal;
+
+    #[tokio::test]
+    async fn wait_for_update_observes_dirty_state_marked_before_wait() {
+        let signal = SourcePolicySignal::default();
+        let subscription = signal.subscribe();
+        signal.mark_dirty();
+
+        assert!(
+            timeout(Duration::from_secs(1), subscription.wait_for_update())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_update_wakes_task_after_cross_task_mark_dirty() {
+        let signal = Arc::new(SourcePolicySignal::default());
+        let subscription = signal.subscribe();
+
+        let waiter = tokio::spawn(async move {
+            timeout(Duration::from_secs(1), subscription.wait_for_update())
+                .await
+                .is_ok()
+        });
+
+        yield_now().await;
+        signal.mark_dirty();
+
+        let waiter_result = waiter.await;
+        assert!(waiter_result.is_ok());
+        let Ok(woke) = waiter_result else {
+            return;
+        };
+        assert!(woke);
+    }
+}

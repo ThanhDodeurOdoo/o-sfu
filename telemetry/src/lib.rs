@@ -113,7 +113,6 @@ fn expand_http_request_function(attr: TokenStream2, item: TokenStream2) -> Resul
     })
 }
 
-#[derive(Debug)]
 struct MeasureDurationArgs {
     metrics: LitStr,
     record: LitStr,
@@ -151,7 +150,6 @@ impl Parse for MeasureDurationArgs {
     }
 }
 
-#[derive(Debug)]
 struct MeasureHttpRequestArgs {
     metrics: LitStr,
     request: LitStr,
@@ -211,79 +209,4 @@ fn required_lit_str(value: Option<LitStr>, key: &str) -> Result<LitStr> {
             format!("missing `{key}` argument"),
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use quote::quote;
-
-    use super::{expand_http_request_function, expand_measured_function};
-
-    #[test]
-    fn parse_attribute_arguments_accepts_any_order() {
-        let parsed_args = syn::parse_str::<super::MeasureDurationArgs>(
-            r#"record = "record_metric", metrics = "state.metrics""#,
-        );
-        assert!(
-            parsed_args.is_ok(),
-            "attribute arguments should parse: {parsed_args:?}"
-        );
-        let Some(args) = parsed_args.ok() else {
-            return;
-        };
-
-        assert_eq!(args.metrics.value(), "state.metrics");
-        assert_eq!(args.record.value(), "record_metric");
-    }
-
-    #[test]
-    fn expand_async_function_records_duration_after_body() {
-        let expanded = expand_measured_function(
-            quote!(metrics = "state.metrics", record = "record_metric"),
-            quote! {
-                async fn measured() -> Option<()> {
-                    return Some(());
-                }
-            },
-        );
-        assert!(
-            expanded.is_ok(),
-            "attribute expansion should succeed: {expanded:?}"
-        );
-        let Some(expanded) = expanded.ok() else {
-            return;
-        };
-        let expanded = expanded.to_string();
-
-        assert!(expanded.contains("struct __TelemetryDurationGuard"));
-        assert!(expanded.contains("__telemetry_metrics . record_metric"));
-    }
-
-    #[test]
-    fn expand_http_request_function_records_route_metrics() {
-        let expanded = expand_http_request_function(
-            quote!(
-                metrics = "state.metrics",
-                request = "record_http_noop_request",
-                route = "HttpRoute::Noop"
-            ),
-            quote! {
-                async fn measured() -> &'static str {
-                    "ok"
-                }
-            },
-        );
-        assert!(
-            expanded.is_ok(),
-            "HTTP attribute expansion should succeed: {expanded:?}"
-        );
-        let Some(expanded) = expanded.ok() else {
-            return;
-        };
-        let expanded = expanded.to_string();
-
-        assert!(expanded.contains("record_http_noop_request"));
-        assert!(expanded.contains("add_http_inflight_requests (HttpRoute :: Noop , 1)"));
-        assert!(expanded.contains("record_http_request_duration"));
-    }
 }

@@ -1,0 +1,7 @@
+error: missing `metrics` argument
+  --> telemetry/tests/ui/fail/measure_duration_missing_metrics.rs:13:1
+   |
+13 | #[measure_duration(record = "record_duration")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `measure_duration` (in Nightly builds, run with -Z macro-backtrace for more info)

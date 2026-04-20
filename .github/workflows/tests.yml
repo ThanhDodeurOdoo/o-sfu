@@ -40,6 +40,39 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  coverage-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Generate workspace coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Export coverage summary
+        run: cargo llvm-cov report --json --summary-only --output-path coverage-summary.json
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-workspace-coverage
+          path: |
+            lcov.info
+            coverage-summary.json
+
   container-build:
     runs-on: ubuntu-latest
 

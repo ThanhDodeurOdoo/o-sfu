@@ -1,5 +1,7 @@
 use super::fixtures::*;
+use futures_util::future::join_all;
 use str0m::{Event, IceConnectionState};
+use tokio::time::timeout;
 
 fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
     offer_sdp
@@ -221,5 +223,86 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
         adapter.session_transport_health(&second_session_key),
         Some(super::super::state::TransportSessionHealth::Disconnected)
     );
+    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() {
+    let adapter = Arc::new(RtcTransportAdapter::default());
+    let session_keys: Vec<_> = (0_u32..8)
+        .map(|offset| {
+            transport_key(
+                3,
+                200_u64 + u64::from(offset),
+                SessionId::Integer(200_i64 + i64::from(offset)),
+            )
+        })
+        .collect();
+
+    let results = timeout(
+        Duration::from_secs(1),
+        join_all(session_keys.into_iter().map(|session_key| {
+            let adapter = Arc::clone(&adapter);
+            async move { adapter.create_initial_session_offer(&session_key).await }
+        })),
+    )
+    .await;
+    assert!(results.is_ok());
+    let Ok(results) = results else {
+        return;
+    };
+
+    for result in results {
+        assert!(result.is_ok());
+    }
+
+    sleep(Duration::from_millis(5)).await;
+    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() {
+    let adapter = Arc::new(RtcTransportAdapter::default());
+    let first_session_key = transport_key(4, 301, SessionId::Integer(301));
+    let second_session_key = transport_key(4, 302, SessionId::Integer(302));
+
+    assert!(
+        prepare_transport_session(&adapter, &first_session_key)
+            .await
+            .is_ok()
+    );
+    assert!(
+        prepare_transport_session(&adapter, &second_session_key)
+            .await
+            .is_ok()
+    );
+    sleep(Duration::from_millis(5)).await;
+    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+
+    let close_results = timeout(Duration::from_secs(1), async {
+        tokio::join!(
+            adapter.close_session(&first_session_key),
+            adapter.close_session(&second_session_key),
+        )
+    })
+    .await;
+    assert!(close_results.is_ok());
+    let Ok((first_close, second_close)) = close_results else {
+        return;
+    };
+    assert_eq!(first_close, Ok(()));
+    assert_eq!(second_close, Ok(()));
+
+    sleep(Duration::from_millis(5)).await;
+    assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(matches!(adapter.worker_handle(), Ok(None)));
+
+    let next_session_key = transport_key(4, 303, SessionId::Integer(303));
+    assert!(
+        prepare_transport_session(&adapter, &next_session_key)
+            .await
+            .is_ok()
+    );
+    sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started.load(Ordering::Acquire));
 }
