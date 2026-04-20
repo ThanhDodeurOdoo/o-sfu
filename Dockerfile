@@ -6,6 +6,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY protocol ./protocol
 COPY router ./router
 COPY rfc ./rfc
+COPY telemetry ./telemetry
 COPY benches ./benches
 COPY src ./src
 
