@@ -25,7 +25,7 @@ Comments may be a bit lacking (although I added some for the most important part
 | :--------------------------------- | :-------------- | :---------: | :------------------------------------------------------------------------------- |
 | `PUBLIC_IP` (required)             | -               |      ✅      | Used to establish WebRTC connections to the server.                              |
 | `AUTH_KEY` (required)              | -               |      ✅      | The base64 encoded encryption key used for JWT authentication.                   |
-| `BIND_ADDRESS`                     | `0.0.0.0:8080`  |      ✅      | HTTP and WebSocket listening address.                                            |
+| `BIND_ADDRESS`                     | `0.0.0.0:8070`  |      ✅      | HTTP and WebSocket listening address.                                            |
 | `PROXY`                            | `false`         |      ✅      | Set to true if behind a proxy to trust forwarding headers.                       |
 | `RTC_MIN_PORT`                     | `40000`         |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                 |
 | `RTC_MAX_PORT`                     | `49999`         |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                 |

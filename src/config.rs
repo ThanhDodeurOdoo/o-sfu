@@ -307,7 +307,7 @@ impl Config {
 
     fn from_var_lookup(mut get_var: impl FnMut(&str) -> Option<String>) -> Result<Self> {
         let bind_address = get_var("BIND_ADDRESS")
-            .unwrap_or_else(|| "0.0.0.0:8080".to_owned())
+            .unwrap_or_else(|| "0.0.0.0:8070".to_owned())
             .parse()
             .context("BIND_ADDRESS must be a valid socket address")?;
         let auth_key = get_var("AUTH_KEY").context("AUTH_KEY env variable is required")?;
@@ -701,7 +701,7 @@ mod tests {
         let Some(config) = config.ok() else {
             return;
         };
-        assert_eq!(config.bind_address.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.bind_address.to_string(), "0.0.0.0:8070");
         assert_eq!(config.auth_key, "dGVzdC1rZXk=");
         assert_eq!(config.authentication_timeout_ms, 10_000);
         assert_eq!(config.channel_size, 100);

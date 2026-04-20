@@ -39,7 +39,7 @@ pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71
 pub(super) fn test_config() -> Config {
     Config {
         auth_key: TEST_AUTH_KEY.to_owned(),
-        bind_address: SocketAddr::from(([127, 0, 0, 1], 8080)),
+        bind_address: SocketAddr::from(([127, 0, 0, 1], 8070)),
         authentication_timeout_ms: 10_000,
         channel_size: 100,
         session_timeout_ms: 10_000,
