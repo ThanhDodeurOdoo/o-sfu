@@ -1,3 +1,11 @@
+//! Compatibility bootstrap and direct-connect helpers for one RTC worker shard.
+//! !! THE FILE WILL EVENTUALLY BE REMOVED !!
+//!
+//! Production session startup goes through offer creation in
+//! `worker/negotiation.rs`. This module only has the older compatibility
+//! bootstrap payload path used by deterministic adapter tests and
+//! `internal-benchmarks`, plus the test-only direct transport-connect helpers
+//! that validate DTLS/ICE sequencing against real worker-local state.
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use std::{
     net::IpAddr,
@@ -107,7 +115,13 @@ pub(super) fn respond_connect_transport(
 }
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
-// TODO: needs documentation:
+/// Ensure the shard has a shared socket plus per-session RTC state and return
+/// the compatibility bootstrap payload for that session
+///
+/// This is a cold-path helper used only by tests and internal benchmarks. It
+/// may allocate new session state orbind the shard-local socket on first use,
+/// but it must leave the packet loop with enough indexed state for later UDP
+/// demux and timeout scheduling.
 fn worker_build_bootstrap_payload(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -188,6 +202,13 @@ fn worker_ensure_transport_connect_compatibility(
 }
 
 #[cfg(test)]
+/// Apply the test-only direct transport-connect path to an existing worker
+/// session after compatibility checks have passed.
+///
+/// The first successful connect call seeds remote ICE and DTLS state and starts
+/// the handshake
+/// Later calls stay idempotent for the already-started DTLS path
+/// so tests can validate both directions against the same shard-local session
 fn worker_apply_transport_connect(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,

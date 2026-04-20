@@ -1,3 +1,5 @@
+//! Worker-local media mutation boundary
+
 mod control;
 mod keyframe;
 mod lifecycle;

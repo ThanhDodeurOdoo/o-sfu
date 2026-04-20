@@ -1,3 +1,11 @@
+//! Production RTC session and socket bootstrap primitives.
+//!
+//! This module owns the real cold-path setup that production worker logic
+//! reuses: bind the shard-local UDP socket, construct `str0m::Rtc`, seed local
+//! candidates, and create the worker-owned session state. The compatibility
+//! transport-bootstrap payload builders in this file are compiled only for
+//! tests and `internal-benchmarks`.
+
 use std::{
     collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},

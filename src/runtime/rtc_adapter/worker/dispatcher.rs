@@ -1,3 +1,10 @@
+//! command dispatcher for worker-local RTC state.
+//!
+//! This module exists to keep the mailbox match in one place while the actual
+//! state mutation lives in focused submodules. It should stay simple:
+//!  decode one worker command, forward it to the owning module, and passe
+//! through the immutable runtime context that those handlers need.
+
 use std::{
     net::IpAddr,
     sync::{Arc, Mutex},
@@ -12,7 +19,7 @@ use tokio::sync::oneshot;
 #[cfg(test)]
 use super::super::commands::debug::DebugRtcWorkerCommand;
 #[cfg(any(test, feature = "internal-benchmarks"))]
-use super::bootstrap;
+use super::compat;
 #[cfg(test)]
 use super::debug;
 use super::{
@@ -38,6 +45,10 @@ pub(crate) struct WorkerCommandContext<'a> {
     pub(crate) metrics: &'a RuntimeMetrics,
 }
 
+/// Dispatch one production worker command against the shard-local RTC state.
+///
+/// Callers must already serialize access to `state`, this function assumes it
+/// runs on the packet-loop task that owns the shard.
 pub(crate) fn handle_worker_command(
     state: &mut RtcBootstrapState,
     context: &WorkerCommandContext<'_>,
@@ -63,6 +74,8 @@ pub(crate) fn handle_worker_command(
 }
 
 #[cfg(test)]
+/// Dispatch one test-only debug command against the same shard-local worker
+/// state used by production commands.
 pub(crate) fn handle_debug_worker_command(
     state: &mut RtcBootstrapState,
     context: &WorkerCommandContext<'_>,
@@ -87,10 +100,10 @@ fn handle_core_worker_command(
             session_key,
             router_capabilities,
             response,
-        } => bootstrap::respond_build_bootstrap(
+        } => compat::respond_build_bootstrap(
             state,
             context.snapshot_state,
-            bootstrap::WorkerBootstrapConfig::new(
+            compat::WorkerBootstrapConfig::new(
                 context.public_ip,
                 context.max_bitrate_out_bps,
                 context.rtc_port_range,
@@ -108,7 +121,7 @@ fn handle_core_worker_command(
             parsed_dtls_parameters,
             remote_ice_credentials,
             response,
-        } => bootstrap::respond_connect_transport(
+        } => compat::respond_connect_transport(
             state,
             &session_key,
             direction,

@@ -1,3 +1,11 @@
+//! Offer/answer ownership for worker-local RTC sessions.
+//!
+//! This module keeps the one-outstanding-offer rule local to the worker that
+//! owns the session's `str0m::Rtc`. It is responsible for creating the initial
+//! server-authored offer, handing out staged follow-up offers, accepting remote
+//! answers, and refreshing any worker-local state that answer application
+//! invalidates.
+
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
@@ -78,7 +86,12 @@ pub(super) fn respond_apply_session_answer(
     ));
 }
 
-// TODO: needs documentation:
+/// Create the first local offer for a session after ensuring the worker has
+/// bootstrap state and the session still has no negotiated media.
+///
+/// The initial offer is reserved for the transport bootstrap and capability
+/// probe flow. Once media has been registered or an earlier initial offer is in
+/// flight, callers must use the renegotiation path instead.
 fn worker_create_initial_session_offer(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -132,7 +145,13 @@ fn worker_create_session_renegotiation_offer(
     Ok(SessionOffer::new(offer_sdp))
 }
 
-// TODO: needs documentation:
+/// Accept the currently pending local offer and reconcile every worker-local
+/// structure that depends on the answer.
+///
+/// Applying an answer can recreate recv bindings inside `str0m`, so this path
+/// must rebuild pending recv expectations, refresh negotiated producer
+/// parameters, stage any deferred removals, and index the remote candidate
+/// addresses that later packet-loop recovery depends on.
 fn worker_apply_session_answer(
     state: &mut RtcBootstrapState,
     max_bitrate_in_bps: u64,

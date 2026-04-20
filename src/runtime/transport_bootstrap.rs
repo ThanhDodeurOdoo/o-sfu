@@ -1,3 +1,6 @@
+//! Compatibility for tests
+//! !! THE FILE WILL EVENTUALLY BE REMOVED !!
+
 use std::net::IpAddr;
 
 use o_sfu_router::MediaCapabilities;

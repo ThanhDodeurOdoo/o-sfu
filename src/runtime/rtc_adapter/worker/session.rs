@@ -1,3 +1,10 @@
+//! worker teardown at session level and auxiliary session bookkeeping.
+//!
+//! Closing a session is more than removing `RtcSessionState`: the worker also
+//! has to clear demux indexes, media registries, route ownership, relay cleanup
+//! hints, snapshot state, bitrate tracking, and lifetime metrics without
+//! leaving packet-loop-visible stuff behind
+
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

@@ -1,3 +1,7 @@
+//! Test-only worker debug commands.
+//!
+//! These helpers expose inspection and state hooks that adapter
+
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},

@@ -1,5 +1,19 @@
-// TODO: needs documentation:
-mod bootstrap;
+//! Worker-local RTC command handling for one shard
+//!
+//! The packet loop owns the mutable [`RtcBootstrapState`](super::state::RtcBootstrapState)
+//! for a shard and calls into this module whenever a control-plane command needs
+//! to mutate it. That keeps async facade code out of the state-transition layer
+//! while preserving one serialized owner for session, negotiation, media, and
+//! teardown staet
+//!
+//! what it does:
+//! - dispatch worker mailbox commands into focused mutation modules
+//! - keep offer/answer, media registru, and route-control changes serialized on
+//!   the packet-loop task
+//! - expose the small helpers that packet-loop code reuses directly, such as
+//!   keyframe requests for already-resolved sources
+
+mod compat;
 #[cfg(test)]
 mod debug;
 mod dispatcher;

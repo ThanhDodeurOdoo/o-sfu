@@ -1,3 +1,9 @@
+//! Keyframe-request routing for worker-local and relayed sources.
+//!
+//! The packet loop and relay-control paths both need the same source-ownership
+//! checks and route-control throttling. This module keeps those rules in one
+//! place so local and cross-worker feedback stay consistent.
+
 use std::time::Instant;
 
 use str0m::media::{KeyframeRequestKind, Rid};
@@ -33,6 +39,12 @@ pub(crate) fn respond_request_remote_keyframe(
     );
 }
 
+/// Forward a keyframe request to a locally owned producer when route-control
+/// policy says the request should escape the shard.
+///
+/// This is reused by the packet loop after it resolves feedback back to a local
+/// source. The helper stays worker-local so the packet path does not need to
+/// know how producer ownership or per-source throttling are represented.
 pub(crate) fn request_keyframe_for_source(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,

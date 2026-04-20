@@ -1,3 +1,5 @@
+//! Small request and ownership transfer objects shared by worker media modules.
+
 use o_sfu_router::RtpParameters as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 

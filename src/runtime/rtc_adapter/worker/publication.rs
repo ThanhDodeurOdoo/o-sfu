@@ -1,3 +1,10 @@
+//! Answer-side producer parameter projection.
+//!
+//! Producers are declared inside the worker before the remote answer confirms
+//! the effective RTP bindings. This module projects the accepted answer back
+//! into router-native RTP parameters and keeps the producer SSRC indexes aligned
+//! with those negotiated bindings.
+
 use std::collections::BTreeSet;
 
 use o_sfu_router::{
@@ -166,6 +173,8 @@ fn apply_projected_recv_streams(
     }
 }
 
+/// Resolve the router-native RTP parameters for one producer after answer-side
+/// projection has populated them for the owning session.
 fn worker_resolve_negotiated_producer_parameters(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
