@@ -21,37 +21,42 @@ Comments may be a bit lacking (although I added some for the most important part
 
 ## Env variables (based on odoo/sfu)
 
-| Variable                    | Default         | Required | Implemented | Description                                                                      |
-| :-------------------------- | :-------------- | :------: | :---------: | :------------------------------------------------------------------------------- |
-| `PUBLIC_IP`                 | -               |   Yes    |      ✅      | Used to establish WebRTC connections to the server.                              |
-| `AUTH_KEY`                  | -               |   Yes    |      ✅      | The base64 encoded encryption key used for JWT authentication.                   |
-| `BIND_ADDRESS`              | `0.0.0.0:8080`  |    No    |      ✅      | HTTP and WebSocket listening address.                                            |
-| `PROXY`                     | `false`         |    No    |      ✅      | Set to true if behind a proxy to trust forwarding headers.                       |
-| `RTC_MIN_PORT`              | `40000`         |    No    |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                 |
-| `RTC_MAX_PORT`              | `49999`         |    No    |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                 |
-| `RTC_MEDIA_WORKER_COUNT`    | `1`             |    No    |      ✅      | Number of RTC media workers to spawn.                                            |
-| `AUTHENTICATION_TIMEOUT_MS` | `10000`         |    No    |      ✅      | Timeout for session authentication in milliseconds.                              |
-| `SESSION_TIMEOUT_MS`        | `10000`         |    No    |      ✅      | Timeout for idle sessions in milliseconds.                                       |
-| `PING_INTERVAL_MS`          | `60000`         |    No    |      ✅      | Interval for signaling pings in milliseconds.                                    |
-| `CHANNEL_SIZE`              | `100`           |    No    |      ✅      | Maximum amount of concurrent users per channel.                                  |
-| `RUST_LOG`                  | `info`          |    No    |      ✅      | SFU log level and filtering (standard `tracing-subscriber` env filter).          |
-| `FEATURE_TRANSCRIPTION`     | `false`         |    No    |      ✅      | Enable transcription feature flags.                                              |
-| `FEATURE_AUDIO_RECORDING`   | `false`         |    No    |      ✅      | Enable audio recording feature flags.                                            |
-| `FEATURE_VIDEO_RECORDING`   | `false`         |    No    |      ✅      | Enable video recording feature flags.                                            |
-| `CODEC_OPUS`                | `true`          |    No    |      ✅      | Enable Opus audio codec.                                                         |
-| `CODEC_PCMU`                | `false`         |    No    |      ✅      | Enable G.711 mu-law audio codec.                                                 |
-| `CODEC_PCMA`                | `false`         |    No    |      ✅      | Enable G.711 a-law audio codec.                                                  |
-| `CODEC_VP8`                 | `true`          |    No    |      ✅      | Enable VP8 video codec.                                                          |
-| `CODEC_H264`                | `false`         |    No    |      ✅      | Enable H.264 video codec.                                                        |
-| `CODEC_H265`                | `false`         |    No    |      ✅      | Enable H.265 video codec.                                                        |
-| `CODEC_VP9`                 | `false`         |    No    |      ✅      | Enable VP9 video codec.                                                          |
-| `CODEC_AV1`                 | `false`         |    No    |      ✅      | Enable AV1 video codec.                                                          |
-| `MAX_BUF_IN`                | `0` (unlimited) |    No    |      ❌      | Maximum incoming buffer size in bytes for SCTP messages per session.             |
-| `MAX_BUF_OUT`               | `0` (unlimited) |    No    |      ❌      | Maximum outgoing buffer size in bytes for SCTP messages per session.             |
-| `MAX_BITRATE_IN`            | `8000000`       |    No    |      ❌      | Maximum incoming bitrate in bps per session (upload).                            |
-| `MAX_BITRATE_OUT`           | `10000000`      |    No    |      ❌      | Maximum outgoing bitrate in bps per session (download).                          |
-| `MAX_VIDEO_BITRATE`         | `4000000`       |    No    |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                    |
-| `DATA_PATH`                 | `/tmp/odoo_sfu` |    No    |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders). |
+| Variable                           | Default         | Required | Implemented | Description                                                                      |
+| :--------------------------------- | :-------------- | :------: | :---------: | :------------------------------------------------------------------------------- |
+| `PUBLIC_IP`                        | -               |   Yes    |      ✅      | Used to establish WebRTC connections to the server.                              |
+| `AUTH_KEY`                         | -               |   Yes    |      ✅      | The base64 encoded encryption key used for JWT authentication.                   |
+| `BIND_ADDRESS`                     | `0.0.0.0:8080`  |    No    |      ✅      | HTTP and WebSocket listening address.                                            |
+| `PROXY`                            | `false`         |    No    |      ✅      | Set to true if behind a proxy to trust forwarding headers.                       |
+| `RTC_MIN_PORT`                     | `40000`         |    No    |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                 |
+| `RTC_MAX_PORT`                     | `49999`         |    No    |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                 |
+| `RTC_MEDIA_WORKER_COUNT`           | `1`             |    No    |      ✅      | Number of RTC media workers to spawn.                                            |
+| `AUTHENTICATION_TIMEOUT_MS`        | `10000`         |    No    |      ✅      | Timeout for session authentication in milliseconds.                              |
+| `SESSION_TIMEOUT_MS`               | `10000`         |    No    |      ✅      | Timeout for idle sessions in milliseconds.                                       |
+| `PING_INTERVAL_MS`                 | `60000`         |    No    |      ✅      | Interval for signaling pings in milliseconds.                                    |
+| `CHANNEL_SIZE`                     | `100`           |    No    |      ✅      | Maximum amount of concurrent users per channel.                                  |
+| `RUST_LOG`                         | `info`          |    No    |      ✅      | SFU log level and filtering (standard `tracing-subscriber` env filter).          |
+| `TELEMETRY_LOG_FORMAT`             | `compact`       |    No    |      ✅      | Runtime log output mode (`compact` or `json`).                                   |
+| `TELEMETRY_SERVICE_NAME`           | `o-sfu`         |    No    |      ✅      | Service name attached to runtime telemetry metadata.                             |
+| `TELEMETRY_DEPLOYMENT_ENVIRONMENT` | `local`         |    No    |      ✅      | Deployment environment name attached to runtime telemetry metadata.              |
+| `TELEMETRY_SERVICE_INSTANCE_ID`    | `pid-<pid>`     |    No    |      ✅      | Optional stable instance identifier for logs and future traces.                  |
+| `TELEMETRY_OTLP_ENDPOINT`          | disabled        |    No    |      ✅      | Reserved owning place for future OTLP trace export configuration.                |
+| `FEATURE_TRANSCRIPTION`            | `false`         |    No    |      ✅      | Enable transcription feature flags.                                              |
+| `FEATURE_AUDIO_RECORDING`          | `false`         |    No    |      ✅      | Enable audio recording feature flags.                                            |
+| `FEATURE_VIDEO_RECORDING`          | `false`         |    No    |      ✅      | Enable video recording feature flags.                                            |
+| `CODEC_OPUS`                       | `true`          |    No    |      ✅      | Enable Opus audio codec.                                                         |
+| `CODEC_PCMU`                       | `false`         |    No    |      ✅      | Enable G.711 mu-law audio codec.                                                 |
+| `CODEC_PCMA`                       | `false`         |    No    |      ✅      | Enable G.711 a-law audio codec.                                                  |
+| `CODEC_VP8`                        | `true`          |    No    |      ✅      | Enable VP8 video codec.                                                          |
+| `CODEC_H264`                       | `false`         |    No    |      ✅      | Enable H.264 video codec.                                                        |
+| `CODEC_H265`                       | `false`         |    No    |      ✅      | Enable H.265 video codec.                                                        |
+| `CODEC_VP9`                        | `false`         |    No    |      ✅      | Enable VP9 video codec.                                                          |
+| `CODEC_AV1`                        | `false`         |    No    |      ✅      | Enable AV1 video codec.                                                          |
+| `MAX_BUF_IN`                       | `0` (unlimited) |    No    |      ❌      | Maximum incoming buffer size in bytes for SCTP messages per session.             |
+| `MAX_BUF_OUT`                      | `0` (unlimited) |    No    |      ❌      | Maximum outgoing buffer size in bytes for SCTP messages per session.             |
+| `MAX_BITRATE_IN`                   | `8000000`       |    No    |      ❌      | Maximum incoming bitrate in bps per session (upload).                            |
+| `MAX_BITRATE_OUT`                  | `10000000`      |    No    |      ❌      | Maximum outgoing bitrate in bps per session (download).                          |
+| `MAX_VIDEO_BITRATE`                | `4000000`       |    No    |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                    |
+| `DATA_PATH`                        | `/tmp/odoo_sfu` |    No    |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders). |
 
 
 ## random thoughts
@@ -71,7 +76,7 @@ allow the SFUs to share shards between them.
 
 ## Observability
 
-There is already groundwork done for observability with runtime/metrics, but there is still a lot to do (like connect to real end-oints), and build a deeper observability system, some random thoughts:
+There is some already groundwork done for observability with `runtime/metrics`, and a `o-sfu/telemetry/` dir for optional Prometheus, Grafana, Alertmanager, and collector defaults.
 - Metrics, logs, traces, and diagnostics must live at runtime boundaries, not in `router/`.
 - `router/` may expose events or state needed by outer layres, but it must not know about Prometheus, OTLP, log shipping, or collector protocols.
 - Call sites must speak in domain terms such as "join accepted", "offer applied", or "relay overload dropped", not in backend-specific terms such as "increment counter X".
@@ -79,6 +84,7 @@ There is already groundwork done for observability with runtime/metrics, but the
 - `/metrics` and `/v1/stats` keep distinct roles:
   - `/metrics` is the authoritative low-cardinality time-series surface.
   - `/v1/stats` remains a compatibility snapshot surface.
+- `telemetry/` is deployer-facing reference material only; production teams may reuse it, adapt it, or replace it.
 
 
 ## crypto

@@ -47,6 +47,7 @@ use crate::runtime::{
     RuntimeState,
     auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
     channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
+    telemetry,
     websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
 };
 
@@ -346,7 +347,10 @@ fn record_session_span(channel: &Channel, session_id: &SessionId) {
     let current_span = Span::current();
     current_span.record("channel_uuid", field::display(channel.uuid()));
     current_span.record("session_id", field::debug(session_id));
-    info!("websocket session established");
+    info!(
+        event = telemetry::schema::event::WS_SESSION_ESTABLISHED,
+        "websocket session established"
+    );
 }
 
 async fn initialize_session(
@@ -400,7 +404,11 @@ async fn reject_handshake<T>(
 ) -> Option<T> {
     state.metrics.record_ws_handshake_rejection(close_code);
     if let Some(code) = close_code {
-        info!(close_code = u16::from(code), "{message}");
+        info!(
+            event = telemetry::schema::event::WS_HANDSHAKE_REJECTED,
+            close_code = u16::from(code),
+            "{message}"
+        );
         if let Some(writer) = writer {
             close_writer(writer, code).await;
         }

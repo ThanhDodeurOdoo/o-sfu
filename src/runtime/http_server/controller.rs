@@ -23,7 +23,7 @@ use crate::{
             IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-        websocket_server,
+        telemetry, websocket_server,
     },
 };
 
@@ -33,6 +33,7 @@ pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
     let listener = TcpListener::bind(state.config.bind_address).await?;
     let local_address = listener.local_addr()?;
     info!(
+        event = telemetry::schema::event::HTTP_LISTENER_READY,
         bind_address = %state.config.bind_address,
         local_address = %local_address,
         trust_proxy_headers = state.config.trust_proxy_headers,

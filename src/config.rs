@@ -13,6 +13,8 @@ const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
+const DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT: &str = "local";
+const DEFAULT_TELEMETRY_SERVICE_NAME: &str = "o-sfu";
 const DEFAULT_TRANSCRIPTION_FEATURE: bool = false;
 const DEFAULT_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_VIDEO_RECORDING_FEATURE: bool = false;
@@ -33,6 +35,61 @@ impl Default for RuntimeFeatureFlags {
             video_recording: DEFAULT_VIDEO_RECORDING_FEATURE,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TelemetryConfig {
+    pub log_format: TelemetryLogFormat,
+    pub resource: TelemetryResource,
+    pub trace_export: TraceExportConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TelemetryLogFormat {
+    #[default]
+    Compact,
+    Json,
+}
+
+impl TelemetryLogFormat {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Json => "json",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetryResource {
+    pub service_name: String,
+    pub deployment_environment: String,
+    pub service_instance_id: Option<String>,
+}
+
+impl TelemetryResource {
+    #[must_use]
+    pub fn resolved_instance_id(&self, process_id: u32) -> String {
+        self.service_instance_id
+            .clone()
+            .unwrap_or_else(|| format!("pid-{process_id}"))
+    }
+}
+
+impl Default for TelemetryResource {
+    fn default() -> Self {
+        Self {
+            service_name: DEFAULT_TELEMETRY_SERVICE_NAME.to_owned(),
+            deployment_environment: DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT.to_owned(),
+            service_instance_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TraceExportConfig {
+    pub otlp_endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +275,7 @@ pub struct Config {
     pub trust_proxy_headers: bool,
     pub feature_flags: RuntimeFeatureFlags,
     pub codec_flags: MediaCodecFlags,
+    pub telemetry: TelemetryConfig,
     pub public_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
@@ -281,6 +339,7 @@ impl Config {
         .unwrap_or(DEFAULT_TRUST_PROXY_HEADERS);
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
+        let telemetry = load_telemetry_config(&mut get_var)?;
         let (public_ip, rtc_port_range, rtc_media_worker_count) =
             load_transport_config(&mut get_var)?;
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
@@ -302,6 +361,7 @@ impl Config {
             trust_proxy_headers,
             feature_flags,
             codec_flags,
+            telemetry,
             public_ip,
             rtc_port_range,
             rtc_media_worker_count,
@@ -322,6 +382,21 @@ impl fmt::Display for ConfigLogView<'_> {
         writeln!(formatter, "  - pid={}", self.process_id)?;
         writeln!(formatter, "  - bind_address={}", config.bind_address)?;
         writeln!(formatter, "  - public_ip={}", config.public_ip)?;
+        writeln!(formatter, "  - telemetry:")?;
+        writeln!(formatter, "    - service_name={}", config.telemetry.resource.service_name)?;
+        writeln!(formatter, "    - deployment_environment={}", config.telemetry.resource.deployment_environment)?;
+        writeln!(formatter, "    - service_instance_id={}", config.telemetry.resource.resolved_instance_id(self.process_id))?;
+        writeln!(formatter, "    - log_format={}", config.telemetry.log_format.as_str())?;
+        writeln!(
+            formatter,
+            "    - trace_export_otlp_endpoint={}",
+            config
+                .telemetry
+                .trace_export
+                .otlp_endpoint
+                .as_deref()
+                .unwrap_or("disabled")
+        )?;
         writeln!(formatter, "  - timing_and_admission:")?;
         writeln!(formatter, "    - authentication_timeout_ms={}", config.authentication_timeout_ms)?;
         writeln!(formatter, "    - session_timeout_ms={}", config.session_timeout_ms)?;
@@ -436,6 +511,42 @@ fn load_media_codec_flags(
         .with_av1(av1))
 }
 
+fn load_telemetry_config(
+    mut get_var: impl FnMut(&str) -> Option<String>,
+) -> Result<TelemetryConfig> {
+    let log_format = match get_var("TELEMETRY_LOG_FORMAT") {
+        Some(value) => match value.as_str() {
+            "compact" => TelemetryLogFormat::Compact,
+            "json" => TelemetryLogFormat::Json,
+            _ => {
+                return Err(anyhow!(
+                    "TELEMETRY_LOG_FORMAT must be either `compact` or `json`"
+                ));
+            }
+        },
+        None => TelemetryLogFormat::default(),
+    };
+    Ok(TelemetryConfig {
+        log_format,
+        resource: TelemetryResource {
+            service_name: parse_optional_non_empty_env(&mut get_var, "TELEMETRY_SERVICE_NAME")?
+                .unwrap_or_else(|| DEFAULT_TELEMETRY_SERVICE_NAME.to_owned()),
+            deployment_environment: parse_optional_non_empty_env(
+                &mut get_var,
+                "TELEMETRY_DEPLOYMENT_ENVIRONMENT",
+            )?
+            .unwrap_or_else(|| DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT.to_owned()),
+            service_instance_id: parse_optional_non_empty_env(
+                &mut get_var,
+                "TELEMETRY_SERVICE_INSTANCE_ID",
+            )?,
+        },
+        trace_export: TraceExportConfig {
+            otlp_endpoint: parse_optional_non_empty_env(&mut get_var, "TELEMETRY_OTLP_ENDPOINT")?,
+        },
+    })
+}
+
 fn load_transport_config(
     mut get_var: impl FnMut(&str) -> Option<String>,
 ) -> Result<(IpAddr, RtcPortRange, usize)> {
@@ -507,9 +618,26 @@ where
         .transpose()
 }
 
+fn parse_optional_non_empty_env(
+    mut get_var: impl FnMut(&str) -> Option<String>,
+    key: &str,
+) -> Result<Option<String>> {
+    match get_var(key) {
+        Some(value) => {
+            let trimmed = value.trim();
+            ensure!(!trimmed.is_empty(), "{key} must not be empty");
+            Ok(Some(trimmed.to_owned()))
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags};
+    use super::{
+        Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
+        TelemetryLogFormat, TelemetryResource, TraceExportConfig,
+    };
 
     #[test]
     fn config_requires_auth_key() {
@@ -541,6 +669,7 @@ mod tests {
         assert!(!config.trust_proxy_headers);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
+        assert_eq!(config.telemetry, TelemetryConfig::default());
         assert_eq!(config.public_ip.to_string(), "127.0.0.1");
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.rtc_media_worker_count, 1);
@@ -605,6 +734,60 @@ mod tests {
                 .with_h264(true)
                 .with_av1(true)
         );
+    }
+
+    #[test]
+    fn config_accepts_telemetry_settings() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "TELEMETRY_LOG_FORMAT" => Some("json".to_owned()),
+            "TELEMETRY_SERVICE_NAME" => Some("custom-o-sfu".to_owned()),
+            "TELEMETRY_DEPLOYMENT_ENVIRONMENT" => Some("staging".to_owned()),
+            "TELEMETRY_SERVICE_INSTANCE_ID" => Some("node-a-1".to_owned()),
+            "TELEMETRY_OTLP_ENDPOINT" => Some("http://collector:4317".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(
+            config.telemetry,
+            TelemetryConfig {
+                log_format: TelemetryLogFormat::Json,
+                resource: TelemetryResource {
+                    service_name: "custom-o-sfu".to_owned(),
+                    deployment_environment: "staging".to_owned(),
+                    service_instance_id: Some("node-a-1".to_owned()),
+                },
+                trace_export: TraceExportConfig {
+                    otlp_endpoint: Some("http://collector:4317".to_owned()),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn config_rejects_invalid_telemetry_log_format() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "TELEMETRY_LOG_FORMAT" => Some("pretty".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_empty_telemetry_service_name() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "TELEMETRY_SERVICE_NAME" => Some("   ".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
     }
 
     #[test]

@@ -8,21 +8,20 @@
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
 //! |  `- session_protocol  -> authenticated signaling flow for one connected session
 //! |- channel              -> room allocation, membership, negotiation, and recording policy
+//! |- telemetry            -> runtime-owned tracing config and event-name conventions
 //! |- transport_adapter    -> runtime-facing transport facade
 //! |  `- rtc_adapter       -> WebRTC worker and packet execution engine
 //! |- recording            -> shared media tap used by channel policy and transport execution
-//! `- metrics              -> process-global observability and export state
+//! `- metrics              -> process-global metrics state and Prometheus export snapshot
 //! ```
 
 use std::{process, sync::Arc};
 
 use anyhow::Result;
-use anyhow::anyhow;
 use tokio::runtime::Builder;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration, MissedTickBehavior};
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 
@@ -36,6 +35,7 @@ mod metrics;
 mod metrics_export;
 mod recording;
 mod rtc_adapter;
+pub(crate) mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_rtp_samples;
 #[doc(hidden)]
@@ -54,6 +54,7 @@ use channel::ChannelRuntimePolicy;
 use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
+use telemetry::init_tracing;
 use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter};
 
 const SOURCE_PACKET_POLICY_SYNC_INTERVAL: Duration = Duration::from_millis(100);
@@ -96,6 +97,10 @@ impl Runtime {
             channel::rtp_capabilities::router_rtp_capabilities(config.codec_flags),
         );
         info!("{}", config.log_view(process::id()));
+        info!(
+            event = telemetry::schema::event::RUNTIME_BOOT,
+            "runtime configuration loaded"
+        );
         Self {
             config,
             channels: Arc::new(ChannelManager::new(
@@ -152,19 +157,6 @@ fn spawn_source_packet_policy_sync_task(
     })
 }
 
-fn init_tracing() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_error| EnvFilter::new("o_sfu=info,o_sfu_router=info")),
-        )
-        .with_target(false)
-        .compact()
-        .try_init()
-        .map_err(|error| anyhow!(error.to_string()))?;
-    Ok(())
-}
-
 fn build_transport_adapter(
     config: &Config,
     recording_media_tap: Arc<MediaTap>,
@@ -186,8 +178,9 @@ fn build_transport_adapter(
 /// the Tokio runtime cannot be built, or the HTTP/WebSocket listener exits with an
 /// error.
 pub fn run() -> Result<()> {
-    init_tracing()?;
-    let runtime = Runtime::new(Config::from_env()?);
+    let config = Config::from_env()?;
+    init_tracing(&config.telemetry, process::id())?;
+    let runtime = Runtime::new(config);
     Builder::new_multi_thread()
         .enable_all()
         .build()?

@@ -40,6 +40,7 @@ use tracing::{Instrument, field, info, info_span};
 use crate::runtime::{
     RuntimeState,
     channel::{Channel, SessionOutbound},
+    telemetry,
 };
 
 use super::{WsWriter, session_protocol::SessionProtocol};
@@ -72,7 +73,10 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
     async move {
         let (mut ws_writer, mut ws_reader) = socket.split();
         state.metrics.record_ws_connection_accepted();
-        info!("accepted websocket connection");
+        info!(
+            event = telemetry::schema::event::WS_CONNECTION_ACCEPTED,
+            "accepted websocket connection"
+        );
         let Some(mut session) =
             super::handshake::establish_session(&state, &mut ws_writer, &mut ws_reader).await
         else {
@@ -91,6 +95,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         .await;
         state.metrics.record_ws_session_loop_exit(exit_reason);
         info!(
+            event = telemetry::schema::event::WS_CONNECTION_CLOSED,
             connection_id = session.connection_id,
             ?exit_reason,
             "closing websocket session"

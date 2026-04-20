@@ -16,7 +16,7 @@ pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
 pub(super) use crate::{
-    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags},
+    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig},
     runtime::{
         RuntimeState,
         auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
@@ -47,6 +47,7 @@ pub(super) fn test_config() -> Config {
         trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
+        telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,

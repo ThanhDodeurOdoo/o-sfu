@@ -16,7 +16,7 @@ use tokio_tungstenite::{
 };
 
 use o_sfu::{
-    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags},
+    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig},
     public::{
         auth::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
@@ -44,6 +44,7 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
         trust_proxy_headers: true,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
+        telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         rtc_media_worker_count: 1,
