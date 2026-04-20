@@ -36,6 +36,7 @@ use super::super::{dtls, state::ParsedRemoteIceCredentials, validation};
 #[derive(Debug, Clone, Copy)]
 pub(super) struct WorkerBootstrapConfig {
     public_ip: IpAddr,
+    max_bitrate_out_bps: u64,
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
 }
@@ -45,11 +46,13 @@ impl WorkerBootstrapConfig {
     #[must_use]
     pub(super) const fn new(
         public_ip: IpAddr,
+        max_bitrate_out_bps: u64,
         rtc_port_range: RtcPortRange,
         codec_flags: MediaCodecFlags,
     ) -> Self {
         Self {
             public_ip,
+            max_bitrate_out_bps,
             rtc_port_range,
             codec_flags,
         }
@@ -126,6 +129,7 @@ fn worker_build_bootstrap_payload(
         &mut state.sessions,
         session_key,
         candidate_addr,
+        config.max_bitrate_out_bps,
         config.codec_flags,
     )?;
     state.mark_session_dirty(session_key);

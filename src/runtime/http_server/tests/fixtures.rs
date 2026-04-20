@@ -50,6 +50,8 @@ pub(super) fn test_config() -> Config {
         telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
+        max_bitrate_in_bps: 8_000_000,
+        max_bitrate_out_bps: 10_000_000,
         rtc_media_worker_count: 1,
     }
 }

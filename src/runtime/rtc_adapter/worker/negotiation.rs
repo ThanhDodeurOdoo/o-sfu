@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use str0m::bwe::Bitrate;
 use str0m::{
     change::{SdpAnswer, SdpApi},
     media::{Direction, MediaKind, Mid},
@@ -30,6 +31,7 @@ const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, Media
 #[derive(Clone, Copy)]
 pub(super) struct OfferBootstrapConfig<'a> {
     pub(super) public_ip: IpAddr,
+    pub(super) max_bitrate_out_bps: u64,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) metrics: &'a RuntimeMetrics,
@@ -63,11 +65,17 @@ pub(super) fn respond_create_session_renegotiation_offer(
 
 pub(super) fn respond_apply_session_answer(
     state: &mut RtcBootstrapState,
+    max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
-    let _ = response.send(worker_apply_session_answer(state, session_key, answer_sdp));
+    let _ = response.send(worker_apply_session_answer(
+        state,
+        max_bitrate_in_bps,
+        session_key,
+        answer_sdp,
+    ));
 }
 
 // TODO: needs documentation:
@@ -127,6 +135,7 @@ fn worker_create_session_renegotiation_offer(
 // TODO: needs documentation:
 fn worker_apply_session_answer(
     state: &mut RtcBootstrapState,
+    max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
 ) -> Result<(), TransportAdapterError> {
@@ -157,11 +166,17 @@ fn worker_apply_session_answer(
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
-    apply_pending_recv_streams(session_state);
+    apply_pending_recv_streams(session_state, max_bitrate_in_bps);
     let local_ice_ufrag = session_state.local_ice_ufrag.clone();
     session_state.dtls_started = true;
     let _ = session_state;
-    refresh_negotiated_producer_parameters(state, session_key, &producer_mids, answer_sdp);
+    refresh_negotiated_producer_parameters(
+        state,
+        session_key,
+        &producer_mids,
+        answer_sdp,
+        max_bitrate_in_bps,
+    );
     if let Some(session_state) = state.sessions.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
     }
@@ -195,7 +210,12 @@ fn answer_remote_candidate_addrs(answer: &SdpAnswer) -> Vec<SocketAddr> {
     addrs
 }
 
-fn apply_pending_recv_streams(session_state: &mut super::super::state::RtcSessionState) {
+fn apply_pending_recv_streams(
+    session_state: &mut super::super::state::RtcSessionState,
+    max_bitrate_in_bps: u64,
+) {
+    // Answer-time recv refresh can recreate `StreamRx` bindings, so REMB must
+    // be re-set here to keep the inbound session cap alive across renegotiation.
     if session_state
         .sdp_negotiation
         .pending_recv_streams
@@ -219,6 +239,13 @@ fn apply_pending_recv_streams(session_state: &mut super::super::state::RtcSessio
             api.remove_stream_rx(existing_ssrc);
         }
         api.expect_stream_rx(stream.ssrc, None, *mid, stream.rid);
+        if let Some(stream_rx) = api.stream_rx_by_mid(*mid, stream.rid) {
+            stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+        }
+    }
+    #[cfg(test)]
+    {
+        session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
     }
     for (mid, _stream) in pending_recv_streams {
         session_state
@@ -288,6 +315,7 @@ fn ensure_session_ready_for_offer(
         &mut state.sessions,
         session_key,
         candidate_addr,
+        config.max_bitrate_out_bps,
         config.codec_flags,
     )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {

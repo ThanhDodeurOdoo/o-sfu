@@ -31,6 +31,8 @@ pub(crate) struct WorkerCommandContext<'a> {
     pub(crate) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub(crate) relay_registry: &'a RelayRegistry,
     pub(crate) public_ip: IpAddr,
+    pub(crate) max_bitrate_in_bps: u64,
+    pub(crate) max_bitrate_out_bps: u64,
     pub(crate) rtc_port_range: RtcPortRange,
     pub(crate) codec_flags: MediaCodecFlags,
     pub(crate) metrics: &'a RuntimeMetrics,
@@ -90,6 +92,7 @@ fn handle_core_worker_command(
             context.snapshot_state,
             bootstrap::WorkerBootstrapConfig::new(
                 context.public_ip,
+                context.max_bitrate_out_bps,
                 context.rtc_port_range,
                 context.codec_flags,
             ),
@@ -153,7 +156,13 @@ fn handle_core_worker_command(
         | RtcWorkerCommand::SetSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. } => {
-            handle_media_command(state, context.metrics, context.relay_registry, command);
+            handle_media_command(
+                state,
+                context.max_bitrate_in_bps,
+                context.metrics,
+                context.relay_registry,
+                command,
+            );
         }
         #[cfg(feature = "internal-benchmarks")]
         RtcWorkerCommand::RememberRemoteAddr { .. } => {}
@@ -174,6 +183,7 @@ fn handle_negotiation_command(
             context.snapshot_state,
             OfferBootstrapConfig {
                 public_ip: context.public_ip,
+                max_bitrate_out_bps: context.max_bitrate_out_bps,
                 rtc_port_range: context.rtc_port_range,
                 codec_flags: context.codec_flags,
                 metrics: context.metrics,
@@ -192,7 +202,13 @@ fn handle_negotiation_command(
             session_key,
             answer_sdp,
             response,
-        } => negotiation::respond_apply_session_answer(state, &session_key, &answer_sdp, response),
+        } => negotiation::respond_apply_session_answer(
+            state,
+            context.max_bitrate_in_bps,
+            &session_key,
+            &answer_sdp,
+            response,
+        ),
         _ => {}
     }
 }
@@ -207,6 +223,7 @@ fn respond_active_speaker_source_snapshot(
 
 fn handle_media_command(
     state: &mut RtcBootstrapState,
+    max_bitrate_in_bps: u64,
     metrics: &RuntimeMetrics,
     relay_registry: &RelayRegistry,
     command: RtcWorkerCommand,
@@ -224,6 +241,7 @@ fn handle_media_command(
             response,
         } => media::respond_add_recv_media(
             state,
+            max_bitrate_in_bps,
             &session_key,
             media_kind,
             &rtp_parameters,

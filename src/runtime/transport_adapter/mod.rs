@@ -10,7 +10,9 @@ mod shard_set;
 pub(crate) mod test_support;
 mod types;
 
-pub(crate) use config::{RtcTransportAdapterConfig, RtcTransportAdapterShardSetConfig};
+pub(crate) use config::{
+    RtcTransportAdapterConfig, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
+};
 pub(crate) use facade::RuntimeTransportAdapter;
 pub(crate) use types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,

@@ -130,7 +130,7 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
 
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = rtc_adapter_with_bitrate_limits(2_222_222, 3_333_333);
     let session_key = transport_key(1, 45, SessionId::Integer(45));
 
     let mut remote = build_remote_rtc(55_006);
@@ -173,6 +173,11 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         session_stream_rx_ssrc(&adapter, &session_key, negotiated_mid).await,
         Some(89_000),
         "renegotiated recv media should expect the published SSRC once the answer lands"
+    );
+    assert_eq!(
+        session_max_bitrate_in(&adapter, &session_key).await,
+        Some(2_222_222),
+        "renegotiated recv media should reapply the incoming bitrate cap after the answer lands"
     );
 
     let negotiated_parameters = adapter

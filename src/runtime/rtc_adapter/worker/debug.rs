@@ -55,6 +55,14 @@ pub(super) fn handle_debug_command(
             mid,
             response,
         } => respond_debug_session_stream_tx_ssrc(state, &session_key, mid, response),
+        DebugRtcWorkerCommand::SessionMaxBitrateIn {
+            session_key,
+            response,
+        } => respond_debug_session_max_bitrate_in(state, &session_key, response),
+        DebugRtcWorkerCommand::SessionMaxBitrateOut {
+            session_key,
+            response,
+        } => respond_debug_session_max_bitrate_out(state, &session_key, response),
         DebugRtcWorkerCommand::RemoteSourceOwner {
             source_transport_media_id,
             response,
@@ -195,6 +203,30 @@ fn respond_debug_session_stream_tx_ssrc(
                 .stream_tx_by_mid(mid, None)
                 .map(|stream_tx| *stream_tx.ssrc())
         });
+    let _ = response.send(value);
+}
+
+fn respond_debug_session_max_bitrate_in(
+    state: &RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    response: oneshot::Sender<Option<u64>>,
+) {
+    let value = state
+        .sessions
+        .get(session_key)
+        .and_then(|session_state| session_state.max_bitrate_in_bps);
+    let _ = response.send(value);
+}
+
+fn respond_debug_session_max_bitrate_out(
+    state: &RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    response: oneshot::Sender<Option<u64>>,
+) {
+    let value = state
+        .sessions
+        .get(session_key)
+        .and_then(|session_state| session_state.max_bitrate_out_bps);
     let _ = response.send(value);
 }
 

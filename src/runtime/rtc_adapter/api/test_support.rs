@@ -11,8 +11,8 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         transport_adapter::{
-            RtcTransportAdapterConfig, SessionOffer, SourcePacketGate, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer, SourcePacketGate,
+            TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
         transport_connect::{TransportConnectDirection, TransportConnectRequest},
     },
@@ -439,6 +439,30 @@ impl RtcTransportAdapter {
         .flatten()
     }
 
+    pub(crate) async fn debug_session_max_bitrate_in(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<u64> {
+        self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionMaxBitrateIn {
+            session_key: session_key.clone(),
+            response,
+        })
+        .await
+        .flatten()
+    }
+
+    pub(crate) async fn debug_session_max_bitrate_out(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<u64> {
+        self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionMaxBitrateOut {
+            session_key: session_key.clone(),
+            response,
+        })
+        .await
+        .flatten()
+    }
+
     pub(crate) async fn debug_remote_source_owner(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -587,6 +611,7 @@ impl Default for RtcTransportAdapter {
     fn default() -> Self {
         Self::new(&RtcTransportAdapterConfig::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
+            SessionBitrateLimits::new(8_000_000, 10_000_000),
             RtcPortRange::new(40_000, 49_999),
             MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),

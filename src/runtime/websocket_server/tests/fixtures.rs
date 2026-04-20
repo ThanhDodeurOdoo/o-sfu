@@ -36,7 +36,9 @@ pub(super) use crate::{
         recording::MediaTap,
         testing::decode_protocol_welcome_batch,
         transport_adapter::test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
-        transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter},
+        transport_adapter::{
+            RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+        },
     },
 };
 
@@ -84,6 +86,8 @@ pub(super) fn test_config(
         telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
+        max_bitrate_in_bps: 8_000_000,
+        max_bitrate_out_bps: 10_000_000,
         rtc_media_worker_count: 1,
     }
 }
@@ -221,6 +225,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(8_000_000, 10_000_000),
         RtcPortRange::new(47_200, 47_299),
         1,
         MediaCodecFlags::default(),

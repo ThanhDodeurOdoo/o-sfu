@@ -323,7 +323,8 @@ mod tests {
             metrics::RuntimeMetrics,
             recording::MediaTap,
             transport_adapter::{
-                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, TransportSessionKey,
+                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+                SessionBitrateLimits, TransportSessionKey,
             },
         },
     };
@@ -332,6 +333,7 @@ mod tests {
     fn build_real_rtc_transport_adapter(port_min: u16) -> RuntimeTransportAdapter {
         RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
+            SessionBitrateLimits::new(8_000_000, 10_000_000),
             RtcPortRange::new(port_min, port_min.saturating_add(99)),
             1,
             MediaCodecFlags::default(),

@@ -94,6 +94,8 @@ impl RtcTransportAdapter {
         info!(
             relay_target_id = ?self.relay_target_id,
             public_ip = %self.public_ip,
+            max_bitrate_in_bps = self.max_bitrate_in_bps,
+            max_bitrate_out_bps = self.max_bitrate_out_bps,
             rtc_port_range_min = self.rtc_port_range.min(),
             rtc_port_range_max = self.rtc_port_range.max(),
             "booted rtc packet loop shard"
@@ -101,6 +103,8 @@ impl RtcTransportAdapter {
         current_runtime.spawn(packet_loop::run_packet_loop(
             PacketLoopConfig {
                 public_ip: self.public_ip,
+                max_bitrate_in_bps: self.max_bitrate_in_bps,
+                max_bitrate_out_bps: self.max_bitrate_out_bps,
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
                 media_tap: Arc::clone(&self.media_tap),

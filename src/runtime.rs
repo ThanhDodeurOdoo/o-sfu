@@ -55,7 +55,9 @@ use http_server::serve_http;
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
 use telemetry::init_tracing;
-use transport_adapter::{RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter};
+use transport_adapter::{
+    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+};
 
 const SOURCE_PACKET_POLICY_SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -164,6 +166,7 @@ fn build_transport_adapter(
 ) -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         config.public_ip,
+        SessionBitrateLimits::new(config.max_bitrate_in_bps, config.max_bitrate_out_bps),
         config.rtc_port_range,
         config.rtc_media_worker_count,
         config.codec_flags,

@@ -5,6 +5,7 @@ use o_sfu_router::{
     MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
     RtpParameters as RouterRtpParameters, StreamBinding,
 };
+use str0m::bwe::Bitrate;
 use str0m::{
     change::SdpAnswer,
     format::PayloadParams,
@@ -42,6 +43,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     session_key: &TransportSessionKey,
     producer_mids: &[Mid],
     answer_sdp: &str,
+    max_bitrate_in_bps: u64,
 ) {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
@@ -117,7 +119,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
             if bindings.is_empty() {
                 continue;
             }
-            apply_projected_recv_streams(session_state, mid, &bindings);
+            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in_bps);
             let parameters = RouterRtpParameters::new(formats, header_extensions, bindings)
                 .with_mid(mid.to_string());
             session_state
@@ -139,6 +141,7 @@ fn apply_projected_recv_streams(
     session_state: &mut RtcSessionState,
     mid: Mid,
     bindings: &[StreamBinding],
+    max_bitrate_in_bps: u64,
 ) {
     let mut api = session_state.rtc.direct_api();
     for binding in bindings {
@@ -147,9 +150,19 @@ fn apply_projected_recv_streams(
         };
         let rid = binding.rid().map(Rid::from);
         if api.stream_rx_by_mid(mid, rid).is_some() {
+            if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
+                stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+            }
             continue;
         }
         api.expect_stream_rx(ssrc.into(), None, mid, rid);
+        if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
+            stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+        }
+    }
+    #[cfg(test)]
+    {
+        session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
     }
 }
 

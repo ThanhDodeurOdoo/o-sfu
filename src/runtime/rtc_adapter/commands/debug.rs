@@ -32,6 +32,14 @@ pub(crate) enum DebugRtcWorkerCommand {
         mid: Mid,
         response: oneshot::Sender<Option<u32>>,
     },
+    SessionMaxBitrateIn {
+        session_key: TransportSessionKey,
+        response: oneshot::Sender<Option<u64>>,
+    },
+    SessionMaxBitrateOut {
+        session_key: TransportSessionKey,
+        response: oneshot::Sender<Option<u64>>,
+    },
     RemoteSourceOwner {
         source_transport_media_id: TransportMediaId,
         response: oneshot::Sender<Option<TransportSessionKey>>,

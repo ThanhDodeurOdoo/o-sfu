@@ -33,6 +33,8 @@ use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
 
 pub(crate) struct PacketLoopConfig {
     pub(crate) public_ip: IpAddr,
+    pub(crate) max_bitrate_in_bps: u64,
+    pub(crate) max_bitrate_out_bps: u64,
     pub(crate) rtc_port_range: RtcPortRange,
     pub(crate) codec_flags: MediaCodecFlags,
     pub(crate) media_tap: Arc<MediaTap>,
@@ -255,6 +257,8 @@ fn handle_worker_command_and_clear_routing_cache(
             snapshot_state,
             relay_registry: &config.relay_registry,
             public_ip: config.public_ip,
+            max_bitrate_in_bps: config.max_bitrate_in_bps,
+            max_bitrate_out_bps: config.max_bitrate_out_bps,
             rtc_port_range: config.rtc_port_range,
             codec_flags: config.codec_flags,
             metrics: &config.metrics,
@@ -280,6 +284,8 @@ fn handle_debug_worker_command_and_clear_routing_cache(
             snapshot_state,
             relay_registry: &config.relay_registry,
             public_ip: config.public_ip,
+            max_bitrate_in_bps: config.max_bitrate_in_bps,
+            max_bitrate_out_bps: config.max_bitrate_out_bps,
             rtc_port_range: config.rtc_port_range,
             codec_flags: config.codec_flags,
             metrics: &config.metrics,

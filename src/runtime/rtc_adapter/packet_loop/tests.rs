@@ -263,12 +263,14 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
         &mut bootstrap_state.sessions,
         &first_session,
         candidate_addr,
+        10_000_000,
         MediaCodecFlags::default(),
     );
     let second_created = bootstrap::ensure_session_rtc_state(
         &mut bootstrap_state.sessions,
         &second_session,
         candidate_addr,
+        10_000_000,
         MediaCodecFlags::default(),
     );
 
@@ -541,6 +543,7 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
             &mut state.sessions,
             &source_session,
             candidate_addr,
+            10_000_000,
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -719,6 +722,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
             &mut state.sessions,
             &source_session,
             candidate_addr,
+            10_000_000,
             MediaCodecFlags::default(),
         )
         .is_ok()

@@ -18,8 +18,8 @@ use crate::{
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::test_support::FakeWebRtcAdapter,
         transport_adapter::{
-            ActiveSpeakerSource, RtcTransportAdapterShardSetConfig, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
+            TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -174,6 +174,7 @@ async fn assert_remote_route_activity(
 fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(8_000_000, 10_000_000),
         rtc_port_range,
         worker_count,
         MediaCodecFlags::default(),
@@ -211,6 +212,7 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
 fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
     let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(8_000_000, 10_000_000),
         RtcPortRange::new(46_100, 46_199),
         1,
         MediaCodecFlags::default(),
@@ -230,6 +232,7 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
 async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
     let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(8_000_000, 10_000_000),
         RtcPortRange::new(46_000, 46_003),
         2,
         MediaCodecFlags::default(),
@@ -413,6 +416,7 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
 async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
     let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(8_000_000, 10_000_000),
         RtcPortRange::new(46_300, 46_599),
         3,
         MediaCodecFlags::default(),

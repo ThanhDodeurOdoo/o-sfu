@@ -77,6 +77,8 @@ impl fmt::Debug for RtcWorkerHandle {
 pub(crate) struct RtcTransportAdapter {
     pub(super) relay_target_id: RelayTargetId,
     pub(super) public_ip: IpAddr,
+    pub(super) max_bitrate_in_bps: u64,
+    pub(super) max_bitrate_out_bps: u64,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) media_tap: Arc<MediaTap>,
@@ -115,6 +117,8 @@ impl RtcTransportAdapter {
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
             ),
             public_ip: config.public_ip(),
+            max_bitrate_in_bps: config.max_bitrate_in_bps(),
+            max_bitrate_out_bps: config.max_bitrate_out_bps(),
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
             media_tap: config.media_tap(),

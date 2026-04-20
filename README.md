@@ -53,8 +53,8 @@ Comments may be a bit lacking (although I added some for the most important part
 | `CODEC_AV1`                        | `false`         |      ✅      | Enable AV1 video codec.                                                          |
 | `MAX_BUF_IN`                       | `0` (unlimited) |      ❌      | Maximum incoming buffer size in bytes for SCTP messages per session.             |
 | `MAX_BUF_OUT`                      | `0` (unlimited) |      ❌      | Maximum outgoing buffer size in bytes for SCTP messages per session.             |
-| `MAX_BITRATE_IN`                   | `8000000`       |      ❌      | Maximum incoming bitrate in bps per session (upload).                            |
-| `MAX_BITRATE_OUT`                  | `10000000`      |      ❌      | Maximum outgoing bitrate in bps per session (download).                          |
+| `MAX_BITRATE_IN`                   | `8000000`       |      ✅      | Maximum incoming bitrate in bps per session (upload).                            |
+| `MAX_BITRATE_OUT`                  | `10000000`      |      ✅      | Maximum outgoing bitrate in bps per session (download).                          |
 | `MAX_VIDEO_BITRATE`                | `4000000`       |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                    |
 | `DATA_PATH`                        | `/tmp/odoo_sfu` |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders). |
 

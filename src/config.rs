@@ -10,6 +10,8 @@ const DEFAULT_AUTHENTICATION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_CHANNEL_SIZE: usize = 100;
 const DEFAULT_SESSION_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 60_000;
+const DEFAULT_MAX_BITRATE_IN_BPS: u64 = 8_000_000;
+const DEFAULT_MAX_BITRATE_OUT_BPS: u64 = 10_000_000;
 const DEFAULT_RTC_MIN_PORT: u16 = 40_000;
 const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
@@ -277,6 +279,8 @@ pub struct Config {
     pub codec_flags: MediaCodecFlags,
     pub telemetry: TelemetryConfig,
     pub public_ip: IpAddr,
+    pub max_bitrate_in_bps: u64,
+    pub max_bitrate_out_bps: u64,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
 }
@@ -340,8 +344,7 @@ impl Config {
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
         let telemetry = load_telemetry_config(&mut get_var)?;
-        let (public_ip, rtc_port_range, rtc_media_worker_count) =
-            load_transport_config(&mut get_var)?;
+        let transport = load_transport_config(&mut get_var)?;
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
         ensure!(
             session_timeout_ms > 0,
@@ -362,9 +365,11 @@ impl Config {
             feature_flags,
             codec_flags,
             telemetry,
-            public_ip,
-            rtc_port_range,
-            rtc_media_worker_count,
+            public_ip: transport.public_ip,
+            max_bitrate_in_bps: transport.max_bitrate_in_bps,
+            max_bitrate_out_bps: transport.max_bitrate_out_bps,
+            rtc_port_range: transport.rtc_port_range,
+            rtc_media_worker_count: transport.rtc_media_worker_count,
         })
     }
 }
@@ -404,6 +409,8 @@ impl fmt::Display for ConfigLogView<'_> {
         writeln!(formatter, "    - channel_size={}", config.channel_size)?;
         writeln!(formatter, "    - trust_proxy_headers={}", config.trust_proxy_headers)?;
         writeln!(formatter, "  - rtc_transport:")?;
+        writeln!(formatter, "    - max_bitrate_in_bps={}", config.max_bitrate_in_bps)?;
+        writeln!(formatter, "    - max_bitrate_out_bps={}", config.max_bitrate_out_bps)?;
         writeln!(formatter, "    - rtc_port_range_min={}", config.rtc_port_range.min())?;
         writeln!(formatter, "    - rtc_port_range_max={}", config.rtc_port_range.max())?;
         writeln!(formatter, "    - rtc_media_worker_count={}", config.rtc_media_worker_count)?;
@@ -547,9 +554,17 @@ fn load_telemetry_config(
     })
 }
 
+struct LoadedTransportConfig {
+    public_ip: IpAddr,
+    max_bitrate_in_bps: u64,
+    max_bitrate_out_bps: u64,
+    rtc_port_range: RtcPortRange,
+    rtc_media_worker_count: usize,
+}
+
 fn load_transport_config(
     mut get_var: impl FnMut(&str) -> Option<String>,
-) -> Result<(IpAddr, RtcPortRange, usize)> {
+) -> Result<LoadedTransportConfig> {
     if get_var("TRANSPORT_BACKEND").is_some() {
         return Err(anyhow!(
             "TRANSPORT_BACKEND is no longer supported; o-sfu always boots the RTC transport"
@@ -565,6 +580,18 @@ fn load_transport_config(
         "RTC_MIN_PORT must be a valid u16",
     )?
     .unwrap_or(DEFAULT_RTC_MIN_PORT);
+    let max_bitrate_in_bps = parse_optional_env(
+        &mut get_var,
+        "MAX_BITRATE_IN",
+        "MAX_BITRATE_IN must be a valid u64",
+    )?
+    .unwrap_or(DEFAULT_MAX_BITRATE_IN_BPS);
+    let max_bitrate_out_bps = parse_optional_env(
+        &mut get_var,
+        "MAX_BITRATE_OUT",
+        "MAX_BITRATE_OUT must be a valid u64",
+    )?
+    .unwrap_or(DEFAULT_MAX_BITRATE_OUT_BPS);
     let rtc_max_port = parse_optional_env(
         &mut get_var,
         "RTC_MAX_PORT",
@@ -585,6 +612,14 @@ fn load_transport_config(
         rtc_media_worker_count > 0,
         "RTC_MEDIA_WORKER_COUNT must be greater than zero"
     );
+    ensure!(
+        max_bitrate_in_bps > 0,
+        "MAX_BITRATE_IN must be greater than zero"
+    );
+    ensure!(
+        max_bitrate_out_bps > 0,
+        "MAX_BITRATE_OUT must be greater than zero"
+    );
     let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
     ensure!(
         rtc_media_worker_count <= usize::from(rtc_port_range.port_count()),
@@ -598,7 +633,13 @@ fn load_transport_config(
         !public_ip.is_multicast(),
         "PUBLIC_IP cannot be a multicast address"
     );
-    Ok((public_ip, rtc_port_range, rtc_media_worker_count))
+    Ok(LoadedTransportConfig {
+        public_ip,
+        max_bitrate_in_bps,
+        max_bitrate_out_bps,
+        rtc_port_range,
+        rtc_media_worker_count,
+    })
 }
 
 fn parse_optional_env<T>(
@@ -671,8 +712,27 @@ mod tests {
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
         assert_eq!(config.telemetry, TelemetryConfig::default());
         assert_eq!(config.public_ip.to_string(), "127.0.0.1");
+        assert_eq!(config.max_bitrate_in_bps, 8_000_000);
+        assert_eq!(config.max_bitrate_out_bps, 10_000_000);
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.rtc_media_worker_count, 1);
+    }
+
+    #[test]
+    fn config_accepts_bitrate_limits() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "MAX_BITRATE_IN" => Some("1234567".to_owned()),
+            "MAX_BITRATE_OUT" => Some("7654321".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(config.max_bitrate_in_bps, 1_234_567);
+        assert_eq!(config.max_bitrate_out_bps, 7_654_321);
     }
 
     #[test]
@@ -891,6 +951,28 @@ mod tests {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "RTC_MEDIA_WORKER_COUNT" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_max_bitrate_in() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "MAX_BITRATE_IN" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_max_bitrate_out() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "MAX_BITRATE_OUT" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

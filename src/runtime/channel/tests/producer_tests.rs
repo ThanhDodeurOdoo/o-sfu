@@ -10,7 +10,8 @@ use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use crate::runtime::transport_adapter::test_support::FakeWebRtcEvent;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterShardSetConfig, SourcePacketGate, TransportMediaId, TransportSessionKey,
+    RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SourcePacketGate,
+    TransportMediaId, TransportSessionKey,
 };
 use o_sfu_router::MediaKind;
 use str0m::{Candidate, Rtc, change::SdpOffer};
@@ -1985,6 +1986,7 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
 fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(8_000_000, 10_000_000),
         RtcPortRange::new(46_200, 46_299),
         1,
         MediaCodecFlags::default(),

@@ -64,6 +64,42 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
 }
 
 #[tokio::test]
+async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
+    let adapter = rtc_adapter_with_bitrate_limits(1_500_000, 2_500_000);
+    let session_key = transport_key(1, 181, SessionId::Integer(181));
+
+    assert!(
+        adapter
+            .create_initial_session_offer(&session_key)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        session_max_bitrate_out(&adapter, &session_key).await,
+        Some(2_500_000)
+    );
+}
+
+#[tokio::test]
+async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
+    let adapter = rtc_adapter_with_bitrate_limits(1_234_567, 7_654_321);
+    let session_key = transport_key(1, 182, SessionId::Integer(182));
+    let rtp_parameters = sample_router_rtp_parameters("aud-up", 52_525);
+
+    assert!(bootstrap_transport(&adapter, &session_key).await.is_ok());
+    assert!(
+        adapter
+            .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        session_max_bitrate_in(&adapter, &session_key).await,
+        Some(1_234_567)
+    );
+}
+
+#[tokio::test]
 async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
     let producer_session_key = transport_key(1, 19, SessionId::Integer(19));

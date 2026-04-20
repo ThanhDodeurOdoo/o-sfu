@@ -12,6 +12,7 @@
 //!   answer
 
 use o_sfu_router::RtpParameters as RouterRtpParameters;
+use str0m::bwe::Bitrate;
 use str0m::{
     media::{Direction, MediaKind, Mid, Rid},
     rtp::Ssrc,
@@ -44,6 +45,7 @@ pub(crate) fn respond_remove_media(
 
 pub(crate) fn respond_add_recv_media(
     state: &mut RtcBootstrapState,
+    max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
@@ -51,6 +53,7 @@ pub(crate) fn respond_add_recv_media(
 ) {
     let _ = response.send(worker_add_recv_media(
         state,
+        max_bitrate_in_bps,
         session_key,
         media_kind,
         rtp_parameters,
@@ -234,6 +237,7 @@ fn worker_stage_native_media_removal(
 /// point every addition must stage the next renegotiation offer first.
 fn worker_add_recv_media(
     state: &mut RtcBootstrapState,
+    max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
@@ -253,6 +257,13 @@ fn worker_add_recv_media(
             }
             if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
                 api.expect_stream_rx(ssrc, None, mid, rid);
+                if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
+                    stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+                }
+                #[cfg(test)]
+                {
+                    session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
+                }
             }
         }
         state.mark_session_dirty(session_key);

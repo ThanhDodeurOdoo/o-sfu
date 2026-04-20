@@ -8,6 +8,7 @@
 pub(super) use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     slice,
+    sync::Arc,
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
@@ -27,8 +28,10 @@ pub(super) use super::super::{
     validation,
 };
 pub(super) use crate::{
+    config::{MediaCodecFlags, RtcPortRange},
     runtime::transport_adapter::{
-        ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits,
+        TransportAdapterError, TransportMediaId, TransportSessionKey,
     },
     runtime::transport_bootstrap::{
         SessionTransportBootstrap, TransportDtlsFingerprint, TransportDtlsFingerprintAlgorithm,
@@ -43,6 +46,7 @@ pub(super) use crate::{
     },
 };
 pub(super) use o_sfu_protocol::shared::SessionId;
+pub(super) use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
 
 pub(super) const VALID_SDP_OFFER: &str = "v=0\r\n\
 o=- 0 0 IN IP4 127.0.0.1\r\n\
@@ -192,6 +196,20 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
     .with_mid(mid.to_owned())
 }
 
+pub(super) fn rtc_adapter_with_bitrate_limits(
+    max_bitrate_in_bps: u64,
+    max_bitrate_out_bps: u64,
+) -> RtcTransportAdapter {
+    RtcTransportAdapter::new(&RtcTransportAdapterConfig::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
+        RtcPortRange::new(40_000, 49_999),
+        MediaCodecFlags::default(),
+        Arc::new(MediaTap::default()),
+        Arc::new(RuntimeMetrics::default()),
+    ))
+}
+
 pub(super) async fn bootstrap_transport(
     adapter: &RtcTransportAdapter,
     session_key: &TransportSessionKey,
@@ -251,6 +269,20 @@ pub(super) async fn session_stream_tx_ssrc(
     mid: Mid,
 ) -> Option<u32> {
     adapter.debug_session_stream_tx_ssrc(session_key, mid).await
+}
+
+pub(super) async fn session_max_bitrate_in(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+) -> Option<u64> {
+    adapter.debug_session_max_bitrate_in(session_key).await
+}
+
+pub(super) async fn session_max_bitrate_out(
+    adapter: &RtcTransportAdapter,
+    session_key: &TransportSessionKey,
+) -> Option<u64> {
+    adapter.debug_session_max_bitrate_out(session_key).await
 }
 
 pub(super) async fn route_entry_by_media_id(

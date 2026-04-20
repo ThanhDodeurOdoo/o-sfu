@@ -64,6 +64,10 @@ pub(super) struct RtcSessionState {
     pub(super) remote_dtls_fingerprint: Option<String>,
     #[cfg(test)]
     pub(super) remote_ice_credentials: Option<ParsedRemoteIceCredentials>,
+    #[cfg(test)]
+    pub(super) max_bitrate_in_bps: Option<u64>,
+    #[cfg(test)]
+    pub(super) max_bitrate_out_bps: Option<u64>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
 }

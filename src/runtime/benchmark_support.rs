@@ -15,7 +15,10 @@ use super::{
     metrics::RuntimeMetrics,
     recording::MediaTap,
     rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
-    transport_adapter::{RtcTransportAdapterConfig, TransportAdapterError, TransportSessionKey},
+    transport_adapter::{
+        RtcTransportAdapterConfig, SessionBitrateLimits, TransportAdapterError,
+        TransportSessionKey,
+    },
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use o_sfu_protocol::shared::SessionId;
@@ -50,6 +53,7 @@ impl RtcUdpDemuxBenchmarkFixture {
         let _runtime_guard = runtime.enter();
         let adapter = RtcTransportAdapter::new(&RtcTransportAdapterConfig::new(
             BENCHMARK_PUBLIC_IP,
+            SessionBitrateLimits::new(8_000_000, 10_000_000),
             BENCHMARK_PORT_RANGE,
             MediaCodecFlags::default(),
             Arc::new(MediaTap::default()),

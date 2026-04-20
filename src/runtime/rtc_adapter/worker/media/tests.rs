@@ -38,6 +38,7 @@ fn prepare_source_session(
             &mut state.sessions,
             source_session,
             candidate_addr,
+            10_000_000,
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -224,6 +225,7 @@ fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
             &mut state.sessions,
             &session_key,
             candidate_addr,
+            10_000_000,
             MediaCodecFlags::default(),
         )
         .is_ok()

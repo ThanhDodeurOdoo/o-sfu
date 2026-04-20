@@ -7,6 +7,7 @@ use std::{
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use str0m::IceCreds;
+use str0m::bwe::Bitrate;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use str0m::config::Fingerprint;
 use str0m::{Candidate, Rtc};
@@ -79,6 +80,7 @@ pub(super) fn ensure_session_rtc_state(
     sessions: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
+    max_bitrate_out_bps: u64,
     codec_flags: MediaCodecFlags,
 ) -> Result<bool, TransportAdapterError> {
     if sessions.contains_key(session_key) {
@@ -86,8 +88,11 @@ pub(super) fn ensure_session_rtc_state(
     }
     let started_at = Instant::now();
     let mut rtc = rtc_builder(codec_flags)
+        .enable_bwe(Some(Bitrate::bps(max_bitrate_out_bps)))
         .set_ice_lite(true)
         .build(started_at);
+    rtc.bwe()
+        .set_desired_bitrate(Bitrate::bps(max_bitrate_out_bps));
     let candidate = Candidate::host(candidate_addr, webrtc::IceTransport::Udp.as_str())
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
@@ -125,6 +130,10 @@ pub(super) fn ensure_session_rtc_state(
             remote_dtls_fingerprint: None,
             #[cfg(test)]
             remote_ice_credentials: None,
+            #[cfg(test)]
+            max_bitrate_in_bps: None,
+            #[cfg(test)]
+            max_bitrate_out_bps: Some(max_bitrate_out_bps),
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
         },
