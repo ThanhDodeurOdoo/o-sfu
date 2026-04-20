@@ -389,8 +389,14 @@ pub(super) async fn real_rtc_route_activity(
     consumer_session_id: SessionId,
     mid: &str,
 ) -> Option<RealRtcRouteActivity> {
-    let _source_connection_id = channel.session_connection_id(&source_session_id).await?;
-    let consumer_connection_id = channel.session_connection_id(&consumer_session_id).await?;
+    let _source_connection_id = channel
+        .test_api()
+        .session_connection_id(&source_session_id)
+        .await?;
+    let consumer_connection_id = channel
+        .test_api()
+        .session_connection_id(&consumer_session_id)
+        .await?;
     let consumer_session_key =
         channel.transport_session_key(&consumer_session_id, consumer_connection_id);
     let route_entry = server

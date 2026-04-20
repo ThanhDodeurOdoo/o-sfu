@@ -50,6 +50,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     );
 
     let producer_id = channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(61),
             StreamType::Camera,

@@ -410,9 +410,12 @@ mod tests {
 
     use super::{ParsedMediaKind, ParsedTransportProtocol, SdpParseDiagnostic, parse_offer_sdp};
 
-    const FIREFOX_OFFER_AUDIO_ONLY: &str = include_str!("testdata/firefox_offer_audio_only.sdp");
-    const CHROME_OFFER_AUDIO_ONLY: &str = include_str!("testdata/chrome_offer_audio_only.sdp");
-    const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("testdata/safari_datachannel_offer.sdp");
+    const FIREFOX_OFFER_AUDIO_ONLY: &str =
+        include_str!("../../testdata/firefox_offer_audio_only.sdp");
+    const CHROME_OFFER_AUDIO_ONLY: &str =
+        include_str!("../../testdata/chrome_offer_audio_only.sdp");
+    const SAFARI_DATA_CHANNEL_OFFER: &str =
+        include_str!("../../testdata/safari_datachannel_offer.sdp");
 
     const VALID_OFFER_SDP: &str = "v=0\r\n\
 o=- 0 0 IN IP4 127.0.0.1\r\n\

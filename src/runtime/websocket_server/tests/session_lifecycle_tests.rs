@@ -121,6 +121,7 @@ async fn websocket_closes_when_ping_response_times_out() {
     assert!(
         !server
             .channels
+            .test_api()
             .has_session(channel.uuid(), &session_id)
             .await
     );
@@ -171,7 +172,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         .is_some()
     );
 
-    let connection_id = channel.session_connection_id(&session_id).await;
+    let connection_id = channel.test_api().session_connection_id(&session_id).await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;

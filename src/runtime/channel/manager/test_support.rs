@@ -62,6 +62,7 @@ impl ChannelManager {
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
                 let join_result = channel
+                    .test_api()
                     .join_session_without_transport_cleanup(
                         request.session_id,
                         request.label,
@@ -95,6 +96,7 @@ impl ChannelManager {
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
                 let did_remove_active_session = channel
+                    .test_api()
                     .leave_session_without_transport_cleanup(
                         session_id,
                         connection_id,
@@ -127,6 +129,7 @@ impl ChannelManager {
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
                 channel
+                    .test_api()
                     .disconnect_sessions_without_transport_cleanup(session_ids, transport_adapter)
                     .await;
                 (channel, session_count_before)

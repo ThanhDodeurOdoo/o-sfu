@@ -11,6 +11,7 @@ async fn publish_audio_and_camera(
 ) {
     assert!(
         channel
+            .test_api()
             .publish_track(
                 session_id,
                 StreamType::Audio,
@@ -23,6 +24,7 @@ async fn publish_audio_and_camera(
     );
     assert!(
         channel
+            .test_api()
             .publish_track(
                 session_id,
                 StreamType::Camera,
@@ -39,16 +41,18 @@ async fn source_media_ids(
     channel: &Arc<super::super::Channel>,
     session_id: &SessionId,
 ) -> (TransportMediaId, TransportMediaId) {
-    let Some(connection_id) = channel.session_connection_id(session_id).await else {
+    let Some(connection_id) = channel.test_api().session_connection_id(session_id).await else {
         panic!("session should exist");
     };
     let Some(audio_media_id) = channel
+        .test_api()
         .producer_transport_media_id(session_id, connection_id, StreamType::Audio)
         .await
     else {
         panic!("audio producer should expose a transport media id");
     };
     let Some(camera_media_id) = channel
+        .test_api()
         .producer_transport_media_id(session_id, connection_id, StreamType::Camera)
         .await
     else {
@@ -128,9 +132,9 @@ async fn channel_manager_assigns_media_workers_explicitly() {
         .create_or_get("issuer-c", None, &ChannelConfig::default(), None)
         .await;
 
-    assert_eq!(first.media_worker_id(), 0);
-    assert_eq!(second.media_worker_id(), 1);
-    assert_eq!(third.media_worker_id(), 0);
+    assert_eq!(first.test_api().media_worker_id(), 0);
+    assert_eq!(second.test_api().media_worker_id(), 1);
+    assert_eq!(third.test_api().media_worker_id(), 0);
 }
 
 #[tokio::test]
@@ -326,6 +330,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         let (sender, receiver) = test_sender();
         receivers.push(receiver);
         channel
+            .test_api()
             .join_session(
                 SessionId::Integer(raw_session_id),
                 None,
@@ -335,12 +340,15 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
             .await
             .expect("session join should succeed");
         channel
+            .test_api()
             .set_publish_transport_ready(&SessionId::Integer(raw_session_id))
             .await;
         channel
+            .test_api()
             .set_consume_transport_ready(&SessionId::Integer(raw_session_id))
             .await;
         channel
+            .test_api()
             .set_client_rtp_capabilities(
                 &SessionId::Integer(raw_session_id),
                 test_client_rtp_capabilities(),

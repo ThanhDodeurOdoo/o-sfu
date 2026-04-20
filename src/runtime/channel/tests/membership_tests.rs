@@ -8,6 +8,7 @@ async fn join_session_enforces_capacity() {
         .await;
     let (tx1, _rx1) = test_sender();
     let result = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -19,6 +20,7 @@ async fn join_session_enforces_capacity() {
 
     let (tx2, _rx2) = test_sender();
     let result = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -37,6 +39,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         .await;
     let (tx1, mut rx1) = test_sender();
     let first_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -45,10 +48,11 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         )
         .await;
     assert!(first_connection.is_ok());
-    assert_eq!(channel.router_session_count().await, 1);
+    assert_eq!(channel.test_api().router_session_count().await, 1);
 
     let (tx2, _rx2) = test_sender();
     let second_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -57,7 +61,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         )
         .await;
     assert!(second_connection.is_ok());
-    assert_eq!(channel.router_session_count().await, 1);
+    assert_eq!(channel.test_api().router_session_count().await, 1);
     assert!(matches!(
         rx1.try_recv().ok(),
         Some(SessionOutbound::Close(SessionCloseReason::Replaced))
@@ -71,22 +75,27 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     };
 
     channel
+        .test_api()
         .leave_session(&SessionId::Integer(1), first_connection)
         .await;
     assert_eq!(channel.session_count().await, 1);
-    assert_eq!(channel.router_session_count().await, 1);
+    assert_eq!(channel.test_api().router_session_count().await, 1);
 
     assert_eq!(
-        channel.session_connection_id(&SessionId::Integer(1)).await,
+        channel
+            .test_api()
+            .session_connection_id(&SessionId::Integer(1))
+            .await,
         Some(second_connection),
         "stale leave must not remove the replacement connection"
     );
 
     channel
+        .test_api()
         .leave_session(&SessionId::Integer(1), second_connection)
         .await;
     assert_eq!(channel.session_count().await, 0);
-    assert_eq!(channel.router_session_count().await, 0);
+    assert_eq!(channel.test_api().router_session_count().await, 0);
 }
 
 #[tokio::test]
@@ -98,6 +107,7 @@ async fn leave_session_sends_departure_to_remaining_peers() {
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let alice_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -106,6 +116,7 @@ async fn leave_session_sends_departure_to_remaining_peers() {
         )
         .await;
     let bob_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -120,6 +131,7 @@ async fn leave_session_sends_departure_to_remaining_peers() {
     };
 
     channel
+        .test_api()
         .leave_session(&SessionId::Integer(2), bob_connection)
         .await;
 
@@ -185,6 +197,7 @@ async fn replacing_a_session_notifies_remaining_peers() {
     let (tx2, mut bob_old_rx) = test_sender();
     let (tx3, _bob_new_rx) = test_sender();
     let _alice_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -193,6 +206,7 @@ async fn replacing_a_session_notifies_remaining_peers() {
         )
         .await;
     let _bob_old_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -202,6 +216,7 @@ async fn replacing_a_session_notifies_remaining_peers() {
         .await;
 
     let _bob_new_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -296,6 +311,7 @@ async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, 
     let (tx1, _rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let first_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -305,6 +321,7 @@ async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, 
         .await
         .unwrap_or(u64::MAX);
     let second_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -321,6 +338,7 @@ async fn publish_camera(
     transport_adapter: &RuntimeTransportAdapter,
 ) -> Option<String> {
     channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -338,6 +356,7 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -361,11 +380,16 @@ async fn leave_session_runtime_removes_surviving_consumer_media() {
     })
     .await;
 
-    let Some(connection_id) = channel.session_connection_id(&SessionId::Integer(1)).await else {
+    let Some(connection_id) = channel
+        .test_api()
+        .session_connection_id(&SessionId::Integer(1))
+        .await
+    else {
         panic!("publisher connection should exist");
     };
     assert!(
         channel
+            .test_api()
             .leave_session_runtime(&SessionId::Integer(1), connection_id, &transport_adapter,)
             .await
     );
@@ -396,6 +420,7 @@ async fn leave_session_runtime_removes_departing_consumer_media() {
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(2),
                 StreamType::Camera,
@@ -417,13 +442,18 @@ async fn leave_session_runtime_removes_departing_consumer_media() {
         )
     })
     .await;
-    assert_eq!(channel.consumer_count().await, 1);
+    assert_eq!(channel.test_api().consumer_count().await, 1);
 
-    let Some(connection_id) = channel.session_connection_id(&SessionId::Integer(1)).await else {
+    let Some(connection_id) = channel
+        .test_api()
+        .session_connection_id(&SessionId::Integer(1))
+        .await
+    else {
         panic!("consumer connection should exist");
     };
     assert!(
         channel
+            .test_api()
             .leave_session_runtime(&SessionId::Integer(1), connection_id, &transport_adapter,)
             .await
     );
@@ -447,6 +477,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -514,12 +545,16 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
 
     assert_ne!(first_connection, second_connection);
     assert_eq!(
-        channel.session_connection_id(&SessionId::Integer(1)).await,
+        channel
+            .test_api()
+            .session_connection_id(&SessionId::Integer(1))
+            .await,
         Some(second_connection)
     );
 
     assert!(
         !channel
+            .test_api()
             .apply_publish_transport_ready(
                 &SessionId::Integer(1),
                 first_connection,
@@ -529,6 +564,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     );
     assert!(
         !channel
+            .test_api()
             .apply_client_rtp_capabilities(
                 &SessionId::Integer(1),
                 first_connection,
@@ -549,6 +585,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     );
     assert!(
         !channel
+            .test_api()
             .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(1))
             .await
     );
@@ -569,6 +606,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     );
     assert!(
         channel
+            .test_api()
             .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(1))
             .await
     );
@@ -650,6 +688,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     let (publisher_tx, mut publisher_rx) = test_sender();
     let (first_subscriber_tx, _first_subscriber_rx) = test_sender();
     let publisher_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -659,6 +698,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
         .await
         .unwrap();
     let first_subscriber_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -680,6 +720,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     );
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -694,6 +735,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
 
     let (second_subscriber_tx, second_subscriber_rx) = test_sender();
     let second_subscriber_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -723,6 +765,7 @@ async fn broadcast_reaches_all_except_sender() {
     let (tx2, mut rx2) = test_sender();
     let (tx3, mut rx3) = test_sender();
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -731,6 +774,7 @@ async fn broadcast_reaches_all_except_sender() {
         )
         .await;
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -739,6 +783,7 @@ async fn broadcast_reaches_all_except_sender() {
         )
         .await;
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(3),
             None,
@@ -748,6 +793,7 @@ async fn broadcast_reaches_all_except_sender() {
         .await;
 
     channel
+        .test_api()
         .broadcast(&SessionId::Integer(2), serde_json::json!({"text": "hi"}))
         .await;
 
@@ -768,6 +814,7 @@ async fn update_session_info_broadcasts_to_all() {
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -776,6 +823,7 @@ async fn update_session_info_broadcasts_to_all() {
         )
         .await;
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -789,6 +837,7 @@ async fn update_session_info_broadcasts_to_all() {
         ..SessionInfo::default()
     };
     channel
+        .test_api()
         .update_session_info(&SessionId::Integer(1), info, false)
         .await;
 
@@ -818,6 +867,7 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -826,6 +876,7 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
         )
         .await;
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -839,6 +890,7 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
         ..SessionInfo::default()
     };
     channel
+        .test_api()
         .update_session_info(&SessionId::Integer(1), info, true)
         .await;
 
@@ -873,6 +925,7 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
     let (tx2, mut rx2) = test_sender();
     let (tx3, mut rx3) = test_sender();
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -881,6 +934,7 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
         )
         .await;
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -889,6 +943,7 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
         )
         .await;
     let _ = channel
+        .test_api()
         .join_session(
             SessionId::Integer(3),
             None,
@@ -898,6 +953,7 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
         .await;
 
     channel
+        .test_api()
         .disconnect_sessions(&[SessionId::Integer(1), SessionId::Integer(2)])
         .await;
 
@@ -931,6 +987,7 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
     let first_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -939,6 +996,7 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
         )
         .await;
     let second_connection = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -953,7 +1011,10 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
         Some(SessionOutbound::Close(SessionCloseReason::Replaced))
     ));
 
-    channel.disconnect_sessions(&[SessionId::Integer(1)]).await;
+    channel
+        .test_api()
+        .disconnect_sessions(&[SessionId::Integer(1)])
+        .await;
 
     assert!(matches!(
         rx2.try_recv().ok(),
@@ -961,7 +1022,7 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
     ));
     assert!(rx1.try_recv().is_err());
     assert_eq!(channel.session_count().await, 0);
-    assert_eq!(channel.router_session_count().await, 0);
+    assert_eq!(channel.test_api().router_session_count().await, 0);
 }
 
 #[tokio::test]
@@ -972,6 +1033,7 @@ async fn channel_maps_string_session_ids_into_router_sessions() {
         .await;
     let (tx, _rx) = test_sender();
     let joined = channel
+        .test_api()
         .join_session(
             SessionId::String("guest-1".to_owned()),
             None,
@@ -981,17 +1043,18 @@ async fn channel_maps_string_session_ids_into_router_sessions() {
         .await;
     assert!(joined.is_ok());
     assert_eq!(channel.session_count().await, 1);
-    assert_eq!(channel.router_session_count().await, 1);
+    assert_eq!(channel.test_api().router_session_count().await, 1);
 
     let Some(connection_id) = joined.ok() else {
         return;
     };
 
     channel
+        .test_api()
         .leave_session(&SessionId::String("guest-1".to_owned()), connection_id)
         .await;
     assert_eq!(channel.session_count().await, 0);
-    assert_eq!(channel.router_session_count().await, 0);
+    assert_eq!(channel.test_api().router_session_count().await, 0);
 }
 
 #[tokio::test]
@@ -1007,11 +1070,13 @@ async fn channel_keeps_router_session_permissions_in_sync() {
     };
     let (first_tx, _first_rx) = test_sender();
     let joined = channel
+        .test_api()
         .join_session(SessionId::Integer(1), None, permissions.clone(), first_tx)
         .await;
     assert!(joined.is_ok());
     assert_eq!(
         channel
+            .test_api()
             .router_session_permissions(&SessionId::Integer(1))
             .await,
         Some(RouterSessionPermissions::from_flags(
@@ -1030,6 +1095,7 @@ async fn channel_keeps_router_session_permissions_in_sync() {
     };
     let (second_tx, _second_rx) = test_sender();
     let replaced = channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -1040,6 +1106,7 @@ async fn channel_keeps_router_session_permissions_in_sync() {
     assert!(replaced.is_ok());
     assert_eq!(
         channel
+            .test_api()
             .router_session_permissions(&SessionId::Integer(1))
             .await,
         Some(RouterSessionPermissions::from_flags(

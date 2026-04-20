@@ -19,34 +19,22 @@
 //! - `test_support`: runtime-owned re-exports for rtc-adapter test helpers that should not live on the production module root
 //! - `packet_loop/`: packet-loop driver, ingress routing, keyframe control, event observation, session draining, and forward flushing
 //! - `worker/media/`: media lifecycle plus one control owner for source validation, route ownership, and gate synchronization
-//! - `dtls`: DTLS parameter parsing (RFC 8122, RFC 4572)
-//! - `ice`: ICE candidate parsing (RFC 8839, RFC 8445)
-//! - `sdp`: SDP offer parsing (RFC 8866)
 //! - `negotiated_capabilities`: answer-side RTP capability projection for native signaling
-//! - `parse_diagnostic`: shared parse diagnostic infrastructure
 
 mod api;
 mod bootstrap;
 mod commands;
 mod demux;
-#[cfg(test)]
-mod dtls;
 mod forwarded_packet;
 mod forwarding_destination;
 mod forwarding_planner;
-#[cfg(test)]
-mod ice;
 mod local_forwarding;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;
-#[cfg(test)]
-mod parse_diagnostic;
 mod relay_registry;
 mod route_control;
 mod routing_miss;
-#[cfg(test)]
-mod sdp;
 mod shared_payload;
 mod state;
 #[cfg(test)]

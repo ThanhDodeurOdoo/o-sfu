@@ -117,6 +117,7 @@ async fn publish_until_ready(
     timeout(Duration::from_secs(1), async {
         loop {
             if let Some(producer_id) = channel
+                .test_api()
                 .publish_track(
                     &SessionId::Integer(81),
                     stream_type,

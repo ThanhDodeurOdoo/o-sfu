@@ -108,6 +108,7 @@ async fn setup_ready_session_scenario(
     let (first_tx, first_rx) = test_sender();
     let (second_tx, second_rx) = test_sender();
     channel
+        .test_api()
         .join_session(
             SessionId::Integer(1),
             None,
@@ -117,6 +118,7 @@ async fn setup_ready_session_scenario(
         .await
         .unwrap();
     channel
+        .test_api()
         .join_session(
             SessionId::Integer(2),
             None,
@@ -134,17 +136,21 @@ async fn setup_ready_session_scenario(
     };
 
     channel
+        .test_api()
         .set_publish_transport_ready(&SessionId::Integer(1))
         .await;
     channel
+        .test_api()
         .set_consume_transport_ready(&SessionId::Integer(1))
         .await;
     channel
+        .test_api()
         .set_client_rtp_capabilities(&SessionId::Integer(1), test_client_rtp_capabilities())
         .await;
 
     if options.publish_camera_before_subscriber_ready {
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -157,12 +163,15 @@ async fn setup_ready_session_scenario(
 
     if !options.publish_camera_before_subscriber_ready {
         channel
+            .test_api()
             .set_publish_transport_ready(&SessionId::Integer(2))
             .await;
         channel
+            .test_api()
             .set_consume_transport_ready(&SessionId::Integer(2))
             .await;
         channel
+            .test_api()
             .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
             .await;
     }

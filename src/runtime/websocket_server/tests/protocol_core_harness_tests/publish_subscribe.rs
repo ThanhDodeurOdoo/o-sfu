@@ -42,6 +42,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     );
 
     let producer_id = channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(51),
             StreamType::Camera,
@@ -319,6 +320,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
     let parsed_client_rtp_capabilities = timeout(Duration::from_secs(1), async {
         loop {
             if let Some(capabilities) = channel
+                .test_api()
                 .parsed_client_rtp_capabilities(&SessionId::Integer(75))
                 .await
             {

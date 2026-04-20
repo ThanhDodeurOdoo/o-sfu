@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::config::RtcTransportAdapterShardSetConfig;
 use super::shard_set::RtcTransportAdapterShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
-use super::test_support::TestTransportBackend;
+use super::test_support::FakeWebRtcAdapter;
 use super::types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
@@ -32,7 +32,7 @@ macro_rules! dispatch_transport_backend {
 pub(crate) enum RuntimeTransportAdapter {
     Rtc(Arc<RtcTransportAdapterShardSet>),
     #[cfg(any(test, feature = "testing-transport"))]
-    Test(Arc<TestTransportBackend>),
+    Test(Arc<FakeWebRtcAdapter>),
 }
 
 #[derive(Clone, Copy)]
@@ -338,7 +338,7 @@ impl RuntimeTransportNegotiation<'_> {
                     .ok_or(TransportAdapterError::InvalidInput)
             },
             test => |_adapter| {
-                TestTransportBackend::negotiated_client_rtp_capabilities(
+                FakeWebRtcAdapter::project_answered_client_rtp_capabilities(
                     answer_sdp,
                     offered_router_capabilities,
                 )
@@ -642,9 +642,7 @@ impl RuntimeTransportMedia<'_> {
                     .ok()
                     .flatten()
             },
-            test => |_adapter| {
-                TestTransportBackend::transport_media_mid(session_key, transport_media_id)
-            }
+            test => |_adapter| { None }
         )
     }
 
@@ -697,7 +695,7 @@ impl RuntimeTransportObservability<'_> {
     ) -> TransportBitrateSnapshot {
         dispatch_transport_backend!(self.adapter,
             rtc => |adapter| { adapter.transport_bitrate_snapshot(session_keys) },
-            test => |_adapter| { TestTransportBackend::transport_bitrate_snapshot(session_keys) }
+            test => |_adapter| { TransportBitrateSnapshot::default() }
         )
     }
 
@@ -719,7 +717,7 @@ impl RuntimeTransportObservability<'_> {
                     .observability()
                     .session_transport_health(session_key)
             },
-            test => |_adapter| { TestTransportBackend::session_transport_health(session_key) }
+            test => |_adapter| { None }
         )
     }
 }

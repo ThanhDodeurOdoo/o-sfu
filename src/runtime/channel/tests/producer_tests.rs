@@ -22,6 +22,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
     // Session 1 publishes a camera track.
     let producer_id = channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -45,6 +46,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
     // Now session 1 sends PRODUCTION_CHANGE: camera off (pause).
     channel
+        .test_api()
         .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
@@ -68,6 +70,7 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
 
     // Resume: session 1 sends PRODUCTION_CHANGE: camera on.
     channel
+        .test_api()
         .set_publication_active(&SessionId::Integer(1), StreamType::Camera, true, &adapter)
         .await;
 
@@ -87,6 +90,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -104,6 +108,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
     let Some(transport_media_id) = channel
+        .test_api()
         .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
         .await
     else {
@@ -116,15 +121,17 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             .await
     );
 
-    assert_eq!(channel.producer_count().await, 0);
-    assert_eq!(channel.consumer_count().await, 0);
+    assert_eq!(channel.test_api().producer_count().await, 0);
+    assert_eq!(channel.test_api().consumer_count().await, 0);
     assert!(
         !channel
+            .test_api()
             .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
             .await
     );
     assert!(
         channel
+            .test_api()
             .producer_stream_type_for_transport_media_id(transport_media_id)
             .await
             .is_none()
@@ -177,6 +184,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
         channel
+            .test_api()
             .join_session(
                 session_id.clone(),
                 None,
@@ -185,15 +193,23 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
             )
             .await
             .expect("session should join");
-        channel.set_publish_transport_ready(&session_id).await;
-        channel.set_consume_transport_ready(&session_id).await;
         channel
+            .test_api()
+            .set_publish_transport_ready(&session_id)
+            .await;
+        channel
+            .test_api()
+            .set_consume_transport_ready(&session_id)
+            .await;
+        channel
+            .test_api()
             .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
             .await;
     }
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -206,6 +222,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
     );
 
     let Some(transport_media_id) = channel
+        .test_api()
         .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
         .await
     else {
@@ -233,6 +250,7 @@ async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() 
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -265,6 +283,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -283,6 +302,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
     );
 
     let Some(transport_media_id) = channel
+        .test_api()
         .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
         .await
     else {
@@ -291,6 +311,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
 
     let (sender, _receiver) = test_sender();
     channel
+        .test_api()
         .join_session_without_transport_cleanup(
             SessionId::Integer(3),
             None,
@@ -326,6 +347,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
         channel
+            .test_api()
             .join_session_without_transport_cleanup(
                 session_id.clone(),
                 None,
@@ -335,15 +357,23 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
             )
             .await
             .expect("session should join");
-        channel.set_publish_transport_ready(&session_id).await;
-        channel.set_consume_transport_ready(&session_id).await;
         channel
+            .test_api()
+            .set_publish_transport_ready(&session_id)
+            .await;
+        channel
+            .test_api()
+            .set_consume_transport_ready(&session_id)
+            .await;
+        channel
+            .test_api()
             .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
             .await;
     }
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -356,6 +386,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     );
 
     let Some(transport_media_id) = channel
+        .test_api()
         .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
         .await
     else {
@@ -364,6 +395,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
 
     assert!(
         channel
+            .test_api()
             .leave_session_without_transport_cleanup(&SessionId::Integer(3), 2, &adapter,)
             .await
     );
@@ -397,6 +429,7 @@ async fn setup_ready_sessions_with_fake(
         let (sender, _receiver) = test_sender();
         let session_id = SessionId::Integer(raw_session_id);
         channel
+            .test_api()
             .join_session_without_transport_cleanup(
                 session_id.clone(),
                 None,
@@ -406,9 +439,16 @@ async fn setup_ready_sessions_with_fake(
             )
             .await
             .expect("session should join");
-        channel.set_publish_transport_ready(&session_id).await;
-        channel.set_consume_transport_ready(&session_id).await;
         channel
+            .test_api()
+            .set_publish_transport_ready(&session_id)
+            .await;
+        channel
+            .test_api()
+            .set_consume_transport_ready(&session_id)
+            .await;
+        channel
+            .test_api()
             .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
             .await;
     }
@@ -430,6 +470,7 @@ async fn publish_audio_and_camera(
 ) {
     assert!(
         channel
+            .test_api()
             .publish_track(
                 session_id,
                 StreamType::Audio,
@@ -442,6 +483,7 @@ async fn publish_audio_and_camera(
     );
     assert!(
         channel
+            .test_api()
             .publish_track(
                 session_id,
                 StreamType::Camera,
@@ -458,16 +500,18 @@ async fn source_media_ids(
     channel: &Arc<Channel>,
     session_id: &SessionId,
 ) -> (TransportMediaId, TransportMediaId) {
-    let Some(connection_id) = channel.session_connection_id(session_id).await else {
+    let Some(connection_id) = channel.test_api().session_connection_id(session_id).await else {
         panic!("session should exist");
     };
     let Some(audio_media_id) = channel
+        .test_api()
         .producer_transport_media_id(session_id, connection_id, StreamType::Audio)
         .await
     else {
         panic!("audio producer should expose a transport media id");
     };
     let Some(camera_media_id) = channel
+        .test_api()
         .producer_transport_media_id(session_id, connection_id, StreamType::Camera)
         .await
     else {
@@ -525,6 +569,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         Instant::now(),
     )]);
     channel
+        .test_api()
         .update_session_info_runtime(
             &SessionId::Integer(2),
             SessionInfo::default(),
@@ -559,6 +604,7 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         Instant::now(),
     )]);
     channel
+        .test_api()
         .update_session_info_runtime(
             &SessionId::Integer(1),
             SessionInfo::default(),
@@ -609,6 +655,7 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
             .collect(),
     );
     channel
+        .test_api()
         .update_session_info_runtime(
             &SessionId::Integer(6),
             SessionInfo::default(),
@@ -647,6 +694,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
     assert!(
         scenario
             .channel
+            .test_api()
             .publish_track(
                 &scenario.publisher_session_id,
                 StreamType::Audio,
@@ -666,6 +714,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
 
     let Some(connection_id) = scenario
         .channel
+        .test_api()
         .session_connection_id(&scenario.publisher_session_id)
         .await
     else {
@@ -673,6 +722,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
     };
     let Some(transport_media_id) = scenario
         .channel
+        .test_api()
         .producer_transport_media_id(
             &scenario.publisher_session_id,
             connection_id,
@@ -704,11 +754,12 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
         "unpublish should abort when transport cleanup fails"
     );
 
-    assert_eq!(scenario.channel.producer_count().await, 1);
-    assert_eq!(scenario.channel.consumer_count().await, 1);
+    assert_eq!(scenario.channel.test_api().producer_count().await, 1);
+    assert_eq!(scenario.channel.test_api().consumer_count().await, 1);
     assert!(
         scenario
             .channel
+            .test_api()
             .has_producer_route_target(
                 &scenario.publisher_session_id,
                 connection_id,
@@ -719,6 +770,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
     assert!(
         scenario
             .channel
+            .test_api()
             .producer_stream_type_for_transport_media_id(transport_media_id)
             .await
             .is_some()
@@ -732,6 +784,7 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     assert!(
         channel
+            .test_api()
             .set_client_rtp_capabilities(
                 &SessionId::Integer(2),
                 test_client_rtp_capabilities_without_video_rtx(),
@@ -741,6 +794,7 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     );
 
     channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -772,6 +826,7 @@ async fn session_replacement_purges_stale_published_media_state() {
     let (channel, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_sessions().await;
 
     let producer_id = channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -787,13 +842,17 @@ async fn session_replacement_purges_stale_published_media_state() {
             .iter()
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
-    let published_transport_media_id = channel.first_published_transport_media_id().await;
+    let published_transport_media_id = channel
+        .test_api()
+        .first_published_transport_media_id()
+        .await;
     assert!(published_transport_media_id.is_some());
 
-    assert_eq!(channel.producer_count().await, 1);
-    assert_eq!(channel.consumer_count().await, 1);
+    assert_eq!(channel.test_api().producer_count().await, 1);
+    assert_eq!(channel.test_api().consumer_count().await, 1);
     assert!(
         channel
+            .test_api()
             .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
             .await
     );
@@ -801,6 +860,7 @@ async fn session_replacement_purges_stale_published_media_state() {
     let (replacement_tx, _replacement_rx) = test_sender();
     assert!(
         channel
+            .test_api()
             .join_session(
                 SessionId::Integer(1),
                 None,
@@ -811,10 +871,11 @@ async fn session_replacement_purges_stale_published_media_state() {
             .is_ok()
     );
 
-    assert_eq!(channel.producer_count().await, 0);
-    assert_eq!(channel.consumer_count().await, 0);
+    assert_eq!(channel.test_api().producer_count().await, 0);
+    assert_eq!(channel.test_api().consumer_count().await, 0);
     assert!(
         channel
+            .test_api()
             .producer_stream_type_for_transport_media_id(
                 published_transport_media_id.expect("published track should have a transport id")
             )
@@ -823,6 +884,7 @@ async fn session_replacement_purges_stale_published_media_state() {
     );
     assert!(
         !channel
+            .test_api()
             .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
             .await
     );
@@ -834,6 +896,7 @@ async fn session_replacement_purges_all_published_stream_mappings() {
 
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Camera,
@@ -846,6 +909,7 @@ async fn session_replacement_purges_all_published_stream_mappings() {
     );
     assert!(
         channel
+            .test_api()
             .publish_track(
                 &SessionId::Integer(1),
                 StreamType::Audio,
@@ -867,9 +931,11 @@ async fn session_replacement_purges_all_published_stream_mappings() {
     );
 
     let camera_transport_media_id = channel
+        .test_api()
         .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
         .await;
     let audio_transport_media_id = channel
+        .test_api()
         .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Audio)
         .await;
     assert!(camera_transport_media_id.is_some());
@@ -878,6 +944,7 @@ async fn session_replacement_purges_all_published_stream_mappings() {
     let (replacement_tx, _replacement_rx) = test_sender();
     assert!(
         channel
+            .test_api()
             .join_session(
                 SessionId::Integer(1),
                 None,
@@ -888,10 +955,11 @@ async fn session_replacement_purges_all_published_stream_mappings() {
             .is_ok()
     );
 
-    assert_eq!(channel.producer_count().await, 0);
-    assert_eq!(channel.consumer_count().await, 0);
+    assert_eq!(channel.test_api().producer_count().await, 0);
+    assert_eq!(channel.test_api().consumer_count().await, 0);
     assert!(
         channel
+            .test_api()
             .producer_stream_type_for_transport_media_id(
                 camera_transport_media_id.expect("camera producer should expose a transport id")
             )
@@ -900,6 +968,7 @@ async fn session_replacement_purges_all_published_stream_mappings() {
     );
     assert!(
         channel
+            .test_api()
             .producer_stream_type_for_transport_media_id(
                 audio_transport_media_id.expect("audio producer should expose a transport id")
             )
@@ -908,11 +977,13 @@ async fn session_replacement_purges_all_published_stream_mappings() {
     );
     assert!(
         !channel
+            .test_api()
             .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
             .await
     );
     assert!(
         !channel
+            .test_api()
             .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Audio)
             .await
     );
@@ -932,6 +1003,7 @@ async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter(
         let adapter = fake_transport_adapter.clone();
         async move {
             channel
+                .test_api()
                 .publish_track(
                     &SessionId::Integer(1),
                     StreamType::Camera,
@@ -956,6 +1028,7 @@ async fn publish_track_releases_channel_lock_while_waiting_on_transport_adapter(
 
     let update_result = timeout(Duration::from_millis(50), async {
         channel
+            .test_api()
             .update_session_info(
                 &SessionId::Integer(2),
                 SessionInfo {
@@ -999,6 +1072,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
         let adapter = adapter.clone();
         async move {
             channel
+                .test_api()
                 .publish_track(
                     &SessionId::Integer(1),
                     StreamType::Camera,
@@ -1021,15 +1095,19 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
     })
     .await;
 
-    assert_eq!(channel.producer_count().await, 0);
+    assert_eq!(channel.test_api().producer_count().await, 0);
 
     assert!(publish_task.await.unwrap().is_some());
 
-    assert_eq!(channel.producer_count().await, 1);
-    let transport_media_id = channel.first_published_transport_media_id().await;
+    assert_eq!(channel.test_api().producer_count().await, 1);
+    let transport_media_id = channel
+        .test_api()
+        .first_published_transport_media_id()
+        .await;
     assert!(transport_media_id.is_some());
     assert_eq!(
         channel
+            .test_api()
             .producer_stream_type_for_transport_media_id(
                 transport_media_id.expect("published track should have a transport id")
             )
@@ -1038,6 +1116,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
     );
     assert!(
         channel
+            .test_api()
             .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
             .await
     );
@@ -1053,6 +1132,7 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
         let adapter = adapter.clone();
         async move {
             channel
+                .test_api()
                 .publish_track(
                     &SessionId::Integer(1),
                     StreamType::Camera,
@@ -1075,7 +1155,12 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
     })
     .await;
 
-    assert!(channel.leave_session(&SessionId::Integer(1), 0).await);
+    assert!(
+        channel
+            .test_api()
+            .leave_session(&SessionId::Integer(1), 0)
+            .await
+    );
     assert!(publish_task.await.unwrap().is_none());
 
     wait_for_fake_event(&fake, |event| {
@@ -1095,6 +1180,7 @@ async fn production_change_updates_screen_sharing_info() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
 
     channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Screen,
@@ -1110,6 +1196,7 @@ async fn production_change_updates_screen_sharing_info() {
 
     // Pause screen sharing.
     channel
+        .test_api()
         .set_publication_active(&SessionId::Integer(1), StreamType::Screen, false, &adapter)
         .await;
 
@@ -1127,6 +1214,7 @@ async fn production_change_updates_transport_route_activity() {
     let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
 
     channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -1139,6 +1227,7 @@ async fn production_change_updates_transport_route_activity() {
     drain_outbound(&mut rx2);
 
     channel
+        .test_api()
         .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
@@ -1159,6 +1248,7 @@ async fn production_change_commits_session_state_before_transport_update_finishe
     let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
 
     channel
+        .test_api()
         .publish_track(
             &SessionId::Integer(1),
             StreamType::Camera,
@@ -1177,6 +1267,7 @@ async fn production_change_commits_session_state_before_transport_update_finishe
         let adapter = adapter.clone();
         async move {
             channel
+                .test_api()
                 .set_publication_active(&SessionId::Integer(1), StreamType::Camera, false, &adapter)
                 .await;
         }
@@ -1193,7 +1284,11 @@ async fn production_change_commits_session_state_before_transport_update_finishe
     })
     .await;
 
-    let Some((_, info)) = channel.session_info_snapshot(&SessionId::Integer(1)).await else {
+    let Some((_, info)) = channel
+        .test_api()
+        .session_info_snapshot(&SessionId::Integer(1))
+        .await
+    else {
         panic!("publisher session should still be present");
     };
     assert_eq!(info.is_camera_on, Some(false));
@@ -1209,9 +1304,11 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
     drain_outbound(&mut subscriber_rx);
 
     channel
+        .test_api()
         .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     channel
+        .test_api()
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
@@ -1221,6 +1318,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
         let adapter = transport_adapter.clone();
         async move {
             channel
+                .test_api()
                 .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
                 .await;
         }
@@ -1240,6 +1338,7 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
 
     let update_result = timeout(Duration::from_millis(50), async {
         channel
+            .test_api()
             .update_session_info(
                 &SessionId::Integer(1),
                 SessionInfo {
@@ -1284,9 +1383,11 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     drain_outbound(&mut subscriber_rx);
 
     channel
+        .test_api()
         .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     channel
+        .test_api()
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
@@ -1296,6 +1397,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
         let adapter = transport_adapter.clone();
         async move {
             channel
+                .test_api()
                 .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
                 .await;
         }
@@ -1313,11 +1415,11 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     })
     .await;
 
-    assert_eq!(channel.consumer_count().await, 0);
+    assert_eq!(channel.test_api().consumer_count().await, 0);
 
     bootstrap_task.await.unwrap();
 
-    assert_eq!(channel.consumer_count().await, 1);
+    assert_eq!(channel.test_api().consumer_count().await, 1);
 }
 
 #[tokio::test]
@@ -1328,9 +1430,11 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     drain_outbound(&mut subscriber_rx);
 
     channel
+        .test_api()
         .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     channel
+        .test_api()
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
@@ -1340,6 +1444,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
         let adapter = transport_adapter.clone();
         async move {
             channel
+                .test_api()
                 .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
                 .await;
         }
@@ -1357,7 +1462,12 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     })
     .await;
 
-    assert!(channel.leave_session(&SessionId::Integer(2), 1).await);
+    assert!(
+        channel
+            .test_api()
+            .leave_session(&SessionId::Integer(2), 1)
+            .await
+    );
     bootstrap_task.await.unwrap();
 
     wait_for_fake_event(&fake, |event| {
@@ -1386,6 +1496,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         let adapter = transport_adapter.clone();
         async move {
             channel
+                .test_api()
                 .publish_track(
                     &SessionId::Integer(1),
                     StreamType::Camera,
@@ -1410,6 +1521,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
     .await;
 
     channel
+        .test_api()
         .bootstrap_missing_consumers(&SessionId::Integer(2), &transport_adapter)
         .await;
 
@@ -1438,7 +1550,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         consume_requests, 1,
         "late-join retry must not schedule a second consumer consume while publish bootstrap is in flight"
     );
-    assert_eq!(channel.consumer_count().await, 1);
+    assert_eq!(channel.test_api().consumer_count().await, 1);
     assert_eq!(
         drain_outbound(&mut subscriber_rx)
             .iter()
@@ -1458,8 +1570,8 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
             )
             .await
     );
-    assert_eq!(channel.producer_count().await, 0);
-    assert_eq!(channel.consumer_count().await, 0);
+    assert_eq!(channel.test_api().producer_count().await, 0);
+    assert_eq!(channel.test_api().consumer_count().await, 0);
 
     let removed_media = fake
         .snapshot_events()
@@ -1478,6 +1590,7 @@ async fn production_change_ignores_unknown_stream_type() {
 
     // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
     channel
+        .test_api()
         .set_publication_active(&SessionId::Integer(1), StreamType::Audio, false, &adapter)
         .await;
 
@@ -1495,6 +1608,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     drain_outbound(&mut subscriber_rx);
 
     let download_update = channel
+        .test_api()
         .set_consume_transport_ready(&SessionId::Integer(2))
         .await;
     assert!(download_update.session_present);
@@ -1502,9 +1616,11 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
 
     assert!(
         channel
+            .test_api()
             .apply_client_rtp_capabilities(
                 &SessionId::Integer(2),
                 channel
+                    .test_api()
                     .session_connection_id(&SessionId::Integer(2))
                     .await
                     .unwrap_or(u64::MAX),
@@ -1515,6 +1631,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     );
     assert!(
         channel
+            .test_api()
             .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(2))
             .await
     );
@@ -1547,21 +1664,25 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
     drain_outbound(&mut subscriber_rx);
 
     let capabilities_update = channel
+        .test_api()
         .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
         .await;
     assert!(capabilities_update.session_present);
     assert!(!capabilities_update.became_consumer_ready);
     assert!(
         channel
+            .test_api()
             .session_has_parsed_client_rtp_capabilities(&SessionId::Integer(2))
             .await
     );
 
     assert!(
         channel
+            .test_api()
             .apply_consume_transport_ready(
                 &SessionId::Integer(2),
                 channel
+                    .test_api()
                     .session_connection_id(&SessionId::Integer(2))
                     .await
                     .unwrap_or(u64::MAX),
@@ -1597,6 +1718,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     assert!(
         scenario
             .channel
+            .test_api()
             .publish_track(
                 &scenario.publisher_session_id,
                 StreamType::Camera,
@@ -1612,7 +1734,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
         &drain_outbound(&mut scenario.subscriber_rx),
         StreamType::Camera,
     );
-    assert_eq!(scenario.channel.consumer_count().await, 1);
+    assert_eq!(scenario.channel.test_api().consumer_count().await, 1);
 
     let first_refresh_offer = scenario
         .transport_adapter
@@ -1623,6 +1745,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     assert!(
         scenario
             .channel
+            .test_api()
             .publish_track(
                 &scenario.publisher_session_id,
                 StreamType::Screen,
@@ -1634,7 +1757,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
             .is_some()
     );
     assert_eq!(
-        scenario.channel.consumer_count().await,
+        scenario.channel.test_api().consumer_count().await,
         1,
         "second consumer must stay pending while the first rtc offer awaits an answer"
     );
@@ -1653,10 +1776,11 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
 
     scenario
         .channel
+        .test_api()
         .bootstrap_missing_consumers(&scenario.subscriber_session_id, &scenario.transport_adapter)
         .await;
 
-    assert_eq!(scenario.channel.consumer_count().await, 2);
+    assert_eq!(scenario.channel.test_api().consumer_count().await, 2);
     assert_bootstrap_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         StreamType::Screen,
@@ -1677,11 +1801,12 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
 
     scenario
         .channel
+        .test_api()
         .bootstrap_missing_consumers(&scenario.subscriber_session_id, &scenario.transport_adapter)
         .await;
 
     assert_eq!(
-        scenario.channel.consumer_count().await,
+        scenario.channel.test_api().consumer_count().await,
         2,
         "retry pass must not duplicate already-committed consumers"
     );
@@ -1696,6 +1821,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
     let mut scenario = setup_real_rtc_refresh_scenario().await;
     let Some(publisher_connection_id) = scenario
         .channel
+        .test_api()
         .session_connection_id(&scenario.publisher_session_id)
         .await
     else {
@@ -1743,6 +1869,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
     assert!(
         scenario
             .channel
+            .test_api()
             .publish_negotiated_track(
                 &scenario.publisher_session_id,
                 NegotiatedPublish {
@@ -1762,7 +1889,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         &drain_outbound(&mut scenario.subscriber_rx),
         StreamType::Camera,
     );
-    assert_eq!(scenario.channel.consumer_count().await, 1);
+    assert_eq!(scenario.channel.test_api().consumer_count().await, 1);
 }
 
 struct RealRtcRefreshScenario {
@@ -1787,6 +1914,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
     let publisher_session_id = SessionId::Integer(1);
     let subscriber_session_id = SessionId::Integer(2);
     let publisher_connection_id = channel
+        .test_api()
         .join_session(
             publisher_session_id.clone(),
             None,
@@ -1796,6 +1924,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
         .await
         .expect("publisher should join");
     let subscriber_connection_id = channel
+        .test_api()
         .join_session(
             subscriber_session_id.clone(),
             None,
@@ -1863,12 +1992,14 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         setup_two_ready_sessions_with_fake().await;
     let session_id = SessionId::Integer(1);
     let connection_id = channel
+        .test_api()
         .session_connection_id(&session_id)
         .await
         .expect("publisher should have a live connection");
 
     assert!(
         channel
+            .test_api()
             .stage_negotiated_publish_for_test(
                 &session_id,
                 connection_id,
@@ -1879,6 +2010,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
     );
     assert_eq!(
         channel
+            .test_api()
             .staged_publish_count(&session_id, connection_id)
             .await,
         1
@@ -1886,6 +2018,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
 
     assert!(
         channel
+            .test_api()
             .rollback_staged_publish_for_test(
                 &session_id,
                 connection_id,
@@ -1897,11 +2030,12 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
 
     assert_eq!(
         channel
+            .test_api()
             .staged_publish_count(&session_id, connection_id)
             .await,
         0
     );
-    assert_eq!(channel.producer_count().await, 0);
+    assert_eq!(channel.test_api().producer_count().await, 0);
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert!(drain_outbound(&mut subscriber_rx).is_empty());
 
@@ -1930,12 +2064,14 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
         setup_two_ready_sessions_with_fake().await;
     let session_id = SessionId::Integer(1);
     let connection_id = channel
+        .test_api()
         .session_connection_id(&session_id)
         .await
         .expect("publisher should have a live connection");
 
     assert!(
         channel
+            .test_api()
             .stage_negotiated_publish_for_test(
                 &session_id,
                 connection_id,
@@ -1946,17 +2082,20 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
     );
     assert_eq!(
         channel
+            .test_api()
             .staged_publish_count(&session_id, connection_id)
             .await,
         1
     );
 
     channel
+        .test_api()
         .commit_staged_publishes_for_test(&session_id, connection_id, &adapter)
         .await;
 
     assert_eq!(
         channel
+            .test_api()
             .staged_publish_count(&session_id, connection_id)
             .await,
         0
