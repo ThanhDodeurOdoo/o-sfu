@@ -32,6 +32,14 @@ updates:
       - "cargo"
       - "AI"
 
+  - package-ecosystem: "cargo"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "cargo"
+      - "AI"
 
   - package-ecosystem: "npm"
     directory: "/client"
