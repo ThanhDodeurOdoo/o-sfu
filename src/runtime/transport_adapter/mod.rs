@@ -12,7 +12,10 @@ mod types;
 pub(crate) use config::{
     RtcTransportAdapterConfig, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
 };
-pub(crate) use facade::RuntimeTransportAdapter;
+pub(crate) use facade::{
+    MediaPort, NegotiationPort, ObservabilityPort, RuntimeTransportAdapter, SessionPort,
+    SourcePolicyPort,
+};
 pub(crate) use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };

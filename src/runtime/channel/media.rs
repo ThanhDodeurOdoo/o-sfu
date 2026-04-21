@@ -3,7 +3,7 @@ use tracing::warn;
 use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::DiagnosticsEventData;
 use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::runtime::transport_adapter::MediaPort;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
@@ -17,7 +17,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
         let mut state = self.state.write().await;
         let media_counts_before = ChannelMediaCounts {
@@ -40,13 +40,13 @@ impl Channel {
             planned_bootstraps,
             ConsumerBootstrapOrigin::LateJoin,
         );
-        effect_plan.execute(self, transport_adapter).await;
+        effect_plan.execute(self, media_port).await;
         true
     }
 
     pub(super) async fn bootstrap_consumer_targets(
         &self,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
         origin: ConsumerBootstrapOrigin,
         targets: Vec<super::state::PendingConsumerBootstrapTarget>,
     ) {
@@ -69,7 +69,7 @@ impl Channel {
                 origin,
             )
         };
-        effect_plan.execute(self, transport_adapter).await;
+        effect_plan.execute(self, media_port).await;
     }
 
     #[allow(
@@ -82,7 +82,7 @@ impl Channel {
         connection_id: ConnectionId,
         stream_type: StreamType,
         active: bool,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) {
         let Some(producer_target) = ({
             let state = self.state.read().await;
@@ -98,7 +98,7 @@ impl Channel {
         }) else {
             return;
         };
-        if transport_adapter
+        if media_port
             .set_producer_active(
                 &transport_session_key,
                 outcome.transport_media_id,
@@ -137,7 +137,7 @@ impl Channel {
         connection_id: ConnectionId,
         target_session_id: &SessionId,
         states: &DownloadStates,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) {
         let effect_plan = {
             let mut state = self.state.write().await;
@@ -169,7 +169,7 @@ impl Channel {
                 planned_change,
             )
         };
-        effect_plan.execute(self, transport_adapter).await;
+        effect_plan.execute(self, media_port).await;
     }
 
     pub(crate) async fn is_stream_published(
@@ -189,7 +189,7 @@ impl Channel {
         session_id: &SessionId,
         connection_id: ConnectionId,
         stream_type: StreamType,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
         let Some(effect_plan) = ({
             let state = self.state.read().await;
@@ -206,6 +206,6 @@ impl Channel {
         }) else {
             return false;
         };
-        effect_plan.execute(self, transport_adapter).await
+        effect_plan.execute(self, media_port).await
     }
 }

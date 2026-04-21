@@ -156,6 +156,7 @@ impl PostAuthSessionProtocol {
                 &self.session_id,
                 self.connection_id,
                 &self.transport_adapter,
+                &self.transport_adapter,
             )
             .await;
         info!(

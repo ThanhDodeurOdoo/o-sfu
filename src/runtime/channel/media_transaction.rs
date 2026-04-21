@@ -6,7 +6,7 @@ use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::DiagnosticsEventData;
 use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{
-    RuntimeTransportAdapter, TransportAdapterError, TransportMediaId,
+    MediaPort, ObservabilityPort, TransportAdapterError, TransportMediaId,
 };
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaStream as RouterRtpParameters;
@@ -161,7 +161,8 @@ impl PublishCommitSnapshot {
     pub(super) async fn commit(
         self,
         channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
+        media_port: &impl MediaPort,
     ) -> Option<String> {
         let effect_plan = {
             let mut state = channel.state.write().await;
@@ -200,7 +201,9 @@ impl PublishCommitSnapshot {
                 ),
             }
         };
-        effect_plan.execute(channel, transport_adapter).await
+        effect_plan
+            .execute(channel, observability_port, media_port)
+            .await
     }
 }
 
@@ -239,7 +242,7 @@ impl Channel {
         session_id: &SessionId,
         connection_id: ConnectionId,
         stream_type: StreamType,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
         let media_kind = media_kind_for_stream_type(stream_type);
         let validated_descriptor = {
@@ -257,7 +260,7 @@ impl Channel {
             return false;
         }
         let session_key = self.transport_session_key(session_id, connection_id);
-        let transport_media_id = match transport_adapter
+        let transport_media_id = match media_port
             .publish_media(&session_key, media_kind, &pending_publish_parameters())
             .await
         {
@@ -289,7 +292,7 @@ impl Channel {
                 session_id,
                 connection_id,
                 transport_media_id,
-                transport_adapter,
+                media_port,
                 "transport adapter failed to remove duplicated staged publish media",
             )
             .await;
@@ -303,7 +306,7 @@ impl Channel {
         session_id: &SessionId,
         connection_id: ConnectionId,
         stream_type: StreamType,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
         let staged_publish = self.pending_publish_transactions.lock().await.take(
             session_id,
@@ -317,7 +320,7 @@ impl Channel {
             session_id,
             connection_id,
             staged_publish.transport_media_id(),
-            transport_adapter,
+            media_port,
             "transport adapter failed to remove staged publish media during rollback",
         )
         .await;
@@ -328,7 +331,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) {
         let staged_publishes = self
             .pending_publish_transactions
@@ -340,7 +343,7 @@ impl Channel {
                 session_id,
                 connection_id,
                 staged_publish.transport_media_id(),
-                transport_adapter,
+                media_port,
                 "transport adapter failed to remove staged publish media during connection cleanup",
             )
             .await;
@@ -351,7 +354,8 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
+        media_port: &impl MediaPort,
     ) {
         let staged_publishes = self
             .pending_publish_transactions
@@ -362,13 +366,13 @@ impl Channel {
         for staged_publish in staged_publishes {
             let stream_type = staged_publish.descriptor.stream_type();
             let transport_media_id = staged_publish.transport_media_id();
-            let commit_outcome = match transport_adapter
+            let commit_outcome = match media_port
                 .negotiated_producer_parameters(&session_key, transport_media_id)
                 .await
             {
                 Ok(rtp_parameters) => staged_publish
                     .into_commit_snapshot(rtp_parameters)
-                    .commit(self, transport_adapter)
+                    .commit(self, observability_port, media_port)
                     .await
                     .map_or(
                         StagedPublishCommitOutcome::PublishRejected,
@@ -379,7 +383,7 @@ impl Channel {
                         session_id,
                         connection_id,
                         transport_media_id,
-                        transport_adapter,
+                        media_port,
                         "transport adapter failed to remove staged publish media after negotiated parameter lookup failed",
                     )
                     .await;
@@ -434,10 +438,10 @@ impl Channel {
         session_id: &SessionId,
         connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
         failure_message: &str,
     ) {
-        if transport_adapter
+        if media_port
             .remove_media(
                 &self.transport_session_key(session_id, connection_id),
                 transport_media_id,
@@ -456,11 +460,11 @@ impl Channel {
 
     pub(super) async fn cleanup_transport_removals_strict(
         &self,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
         removals: &[TransportMediaRemoval],
     ) -> bool {
         for removal in removals {
-            if transport_adapter
+            if media_port
                 .remove_media(
                     &self.transport_session_key(removal.session(), removal.connection()),
                     removal.transport_media(),
@@ -485,13 +489,13 @@ impl Channel {
         target: &PendingConsumerBootstrapTarget,
         consumer_transport_media_id: TransportMediaId,
         consumer_active: bool,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
         origin: ConsumerBootstrapOrigin,
     ) {
         if consumer_active {
             return;
         }
-        if transport_adapter
+        if media_port
             .set_consumer_active(
                 &self.transport_session_key(
                     target.consumer_session_id(),

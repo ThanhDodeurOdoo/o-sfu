@@ -41,7 +41,7 @@ impl ChannelTestMedia<'_> {
         };
         StagedPublishTransaction::new(validated_descriptor, publish.transport_media_id)
             .into_commit_snapshot(publish.consumable_rtp_parameters)
-            .commit(self.channel, transport_adapter)
+            .commit(self.channel, transport_adapter, transport_adapter)
             .await
     }
 
@@ -101,7 +101,7 @@ impl ChannelTestMedia<'_> {
         };
         StagedPublishTransaction::new(validated_descriptor, transport_media_id)
             .into_commit_snapshot(consumable_rtp_parameters)
-            .commit(self.channel, transport_adapter)
+            .commit(self.channel, transport_adapter, transport_adapter)
             .await
     }
 

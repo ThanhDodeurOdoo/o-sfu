@@ -22,8 +22,10 @@ use crate::{
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::test_support::FakeWebRtcAdapter,
         transport_adapter::{
-            ActiveSpeakerSource, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
-            TransportAdapterError, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, MediaPort, NegotiationPort, ObservabilityPort,
+            RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer,
+            SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
+            TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -201,6 +203,38 @@ fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
         .and_then(|port| port.parse::<u16>().ok())
 }
 
+async fn create_offer_via_negotiation_port(
+    negotiation_port: &impl NegotiationPort,
+    session_key: &TransportSessionKey,
+) -> Result<String, TransportAdapterError> {
+    negotiation_port
+        .create_initial_session_offer(session_key)
+        .await
+        .map(SessionOffer::into_sdp)
+}
+
+async fn publish_audio_via_media_port(
+    media_port: &impl MediaPort,
+    session_key: &TransportSessionKey,
+    rtp_parameters: &MediaStream,
+) -> Result<TransportMediaId, TransportAdapterError> {
+    media_port
+        .publish_media(session_key, MediaKind::Audio, rtp_parameters)
+        .await
+}
+
+async fn observe_active_speakers(
+    observability_port: &impl ObservabilityPort,
+) -> Vec<ActiveSpeakerSource> {
+    observability_port.active_speaker_source_snapshot().await
+}
+
+fn subscribe_source_policy(
+    source_policy_port: &impl SourcePolicyPort,
+) -> SourcePolicyUpdateSubscription {
+    source_policy_port.source_policy_subscription()
+}
+
 #[test]
 fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
     let adapter =
@@ -222,6 +256,53 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
         adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
 
     assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
+}
+
+#[tokio::test]
+async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
+    let fake = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
+    let session_key = test_session_key(17, 0, 3, SessionId::Integer(41));
+    let audio_rtp_parameters = sample_audio_rtp_parameters("aud-up", 1234);
+
+    let offer_result = create_offer_via_negotiation_port(&adapter, &session_key).await;
+    assert!(offer_result.is_ok());
+    let Ok(offer_sdp) = offer_result else {
+        return;
+    };
+    assert!(offer_sdp.starts_with("v=0"));
+
+    let publish_result =
+        publish_audio_via_media_port(&adapter, &session_key, &audio_rtp_parameters).await;
+    assert!(publish_result.is_ok());
+    let Ok(published_media_id) = publish_result else {
+        return;
+    };
+
+    let subscription = subscribe_source_policy(&adapter);
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        published_media_id,
+        Instant::now(),
+    )]);
+    let update_result = timeout(Duration::from_millis(50), subscription.wait_for_update()).await;
+    assert!(update_result.is_ok());
+    let Ok(updated_runtime_ids) = update_result else {
+        return;
+    };
+    let updated_runtime_ids = updated_runtime_ids.into_iter().collect::<BTreeSet<_>>();
+    assert_eq!(
+        updated_runtime_ids,
+        BTreeSet::from([session_key.channel_runtime_id()])
+    );
+
+    let active_speakers = observe_active_speakers(&adapter).await;
+    assert_eq!(active_speakers.len(), 1);
+    assert_eq!(
+        active_speakers
+            .first()
+            .map(|active_speaker| active_speaker.transport_media_id()),
+        Some(published_media_id)
+    );
 }
 
 #[test]

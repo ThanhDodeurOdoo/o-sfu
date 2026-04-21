@@ -21,7 +21,7 @@ use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::DiagnosticsEventData;
 use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, RuntimeTransportAdapter, SourcePacketGate, TransportMediaId,
+    ActiveSpeakerSource, MediaPort, ObservabilityPort, SourcePacketGate, TransportMediaId,
 };
 use o_sfu_protocol::shared::{SessionId, StreamType};
 
@@ -184,11 +184,7 @@ impl SubscriptionEffectPlan {
         }
     }
 
-    pub(super) async fn execute(
-        self,
-        channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
+    pub(super) async fn execute(self, channel: &Channel, media_port: &impl MediaPort) {
         if let Some(media_count_delta) = self.media_count_delta {
             media_count_delta.record(channel);
         }
@@ -196,7 +192,7 @@ impl SubscriptionEffectPlan {
             // Transport activity is best-efort here: the channel intent has
             // already been committed, so the failure path is to surface it to
             // operators instead of trying to rebuild the previous room state.
-            if transport_adapter
+            if media_port
                 .set_consumer_active(
                     &channel.transport_session_key(
                         &transport_op.consumer_session_id,
@@ -224,7 +220,7 @@ impl SubscriptionEffectPlan {
             channel.diagnostics.record(transport_op.diagnostics);
         }
         for bootstrap_op in self.bootstrap_ops {
-            bootstrap_op.execute(channel, transport_adapter).await;
+            bootstrap_op.execute(channel, media_port).await;
         }
     }
 }
@@ -240,7 +236,7 @@ impl ConsumerBootstrapOp {
         }
     }
 
-    async fn execute(self, channel: &Channel, transport_adapter: &RuntimeTransportAdapter) {
+    async fn execute(self, channel: &Channel, media_port: &impl MediaPort) {
         let Self {
             target,
             prepared,
@@ -248,14 +244,8 @@ impl ConsumerBootstrapOp {
             origin,
         } = self;
         let Some((consumer_transport_media_id, consumer_mid)) =
-            Self::declare_consumer_transport_media(
-                &target,
-                &prepared,
-                origin,
-                channel,
-                transport_adapter,
-            )
-            .await
+            Self::declare_consumer_transport_media(&target, &prepared, origin, channel, media_port)
+                .await
         else {
             return;
         };
@@ -281,7 +271,7 @@ impl ConsumerBootstrapOp {
         let media_count_delta = MediaCountDelta::new(media_counts_before, media_counts_after);
         Self::finish(
             channel,
-            transport_adapter,
+            media_port,
             &target,
             origin,
             consumer_transport_media_id,
@@ -296,13 +286,13 @@ impl ConsumerBootstrapOp {
         prepared: &PreparedConsumerBootstrap,
         origin: ConsumerBootstrapOrigin,
         channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> Option<(TransportMediaId, Option<String>)> {
         let consumer_session_key = channel.transport_session_key(
             target.consumer_session_id(),
             target.consumer_connection_id(),
         );
-        let consumer_transport_media_id = match transport_adapter
+        let consumer_transport_media_id = match media_port
             .consume_media(
                 &consumer_session_key,
                 target.media_kind(),
@@ -332,7 +322,7 @@ impl ConsumerBootstrapOp {
                 return None;
             }
         };
-        let consumer_mid = transport_adapter
+        let consumer_mid = media_port
             .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
             .await;
         Some((consumer_transport_media_id, consumer_mid))
@@ -340,7 +330,7 @@ impl ConsumerBootstrapOp {
 
     async fn finish(
         channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
         target: &PendingConsumerBootstrapTarget,
         origin: ConsumerBootstrapOrigin,
         consumer_transport_media_id: TransportMediaId,
@@ -358,7 +348,7 @@ impl ConsumerBootstrapOp {
                     target.consumer_session_id(),
                     target.consumer_connection_id(),
                     consumer_transport_media_id,
-                    transport_adapter,
+                    media_port,
                     "transport adapter failed to remove consumer transport media after bootstrap state commit failed",
                 )
                 .await;
@@ -370,7 +360,7 @@ impl ConsumerBootstrapOp {
                 target,
                 consumer_transport_media_id,
                 consumer_active,
-                transport_adapter,
+                media_port,
                 origin,
             )
             .await;
@@ -449,7 +439,8 @@ impl StagedPublishCommitEffectPlan {
     pub(super) async fn execute(
         self,
         channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
+        media_port: &impl MediaPort,
     ) -> Option<String> {
         match self {
             Self::Commit {
@@ -464,11 +455,11 @@ impl StagedPublishCommitEffectPlan {
                 // multi-party camera publish can bootstrap consumers against a
                 // stale gate decision
                 channel
-                    .sync_source_packet_selection_policy(Some(transport_adapter))
+                    .sync_source_packet_selection_policy(Some(observability_port), media_port)
                     .await;
                 channel
                     .bootstrap_consumer_targets(
-                        transport_adapter,
+                        media_port,
                         ConsumerBootstrapOrigin::Publish,
                         consumer_targets,
                     )
@@ -486,7 +477,7 @@ impl StagedPublishCommitEffectPlan {
                         &session_id,
                         connection_id,
                         transport_media_id,
-                        transport_adapter,
+                        media_port,
                         "transport adapter failed to remove published transport media after channel commit failed",
                     )
                     .await;
@@ -519,16 +510,12 @@ impl UnpublishEffectPlan {
         }
     }
 
-    pub(super) async fn execute(
-        self,
-        channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
+    pub(super) async fn execute(self, channel: &Channel, media_port: &impl MediaPort) -> bool {
         // Explicit unpublish tears down transport state first so a later state
         // commit failure cannot leave routable media alive for a track the room
         // already considers removed.
         if !channel
-            .cleanup_transport_removals_strict(transport_adapter, &self.transport_removals)
+            .cleanup_transport_removals_strict(media_port, &self.transport_removals)
             .await
         {
             return false;
@@ -584,15 +571,11 @@ impl SourcePacketPolicyEffectPlan {
         self.source_packet_updates.is_empty() && self.featured_session_updates.is_empty()
     }
 
-    pub(super) async fn execute(
-        self,
-        channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
+    pub(super) async fn execute(self, channel: &Channel, media_port: &impl MediaPort) {
         let mut applied_source_packet_updates =
             Vec::with_capacity(self.source_packet_updates.len());
         for update in self.source_packet_updates {
-            if transport_adapter
+            if media_port
                 .set_source_packet_gate(
                     &channel.transport_session_key(
                         update.owner_session_id(),

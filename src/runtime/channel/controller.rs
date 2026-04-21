@@ -30,7 +30,7 @@ use crate::runtime::diagnostics::{
 };
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
-use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
+use crate::runtime::transport_adapter::{ObservabilityPort, TransportSessionKey};
 use crate::runtime::{ChannelRuntimeId, ConnectionId};
 
 use super::{
@@ -272,7 +272,7 @@ impl Channel {
 
     pub(crate) async fn session_stats_snapshot(
         &self,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
     ) -> ChannelSessionStatsSnapshot {
         let state = self.state.read().await;
         let session_keys = state
@@ -282,7 +282,7 @@ impl Channel {
                 self.transport_session_key(&session_id, connection_id)
             })
             .collect::<Vec<_>>();
-        let transport_snapshot = transport_adapter.transport_bitrate_snapshot(&session_keys);
+        let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
         let mut aggregated_bitrate = IncomingBitrateSnapshot {
             total: transport_snapshot.total,
             ..Default::default()
@@ -350,7 +350,7 @@ impl Channel {
 
     pub(crate) async fn diagnostics_session_views(
         &self,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
     ) -> Vec<DiagnosticsSessionView> {
         let state = self.state.read().await;
         let session_entries = state.transport_session_entries();
@@ -360,7 +360,7 @@ impl Channel {
                 self.transport_session_key(session_id, *connection_id)
             })
             .collect::<Vec<_>>();
-        let transport_snapshot = transport_adapter.transport_bitrate_snapshot(&session_keys);
+        let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
         let incoming_bitrate_by_session =
             state.diagnostics_incoming_bitrate_by_session(&transport_snapshot.per_media);
         let transport_by_session = session_entries
@@ -368,7 +368,7 @@ impl Channel {
             .map(|(session_id, connection_id)| {
                 let transport = DiagnosticsSessionTransport {
                     connection_id: connection_id.as_u64(),
-                    health: transport_adapter
+                    health: observability_port
                         .session_transport_health(
                             &self.transport_session_key(&session_id, connection_id),
                         )
@@ -391,9 +391,9 @@ impl Channel {
     pub(crate) async fn diagnostics_matching_session(
         &self,
         requested_session_id: &str,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
     ) -> Option<(DiagnosticsSessionView, SessionId)> {
-        self.diagnostics_session_views(transport_adapter)
+        self.diagnostics_session_views(observability_port)
             .await
             .into_iter()
             .find(|session| session_id_matches(&session.session_id, requested_session_id))

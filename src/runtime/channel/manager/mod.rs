@@ -14,7 +14,7 @@ use crate::runtime::diagnostics::{DiagnosticsEventData, DiagnosticsStore};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::runtime::transport_adapter::{MediaPort, ObservabilityPort, RuntimeTransportAdapter};
 use crate::runtime::{ChannelRuntimeId, ConnectionId};
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
@@ -159,12 +159,12 @@ impl ChannelManager {
 
     pub async fn stats_snapshots(
         &self,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
     ) -> Vec<RuntimeChannelStatsSnapshot> {
         let entries = self.directory_entries().await;
         let mut snapshots = Vec::with_capacity(entries.len());
         for entry in entries {
-            snapshots.push(self.entry_stats_snapshot(entry, transport_adapter).await);
+            snapshots.push(self.entry_stats_snapshot(entry, observability_port).await);
         }
         snapshots
     }
@@ -196,7 +196,8 @@ impl ChannelManager {
     pub(crate) async fn sync_source_packet_selection_policies_for_runtime_ids(
         &self,
         channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
+        media_port: &impl MediaPort,
     ) {
         if channel_runtime_ids.is_empty() {
             return;
@@ -207,12 +208,12 @@ impl ChannelManager {
         if channels.is_empty() {
             return;
         }
-        let active_speaker_sources = transport_adapter.active_speaker_source_snapshot().await;
+        let active_speaker_sources = observability_port.active_speaker_source_snapshot().await;
         for channel in channels {
             channel
                 .sync_source_packet_selection_policy_from_active_speakers(
                     &active_speaker_sources,
-                    transport_adapter,
+                    media_port,
                 )
                 .await;
         }
@@ -389,10 +390,10 @@ impl ChannelManager {
     async fn entry_stats_snapshot(
         &self,
         entry: ChannelDirectoryEntry,
-        transport_adapter: &RuntimeTransportAdapter,
+        observability_port: &impl ObservabilityPort,
     ) -> RuntimeChannelStatsSnapshot {
         let channel = entry.channel();
-        let sessions_stats = channel.session_stats_snapshot(transport_adapter).await;
+        let sessions_stats = channel.session_stats_snapshot(observability_port).await;
         RuntimeChannelStatsSnapshot {
             create_date: entry.create_date().to_owned(),
             uuid: channel.uuid().to_owned(),

@@ -106,9 +106,11 @@ impl ChannelTestLifecycle<'_> {
         channel
             .cleanup_transport_removals(cleanup, &outcome.transport_removals)
             .await;
-        channel
-            .sync_source_packet_selection_policy(cleanup.transport_adapter())
-            .await;
+        if let Some(transport_adapter) = cleanup.transport_adapter() {
+            channel
+                .sync_source_packet_selection_policy(Some(transport_adapter), transport_adapter)
+                .await;
+        }
         Channel::emit_lifecycle_effects(outcome.effects);
         true
     }

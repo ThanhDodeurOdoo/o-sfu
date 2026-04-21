@@ -15,7 +15,7 @@
 //! `- metrics              -> process-global metrics state and Prometheus export snapshot
 //! ```
 
-use std::{process, sync::Arc, time::Instant as StdInstant};
+use std::{collections::BTreeSet, process, sync::Arc, time::Instant as StdInstant};
 
 use anyhow::Result;
 use tokio::runtime::Builder;
@@ -57,7 +57,8 @@ use metrics::RuntimeMetrics;
 use recording::MediaTap;
 use telemetry::init_tracing;
 use transport_adapter::{
-    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+    MediaPort, ObservabilityPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+    SessionBitrateLimits, SourcePolicyPort,
 };
 
 /// Process-global application shell for the server process.
@@ -124,6 +125,8 @@ impl Runtime {
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
             Arc::clone(&self.channels),
             self.transport_adapter.clone(),
+            subscribe_source_policy_updates(&self.transport_adapter),
+            self.transport_adapter.clone(),
         );
         let result = serve_http(RuntimeState {
             config: self.config,
@@ -146,21 +149,24 @@ impl Runtime {
 /// deadline instead of polling the whole process on a fixed interval.
 fn spawn_source_packet_policy_update_task(
     channels: Arc<ChannelManager>,
-    transport_adapter: RuntimeTransportAdapter,
+    observability_port: RuntimeTransportAdapter,
+    updates: transport_adapter::SourcePolicyUpdateSubscription,
+    media_port: RuntimeTransportAdapter,
 ) -> JoinHandle<()> {
-    let updates = transport_adapter.source_policy_subscription();
     info!("booted source packet policy update task");
     tokio::spawn(async move {
         loop {
-            let next_deadline = transport_adapter.next_active_speaker_deadline().await;
+            let next_deadline = next_active_speaker_deadline(&observability_port).await;
             let mut dirty_channel_runtime_ids = match next_deadline {
                 Some(next_deadline) => {
                     tokio::select! {
                         dirty_channel_runtime_ids = updates.wait_for_update() => dirty_channel_runtime_ids,
                         () = time::sleep_until(Instant::from_std(next_deadline)) => {
-                            transport_adapter
-                                .expired_active_speaker_channel_runtime_ids(StdInstant::now())
-                                .await
+                            expired_active_speaker_channel_runtime_ids(
+                                &observability_port,
+                                StdInstant::now(),
+                            )
+                            .await
                         }
                     }
                 }
@@ -170,14 +176,51 @@ fn spawn_source_packet_policy_update_task(
             if dirty_channel_runtime_ids.is_empty() {
                 continue;
             }
-            channels
-                .sync_source_packet_selection_policies_for_runtime_ids(
-                    &dirty_channel_runtime_ids,
-                    &transport_adapter,
-                )
-                .await;
+            sync_source_packet_selection_policies(
+                &channels,
+                &dirty_channel_runtime_ids,
+                &observability_port,
+                &media_port,
+            )
+            .await;
         }
     })
+}
+
+fn subscribe_source_policy_updates(
+    source_policy_port: &impl SourcePolicyPort,
+) -> transport_adapter::SourcePolicyUpdateSubscription {
+    source_policy_port.source_policy_subscription()
+}
+
+async fn next_active_speaker_deadline(
+    observability_port: &impl ObservabilityPort,
+) -> Option<StdInstant> {
+    observability_port.next_active_speaker_deadline().await
+}
+
+async fn expired_active_speaker_channel_runtime_ids(
+    observability_port: &impl ObservabilityPort,
+    now: StdInstant,
+) -> BTreeSet<ChannelRuntimeId> {
+    observability_port
+        .expired_active_speaker_channel_runtime_ids(now)
+        .await
+}
+
+async fn sync_source_packet_selection_policies(
+    channels: &ChannelManager,
+    channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
+    observability_port: &impl ObservabilityPort,
+    media_port: &impl MediaPort,
+) {
+    channels
+        .sync_source_packet_selection_policies_for_runtime_ids(
+            channel_runtime_ids,
+            observability_port,
+            media_port,
+        )
+        .await;
 }
 
 fn build_transport_adapter(

@@ -5,7 +5,7 @@ use tracing::warn;
 use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::DiagnosticsEventData;
 use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::runtime::transport_adapter::{MediaPort, RuntimeTransportAdapter, SessionPort};
 use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
@@ -206,8 +206,13 @@ impl Channel {
             state.apply_presence_update(session_id, connection_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
-            self.sync_source_packet_selection_policy(transport_adapter)
+            if let Some(transport_adapter) = transport_adapter {
+                self.sync_source_packet_selection_policy(
+                    Some(transport_adapter),
+                    transport_adapter,
+                )
                 .await;
+            }
             outcome.emit();
         } else {
             warn!(
@@ -277,9 +282,9 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        session_port: &impl SessionPort,
     ) {
-        if transport_adapter
+        if session_port
             .close_session(&self.transport_session_key(session_id, connection_id))
             .await
             .is_err()
@@ -355,8 +360,13 @@ impl Channel {
             SessionTransitionOutcome::Join(outcome) => {
                 self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
                     .await;
-                self.sync_source_packet_selection_policy(cleanup.transport_adapter())
+                if let Some(transport_adapter) = cleanup.transport_adapter() {
+                    self.sync_source_packet_selection_policy(
+                        Some(transport_adapter),
+                        transport_adapter,
+                    )
                     .await;
+                }
                 let connection_id = outcome.connection_id;
                 let session_id = outcome.session_id.clone();
                 Self::emit_lifecycle_effects(outcome.effects);
@@ -397,8 +407,13 @@ impl Channel {
                         .with_media_worker_id(self.media_worker_id()),
                     );
                     self.diagnostics.forget_session(self.uuid(), &session_id);
-                    self.sync_source_packet_selection_policy(cleanup.transport_adapter())
+                    if let Some(transport_adapter) = cleanup.transport_adapter() {
+                        self.sync_source_packet_selection_policy(
+                            Some(transport_adapter),
+                            transport_adapter,
+                        )
                         .await;
+                    }
                 }
                 SessionTransitionResult::Applied
             }
@@ -416,8 +431,13 @@ impl Channel {
                     );
                     self.diagnostics.forget_session(self.uuid(), session_id);
                 }
-                self.sync_source_packet_selection_policy(cleanup.transport_adapter())
+                if let Some(transport_adapter) = cleanup.transport_adapter() {
+                    self.sync_source_packet_selection_policy(
+                        Some(transport_adapter),
+                        transport_adapter,
+                    )
                     .await;
+                }
                 Self::emit_lifecycle_effects(outcome.effects);
                 SessionTransitionResult::Applied
             }
@@ -442,13 +462,13 @@ impl Channel {
         session_id: &SessionId,
         connection_id: ConnectionId,
         capabilities: MediaCapabilities,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
         let update = {
             let mut state = self.state.write().await;
             state.set_session_negotiated(session_id, connection_id, &capabilities)
         };
-        self.apply_negotiation_update(session_id, connection_id, update, transport_adapter)
+        self.apply_negotiation_update(session_id, connection_id, update, media_port)
             .await
     }
 
@@ -457,18 +477,14 @@ impl Channel {
         session_id: &SessionId,
         connection_id: ConnectionId,
         update: SessionNegotiationUpdate,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
         if !update.session_present {
             return false;
         }
         if update.became_consumer_ready {
             return self
-                .bootstrap_missing_consumers_for_connection(
-                    session_id,
-                    connection_id,
-                    transport_adapter,
-                )
+                .bootstrap_missing_consumers_for_connection(session_id, connection_id, media_port)
                 .await;
         }
         true
@@ -478,14 +494,10 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        media_port: &impl MediaPort,
     ) -> bool {
-        self.bootstrap_missing_consumers_for_connection(
-            session_id,
-            connection_id,
-            transport_adapter,
-        )
-        .await
+        self.bootstrap_missing_consumers_for_connection(session_id, connection_id, media_port)
+            .await
     }
 
     pub(super) async fn session_count(&self) -> usize {

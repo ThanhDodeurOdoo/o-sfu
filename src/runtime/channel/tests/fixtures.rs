@@ -262,7 +262,12 @@ pub(super) async fn commit_staged_publishes(
     transport_adapter: &RuntimeTransportAdapter,
 ) {
     channel
-        .commit_staged_publishes(session_id, connection_id, transport_adapter)
+        .commit_staged_publishes(
+            session_id,
+            connection_id,
+            transport_adapter,
+            transport_adapter,
+        )
         .await;
 }
 

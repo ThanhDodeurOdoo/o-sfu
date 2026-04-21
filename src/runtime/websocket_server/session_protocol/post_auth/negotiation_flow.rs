@@ -1,6 +1,6 @@
 use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{
-    RuntimeTransportAdapter, TransportAdapterError, TransportSessionKey,
+    NegotiationPort, SessionOffer, TransportAdapterError, TransportSessionKey,
 };
 use crate::runtime::websocket_server::WsWriter;
 use o_sfu_protocol::signaling::{
@@ -35,9 +35,7 @@ impl PostAuthSessionProtocol {
         let session_key = self
             .channel
             .transport_session_key(&self.session_id, self.connection_id);
-        let offer = self
-            .transport_adapter
-            .create_initial_session_offer(&session_key)
+        let offer = create_initial_offer(&self.transport_adapter, &session_key)
             .await
             .map_err(|error| {
                 warn!(
@@ -232,10 +230,8 @@ impl PostAuthSessionProtocol {
         let session_key = self
             .channel
             .transport_session_key(&self.session_id, self.connection_id);
-        if let Err(error) = self
-            .transport_adapter
-            .apply_session_answer(&session_key, answer_sdp)
-            .await
+        if let Err(error) =
+            apply_transport_answer(&self.transport_adapter, &session_key, answer_sdp).await
         {
             warn!(
                 event = telemetry_event::NEGOTIATION_FAILED,
@@ -280,8 +276,7 @@ impl PostAuthSessionProtocol {
                 offered_router_rtp_capabilities,
             } => {
                 let client_rtp_capabilities = self
-                    .transport_adapter
-                    .negotiated_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
+                    .project_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
                     .map_err(|error| {
                         warn!(
                             event = telemetry_event::NEGOTIATION_FAILED,
@@ -343,12 +338,53 @@ impl PostAuthSessionProtocol {
     }
 }
 
+impl PostAuthSessionProtocol {
+    fn project_client_rtp_capabilities(
+        &self,
+        answer_sdp: &str,
+        offered_router_rtp_capabilities: &o_sfu_router::MediaCapabilities,
+    ) -> Result<o_sfu_router::MediaCapabilities, TransportAdapterError> {
+        project_client_rtp_capabilities(
+            &self.transport_adapter,
+            answer_sdp,
+            offered_router_rtp_capabilities,
+        )
+    }
+}
+
+async fn create_initial_offer(
+    negotiation_port: &impl NegotiationPort,
+    session_key: &TransportSessionKey,
+) -> Result<SessionOffer, TransportAdapterError> {
+    negotiation_port
+        .create_initial_session_offer(session_key)
+        .await
+}
+
+async fn apply_transport_answer(
+    negotiation_port: &impl NegotiationPort,
+    session_key: &TransportSessionKey,
+    answer_sdp: &str,
+) -> Result<(), TransportAdapterError> {
+    negotiation_port
+        .apply_session_answer(session_key, answer_sdp)
+        .await
+}
+
+fn project_client_rtp_capabilities(
+    negotiation_port: &impl NegotiationPort,
+    answer_sdp: &str,
+    offered_router_rtp_capabilities: &o_sfu_router::MediaCapabilities,
+) -> Result<o_sfu_router::MediaCapabilities, TransportAdapterError> {
+    negotiation_port.negotiated_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
+}
+
 async fn staged_renegotiation_request(
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_port: &impl NegotiationPort,
     session_key: &TransportSessionKey,
     remote_address: &str,
 ) -> Result<Option<ServerRequest>, WebSocketCloseCode> {
-    match transport_adapter
+    match transport_port
         .create_session_renegotiation_offer(session_key)
         .await
     {
