@@ -6,7 +6,7 @@ use tracing::{error, warn};
 
 use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::TransportMediaId;
-use o_sfu_protocol::shared::{SessionId, StreamType};
+use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::super::{
     super::{ChannelEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
@@ -14,6 +14,26 @@ use super::super::{
     shared::{ChannelState, ConsumerKey, ConsumerState, PublishedProducer},
 };
 use super::router_stream_type::to_router_stream_type;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime::channel) struct ConsumerRouteUpdate {
+    consumer_state: ConsumerState,
+    stream_type: StreamType,
+    active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsumerRouteState {
+    Absent,
+    Inactive,
+    Active,
+}
+
+#[derive(Debug, Default)]
+pub(in crate::runtime::channel) struct PlannedSubscriptionChange {
+    route_updates: Vec<ConsumerRouteUpdate>,
+    bootstraps: Vec<PlannedConsumerBootstrap>,
+}
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PendingConsumerBootstrapTarget {
@@ -37,9 +57,6 @@ pub(in crate::runtime::channel) struct ConsumerBootstrapProducerSnapshot {
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PreparedConsumerBootstrap {
     consumer_rtp_parameters: RouterRtpParameters,
-    sender: OutboundSender,
-    consumer_active: bool,
-    producer: ConsumerBootstrapProducerSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +66,13 @@ pub(in crate::runtime::channel) struct PendingConsumerBootstrap {
     bootstrap: RemoteTrackBootstrap,
     consumer_active: bool,
     producer: ConsumerBootstrapProducerSnapshot,
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::runtime::channel) struct PlannedConsumerBootstrap {
+    target: PendingConsumerBootstrapTarget,
+    prepared: PreparedConsumerBootstrap,
+    pending_bootstrap: PendingConsumerBootstrap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,14 +91,52 @@ pub(crate) struct RemoteTrackBootstrap {
 pub(in crate::runtime::channel) enum ConsumerBootstrapOrigin {
     LateJoin,
     Publish,
+    Subscribe,
 }
 
 impl ChannelState {
-    pub(in crate::runtime::channel) fn missing_consumer_targets_for_connection(
-        &self,
+    pub(in crate::runtime::channel) fn plan_subscription_change(
+        &mut self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-    ) -> Option<Vec<PendingConsumerBootstrapTarget>> {
+        target_session_id: &SessionId,
+        states: &DownloadStates,
+    ) -> PlannedSubscriptionChange {
+        let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
+            return PlannedSubscriptionChange::default();
+        };
+        let existing_states = session
+            .desired_download_states
+            .entry(target_session_id.clone())
+            .or_default();
+        merge_download_states(existing_states, states);
+        if download_states_are_empty(existing_states) {
+            session.desired_download_states.remove(target_session_id);
+        }
+        let route_updates = self.apply_subscription_route_updates(
+            session_id,
+            connection_id,
+            target_session_id,
+            states,
+        );
+        let bootstraps = self.plan_consumer_bootstraps_for_targets(
+            self.collect_missing_consumer_targets_for_peer(
+                session_id,
+                connection_id,
+                target_session_id,
+            ),
+        );
+        PlannedSubscriptionChange {
+            route_updates,
+            bootstraps,
+        }
+    }
+
+    pub(in crate::runtime::channel) fn plan_missing_consumer_bootstraps_for_connection(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+    ) -> Option<Vec<PlannedConsumerBootstrap>> {
         let session = self.sessions.get(session_id)?;
         if session.connection_id != connection_id {
             return None;
@@ -82,10 +144,61 @@ impl ChannelState {
         if !session.negotiation.can_consume() {
             return Some(Vec::new());
         }
-        Some(self.collect_missing_consumer_targets(session_id, connection_id))
+        Some(self.plan_consumer_bootstraps_for_targets(
+            self.collect_missing_consumer_targets(session_id, connection_id),
+        ))
     }
 
-    pub(super) fn collect_missing_consumer_targets(
+    pub(in crate::runtime::channel) fn plan_consumer_bootstraps_for_targets(
+        &mut self,
+        targets: Vec<PendingConsumerBootstrapTarget>,
+    ) -> Vec<PlannedConsumerBootstrap> {
+        targets
+            .into_iter()
+            .filter_map(|target| self.plan_consumer_bootstrap(&target))
+            .collect()
+    }
+
+    fn apply_subscription_route_updates(
+        &mut self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+        target_session_id: &SessionId,
+        states: &DownloadStates,
+    ) -> Vec<ConsumerRouteUpdate> {
+        let mut accepted_updates = Vec::new();
+        for (stream_type, active) in states.iter() {
+            let key = ConsumerKey::new(session_id, target_session_id, stream_type);
+            let Some(current_consumer_state) = self.consumer_index.get(&key).copied() else {
+                continue;
+            };
+            if current_consumer_state.consumer_connection_id != connection_id {
+                continue;
+            }
+            let paused = !active;
+            if self
+                .topology
+                .set_consumer_paused(current_consumer_state.routed_consumer_id, paused)
+                .is_err()
+            {
+                error!(
+                    ?session_id,
+                    ?target_session_id,
+                    ?stream_type,
+                    "failed to set consumer pause state in channel router"
+                );
+                continue;
+            }
+            accepted_updates.push(ConsumerRouteUpdate {
+                consumer_state: current_consumer_state,
+                stream_type,
+                active,
+            });
+        }
+        accepted_updates
+    }
+
+    fn collect_missing_consumer_targets(
         &self,
         session_id: &SessionId,
         consumer_connection_id: ConnectionId,
@@ -93,35 +206,72 @@ impl ChannelState {
         self.producers
             .iter()
             .filter_map(|(producer_id, producer)| {
-                let transport_media_id = producer.transport_media_id?;
-                if producer.owner_session_id == *session_id {
-                    return None;
-                }
-                let consumer_key =
-                    ConsumerKey::new(session_id, &producer.owner_session_id, producer.stream_type);
-                if self.consumer_bootstrap_exists(&consumer_key) {
-                    return None;
-                }
-                Some(PendingConsumerBootstrapTarget::new(
-                    session_id.clone(),
+                self.pending_consumer_target(
+                    session_id,
                     consumer_connection_id,
-                    ConsumerBootstrapProducerSnapshot::pending(
-                        producer.owner_session_id.clone(),
-                        producer.owner_connection_id,
-                        *producer_id,
-                        producer.stream_type,
-                        producer.media_kind,
-                        transport_media_id,
-                    ),
-                ))
+                    *producer_id,
+                    producer,
+                )
             })
             .collect()
     }
 
-    pub(in crate::runtime::channel) fn prepare_consumer_bootstrap(
+    fn collect_missing_consumer_targets_for_peer(
         &self,
+        session_id: &SessionId,
+        consumer_connection_id: ConnectionId,
+        target_session_id: &SessionId,
+    ) -> Vec<PendingConsumerBootstrapTarget> {
+        self.producers
+            .iter()
+            .filter_map(|(producer_id, producer)| {
+                if producer.owner_session_id != *target_session_id {
+                    return None;
+                }
+                self.pending_consumer_target(
+                    session_id,
+                    consumer_connection_id,
+                    *producer_id,
+                    producer,
+                )
+            })
+            .collect()
+    }
+
+    fn pending_consumer_target(
+        &self,
+        session_id: &SessionId,
+        consumer_connection_id: ConnectionId,
+        producer_id: ProducerRuntimeId,
+        producer: &PublishedProducer,
+    ) -> Option<PendingConsumerBootstrapTarget> {
+        let transport_media_id = producer.transport_media_id?;
+        if producer.owner_session_id == *session_id {
+            return None;
+        }
+        let consumer_key =
+            ConsumerKey::new(session_id, &producer.owner_session_id, producer.stream_type);
+        if self.consumer_bootstrap_exists(&consumer_key) {
+            return None;
+        }
+        Some(PendingConsumerBootstrapTarget::new(
+            session_id.clone(),
+            consumer_connection_id,
+            ConsumerBootstrapProducerSnapshot::pending(
+                producer.owner_session_id.clone(),
+                producer.owner_connection_id,
+                producer_id,
+                producer.stream_type,
+                producer.media_kind,
+                transport_media_id,
+            ),
+        ))
+    }
+
+    fn plan_consumer_bootstrap(
+        &mut self,
         target: &PendingConsumerBootstrapTarget,
-    ) -> Option<PreparedConsumerBootstrap> {
+    ) -> Option<PlannedConsumerBootstrap> {
         let (sender, client_capabilities) = {
             let session = self.sessions.get(&target.consumer_session_id)?;
             if session.connection_id != target.consumer_connection_id
@@ -131,53 +281,30 @@ impl ChannelState {
             }
             (
                 session.sender.clone(),
-                session.parsed_client_rtp_capabilities.as_ref()?,
+                session.parsed_client_rtp_capabilities.clone()?,
             )
         };
-        let producer = self.producers.get(&target.producer().producer_id)?;
-        if !target.producer().matches_pending_producer(producer) {
+        let producer = self.producers.get(&target.producer.producer_id)?;
+        if !target.producer.matches_pending_producer(producer) {
             return None;
         }
         let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
+        let prepared_producer = target
+            .producer
+            .with_commit_snapshot(producer.routed_producer_id, producer.active);
         let consumer_active = self.desired_download_active(
             &target.consumer_session_id,
             target.producer_session_id(),
             target.stream_type(),
         );
-
-        if !can_consume(&producer_consumable_rtp_parameters, client_capabilities) {
+        if !can_consume(&producer_consumable_rtp_parameters, &client_capabilities) {
             return None;
         }
         let negotiated_rtp_parameters = negotiate_consumer_rtp_parameters(
             &producer_consumable_rtp_parameters,
-            client_capabilities,
+            &client_capabilities,
         )
         .ok()?;
-        Some(PreparedConsumerBootstrap {
-            consumer_rtp_parameters: negotiated_rtp_parameters,
-            sender,
-            consumer_active,
-            producer: target
-                .producer()
-                .with_commit_snapshot(producer.routed_producer_id, producer.active),
-        })
-    }
-
-    pub(in crate::runtime::channel) fn prepare_consumer_bootstrap_transaction(
-        &mut self,
-        target: &PendingConsumerBootstrapTarget,
-        prepared: &PreparedConsumerBootstrap,
-    ) -> Option<PendingConsumerBootstrap> {
-        let session = self.sessions.get(&target.consumer_session_id)?;
-        if session.connection_id != target.consumer_connection_id
-            || !session.negotiation.can_consume()
-        {
-            return None;
-        }
-        let producer = self.producers.get(&prepared.producer.producer_id)?;
-        if !prepared.producer.matches_committed_producer(producer) {
-            return None;
-        }
         let consumer_key = ConsumerKey::new(
             &target.consumer_session_id,
             target.producer_session_id(),
@@ -189,24 +316,29 @@ impl ChannelState {
         self.pending_consumer_bootstraps
             .insert(consumer_key.clone());
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
-        Some(PendingConsumerBootstrap {
-            consumer_key,
-            sender: prepared.sender.clone(),
-            bootstrap: RemoteTrackBootstrap {
-                consumer_id,
-                media_kind: prepared.producer.media_kind,
-                mid: prepared
-                    .consumer_rtp_parameters
-                    .mid()
-                    .map_or_else(|| consumer_id.into_wire_id(), ToOwned::to_owned),
-                producer_id: prepared.producer.producer_id,
-                rtp_parameters: prepared.consumer_rtp_parameters.clone(),
-                session_id: prepared.producer.owner_session_id.clone(),
-                active: prepared.producer.active.unwrap_or(true),
-                stream_type: prepared.producer.stream_type,
+        Some(PlannedConsumerBootstrap {
+            target: target.clone(),
+            prepared: PreparedConsumerBootstrap {
+                consumer_rtp_parameters: negotiated_rtp_parameters.clone(),
             },
-            consumer_active: prepared.consumer_active,
-            producer: prepared.producer.clone(),
+            pending_bootstrap: PendingConsumerBootstrap {
+                consumer_key,
+                sender,
+                bootstrap: RemoteTrackBootstrap {
+                    consumer_id,
+                    media_kind: prepared_producer.media_kind,
+                    mid: negotiated_rtp_parameters
+                        .mid()
+                        .map_or_else(|| consumer_id.into_wire_id(), ToOwned::to_owned),
+                    producer_id: prepared_producer.producer_id,
+                    rtp_parameters: negotiated_rtp_parameters,
+                    session_id: prepared_producer.owner_session_id.clone(),
+                    active: prepared_producer.active.unwrap_or(true),
+                    stream_type: prepared_producer.stream_type,
+                },
+                consumer_active,
+                producer: prepared_producer,
+            },
         })
     }
 
@@ -289,12 +421,91 @@ impl ChannelState {
         ));
     }
 
+    pub(in crate::runtime::channel) fn desired_download_active(
+        &self,
+        session_id: &SessionId,
+        target_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.sessions
+            .get(session_id)
+            .and_then(|session| session.desired_download_states.get(target_session_id))
+            .and_then(|states| download_state_for_stream_type(states, stream_type))
+            .unwrap_or(true)
+    }
+
+    pub(in crate::runtime::channel) fn consumer_route_state(
+        &self,
+        consumer_session_id: &SessionId,
+        producer_session_id: &SessionId,
+        stream_type: StreamType,
+    ) -> Option<ConsumerRouteState> {
+        self.sessions.get(consumer_session_id)?;
+        let consumer_key = ConsumerKey::new(consumer_session_id, producer_session_id, stream_type);
+        if !self.consumer_index.contains_key(&consumer_key) {
+            return Some(ConsumerRouteState::Absent);
+        }
+        let Some(producer_id) =
+            self.producer_ids_by_owner_stream
+                .get(&super::super::shared::ProducerKey::new(
+                    producer_session_id,
+                    stream_type,
+                ))
+        else {
+            return Some(ConsumerRouteState::Absent);
+        };
+        let Some(producer) = self.producers.get(producer_id) else {
+            return Some(ConsumerRouteState::Absent);
+        };
+        let route_active = producer.active
+            && self.desired_download_active(consumer_session_id, producer_session_id, stream_type);
+        Some(if route_active {
+            ConsumerRouteState::Active
+        } else {
+            ConsumerRouteState::Inactive
+        })
+    }
+
     pub(in crate::runtime::channel) fn consumer_bootstrap_exists(
         &self,
         consumer_key: &ConsumerKey,
     ) -> bool {
         self.consumer_index.contains_key(consumer_key)
             || self.pending_consumer_bootstraps.contains(consumer_key)
+    }
+}
+
+impl PlannedSubscriptionChange {
+    pub(in crate::runtime::channel) fn into_parts(
+        self,
+    ) -> (Vec<ConsumerRouteUpdate>, Vec<PlannedConsumerBootstrap>) {
+        (self.route_updates, self.bootstraps)
+    }
+}
+
+impl ConsumerRouteUpdate {
+    pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> ConnectionId {
+        self.consumer_state.consumer_connection_id
+    }
+
+    pub(in crate::runtime::channel) const fn consumer_media(&self) -> TransportMediaId {
+        self.consumer_state.consumer_media
+    }
+
+    pub(in crate::runtime::channel) const fn source_connection_id(&self) -> ConnectionId {
+        self.consumer_state.source_connection_id
+    }
+
+    pub(in crate::runtime::channel) const fn source_media(&self) -> TransportMediaId {
+        self.consumer_state.source_media
+    }
+
+    pub(in crate::runtime::channel) const fn stream_type(&self) -> StreamType {
+        self.stream_type
+    }
+
+    pub(in crate::runtime::channel) const fn active(&self) -> bool {
+        self.active
     }
 }
 
@@ -309,10 +520,6 @@ impl PendingConsumerBootstrapTarget {
             consumer_connection_id,
             producer,
         }
-    }
-
-    fn producer(&self) -> &ConsumerBootstrapProducerSnapshot {
-        &self.producer
     }
 
     pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> ConnectionId {
@@ -347,6 +554,18 @@ impl PendingConsumerBootstrapTarget {
 impl PreparedConsumerBootstrap {
     pub(in crate::runtime::channel) fn consumer_rtp_parameters(&self) -> &RouterRtpParameters {
         &self.consumer_rtp_parameters
+    }
+}
+
+impl PlannedConsumerBootstrap {
+    pub(in crate::runtime::channel) fn into_parts(
+        self,
+    ) -> (
+        PendingConsumerBootstrapTarget,
+        PreparedConsumerBootstrap,
+        PendingConsumerBootstrap,
+    ) {
+        (self.target, self.prepared, self.pending_bootstrap)
     }
 }
 
@@ -429,5 +648,32 @@ impl RemoteTrackBootstrap {
 
     pub(crate) fn into_channel_event_request(self) -> ChannelEventRequest {
         ChannelEventRequest::BootstrapRemoteTrack(self)
+    }
+}
+
+fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {
+    if let Some(audio) = update.audio {
+        target.audio = Some(audio);
+    }
+    if let Some(camera) = update.camera {
+        target.camera = Some(camera);
+    }
+    if let Some(screen) = update.screen {
+        target.screen = Some(screen);
+    }
+}
+
+fn download_states_are_empty(states: &DownloadStates) -> bool {
+    states.audio.is_none() && states.camera.is_none() && states.screen.is_none()
+}
+
+fn download_state_for_stream_type(
+    states: &DownloadStates,
+    stream_type: StreamType,
+) -> Option<bool> {
+    match stream_type {
+        StreamType::Audio => states.audio,
+        StreamType::Camera => states.camera,
+        StreamType::Screen => states.screen,
     }
 }

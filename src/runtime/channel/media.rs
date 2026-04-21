@@ -7,9 +7,9 @@ use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
-    Channel,
-    effects::{SubscriptionEffectPlan, UnpublishEffectPlan},
-    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget},
+    Channel, ChannelMediaCounts,
+    effects::{SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan},
+    state::ConsumerBootstrapOrigin,
 };
 
 impl Channel {
@@ -19,31 +19,57 @@ impl Channel {
         connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
-        let Some(targets) = ({
-            let state = self.state.read().await;
-            state.missing_consumer_targets_for_connection(session_id, connection_id)
-        }) else {
+        let mut state = self.state.write().await;
+        let media_counts_before = ChannelMediaCounts {
+            publications: state.publication_count(),
+            subscriptions: state.subscription_count(),
+        };
+        let Some(planned_bootstraps) =
+            state.plan_missing_consumer_bootstraps_for_connection(session_id, connection_id)
+        else {
             return false;
         };
-        self.bootstrap_consumer_targets(
-            targets,
-            transport_adapter,
+        let media_counts_after = ChannelMediaCounts {
+            publications: state.publication_count(),
+            subscriptions: state.subscription_count(),
+        };
+        drop(state);
+        let effect_plan = SubscriptionEffectPlan::from_planned_bootstraps(
+            media_counts_before,
+            media_counts_after,
+            planned_bootstraps,
             ConsumerBootstrapOrigin::LateJoin,
-        )
-        .await;
+        );
+        effect_plan.execute(self, transport_adapter).await;
         true
     }
 
-    async fn bootstrap_consumer_targets(
+    pub(super) async fn bootstrap_consumer_targets(
         &self,
-        targets: Vec<PendingConsumerBootstrapTarget>,
         transport_adapter: &RuntimeTransportAdapter,
         origin: ConsumerBootstrapOrigin,
+        targets: Vec<super::state::PendingConsumerBootstrapTarget>,
     ) {
-        for target in targets {
-            self.execute_consumer_bootstrap(target, transport_adapter, origin)
-                .await;
-        }
+        let effect_plan = {
+            let mut state = self.state.write().await;
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let planned_bootstraps = state.plan_consumer_bootstraps_for_targets(targets);
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            SubscriptionEffectPlan::from_planned_bootstraps(
+                media_counts_before,
+                media_counts_after,
+                planned_bootstraps,
+                origin,
+            )
+        };
+        effect_plan.execute(self, transport_adapter).await;
     }
 
     #[allow(
@@ -115,17 +141,32 @@ impl Channel {
     ) {
         let effect_plan = {
             let mut state = self.state.write().await;
-            SubscriptionEffectPlan::from_route_updates(
-                self,
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let planned_change = state.plan_subscription_change(
                 session_id,
                 connection_id,
                 target_session_id,
-                state.apply_download_state_update(
+                states,
+            );
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            SubscriptionEffectPlan::from_planned_change(
+                self,
+                SubscriptionEffectContext {
                     session_id,
                     connection_id,
                     target_session_id,
-                    states,
-                ),
+                    media_counts_before,
+                    media_counts_after,
+                    origin: ConsumerBootstrapOrigin::Subscribe,
+                },
+                planned_change,
             )
         };
         effect_plan.execute(self, transport_adapter).await;

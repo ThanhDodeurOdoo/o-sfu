@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, MediaStream, ProducerId, RouterId,
-    StreamType as RouterStreamType,
+    StreamType as RouterStreamType, derive_consumable_rtp_parameters,
 };
 use tokio::sync::mpsc;
 
@@ -20,10 +20,14 @@ use super::super::{
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::channel::{
-    ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities, topology::RoutedProducerId,
+    ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
+    session_negotiation::SessionTransportReady, topology::RoutedProducerId,
 };
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
+use crate::runtime::test_rtp_samples::{
+    sample_client_rtp_capabilities, sample_video_rtp_parameters,
+};
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::runtime::{ChannelRuntimeId, ConnectionId};
 use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
@@ -183,18 +187,21 @@ fn stale_replaced_connection_cannot_update_download_state() {
             .is_ok()
     );
 
-    let committed_updates = state.apply_download_state_update(
-        &consumer_session_id,
-        stale_connection_id,
-        &producer_session_id,
-        &DownloadStates {
-            camera: Some(false),
-            audio: None,
-            screen: None,
-        },
-    );
+    let (committed_updates, planned_bootstraps) = state
+        .plan_subscription_change(
+            &consumer_session_id,
+            stale_connection_id,
+            &producer_session_id,
+            &DownloadStates {
+                camera: Some(false),
+                audio: None,
+                screen: None,
+            },
+        )
+        .into_parts();
 
     assert!(committed_updates.is_empty());
+    assert!(planned_bootstraps.is_empty());
     assert!(
         state.desired_download_active(
             &consumer_session_id,
@@ -207,5 +214,95 @@ fn stale_replaced_connection_cannot_update_download_state() {
         state.consumer_index.get(&route_key),
         None,
         "replacement join should clear stale consumer routes before the new connection reboots them"
+    );
+}
+
+#[test]
+fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
+    let mut state = test_state();
+    let publisher_session_id = SessionId::Integer(1);
+    let subscriber_session_id = SessionId::Integer(2);
+
+    join_test_session(&mut state, &publisher_session_id);
+    join_test_session(&mut state, &subscriber_session_id);
+
+    let publisher_connection_id = state
+        .session_connection_id(&publisher_session_id)
+        .expect("publisher should have a connection id");
+    let subscriber_connection_id = state
+        .session_connection_id(&subscriber_session_id)
+        .expect("subscriber should have a connection id");
+
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                &subscriber_session_id,
+                subscriber_connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(
+                &subscriber_session_id,
+                subscriber_connection_id,
+                SessionTransportReady::Consume,
+            )
+            .session_present
+    );
+
+    let routed_producer_id = state
+        .topology
+        .add_producer(
+            &publisher_session_id,
+            RouterMediaKind::Video,
+            RouterStreamType::Camera,
+        )
+        .expect("publisher route should be added");
+    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+    let producer_rtp_parameters = sample_video_rtp_parameters(None, 22_222);
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &producer_rtp_parameters,
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should derive consumable router parameters");
+    state.producer_ids_by_owner_stream.insert(
+        ProducerKey::new(&publisher_session_id, StreamType::Camera),
+        producer_id,
+    );
+    state.producers.insert(
+        producer_id,
+        PublishedProducer {
+            owner_session_id: publisher_session_id.clone(),
+            owner_connection_id: publisher_connection_id,
+            stream_type: StreamType::Camera,
+            media_kind: RouterMediaKind::Video,
+            consumable_rtp_parameters,
+            routed_producer_id,
+            transport_media_id: Some(TransportMediaId::new(10)),
+            source_packet_selection: None,
+            active: true,
+        },
+    );
+
+    let (route_updates, planned_bootstraps) = state
+        .plan_subscription_change(
+            &subscriber_session_id,
+            subscriber_connection_id,
+            &publisher_session_id,
+            &DownloadStates {
+                camera: Some(false),
+                audio: None,
+                screen: None,
+            },
+        )
+        .into_parts();
+
+    assert!(route_updates.is_empty());
+    assert_eq!(planned_bootstraps.len(), 1);
+    assert!(
+        state.subscription_count() >= 1,
+        "planning the bootstrap must reserve the pending consumer slot immediately"
     );
 }

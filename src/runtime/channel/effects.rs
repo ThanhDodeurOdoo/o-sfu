@@ -29,7 +29,9 @@ use super::{
     Channel, ChannelMediaCounts,
     state::{
         ChannelState, ConsumerBootstrapOrigin, ConsumerRouteUpdate, FeaturedSessionUpdate,
-        PendingConsumerBootstrapTarget, SourcePacketSelectionUpdate, TransportMediaRemoval,
+        PendingConsumerBootstrap, PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
+        PlannedSubscriptionChange, PreparedConsumerBootstrap, SourcePacketSelectionUpdate,
+        TransportMediaRemoval,
     },
 };
 
@@ -62,9 +64,29 @@ struct SubscriptionTransportOp {
     diagnostics: DiagnosticsEventData,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SubscriptionEffectContext<'a> {
+    pub(super) session_id: &'a SessionId,
+    pub(super) connection_id: ConnectionId,
+    pub(super) target_session_id: &'a SessionId,
+    pub(super) media_counts_before: ChannelMediaCounts,
+    pub(super) media_counts_after: ChannelMediaCounts,
+    pub(super) origin: ConsumerBootstrapOrigin,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct SubscriptionEffectPlan {
+    media_count_delta: Option<MediaCountDelta>,
     transport_ops: Vec<SubscriptionTransportOp>,
+    bootstrap_ops: Vec<ConsumerBootstrapOp>,
+}
+
+#[derive(Debug)]
+struct ConsumerBootstrapOp {
+    target: PendingConsumerBootstrapTarget,
+    prepared: PreparedConsumerBootstrap,
+    pending_bootstrap: PendingConsumerBootstrap,
+    origin: ConsumerBootstrapOrigin,
 }
 
 impl SubscriptionEffectPlan {
@@ -112,7 +134,54 @@ impl SubscriptionEffectPlan {
                 ),
             })
             .collect();
-        Self { transport_ops }
+        Self {
+            media_count_delta: None,
+            transport_ops,
+            bootstrap_ops: Vec::new(),
+        }
+    }
+
+    pub(super) fn from_planned_change(
+        channel: &Channel,
+        context: SubscriptionEffectContext<'_>,
+        planned_change: PlannedSubscriptionChange,
+    ) -> Self {
+        let (route_updates, planned_bootstraps) = planned_change.into_parts();
+        let mut effect_plan = Self::from_route_updates(
+            channel,
+            context.session_id,
+            context.connection_id,
+            context.target_session_id,
+            route_updates,
+        );
+        effect_plan.media_count_delta = Some(MediaCountDelta::new(
+            context.media_counts_before,
+            context.media_counts_after,
+        ));
+        effect_plan.bootstrap_ops = planned_bootstraps
+            .into_iter()
+            .map(|planned_bootstrap| ConsumerBootstrapOp::new(planned_bootstrap, context.origin))
+            .collect();
+        effect_plan
+    }
+
+    pub(super) fn from_planned_bootstraps(
+        media_counts_before: ChannelMediaCounts,
+        media_counts_after: ChannelMediaCounts,
+        planned_bootstraps: Vec<PlannedConsumerBootstrap>,
+        origin: ConsumerBootstrapOrigin,
+    ) -> Self {
+        Self {
+            media_count_delta: Some(MediaCountDelta::new(
+                media_counts_before,
+                media_counts_after,
+            )),
+            transport_ops: Vec::new(),
+            bootstrap_ops: planned_bootstraps
+                .into_iter()
+                .map(|planned_bootstrap| ConsumerBootstrapOp::new(planned_bootstrap, origin))
+                .collect(),
+        }
     }
 
     pub(super) async fn execute(
@@ -120,6 +189,9 @@ impl SubscriptionEffectPlan {
         channel: &Channel,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
+        if let Some(media_count_delta) = self.media_count_delta {
+            media_count_delta.record(channel);
+        }
         for transport_op in self.transport_ops {
             // Transport activity is best-efort here: the channel intent has
             // already been committed, so the failure path is to surface it to
@@ -151,6 +223,184 @@ impl SubscriptionEffectPlan {
             }
             channel.diagnostics.record(transport_op.diagnostics);
         }
+        for bootstrap_op in self.bootstrap_ops {
+            bootstrap_op.execute(channel, transport_adapter).await;
+        }
+    }
+}
+
+impl ConsumerBootstrapOp {
+    fn new(planned_bootstrap: PlannedConsumerBootstrap, origin: ConsumerBootstrapOrigin) -> Self {
+        let (target, prepared, pending_bootstrap) = planned_bootstrap.into_parts();
+        Self {
+            target,
+            prepared,
+            pending_bootstrap,
+            origin,
+        }
+    }
+
+    async fn execute(self, channel: &Channel, transport_adapter: &RuntimeTransportAdapter) {
+        let Self {
+            target,
+            prepared,
+            pending_bootstrap,
+            origin,
+        } = self;
+        let Some((consumer_transport_media_id, consumer_mid)) =
+            Self::declare_consumer_transport_media(
+                &target,
+                &prepared,
+                origin,
+                channel,
+                transport_adapter,
+            )
+            .await
+        else {
+            return;
+        };
+        let (media_counts_before, outbound, media_counts_after) = {
+            let mut state = channel.state.write().await;
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let outbound = state.commit_consumer_bootstrap(
+                &target,
+                pending_bootstrap,
+                consumer_transport_media_id,
+                consumer_mid,
+            );
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            (media_counts_before, outbound, media_counts_after)
+        };
+        let media_count_delta = MediaCountDelta::new(media_counts_before, media_counts_after);
+        Self::finish(
+            channel,
+            transport_adapter,
+            &target,
+            origin,
+            consumer_transport_media_id,
+            media_count_delta,
+            outbound,
+        )
+        .await;
+    }
+
+    async fn declare_consumer_transport_media(
+        target: &PendingConsumerBootstrapTarget,
+        prepared: &PreparedConsumerBootstrap,
+        origin: ConsumerBootstrapOrigin,
+        channel: &Channel,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Option<(TransportMediaId, Option<String>)> {
+        let consumer_session_key = channel.transport_session_key(
+            target.consumer_session_id(),
+            target.consumer_connection_id(),
+        );
+        let consumer_transport_media_id = match transport_adapter
+            .consume_media(
+                &consumer_session_key,
+                target.media_kind(),
+                &channel.transport_session_key(
+                    target.producer_session_id(),
+                    target.producer_connection_id(),
+                ),
+                target.transport_media_id(),
+                prepared.consumer_rtp_parameters(),
+            )
+            .await
+        {
+            Ok(transport_media_id) => transport_media_id,
+            Err(error) => {
+                channel.release_pending_consumer_bootstrap(target).await;
+                warn!(
+                    consumer_session_id = ?target.consumer_session_id(),
+                    consumer_connection_id = ?target.consumer_connection_id(),
+                    producer_session_id = ?target.producer_session_id(),
+                    producer_connection_id = ?target.producer_connection_id(),
+                    source_transport_media_id = ?target.transport_media_id(),
+                    error = ?error,
+                    consumer_mid = prepared.consumer_rtp_parameters().mid(),
+                    ?origin,
+                    "transport adapter rejected consume media declaration"
+                );
+                return None;
+            }
+        };
+        let consumer_mid = transport_adapter
+            .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
+            .await;
+        Some((consumer_transport_media_id, consumer_mid))
+    }
+
+    async fn finish(
+        channel: &Channel,
+        transport_adapter: &RuntimeTransportAdapter,
+        target: &PendingConsumerBootstrapTarget,
+        origin: ConsumerBootstrapOrigin,
+        consumer_transport_media_id: TransportMediaId,
+        media_count_delta: MediaCountDelta,
+        outbound: Option<(
+            super::outbound::OutboundSender,
+            super::RemoteTrackBootstrap,
+            bool,
+        )>,
+    ) {
+        let Some((sender, bootstrap, consumer_active)) = outbound else {
+            media_count_delta.record(channel);
+            channel
+                .cleanup_transport_media(
+                    target.consumer_session_id(),
+                    target.consumer_connection_id(),
+                    consumer_transport_media_id,
+                    transport_adapter,
+                    "transport adapter failed to remove consumer transport media after bootstrap state commit failed",
+                )
+                .await;
+            return;
+        };
+        media_count_delta.record(channel);
+        channel
+            .apply_initial_consumer_pause_state(
+                target,
+                consumer_transport_media_id,
+                consumer_active,
+                transport_adapter,
+                origin,
+            )
+            .await;
+        channel.diagnostics.record(
+            DiagnosticsEventData::for_session(
+                channel.uuid(),
+                target.consumer_session_id(),
+                telemetry_event::SUBSCRIBE_SUCCEEDED,
+            )
+            .with_connection_id(target.consumer_connection_id().as_u64())
+            .with_media_worker_id(channel.media_worker_id())
+            .with_transport_media_id(consumer_transport_media_id.as_u64())
+            .insert_field(
+                "producer_session_id",
+                serde_json::to_value(target.producer_session_id())
+                    .unwrap_or(serde_json::Value::Null),
+            )
+            .insert_field(
+                "source_transport_media_id",
+                target.transport_media_id().as_u64(),
+            )
+            .insert_field(
+                "stream_type",
+                format!("{:?}", target.stream_type()).to_lowercase(),
+            )
+            .insert_field("origin", format!("{origin:?}").to_lowercase()),
+        );
+        let _ = sender.send(super::SessionOutbound::Request(Box::new(
+            bootstrap.into_channel_event_request(),
+        )));
     }
 }
 
@@ -216,15 +466,13 @@ impl StagedPublishCommitEffectPlan {
                 channel
                     .sync_source_packet_selection_policy(Some(transport_adapter))
                     .await;
-                for target in consumer_targets {
-                    channel
-                        .execute_consumer_bootstrap(
-                            target,
-                            transport_adapter,
-                            ConsumerBootstrapOrigin::Publish,
-                        )
-                        .await;
-                }
+                channel
+                    .bootstrap_consumer_targets(
+                        transport_adapter,
+                        ConsumerBootstrapOrigin::Publish,
+                        consumer_targets,
+                    )
+                    .await;
                 channel.diagnostics.record(diagnostics);
                 Some(producer_id)
             }

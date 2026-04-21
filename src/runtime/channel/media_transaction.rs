@@ -12,12 +12,11 @@ use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::{
-    Channel, ChannelMediaCounts, SessionOutbound,
+    Channel, ChannelMediaCounts,
     effects::StagedPublishCommitEffectPlan,
     state::{
-        ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
-        PreparedConsumerBootstrap, PreparedPublishedTrack, TransportMediaRemoval,
-        ValidatedPublishDescriptor,
+        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
+        TransportMediaRemoval, ValidatedPublishDescriptor,
     },
 };
 
@@ -178,19 +177,22 @@ impl PublishCommitSnapshot {
             };
             drop(state);
             match consumer_targets {
-                Some((producer_id, consumer_targets)) => StagedPublishCommitEffectPlan::committed(
-                    producer_id.into_wire_id(),
-                    (media_counts_before, media_counts_after),
-                    consumer_targets,
-                    DiagnosticsEventData::for_session(
-                        channel.uuid(),
-                        &self.session_id,
-                        telemetry_event::PUBLISH_COMMITTED,
+                Some((producer_id, consumer_targets)) => {
+                    let producer_wire_id: String = producer_id.into_wire_id();
+                    StagedPublishCommitEffectPlan::committed(
+                        producer_wire_id,
+                        (media_counts_before, media_counts_after),
+                        consumer_targets,
+                        DiagnosticsEventData::for_session(
+                            channel.uuid(),
+                            &self.session_id,
+                            telemetry_event::PUBLISH_COMMITTED,
+                        )
+                        .with_connection_id(self.connection_id.as_u64())
+                        .with_media_worker_id(channel.media_worker_id())
+                        .with_transport_media_id(self.transport_media_id.as_u64()),
                     )
-                    .with_connection_id(self.connection_id.as_u64())
-                    .with_media_worker_id(channel.media_worker_id())
-                    .with_transport_media_id(self.transport_media_id.as_u64()),
-                ),
+                }
                 None => StagedPublishCommitEffectPlan::rejected(
                     self.session_id.clone(),
                     self.connection_id,
@@ -199,145 +201,6 @@ impl PublishCommitSnapshot {
             }
         };
         effect_plan.execute(channel, transport_adapter).await
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct ConsumerBootstrapTransaction {
-    target: PendingConsumerBootstrapTarget,
-    prepared: PreparedConsumerBootstrap,
-    pending_bootstrap: PendingConsumerBootstrap,
-}
-
-impl ConsumerBootstrapTransaction {
-    async fn declare_consumer_transport_media(
-        &self,
-        channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
-        origin: ConsumerBootstrapOrigin,
-    ) -> Option<(TransportMediaId, Option<String>)> {
-        let consumer_session_key = channel.transport_session_key(
-            self.target.consumer_session_id(),
-            self.target.consumer_connection_id(),
-        );
-        let consumer_transport_media_id = match transport_adapter
-            .consume_media(
-                &consumer_session_key,
-                self.target.media_kind(),
-                &channel.transport_session_key(
-                    self.target.producer_session_id(),
-                    self.target.producer_connection_id(),
-                ),
-                self.target.transport_media_id(),
-                self.prepared.consumer_rtp_parameters(),
-            )
-            .await
-        {
-            Ok(transport_media_id) => transport_media_id,
-            Err(error) => {
-                channel
-                    .release_pending_consumer_bootstrap(&self.target)
-                    .await;
-                warn!(
-                    consumer_session_id = ?self.target.consumer_session_id(),
-                    consumer_connection_id = ?self.target.consumer_connection_id(),
-                    producer_session_id = ?self.target.producer_session_id(),
-                    producer_connection_id = ?self.target.producer_connection_id(),
-                    source_transport_media_id = ?self.target.transport_media_id(),
-                    error = ?error,
-                    consumer_mid = self.prepared.consumer_rtp_parameters().mid(),
-                    ?origin,
-                    "transport adapter rejected consume media declaration"
-                );
-                return None;
-            }
-        };
-        let consumer_mid = transport_adapter
-            .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
-            .await;
-        Some((consumer_transport_media_id, consumer_mid))
-    }
-
-    async fn execute(
-        self,
-        channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
-        origin: ConsumerBootstrapOrigin,
-    ) {
-        let Some((consumer_transport_media_id, consumer_mid)) = self
-            .declare_consumer_transport_media(channel, transport_adapter, origin)
-            .await
-        else {
-            return;
-        };
-        let (media_counts_before, outbound, media_counts_after) = {
-            let mut state = channel.state.write().await;
-            let media_counts_before = ChannelMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
-            let outbound = state.commit_consumer_bootstrap(
-                &self.target,
-                self.pending_bootstrap,
-                consumer_transport_media_id,
-                consumer_mid,
-            );
-            let media_counts_after = ChannelMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
-            drop(state);
-            (media_counts_before, outbound, media_counts_after)
-        };
-        let Some((sender, bootstrap, consumer_active)) = outbound else {
-            channel.record_media_count_delta(media_counts_before, media_counts_after);
-            channel
-                .cleanup_transport_media(
-                    self.target.consumer_session_id(),
-                    self.target.consumer_connection_id(),
-                    consumer_transport_media_id,
-                    transport_adapter,
-                    "transport adapter failed to remove consumer transport media after bootstrap state commit failed",
-                )
-                .await;
-            return;
-        };
-        channel.record_media_count_delta(media_counts_before, media_counts_after);
-        channel
-            .apply_initial_consumer_pause_state(
-                &self.target,
-                consumer_transport_media_id,
-                consumer_active,
-                transport_adapter,
-                origin,
-            )
-            .await;
-        channel.diagnostics.record(
-            DiagnosticsEventData::for_session(
-                channel.uuid(),
-                self.target.consumer_session_id(),
-                telemetry_event::SUBSCRIBE_SUCCEEDED,
-            )
-            .with_connection_id(self.target.consumer_connection_id().as_u64())
-            .with_media_worker_id(channel.media_worker_id())
-            .with_transport_media_id(consumer_transport_media_id.as_u64())
-            .insert_field(
-                "producer_session_id",
-                serde_json::to_value(self.target.producer_session_id())
-                    .unwrap_or(serde_json::Value::Null),
-            )
-            .insert_field(
-                "source_transport_media_id",
-                self.target.transport_media_id().as_u64(),
-            )
-            .insert_field(
-                "stream_type",
-                format!("{:?}", self.target.stream_type()).to_lowercase(),
-            ),
-        );
-        let _ = sender.send(SessionOutbound::Request(Box::new(
-            bootstrap.into_channel_event_request(),
-        )));
     }
 }
 
@@ -548,49 +411,6 @@ impl Channel {
         }
     }
 
-    pub(super) async fn prepare_consumer_bootstrap_transaction(
-        &self,
-        target: &PendingConsumerBootstrapTarget,
-    ) -> Option<ConsumerBootstrapTransaction> {
-        let prepared = {
-            let state = self.state.read().await;
-            state.prepare_consumer_bootstrap(target)?
-        };
-        let pending_bootstrap = {
-            let mut state = self.state.write().await;
-            let media_counts_before = ChannelMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
-            let pending_bootstrap =
-                state.prepare_consumer_bootstrap_transaction(target, &prepared)?;
-            let media_counts_after = ChannelMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
-            drop(state);
-            self.record_media_count_delta(media_counts_before, media_counts_after);
-            pending_bootstrap
-        };
-        Some(ConsumerBootstrapTransaction {
-            target: target.clone(),
-            prepared,
-            pending_bootstrap,
-        })
-    }
-
-    pub(super) async fn execute_consumer_bootstrap(
-        &self,
-        target: PendingConsumerBootstrapTarget,
-        transport_adapter: &RuntimeTransportAdapter,
-        origin: ConsumerBootstrapOrigin,
-    ) {
-        let Some(transaction) = self.prepare_consumer_bootstrap_transaction(&target).await else {
-            return;
-        };
-        transaction.execute(self, transport_adapter, origin).await;
-    }
-
     pub(super) async fn release_pending_consumer_bootstrap(
         &self,
         target: &PendingConsumerBootstrapTarget,
@@ -660,7 +480,7 @@ impl Channel {
         true
     }
 
-    async fn apply_initial_consumer_pause_state(
+    pub(super) async fn apply_initial_consumer_pause_state(
         &self,
         target: &PendingConsumerBootstrapTarget,
         consumer_transport_media_id: TransportMediaId,

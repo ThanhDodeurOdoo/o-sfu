@@ -7,9 +7,7 @@ use tracing::warn;
 use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 
-use super::super::super::{
-    Channel, media_transaction::StagedPublishTransaction, state::ConsumerBootstrapOrigin,
-};
+use super::super::super::{Channel, media_transaction::StagedPublishTransaction};
 
 #[derive(Debug, Clone)]
 pub(crate) struct NegotiatedPublish {
@@ -52,19 +50,23 @@ impl ChannelTestMedia<'_> {
         session_id: &SessionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let targets = {
-            let state = self.channel.state.read().await;
-            state.missing_consumer_targets(session_id)
+        let Some(connection_id) = self
+            .channel
+            .test_api()
+            .inspect()
+            .session_connection_id(session_id)
+            .await
+        else {
+            return;
         };
-        for target in targets {
-            self.channel
-                .execute_consumer_bootstrap(
-                    target,
-                    transport_adapter,
-                    ConsumerBootstrapOrigin::LateJoin,
-                )
-                .await;
-        }
+        let _ = self
+            .channel
+            .bootstrap_missing_consumers_for_connection(
+                session_id,
+                connection_id,
+                transport_adapter,
+            )
+            .await;
     }
 
     pub(crate) async fn publish_track(

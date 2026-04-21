@@ -15,7 +15,10 @@ use super::super::{
     ids::ProducerRuntimeId,
     shared::{ChannelState, ConsumerKey, ProducerKey, PublishedProducer, TransportMediaRemoval},
 };
-use super::{bootstrap::PendingConsumerBootstrapTarget, router_stream_type::to_router_stream_type};
+use super::{
+    router_stream_type::to_router_stream_type,
+    subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
+};
 
 #[allow(
     clippy::struct_field_names,
@@ -204,7 +207,7 @@ impl ChannelState {
                 Some(PendingConsumerBootstrapTarget::new(
                     peer_session_id.clone(),
                     peer_session.connection_id,
-                    super::bootstrap::ConsumerBootstrapProducerSnapshot::pending(
+                    ConsumerBootstrapProducerSnapshot::pending(
                         producer_session_id.clone(),
                         producer_connection_id,
                         producer_id,
