@@ -4,12 +4,12 @@ use crate::runtime::transport_adapter::SourcePacketGate;
 #[tokio::test]
 async fn rtc_transport_bootstrap_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
-    assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(!adapter.packet_loop_started());
     let session_key = transport_key(1, 15, SessionId::Integer(15));
     let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]

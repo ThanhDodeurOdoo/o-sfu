@@ -34,6 +34,9 @@ impl SourcePolicyDirtyState {
     }
 }
 
+pub use super::recording::ActiveChannelRegistry;
+pub use super::rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot};
+
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
 pub struct TestServer {

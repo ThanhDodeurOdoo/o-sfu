@@ -16,14 +16,14 @@ async fn rtc_initial_session_offer_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 15, SessionId::Integer(15));
 
-    assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(!adapter.packet_loop_started());
     assert!(
         prepare_transport_session(&adapter, &session_key)
             .await
             .is_ok()
     );
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]
@@ -180,10 +180,10 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
             .is_ok()
     );
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 
     assert_eq!(adapter.close_session(&first_session_key).await, Ok(()));
-    assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(!adapter.packet_loop_started());
     assert!(matches!(adapter.worker_handle(), Ok(None)));
 
     let second_session_key = transport_key(1, 142, SessionId::Integer(142));
@@ -193,7 +193,7 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
             .is_ok()
     );
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]
@@ -223,7 +223,7 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
         adapter.session_transport_health(&second_session_key),
         Some(super::super::state::TransportSessionHealth::Disconnected)
     );
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]
@@ -257,7 +257,7 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
     }
 
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]
@@ -277,7 +277,7 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
             .is_ok()
     );
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 
     let close_results = timeout(Duration::from_secs(1), async {
         tokio::join!(
@@ -294,7 +294,7 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
     assert_eq!(second_close, Ok(()));
 
     sleep(Duration::from_millis(5)).await;
-    assert!(!adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(!adapter.packet_loop_started());
     assert!(matches!(adapter.worker_handle(), Ok(None)));
 
     let next_session_key = transport_key(4, 303, SessionId::Integer(303));
@@ -304,5 +304,5 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
             .is_ok()
     );
     sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started.load(Ordering::Acquire));
+    assert!(adapter.packet_loop_started());
 }

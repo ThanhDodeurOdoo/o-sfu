@@ -21,7 +21,7 @@
 //! the worker while keeping the worker itself synchronous and focused on the
 //! media hot-path.
 use std::{
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -43,12 +43,55 @@ use super::super::{
 };
 use super::facade::{RtcTransportAdapter, RtcTransportObservabilityFacade, RtcWorkerHandle};
 
+/// Publication slot for the lazily booted packet-loop handle.
+///
+/// The RTC adapter publishes a fully constructed worker handle into this slot
+/// before any caller can start sending commands. Loom reuses the same slot logic
+/// with modeled synchronization primitives to check the publication contract.
+#[derive(Debug, Clone)]
+pub struct WorkerHandleSlot<T> {
+    handle: Option<T>,
+}
+
+impl<T> Default for WorkerHandleSlot<T> {
+    fn default() -> Self {
+        Self { handle: None }
+    }
+}
+
+impl<T: Clone> WorkerHandleSlot<T> {
+    pub fn worker_handle(&self) -> Option<T> {
+        self.handle.clone()
+    }
+
+    pub fn store(&mut self, handle: T) -> T {
+        self.handle = Some(handle.clone());
+        handle
+    }
+
+    pub fn clear(&mut self) {
+        self.handle = None;
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.handle.is_some()
+    }
+}
+
 impl RtcTransportAdapter {
     pub(crate) fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
         let Ok(worker_handle) = self.worker_handle.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        Ok(worker_handle.clone())
+        Ok(worker_handle.worker_handle())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn packet_loop_started(&self) -> bool {
+        let Ok(worker_handle) = self.worker_handle.lock() else {
+            return false;
+        };
+        worker_handle.is_started()
     }
 
     /// Lazily boot the shard-local packet loop and return the handle that all
@@ -56,16 +99,13 @@ impl RtcTransportAdapter {
     pub(super) fn ensure_packet_loop_started(
         &self,
     ) -> Result<RtcWorkerHandle, TransportAdapterError> {
-        if let Some(worker_handle) = self.worker_handle()? {
+        let Ok(mut worker_slot) = self.worker_handle.lock() else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        if let Some(worker_handle) = worker_slot.worker_handle() {
             return Ok(worker_handle);
         }
-        if self.packet_loop_started.swap(true, Ordering::AcqRel) {
-            return self
-                .worker_handle()?
-                .ok_or(TransportAdapterError::TransportUnavailable);
-        }
         let Ok(current_runtime) = Handle::try_current() else {
-            self.packet_loop_started.store(false, Ordering::Release);
             return Err(TransportAdapterError::TransportUnavailable);
         };
         let (command_tx, command_rx) = mpsc::channel(64);
@@ -84,13 +124,8 @@ impl RtcTransportAdapter {
             snapshot_state: Arc::clone(&snapshot_state),
             shutdown_token: shutdown_token.clone(),
         };
-        {
-            let Ok(mut worker_slot) = self.worker_handle.lock() else {
-                self.packet_loop_started.store(false, Ordering::Release);
-                return Err(TransportAdapterError::TransportUnavailable);
-            };
-            *worker_slot = Some(worker_handle.clone());
-        }
+        let worker_handle = worker_slot.store(worker_handle);
+        drop(worker_slot);
         info!(
             relay_target_id = ?self.relay_target_id,
             public_ip = %self.public_ip,

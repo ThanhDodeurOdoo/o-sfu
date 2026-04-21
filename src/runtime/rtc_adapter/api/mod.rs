@@ -36,3 +36,4 @@ mod benchmarks;
 mod test_support;
 
 pub(crate) use facade::RtcTransportAdapter;
+pub use runtime::WorkerHandleSlot;

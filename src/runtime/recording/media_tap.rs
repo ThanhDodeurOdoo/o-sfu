@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    hash::Hash,
     sync::{
         Arc, PoisonError, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -13,16 +14,63 @@ use crate::runtime::{
 
 use super::{MediaPacketSink, MediaSource};
 
+/// Shared channel-to-sink registry used by the production media tap and the
+/// Loom model that exercises its visibility rules.
+#[derive(Debug, Clone)]
+pub struct ActiveChannelRegistry<K, V> {
+    channels: HashMap<K, V>,
+}
+
+impl<K, V> Default for ActiveChannelRegistry<K, V> {
+    fn default() -> Self {
+        Self {
+            channels: HashMap::new(),
+        }
+    }
+}
+
+impl<K, V> ActiveChannelRegistry<K, V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    pub fn insert(&mut self, channel_runtime_id: K, sink: V) {
+        self.channels.insert(channel_runtime_id, sink);
+    }
+
+    pub fn remove(&mut self, channel_runtime_id: &K) -> bool {
+        self.channels.remove(channel_runtime_id).is_some()
+    }
+
+    pub fn get(&self, channel_runtime_id: &K) -> Option<V> {
+        self.channels.get(channel_runtime_id).cloned()
+    }
+
+    pub fn contains_key(&self, channel_runtime_id: &K) -> bool {
+        self.channels.contains_key(channel_runtime_id)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.channels.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.channels.len()
+    }
+}
+
 pub(crate) struct MediaTap {
     any_active: AtomicBool,
-    active_channels: RwLock<HashMap<ChannelRuntimeId, Arc<dyn MediaPacketSink>>>,
+    active_channels: RwLock<ActiveChannelRegistry<ChannelRuntimeId, Arc<dyn MediaPacketSink>>>,
 }
 
 impl Default for MediaTap {
     fn default() -> Self {
         Self {
             any_active: AtomicBool::new(false),
-            active_channels: RwLock::new(HashMap::new()),
+            active_channels: RwLock::new(ActiveChannelRegistry::default()),
         }
     }
 }
@@ -39,7 +87,6 @@ impl MediaTap {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&channel_runtime_id)
-            .cloned()
     }
 
     pub(crate) fn write_packet(

@@ -25,19 +25,40 @@ Comments may be a bit lacking (although I added some for the most important part
 
 ```mermaid
 flowchart TD
-    A[HTTP API] --> B[Runtime]
-    C[WebSocket Signaling] --> B
-    B --> D[Channel Manager]
-    D --> E[Channel]
-    E --> F[Pure Router Core]
-    E --> G[Transport Adapter]
-    G --> H[RTC Adapter Shards]
-    H --> I[WebRTC / RTP / UDP]
-    E --> J[Recording Service / Media Tap]
-    B --> K[Metrics Export]
-    B --> L[Telemetry / Tracing]
-    M[Browser Client] --> C
-    M --> I
+  Odoo[Odoo Server]
+  Client[Browser Client]
+  CB[Client Bundle]
+  subgraph s1["o-sfu"]
+    HTTP
+    WS[WebSocket]
+    RT[Runtime]
+    CM[Channel Manager]
+    CH[Channel]
+    R[Pure Router Core]
+    TRA[Transport Adapter]
+    RTCS[RTC Adapter Shards]
+    WRTC[WebRTC / RTP / UDP]
+    REC[Recording Service / Media Tap]
+    MET[Metrics Export]
+    TEL[Telemetry / Tracing]
+    
+  end
+  Odoo <--> Client
+  Odoo --> HTTP
+  HTTP --> RT
+  WS --> RT
+  RT --> CM
+  CM --> CH
+  CH --> R
+  CH --> TRA
+  TRA --> RTCS
+  RTCS --> WRTC
+  CH --> REC
+  RT --> MET
+  RT --> TEL
+  Client --> CB
+  CB --> WS
+  CB --> WRTC
 ```
 
 ## Running the server

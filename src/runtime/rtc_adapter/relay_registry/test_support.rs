@@ -54,19 +54,6 @@ impl RelayTargetTransport {
     }
 }
 
-impl RelaySourceRegistration {
-    fn target_count(&self) -> usize {
-        self.targets.len()
-    }
-
-    fn active_target_count(&self) -> usize {
-        self.targets
-            .values()
-            .filter(|registration| registration.active_reference_count > 0)
-            .count()
-    }
-}
-
 impl RelayRegistry {
     pub(in crate::runtime::rtc_adapter) fn target_count_for_source(
         &self,

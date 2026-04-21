@@ -97,21 +97,36 @@ impl RelayTargetId {
     }
 }
 
-#[derive(Clone)]
-struct RelayTargetRegistration {
-    target: RelayTargetTransport,
+#[derive(Debug, Clone)]
+struct RelayTargetRegistration<Target> {
+    target: Target,
     reference_count: usize,
     active_reference_count: usize,
 }
 
-#[derive(Clone, Default)]
-struct RelaySourceRegistration {
-    targets: BTreeMap<RelayTargetId, RelayTargetRegistration>,
-    active_targets: Arc<[RelayTargetTransport]>,
+/// Shared per-source relay target state used by the live registry and the Loom
+/// model that validates publication and reference-count transitions.
+#[derive(Debug, Clone)]
+pub struct RelayTargetRegistry<TargetId, Target> {
+    targets: BTreeMap<TargetId, RelayTargetRegistration<Target>>,
+    active_targets: Arc<[Target]>,
 }
 
-impl RelaySourceRegistration {
-    fn add_target(&mut self, target_id: RelayTargetId, target: RelayTargetTransport) {
+impl<TargetId, Target> Default for RelayTargetRegistry<TargetId, Target> {
+    fn default() -> Self {
+        Self {
+            targets: BTreeMap::new(),
+            active_targets: Arc::default(),
+        }
+    }
+}
+
+impl<TargetId, Target> RelayTargetRegistry<TargetId, Target>
+where
+    TargetId: Copy + Ord,
+    Target: Clone,
+{
+    pub fn add_target(&mut self, target_id: TargetId, target: Target) {
         if let Some(registration) = self.targets.get_mut(&target_id) {
             registration.reference_count = registration.reference_count.saturating_add(1);
         } else {
@@ -126,7 +141,7 @@ impl RelaySourceRegistration {
         }
     }
 
-    fn remove_target(&mut self, target_id: RelayTargetId) -> bool {
+    pub fn remove_target(&mut self, target_id: TargetId) -> bool {
         let Some(registration) = self.targets.get_mut(&target_id) else {
             return self.targets.is_empty();
         };
@@ -143,7 +158,7 @@ impl RelaySourceRegistration {
         self.targets.is_empty()
     }
 
-    fn set_target_active(&mut self, target_id: RelayTargetId, active: bool) {
+    pub fn set_target_active(&mut self, target_id: TargetId, active: bool) {
         let Some(registration) = self.targets.get_mut(&target_id) else {
             return;
         };
@@ -162,20 +177,35 @@ impl RelaySourceRegistration {
         }
     }
 
-    fn active_targets(&self) -> Arc<[RelayTargetTransport]> {
+    #[must_use]
+    pub fn active_targets(&self) -> Arc<[Target]> {
         Arc::clone(&self.active_targets)
     }
 
-    fn has_active_targets(&self) -> bool {
+    #[must_use]
+    pub fn has_active_targets(&self) -> bool {
         self.targets
             .values()
             .any(|registration| registration.active_reference_count > 0)
     }
 
-    fn is_target_active(&self, target_id: RelayTargetId) -> bool {
+    pub fn is_target_active(&self, target_id: TargetId) -> bool {
         self.targets
             .get(&target_id)
             .is_some_and(|registration| registration.active_reference_count > 0)
+    }
+
+    #[must_use]
+    pub fn target_count(&self) -> usize {
+        self.targets.len()
+    }
+
+    #[must_use]
+    pub fn active_target_count(&self) -> usize {
+        self.targets
+            .values()
+            .filter(|registration| registration.active_reference_count > 0)
+            .count()
     }
 
     fn rebuild_mailboxes(&mut self) {
@@ -188,6 +218,8 @@ impl RelaySourceRegistration {
             .into();
     }
 }
+
+type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, RelayTargetTransport>;
 
 pub(super) struct RelayRegistry {
     any_active: AtomicBool,

@@ -9,7 +9,6 @@ pub(super) use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     slice,
     sync::Arc,
-    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 

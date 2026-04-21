@@ -1,5 +1,4 @@
-//! This module stays doc-hidden so runtime internals can keep moving without
-//! accidentally becoming a stable crate API.
+//! This module is doc-hidden to avoid tests looking like a stable API
 
 pub mod auth {
     pub use crate::runtime::auth::{
@@ -26,5 +25,7 @@ pub mod server {
 }
 
 pub mod concurrency {
-    pub use crate::runtime::testing::SourcePolicyDirtyState;
+    pub use crate::runtime::testing::{
+        ActiveChannelRegistry, RelayTargetRegistry, SourcePolicyDirtyState, WorkerHandleSlot,
+    };
 }

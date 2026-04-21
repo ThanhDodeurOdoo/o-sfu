@@ -17,6 +17,7 @@ pub(crate) mod test_support;
 mod tests;
 
 pub(crate) use media_source::{MediaPacketSink, MediaSource, into_packet_sink};
+pub use media_tap::ActiveChannelRegistry;
 pub(crate) use media_tap::MediaTap;
 pub(crate) use ortp_format::OrtpFileHeader;
 pub(crate) use service::{RecordingRouterObserver, RecordingService};

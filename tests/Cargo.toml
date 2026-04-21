@@ -39,3 +39,18 @@ path = "miri/router_protocol.rs"
 name = "loom_source_policy_coordination"
 path = "loom/source_policy_coordination.rs"
 required-features = ["loom-tests"]
+
+[[test]]
+name = "loom_relay_registry_coordination"
+path = "loom/relay_registry_coordination.rs"
+required-features = ["loom-tests"]
+
+[[test]]
+name = "loom_media_tap_coordination"
+path = "loom/media_tap_coordination.rs"
+required-features = ["loom-tests"]
+
+[[test]]
+name = "loom_rtc_worker_startup"
+path = "loom/rtc_worker_startup.rs"
+required-features = ["loom-tests"]

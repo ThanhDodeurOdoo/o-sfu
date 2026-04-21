@@ -18,7 +18,7 @@ use std::{
     net::IpAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -80,8 +80,7 @@ pub(crate) struct RtcTransportAdapter {
     pub(super) relay_registry: Arc<RelayRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
-    pub(super) worker_handle: Mutex<Option<RtcWorkerHandle>>,
-    pub(crate) packet_loop_started: Arc<AtomicBool>,
+    pub(super) worker_handle: Mutex<super::runtime::WorkerHandleSlot<RtcWorkerHandle>>,
 }
 
 #[derive(Clone, Copy)]
@@ -122,8 +121,7 @@ impl RtcTransportAdapter {
             relay_registry: Arc::new(RelayRegistry::default()),
             source_policy_signal,
             metrics: config.metrics(),
-            worker_handle: Mutex::new(None),
-            packet_loop_started: Arc::new(AtomicBool::new(false)),
+            worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
         }
     }
 
@@ -219,11 +217,8 @@ impl RtcTransportSessionFacade<'_> {
         if close_outcome.state() == CloseSessionState::WorkerDrained {
             worker_handle.shutdown_token.cancel();
             if let Ok(mut worker_slot) = self.adapter.worker_handle.lock() {
-                *worker_slot = None;
+                worker_slot.clear();
             }
-            self.adapter
-                .packet_loop_started
-                .store(false, Ordering::Release);
         }
         Ok(close_outcome)
     }

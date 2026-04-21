@@ -75,10 +75,14 @@ cargo +nightly miri test -p o-sfu-tests --test miri_router_protocol
 
 ## Concurrency tests
 
-Run the Loom transport coordination model:
+Run the Loom transport coordination models:
 
 ```bash
-cargo test -p o-sfu-tests --test loom_source_policy_coordination --features loom-tests
+cargo test -p o-sfu-tests --features loom-tests \
+  --test loom_source_policy_coordination \
+  --test loom_relay_registry_coordination \
+  --test loom_media_tap_coordination \
+  --test loom_rtc_worker_startup
 ```
 
 

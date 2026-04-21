@@ -44,6 +44,7 @@ mod tests;
 mod worker;
 
 pub(crate) use api::RtcTransportAdapter;
+pub use api::WorkerHandleSlot;
 pub(crate) use commands::RelayCleanup;
 #[cfg(feature = "internal-benchmarks")]
 pub(crate) use demux::RemoteAddrDemux;
@@ -55,4 +56,5 @@ pub(crate) use forwarded_packet::sample_forwarded_packet_with_audio_activity;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet_with_rid;
 pub(crate) use negotiated_capabilities::client_rtp_capabilities_from_answer;
+pub use relay_registry::RelayTargetRegistry;
 pub(crate) use state::TransportSessionHealth;
