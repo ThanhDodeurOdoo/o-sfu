@@ -35,6 +35,7 @@ mod ids;
 mod metrics;
 mod metrics_export;
 mod recording;
+mod request_origin;
 mod rtc_adapter;
 pub(crate) mod telemetry;
 #[cfg(test)]

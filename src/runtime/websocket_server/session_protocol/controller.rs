@@ -31,6 +31,7 @@ impl SessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
         session_id: SessionId,
         connection_id: ConnectionId,
+        remote_address: Arc<str>,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,
@@ -38,6 +39,7 @@ impl SessionProtocol {
         Self(PostAuthSessionProtocol::new(
             session_id,
             connection_id,
+            remote_address,
             channel,
             transport_adapter,
             metrics,

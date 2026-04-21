@@ -22,13 +22,14 @@
 //!    on the `ChannelManager`, which removes the user from the channel and signasl
 //!    the `TransportAdapter` to tear down the associated WebRTC media resources.
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::{
-        State,
+        ConnectInfo, Extension, State,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
+    http::HeaderMap,
     response::Response,
 };
 use futures_util::stream::SplitStream;
@@ -40,6 +41,7 @@ use tracing::{Instrument, Span, field, info};
 use crate::runtime::{
     ConnectionId, RuntimeState,
     channel::{Channel, SessionOutbound},
+    request_origin::resolve_remote_address,
     telemetry,
 };
 
@@ -51,15 +53,23 @@ pub(super) struct ConnectedSession {
     pub(super) channel: Arc<Channel>,
     pub(super) session_id: SessionId,
     pub(super) connection_id: ConnectionId,
+    pub(super) remote_address: Arc<str>,
     pub(super) outbound_rx: mpsc::UnboundedReceiver<SessionOutbound>,
     pub(super) session_protocol: SessionProtocol,
 }
 
 pub(crate) async fn upgrade(
     State(state): State<RuntimeState>,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     websocket: WebSocketUpgrade,
 ) -> Response {
-    websocket.on_upgrade(move |socket| handle_socket(socket, state))
+    let remote_address = Arc::<str>::from(resolve_remote_address(
+        &headers,
+        &state.config,
+        connect_info.map(|Extension(ConnectInfo(addr))| addr),
+    ));
+    websocket.on_upgrade(move |socket| handle_socket(socket, state, remote_address))
 }
 
 /// Owns one upgraded WebSocket from first split through final channel cleanup.
@@ -69,23 +79,36 @@ pub(crate) async fn upgrade(
 /// session loop, and then closes the logical channel session exactly once. Keeping that
 /// sequencing here prevent handshake code and steady-state protocol code from racing to
 /// clean up the same chanel session.
-async fn handle_socket(socket: WebSocket, state: RuntimeState) {
+async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: Arc<str>) {
     async move {
+        let current_span = Span::current();
+        current_span.record(
+            telemetry::schema::field::REMOTE_ADDRESS,
+            field::display(remote_address.as_ref()),
+        );
         let (mut ws_writer, mut ws_reader) = socket.split();
         state.metrics.record_ws_connection_accepted();
         info!(
             event = telemetry::schema::event::WS_CONNECTION_ACCEPTED,
+            remote_address = remote_address.as_ref(),
             "accepted websocket connection"
         );
         let handshake_span = telemetry::ws_handshake_span();
-        let Some(mut session) =
-            super::handshake::establish_session(&state, &mut ws_writer, &mut ws_reader)
-                .instrument(handshake_span)
-                .await
+        handshake_span.record(
+            telemetry::schema::field::REMOTE_ADDRESS,
+            field::display(remote_address.as_ref()),
+        );
+        let Some(mut session) = super::handshake::establish_session(
+            &state,
+            &mut ws_writer,
+            &mut ws_reader,
+            Arc::clone(&remote_address),
+        )
+        .instrument(handshake_span)
+        .await
         else {
             return;
         };
-        let current_span = Span::current();
         current_span.record("channel_uuid", field::display(session.channel.uuid()));
         current_span.record("session_id", field::debug(&session.session_id));
         current_span.record("connection_id", field::debug(session.connection_id));
@@ -104,6 +127,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         info!(
             event = telemetry::schema::event::WS_CONNECTION_CLOSED,
             connection_id = ?session.connection_id,
+            remote_address = session.remote_address.as_ref(),
             ?exit_reason,
             "closing websocket session"
         );

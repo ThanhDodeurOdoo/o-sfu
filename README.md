@@ -10,9 +10,12 @@
 
 # o-sfu
 
-> [!WARNING]  
-> NOT PRODUCTION READY! This repo is mostly made for experimenting with ideas. The readme may not be up to date, or be incorrect.
-> Everything is up for refactor, some files are just testing prototypes.
+The goal is to be able to run it as an alternative to odoo/sfu (so the http and ws API and client bundle API are the same), but with:
+- higher control on routing
+- better recording integration (no port publishing to ffmpeg)
+- better scaling architecture (local and multi server sharding)
+- more observability (prometheus, open telemetry,...)
+- stronger guarantees (rust + formal proofs + fuzzing + concurrency tests + UB tests + puppetter full stack tests)
 
 MISSING FEATURES [Odoo SFU](https://github.com/odoo/sfu):
 - Recording
@@ -116,40 +119,40 @@ docker run --rm \
 
 ## Env variables (based on odoo/sfu)
 
-| Variable                           | Default         | Implemented | Description                                                                      |
-| :--------------------------------- | :-------------- | :---------: | :------------------------------------------------------------------------------- |
-| `PUBLIC_IP` (required)             | -               |      ✅      | Used to establish WebRTC connections to the server.                              |
-| `AUTH_KEY` (required)              | -               |      ✅      | The base64 encoded encryption key used for JWT authentication.                   |
-| `BIND_ADDRESS`                     | `0.0.0.0:8070`  |      ✅      | HTTP and WebSocket listening address.                                            |
-| `PROXY`                            | `false`         |      ✅      | Set to true if behind a proxy to trust forwarding headers.                       |
-| `RTC_MIN_PORT`                     | `40000`         |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                 |
-| `RTC_MAX_PORT`                     | `49999`         |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                 |
-| `RTC_MEDIA_WORKER_COUNT`           | `1`             |      ✅      | Number of RTC media workers to spawn.                                            |
-| `AUTHENTICATION_TIMEOUT_MS`        | `10000`         |      ✅      | Timeout for session authentication in milliseconds.                              |
-| `SESSION_TIMEOUT_MS`               | `10000`         |      ✅      | Timeout for idle sessions in milliseconds.                                       |
-| `PING_INTERVAL_MS`                 | `60000`         |      ✅      | Interval for signaling pings in milliseconds.                                    |
-| `CHANNEL_SIZE`                     | `100`           |      ✅      | Maximum amount of concurrent users per channel.                                  |
-| `RUST_LOG`                         | `info`          |      ✅      | SFU log level and filtering (standard `tracing-subscriber` env filter).          |
-| `TELEMETRY_LOG_FORMAT`             | `compact`       |      ✅      | Runtime log output mode (`compact` or `json`).                                   |
-| `TELEMETRY_SERVICE_NAME`           | `o-sfu`         |      ✅      | Service name attached to runtime telemetry metadata.                             |
-| `TELEMETRY_DEPLOYMENT_ENVIRONMENT` | `local`         |      ✅      | Deployment environment name attached to runtime telemetry metadata.              |
-| `TELEMETRY_SERVICE_INSTANCE_ID`    | `pid-<pid>`     |      ✅      | Optional stable instance identifier for logs and future traces.                  |
+| Variable                           | Default         | Implemented | Description                                                                                                                                                       |
+| :--------------------------------- | :-------------- | :---------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUBLIC_IP` (required)             | -               |      ✅      | Used to establish WebRTC connections to the server.                                                                                                               |
+| `AUTH_KEY` (required)              | -               |      ✅      | The base64 encoded encryption key used for JWT authentication.                                                                                                    |
+| `BIND_ADDRESS`                     | `0.0.0.0:8070`  |      ✅      | HTTP and WebSocket listening address.                                                                                                                             |
+| `PROXY`                            | `false`         |      ✅      | Set to true if behind a proxy to trust forwarding headers.                                                                                                        |
+| `RTC_MIN_PORT`                     | `40000`         |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                                                                                                  |
+| `RTC_MAX_PORT`                     | `49999`         |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                                                                                                  |
+| `RTC_MEDIA_WORKER_COUNT`           | `1`             |      ✅      | Number of RTC media workers to spawn.                                                                                                                             |
+| `AUTHENTICATION_TIMEOUT_MS`        | `10000`         |      ✅      | Timeout for session authentication in milliseconds.                                                                                                               |
+| `SESSION_TIMEOUT_MS`               | `10000`         |      ✅      | Timeout for idle sessions in milliseconds.                                                                                                                        |
+| `PING_INTERVAL_MS`                 | `60000`         |      ✅      | Interval for signaling pings in milliseconds.                                                                                                                     |
+| `CHANNEL_SIZE`                     | `100`           |      ✅      | Maximum amount of concurrent users per channel.                                                                                                                   |
+| `RUST_LOG`                         | `info`          |      ✅      | SFU log level and filtering (standard `tracing-subscriber` env filter).                                                                                           |
+| `TELEMETRY_LOG_FORMAT`             | `compact`       |      ✅      | Runtime log output mode (`compact` or `json`).                                                                                                                    |
+| `TELEMETRY_SERVICE_NAME`           | `o-sfu`         |      ✅      | Service name attached to runtime telemetry metadata.                                                                                                              |
+| `TELEMETRY_DEPLOYMENT_ENVIRONMENT` | `local`         |      ✅      | Deployment environment name attached to runtime telemetry metadata.                                                                                               |
+| `TELEMETRY_SERVICE_INSTANCE_ID`    | `pid-<pid>`     |      ✅      | Optional stable instance identifier for logs and future traces.                                                                                                   |
 | `TELEMETRY_OTLP_ENDPOINT`          | disabled        |      ✅      | Optional OTLP/HTTP traces endpoint (for example `http://collector:4318` or `http://collector:4318/v1/traces`). Requires the default `otel-tracing` cargo feature. |
-| `FEATURE_TRANSCRIPTION`            | `false`         |      ✅      | Enable transcription feature flags.                                              |
-| `FEATURE_AUDIO_RECORDING`          | `false`         |      ✅      | Enable audio recording feature flags.                                            |
-| `FEATURE_VIDEO_RECORDING`          | `false`         |      ✅      | Enable video recording feature flags.                                            |
-| `CODEC_OPUS`                       | `true`          |      ✅      | Enable Opus audio codec.                                                         |
-| `CODEC_PCMU`                       | `false`         |      ✅      | Enable G.711 mu-law audio codec.                                                 |
-| `CODEC_PCMA`                       | `false`         |      ✅      | Enable G.711 a-law audio codec.                                                  |
-| `CODEC_VP8`                        | `true`          |      ✅      | Enable VP8 video codec.                                                          |
-| `CODEC_H264`                       | `false`         |      ✅      | Enable H.264 video codec.                                                        |
-| `CODEC_H265`                       | `false`         |      ✅      | Enable H.265 video codec.                                                        |
-| `CODEC_VP9`                        | `false`         |      ✅      | Enable VP9 video codec.                                                          |
-| `CODEC_AV1`                        | `false`         |      ✅      | Enable AV1 video codec.                                                          |
-| `MAX_BITRATE_IN`                   | `8000000`       |      ✅      | Maximum incoming bitrate in bps per session (upload).                            |
-| `MAX_BITRATE_OUT`                  | `10000000`      |      ✅      | Maximum outgoing bitrate in bps per session (download).                          |
-| `MAX_VIDEO_BITRATE`                | `4000000`       |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                    |
-| `DATA_PATH`/`MEDIA_DIR`            | `/tmp/odoo_sfu` |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders). |
+| `FEATURE_TRANSCRIPTION`            | `false`         |      ✅      | Enable transcription feature flags.                                                                                                                               |
+| `FEATURE_AUDIO_RECORDING`          | `false`         |      ✅      | Enable audio recording feature flags.                                                                                                                             |
+| `FEATURE_VIDEO_RECORDING`          | `false`         |      ✅      | Enable video recording feature flags.                                                                                                                             |
+| `CODEC_OPUS`                       | `true`          |      ✅      | Enable Opus audio codec.                                                                                                                                          |
+| `CODEC_PCMU`                       | `false`         |      ✅      | Enable G.711 mu-law audio codec.                                                                                                                                  |
+| `CODEC_PCMA`                       | `false`         |      ✅      | Enable G.711 a-law audio codec.                                                                                                                                   |
+| `CODEC_VP8`                        | `true`          |      ✅      | Enable VP8 video codec.                                                                                                                                           |
+| `CODEC_H264`                       | `false`         |      ✅      | Enable H.264 video codec.                                                                                                                                         |
+| `CODEC_H265`                       | `false`         |      ✅      | Enable H.265 video codec.                                                                                                                                         |
+| `CODEC_VP9`                        | `false`         |      ✅      | Enable VP9 video codec.                                                                                                                                           |
+| `CODEC_AV1`                        | `false`         |      ✅      | Enable AV1 video codec.                                                                                                                                           |
+| `MAX_BITRATE_IN`                   | `8000000`       |      ✅      | Maximum incoming bitrate in bps per session (upload).                                                                                                             |
+| `MAX_BITRATE_OUT`                  | `10000000`      |      ✅      | Maximum outgoing bitrate in bps per session (download).                                                                                                           |
+| `MAX_VIDEO_BITRATE`                | `4000000`       |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                                                                                                     |
+| `DATA_PATH`/`MEDIA_DIR`            | `/tmp/odoo_sfu` |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders).                                                                                  |
 
 
 

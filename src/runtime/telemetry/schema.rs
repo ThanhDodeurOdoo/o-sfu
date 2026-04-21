@@ -49,6 +49,7 @@ pub(crate) mod field {
     pub(crate) const OPERATION: &str = "operation";
     pub(crate) const OUTCOME: &str = "outcome";
     pub(crate) const REASON: &str = "reason";
+    pub(crate) const REMOTE_ADDRESS: &str = "remote_address";
     pub(crate) const SERVICE_INSTANCE_ID: &str = "service.instance.id";
     pub(crate) const SERVICE_NAME: &str = "service.name";
     pub(crate) const SERVICE_VERSION: &str = "service.version";
@@ -75,6 +76,7 @@ pub(crate) const CORRELATION_FIELD_NAMES: &[&str] = &[
     field::CHANNEL_UUID,
     field::SESSION_ID,
     field::CONNECTION_ID,
+    field::REMOTE_ADDRESS,
     field::TRANSPORT_MEDIA_ID,
     field::MEDIA_WORKER_ID,
     field::TRACE_ID,

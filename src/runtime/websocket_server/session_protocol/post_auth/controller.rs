@@ -37,6 +37,7 @@ use super::state::PostAuthSessionState;
 pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) session_id: SessionId,
     pub(super) connection_id: ConnectionId,
+    pub(super) remote_address: Arc<str>,
     pub(super) channel: Arc<Channel>,
     pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) metrics: Arc<RuntimeMetrics>,
@@ -50,6 +51,7 @@ impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
         session_id: SessionId,
         connection_id: ConnectionId,
+        remote_address: Arc<str>,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,
@@ -57,6 +59,7 @@ impl PostAuthSessionProtocol {
         Self {
             session_id,
             connection_id,
+            remote_address,
             channel,
             transport_adapter,
             metrics,
@@ -104,7 +107,11 @@ impl PostAuthSessionProtocol {
             Message::Text(payload) => self.handle_text_payload(writer, &payload).await,
             Message::Binary(payload) => self.handle_binary_payload(writer, &payload).await,
             Message::Close(frame) => {
-                tracing::info!(?frame, "websocket peer sent close frame");
+                tracing::info!(
+                    remote_address = self.remote_address.as_ref(),
+                    ?frame,
+                    "websocket peer sent close frame"
+                );
                 SessionProtocolOutcome::Break
             }
             Message::Ping(_) | Message::Pong(_) => SessionProtocolOutcome::Continue,
@@ -121,6 +128,7 @@ impl PostAuthSessionProtocol {
             warn!(
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
                 payload_len = payload.len(),
                 max_len = MAX_CLIENT_FRAME_BYTES,
                 "received oversized websocket binary frame"
@@ -134,6 +142,7 @@ impl PostAuthSessionProtocol {
                 warn!(
                     session_id = ?self.session_id,
                     connection_id = ?self.connection_id,
+                    remote_address = self.remote_address.as_ref(),
                     "received websocket binary frame with invalid UTF-8"
                 );
                 SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
@@ -155,6 +164,7 @@ impl PostAuthSessionProtocol {
                         warn!(
                             session_id = ?self.session_id,
                             connection_id = ?self.connection_id,
+                            remote_address = self.remote_address.as_ref(),
                             "failed to decode client websocket batch because the payload was invalid"
                         );
                     }
@@ -163,6 +173,7 @@ impl PostAuthSessionProtocol {
                         warn!(
                             session_id = ?self.session_id,
                             connection_id = ?self.connection_id,
+                            remote_address = self.remote_address.as_ref(),
                             "failed to decode client websocket batch because it used an unsupported feature"
                         );
                     }

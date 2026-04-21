@@ -80,15 +80,23 @@ pub(super) async fn establish_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
+    remote_address: Arc<str>,
 ) -> Option<ConnectedSession> {
-    let (channel, claims) = authenticate_handshake_session(state, writer, reader).await?;
+    let (channel, claims) =
+        authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
     let (session_id, outbound_rx, channel, connection_id) =
-        join_session(state, writer, channel, claims).await?;
+        join_session(state, writer, channel, claims, remote_address.as_ref()).await?;
     state.metrics.record_ws_session_joined();
-    record_session_span(&channel, &session_id, connection_id);
+    record_session_span(
+        &channel,
+        &session_id,
+        connection_id,
+        remote_address.as_ref(),
+    );
     let mut session_protocol = SessionProtocol::new(
         session_id.clone(),
         connection_id,
+        Arc::clone(&remote_address),
         Arc::clone(&channel),
         state.transport_adapter.clone(),
         Arc::clone(&state.metrics),
@@ -100,18 +108,21 @@ pub(super) async fn establish_session(
         &session_id,
         connection_id,
         &mut session_protocol,
+        remote_address.as_ref(),
     )
     .instrument(telemetry::activated_span(tracing::info_span!(
         "session.initialize",
         channel_uuid = %channel.uuid(),
         session_id = ?session_id,
-        connection_id = ?connection_id
+        connection_id = ?connection_id,
+        remote_address = %remote_address
     )))
     .await?;
     Some(ConnectedSession {
         channel,
         session_id,
         connection_id,
+        remote_address,
         outbound_rx,
         session_protocol,
     })
@@ -144,6 +155,7 @@ async fn receive_auth_or_reject(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
+    remote_address: &str,
 ) -> Option<AuthPayload> {
     match receive_auth(state, reader).await {
         Ok(Some(auth_payload)) => {
@@ -156,6 +168,7 @@ async fn receive_auth_or_reject(
                 state,
                 Some(writer),
                 close_code,
+                remote_address,
                 "rejecting websocket during auth receive",
             )
             .await
@@ -168,9 +181,10 @@ async fn authenticate_handshake_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
+    remote_address: &str,
 ) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
-    let auth_payload = receive_auth_or_reject(state, writer, reader).await?;
-    authenticate_session(state, writer, &auth_payload).await
+    let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
+    authenticate_session(state, writer, &auth_payload, remote_address).await
 }
 
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
@@ -223,6 +237,7 @@ fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebS
 async fn authenticate(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
+    remote_address: &str,
 ) -> Result<(Arc<Channel>, WebSocketConnectClaims), WebSocketCloseCode> {
     if let Some(channel_uuid) = auth_payload.channel.as_deref() {
         let Some(channel) = state.channels.get_by_uuid(channel_uuid).await else {
@@ -233,13 +248,21 @@ async fn authenticate(
             return Err(WebSocketCloseCode::AuthFailed);
         };
         let key = channel.key().unwrap_or(&state.config.auth_key);
-        let claims = authenticate_channel_scoped_claims(&auth_payload.jwt, key, channel_uuid)?;
+        let claims = authenticate_channel_scoped_claims(
+            &auth_payload.jwt,
+            key,
+            channel_uuid,
+            remote_address,
+        )?;
         return Ok((channel, claims));
     }
 
     let claims = auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth_key)
         .map_err(|_error| {
-            warn!("failed to verify websocket auth token against the global key");
+            warn!(
+                remote_address,
+                "failed to verify websocket auth token against the global key"
+            );
             WebSocketCloseCode::AuthFailed
         })?;
     let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
@@ -263,6 +286,7 @@ fn authenticate_channel_scoped_claims(
     token: &str,
     key: &str,
     channel_uuid: &str,
+    remote_address: &str,
 ) -> Result<WebSocketConnectClaims, WebSocketCloseCode> {
     if let Ok(claims) = auth::verify::<WebSocketConnectClaims>(token, key) {
         if claims.sfu_channel_uuid != channel_uuid {
@@ -278,7 +302,10 @@ fn authenticate_channel_scoped_claims(
 
     let claims =
         auth::verify::<LegacyChannelScopedConnectClaims>(token, key).map_err(|_error| {
-            warn!("failed to verify websocket auth token against the channel-scoped key");
+            warn!(
+                remote_address,
+                "failed to verify websocket auth token against the channel-scoped key"
+            );
             WebSocketCloseCode::AuthFailed
         })?;
     Ok(WebSocketConnectClaims {
@@ -294,19 +321,22 @@ async fn authenticate_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
+    remote_address: &str,
 ) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
-    match authenticate(state, auth_payload).await {
+    match authenticate(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
             info!(
                 event = telemetry::schema::event::WS_AUTH_REJECTED,
                 close_code = u16::from(code),
+                remote_address,
                 "rejected websocket authentication"
             );
             reject_handshake(
                 state,
                 Some(writer),
                 Some(code),
+                remote_address,
                 "rejecting websocket during authentication",
             )
             .await
@@ -324,6 +354,7 @@ async fn join_session(
     writer: &mut WsWriter,
     channel: Arc<Channel>,
     claims: WebSocketConnectClaims,
+    remote_address: &str,
 ) -> Option<(
     SessionId,
     mpsc::UnboundedReceiver<SessionOutbound>,
@@ -364,6 +395,7 @@ async fn join_session(
             warn!(
                 event = telemetry::schema::event::WS_JOIN_FAILED,
                 ?session_id,
+                remote_address,
                 ?error,
                 close_code = u16::from(close_code),
                 "rejecting websocket because the authenticated session could not join the channel"
@@ -372,6 +404,7 @@ async fn join_session(
                 state,
                 Some(writer),
                 Some(close_code),
+                remote_address,
                 "rejecting websocket during session join",
             )
             .await
@@ -379,14 +412,24 @@ async fn join_session(
     }
 }
 
-fn record_session_span(channel: &Channel, session_id: &SessionId, connection_id: ConnectionId) {
+fn record_session_span(
+    channel: &Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    remote_address: &str,
+) {
     let current_span = Span::current();
     current_span.record("channel_uuid", field::display(channel.uuid()));
     current_span.record("session_id", field::debug(session_id));
     current_span.record("connection_id", field::debug(connection_id));
+    current_span.record(
+        telemetry::schema::field::REMOTE_ADDRESS,
+        field::display(remote_address),
+    );
     info!(
         event = telemetry::schema::event::WS_SESSION_ESTABLISHED,
         connection_id = ?connection_id,
+        remote_address,
         "websocket session established"
     );
 }
@@ -402,6 +445,7 @@ async fn initialize_session(
     session_id: &SessionId,
     connection_id: ConnectionId,
     session_protocol: &mut SessionProtocol,
+    remote_address: &str,
 ) -> Option<()> {
     if send_welcome(channel, session_id, writer).await.is_err() {
         debug!(
@@ -414,6 +458,7 @@ async fn initialize_session(
             event = telemetry::schema::event::WS_JOIN_FAILED,
             session_id = ?session_id,
             connection_id = ?connection_id,
+            remote_address,
             outcome = "welcome_send_failed",
             "failed to send websocket welcome payload"
         );
@@ -425,6 +470,7 @@ async fn initialize_session(
             event = telemetry::schema::event::WS_JOIN_FAILED,
             ?session_id,
             connection_id = ?connection_id,
+            remote_address,
             outcome = "session_initialize_failed",
             "failed to initialize websocket session protocol"
         );
@@ -456,6 +502,7 @@ async fn reject_handshake<T>(
     state: &RuntimeState,
     writer: Option<&mut WsWriter>,
     close_code: Option<WebSocketCloseCode>,
+    remote_address: &str,
     message: &str,
 ) -> Option<T> {
     state.metrics.record_ws_handshake_rejection(close_code);
@@ -463,6 +510,7 @@ async fn reject_handshake<T>(
         info!(
             event = telemetry::schema::event::WS_HANDSHAKE_REJECTED,
             close_code = u16::from(code),
+            remote_address,
             "{message}"
         );
         if let Some(writer) = writer {

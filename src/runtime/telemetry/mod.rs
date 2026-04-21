@@ -296,7 +296,8 @@ pub(crate) fn http_request_span(route: &'static str) -> Span {
         route,
         channel_uuid = field::Empty,
         session_id = field::Empty,
-        connection_id = field::Empty
+        connection_id = field::Empty,
+        remote_address = field::Empty
     ))
 }
 
@@ -305,7 +306,8 @@ pub(crate) fn ws_upgrade_span() -> Span {
         "ws.upgrade",
         channel_uuid = field::Empty,
         session_id = field::Empty,
-        connection_id = field::Empty
+        connection_id = field::Empty,
+        remote_address = field::Empty
     ))
 }
 
@@ -314,7 +316,8 @@ pub(crate) fn ws_handshake_span() -> Span {
         "ws.handshake",
         channel_uuid = field::Empty,
         session_id = field::Empty,
-        connection_id = field::Empty
+        connection_id = field::Empty,
+        remote_address = field::Empty
     ))
 }
 

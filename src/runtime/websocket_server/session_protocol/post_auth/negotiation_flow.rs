@@ -47,6 +47,7 @@ impl PostAuthSessionProtocol {
                     outcome = "transport_error",
                     session_id = ?self.session_id,
                     connection_id = ?self.connection_id,
+                    remote_address = self.remote_address.as_ref(),
                     ?error,
                     "failed to create initial transport offer"
                 );
@@ -85,6 +86,7 @@ impl PostAuthSessionProtocol {
                 outcome = "request_send_failed",
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
                 ?request_id,
                 close_code = u16::from(code),
                 "failed to send negotiation request over websocket"
@@ -121,8 +123,12 @@ impl PostAuthSessionProtocol {
                 let session_key = self
                     .channel
                     .transport_session_key(&self.session_id, self.connection_id);
-                let Some(request) =
-                    staged_renegotiation_request(&self.transport_adapter, &session_key).await?
+                let Some(request) = staged_renegotiation_request(
+                    &self.transport_adapter,
+                    &session_key,
+                    self.remote_address.as_ref(),
+                )
+                .await?
                 else {
                     return Ok(false);
                 };
@@ -191,6 +197,7 @@ impl PostAuthSessionProtocol {
             warn!(
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
                 ?response_to,
                 "received empty SDP answer for negotiation request"
             );
@@ -209,6 +216,7 @@ impl PostAuthSessionProtocol {
             warn!(
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
                 ?response_to,
                 "received negotiation answer for an unknown or stale request"
             );
@@ -246,6 +254,7 @@ impl PostAuthSessionProtocol {
                 outcome = "transport_error",
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
                 ?response_to,
                 request = ?resolved.pending.request,
                 ?error,
@@ -291,6 +300,7 @@ impl PostAuthSessionProtocol {
                             outcome = "capability_projection_failed",
                             session_id = ?self.session_id,
                             connection_id = ?self.connection_id,
+                            remote_address = self.remote_address.as_ref(),
                             ?error,
                             "failed to project client RTP capabilities from the answered SDP"
                         );
@@ -311,6 +321,7 @@ impl PostAuthSessionProtocol {
                         outcome = "channel_commit_failed",
                         session_id = ?self.session_id,
                         connection_id = ?self.connection_id,
+                        remote_address = self.remote_address.as_ref(),
                         "failed to commit negotiated session state after initial answer"
                     );
                     return Err(());
@@ -332,6 +343,7 @@ impl PostAuthSessionProtocol {
                         outcome = "channel_refresh_failed",
                         session_id = ?self.session_id,
                         connection_id = ?self.connection_id,
+                        remote_address = self.remote_address.as_ref(),
                         "failed to refresh session state after renegotiation answer"
                     );
                     return Err(());
@@ -345,6 +357,7 @@ impl PostAuthSessionProtocol {
 async fn staged_renegotiation_request(
     transport_adapter: &RuntimeTransportAdapter,
     session_key: &TransportSessionKey,
+    remote_address: &str,
 ) -> Result<Option<ServerRequest>, WebSocketCloseCode> {
     match transport_adapter
         .create_session_renegotiation_offer(session_key)
@@ -365,6 +378,7 @@ async fn staged_renegotiation_request(
                 event = telemetry_event::NEGOTIATION_FAILED,
                 operation = "renegotiation_offer_create",
                 outcome = "transport_error",
+                remote_address,
                 ?error,
                 "failed to build a staged renegotiation offer"
             );
@@ -459,7 +473,7 @@ mod tests {
         );
 
         let renegotiation_request =
-            staged_renegotiation_request(&transport_adapter, &session_key).await;
+            staged_renegotiation_request(&transport_adapter, &session_key, "127.0.0.1").await;
 
         assert_eq!(renegotiation_request, Ok(None));
     }
@@ -470,7 +484,8 @@ mod tests {
         let missing_session_key = test_transport_session_key(8, 0, 12, SessionId::Integer(20));
 
         let renegotiation_request =
-            staged_renegotiation_request(&transport_adapter, &missing_session_key).await;
+            staged_renegotiation_request(&transport_adapter, &missing_session_key, "127.0.0.1")
+                .await;
 
         assert_eq!(renegotiation_request, Err(WebSocketCloseCode::Error));
     }

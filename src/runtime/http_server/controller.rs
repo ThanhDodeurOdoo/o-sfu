@@ -24,6 +24,7 @@ use crate::{
         },
         metrics::HttpRoute,
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+        request_origin::{resolve_remote_address, trusted_forwarded_header},
         telemetry, websocket_server,
     },
 };
@@ -146,7 +147,7 @@ async fn channel(
             state.metrics.record_http_channel_bad_request();
             return StatusCode::BAD_REQUEST.into_response();
         }
-        let remote_address = request_remote_address(
+        let remote_address = resolve_remote_address(
             &headers,
             &state.config,
             connect_info.map(|Extension(ConnectInfo(addr))| addr),
@@ -233,28 +234,6 @@ fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
     format!("{scheme}://{host}")
 }
 
-fn request_remote_address(
-    headers: &HeaderMap,
-    config: &Config,
-    connect_info: Option<SocketAddr>,
-) -> String {
-    trusted_forwarded_header(headers, config, "x-forwarded-for")
-        .map(str::to_owned)
-        .or_else(|| connect_info.map(|addr| addr.ip().to_string()))
-        .unwrap_or_else(|| String::from("unknown"))
-}
-
-fn trusted_forwarded_header<'headers>(
-    headers: &'headers HeaderMap,
-    config: &Config,
-    name: &str,
-) -> Option<&'headers str> {
-    if !config.trust_proxy_headers {
-        return None;
-    }
-    forwarded_header(headers, name)
-}
-
 fn http_channel_stats(snapshot: RuntimeChannelStatsSnapshot) -> ChannelStats {
     ChannelStats {
         create_date: snapshot.create_date,
@@ -273,9 +252,4 @@ fn http_channel_stats(snapshot: RuntimeChannelStatsSnapshot) -> ChannelStats {
         },
         web_rtc_enabled: snapshot.web_rtc_enabled,
     }
-}
-
-fn forwarded_header<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'headers str> {
-    let value = headers.get(name)?.to_str().ok()?;
-    value.split(',').next().map(str::trim)
 }
