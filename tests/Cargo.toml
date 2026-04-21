@@ -8,12 +8,14 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
+default = ["otel-tracing"]
 loom-tests = ["dep:loom"]
+otel-tracing = ["o-sfu/otel-tracing"]
 
 [dependencies]
 futures-util.workspace = true
 loom = { version = "0.7.2", optional = true }
-o-sfu = { path = ".." }
+o-sfu = { path = "..", default-features = false }
 o-sfu-protocol = { path = "../protocol" }
 o-sfu-router = { path = "../router" }
 o-sfu-telemetry = { path = "../telemetry" }

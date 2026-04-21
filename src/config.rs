@@ -18,6 +18,7 @@ const DEFAULT_RTC_MAX_PORT: u16 = 49_999;
 const DEFAULT_RTC_MEDIA_WORKER_COUNT: usize = 1;
 const DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT: &str = "local";
 const DEFAULT_TELEMETRY_SERVICE_NAME: &str = "o-sfu";
+const OTEL_TRACING_FEATURE_NAME: &str = "otel-tracing";
 const DEFAULT_TRANSCRIPTION_FEATURE: bool = false;
 const DEFAULT_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_VIDEO_RECORDING_FEATURE: bool = false;
@@ -482,6 +483,12 @@ fn load_telemetry_config(
         },
         None => TelemetryLogFormat::default(),
     };
+    let otlp_endpoint = parse_optional_non_empty_env(&mut get_var, "TELEMETRY_OTLP_ENDPOINT")?;
+    if !cfg!(feature = "otel-tracing") && otlp_endpoint.is_some() {
+        return Err(anyhow!(
+            "TELEMETRY_OTLP_ENDPOINT requires the `{OTEL_TRACING_FEATURE_NAME}` cargo feature"
+        ));
+    }
     Ok(TelemetryConfig {
         log_format,
         resource: TelemetryResource {
@@ -497,9 +504,7 @@ fn load_telemetry_config(
                 "TELEMETRY_SERVICE_INSTANCE_ID",
             )?,
         },
-        trace_export: TraceExportConfig {
-            otlp_endpoint: parse_optional_non_empty_env(&mut get_var, "TELEMETRY_OTLP_ENDPOINT")?,
-        },
+        trace_export: TraceExportConfig { otlp_endpoint },
     })
 }
 
@@ -624,10 +629,9 @@ fn parse_optional_non_empty_env(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
-        TelemetryLogFormat, TelemetryResource, TraceExportConfig,
-    };
+    use super::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig};
+    #[cfg(feature = "otel-tracing")]
+    use super::{TelemetryLogFormat, TelemetryResource, TraceExportConfig};
 
     #[test]
     fn config_requires_auth_key() {
@@ -745,6 +749,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "otel-tracing")]
     #[test]
     fn config_accepts_telemetry_settings() {
         let config = Config::from_var_lookup(|key| match key {
@@ -774,6 +779,26 @@ mod tests {
                     otlp_endpoint: Some("http://collector:4317".to_owned()),
                 },
             }
+        );
+    }
+
+    #[cfg(not(feature = "otel-tracing"))]
+    #[test]
+    fn config_rejects_otlp_endpoint_without_otel_tracing_feature() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "TELEMETRY_OTLP_ENDPOINT" => Some("http://collector:4318".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+        let Some(error) = config.err() else {
+            return;
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("TELEMETRY_OTLP_ENDPOINT requires the `otel-tracing` cargo feature")
         );
     }
 

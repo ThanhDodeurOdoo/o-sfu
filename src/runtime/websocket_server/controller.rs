@@ -35,7 +35,7 @@ use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 use tokio::sync::mpsc;
-use tracing::{Instrument, field, info, info_span};
+use tracing::{Instrument, Span, field, info};
 
 use crate::runtime::{
     ConnectionId, RuntimeState,
@@ -77,11 +77,18 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
             event = telemetry::schema::event::WS_CONNECTION_ACCEPTED,
             "accepted websocket connection"
         );
+        let handshake_span = telemetry::ws_handshake_span();
         let Some(mut session) =
-            super::handshake::establish_session(&state, &mut ws_writer, &mut ws_reader).await
+            super::handshake::establish_session(&state, &mut ws_writer, &mut ws_reader)
+                .instrument(handshake_span)
+                .await
         else {
             return;
         };
+        let current_span = Span::current();
+        current_span.record("channel_uuid", field::display(session.channel.uuid()));
+        current_span.record("session_id", field::debug(&session.session_id));
+        current_span.record("connection_id", field::debug(session.connection_id));
         state.metrics.record_ws_session_loop_started();
         let exit_reason = super::session_loop::run(
             &mut ws_writer,
@@ -110,11 +117,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
             )
             .await;
     }
-    .instrument(info_span!(
-        "ws.connection",
-        channel_uuid = field::Empty,
-        session_id = field::Empty
-    ))
+    .instrument(telemetry::ws_upgrade_span())
     .await;
 }
 

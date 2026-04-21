@@ -16,6 +16,9 @@ base64 = "0.22"
 bitflags = "2.6"
 futures-util = "0.3"
 hmac = "0.13"
+opentelemetry = { version = "0.31", features = ["trace"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
 o-sfu-protocol = { path = "protocol" }
 o-sfu-rfc = { path = "rfc" }
 o-sfu-router = { path = "router" }
@@ -34,6 +37,7 @@ tokio = { version = "1.52", features = [
 tokio-tungstenite = "0.29"
 tokio-util = "0.7"
 tracing = "0.1"
+tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["v4"] }
@@ -109,6 +113,13 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
+default = ["otel-tracing"]
+otel-tracing = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
 internal-benchmarks = []
 testing-transport = []
 
@@ -119,6 +130,9 @@ base64.workspace = true
 bitflags.workspace = true
 futures-util.workspace = true
 hmac.workspace = true
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
 o-sfu-protocol.workspace = true
 o-sfu-rfc.workspace = true
 o-sfu-router.workspace = true
@@ -132,6 +146,7 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

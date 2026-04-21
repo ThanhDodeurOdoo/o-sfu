@@ -1,10 +1,11 @@
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::websocket_server::WsWriter;
-use o_sfu_protocol::shared::SessionInfo;
+use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionInfo};
 use o_sfu_protocol::signaling::{
     ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
-    RecordingActionResult, ServerResponse, WebSocketCloseCode,
+    RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
 };
-use tracing::debug;
+use tracing::{debug, info, instrument};
 
 use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_response};
 use super::controller::PostAuthSessionProtocol;
@@ -38,7 +39,119 @@ impl PostAuthSessionProtocol {
             .await;
     }
 
-    // TODO: needs documentation:
+    #[instrument(
+        name = "subscribe.intent",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id,
+            target_session_id = ?target_session_id
+        )
+    )]
+    async fn handle_subscribe_intent(
+        &self,
+        target_session_id: &SessionId,
+        states: &DownloadStates,
+    ) {
+        info!(
+            event = telemetry_event::SUBSCRIBE_PREPARED,
+            operation = "consume_prepare",
+            outcome = "request_received",
+            "received subscribe intent"
+        );
+        self.channel
+            .update_subscription_runtime(
+                &self.session_id,
+                self.connection_id,
+                target_session_id,
+                states,
+                &self.transport_adapter,
+            )
+            .await;
+        info!(
+            event = telemetry_event::SUBSCRIBE_SUCCEEDED,
+            operation = "consume_prepare",
+            outcome = "applied",
+            "applied subscribe intent"
+        );
+    }
+
+    #[instrument(
+        name = "recording.start",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id,
+            request_id = ?request_id
+        )
+    )]
+    async fn handle_start_recording_request(
+        &self,
+        writer: &mut WsWriter,
+        request_id: RequestId,
+        payload: RecordingOptions,
+    ) -> SessionProtocolOutcome {
+        let ok = self
+            .channel
+            .start_recording_runtime(&self.session_id, self.connection_id, payload)
+            .await;
+        info!(
+            event = telemetry_event::RECORDING_STARTED,
+            operation = "recording_start",
+            outcome = if ok { "accepted" } else { "rejected" },
+            "processed recording start request"
+        );
+        match send_server_response(
+            writer,
+            request_id,
+            ServerResponse::StartRecording(RecordingActionResult { ok }),
+        )
+        .await
+        {
+            Ok(()) => SessionProtocolOutcome::Continue,
+            Err(code) => SessionProtocolOutcome::Close(code),
+        }
+    }
+
+    #[instrument(
+        name = "recording.stop",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id,
+            request_id = ?request_id
+        )
+    )]
+    async fn handle_stop_recording_request(
+        &self,
+        writer: &mut WsWriter,
+        request_id: RequestId,
+    ) -> SessionProtocolOutcome {
+        let ok = self
+            .channel
+            .stop_recording_runtime(&self.session_id, self.connection_id)
+            .await;
+        info!(
+            event = telemetry_event::RECORDING_STOPPED,
+            operation = "recording_stop",
+            outcome = if ok { "accepted" } else { "rejected" },
+            "processed recording stop request"
+        );
+        match send_server_response(
+            writer,
+            request_id,
+            ServerResponse::StopRecording(RecordingActionResult { ok }),
+        )
+        .await
+        {
+            Ok(()) => SessionProtocolOutcome::Continue,
+            Err(code) => SessionProtocolOutcome::Close(code),
+        }
+    }
+
     pub(super) async fn dispatch_client_envelope(
         &mut self,
         writer: &mut WsWriter,
@@ -61,14 +174,7 @@ impl PostAuthSessionProtocol {
                 SessionProtocolOutcome::Continue
             }
             ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
-                self.channel
-                    .update_subscription_runtime(
-                        &self.session_id,
-                        self.connection_id,
-                        &payload.session_id,
-                        &payload.states,
-                        &self.transport_adapter,
-                    )
+                self.handle_subscribe_intent(&payload.session_id, &payload.states)
                     .await;
                 SessionProtocolOutcome::Continue
             }
@@ -97,40 +203,13 @@ impl PostAuthSessionProtocol {
                 request_id,
                 request: ClientRequest::StartRecording(payload),
             } => {
-                let ok = self
-                    .channel
-                    .start_recording_runtime(&self.session_id, self.connection_id, payload)
-                    .await;
-                match send_server_response(
-                    writer,
-                    request_id,
-                    ServerResponse::StartRecording(RecordingActionResult { ok }),
-                )
-                .await
-                {
-                    Ok(()) => SessionProtocolOutcome::Continue,
-                    Err(code) => SessionProtocolOutcome::Close(code),
-                }
+                self.handle_start_recording_request(writer, request_id, payload)
+                    .await
             }
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StopRecording,
-            } => {
-                let ok = self
-                    .channel
-                    .stop_recording_runtime(&self.session_id, self.connection_id)
-                    .await;
-                match send_server_response(
-                    writer,
-                    request_id,
-                    ServerResponse::StopRecording(RecordingActionResult { ok }),
-                )
-                .await
-                {
-                    Ok(()) => SessionProtocolOutcome::Continue,
-                    Err(code) => SessionProtocolOutcome::Close(code),
-                }
-            }
+            } => self.handle_stop_recording_request(writer, request_id).await,
             ClientEnvelope::Response { .. } | ClientEnvelope::Message(ClientMessage::Auth(_)) => {
                 SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
             }

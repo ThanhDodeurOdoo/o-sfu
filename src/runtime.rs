@@ -182,7 +182,7 @@ fn build_transport_adapter(
 /// error.
 pub fn run() -> Result<()> {
     let config = Config::from_env()?;
-    init_tracing(&config.telemetry, process::id())?;
+    let _telemetry = init_tracing(&config.telemetry, process::id())?;
     let runtime = Runtime::new(config);
     Builder::new_multi_thread()
         .enable_all()

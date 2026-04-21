@@ -35,7 +35,7 @@ use o_sfu_protocol::{
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::{Span, debug, field, info, warn};
+use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
     WsWriter, close_writer,
@@ -85,7 +85,7 @@ pub(super) async fn establish_session(
     let (session_id, outbound_rx, channel, connection_id) =
         join_session(state, writer, channel, claims).await?;
     state.metrics.record_ws_session_joined();
-    record_session_span(&channel, &session_id);
+    record_session_span(&channel, &session_id, connection_id);
     let mut session_protocol = SessionProtocol::new(
         session_id.clone(),
         connection_id,
@@ -101,6 +101,12 @@ pub(super) async fn establish_session(
         connection_id,
         &mut session_protocol,
     )
+    .instrument(telemetry::activated_span(tracing::info_span!(
+        "session.initialize",
+        channel_uuid = %channel.uuid(),
+        session_id = ?session_id,
+        connection_id = ?connection_id
+    )))
     .await?;
     Some(ConnectedSession {
         channel,
@@ -292,6 +298,11 @@ async fn authenticate_session(
     match authenticate(state, auth_payload).await {
         Ok(result) => Some(result),
         Err(code) => {
+            info!(
+                event = telemetry::schema::event::WS_AUTH_REJECTED,
+                close_code = u16::from(code),
+                "rejected websocket authentication"
+            );
             reject_handshake(
                 state,
                 Some(writer),
@@ -303,6 +314,11 @@ async fn authenticate_session(
     }
 }
 
+#[instrument(
+    name = "channel.join",
+    skip_all,
+    fields(channel_uuid = %channel.uuid(), session_id = ?claims.session_id)
+)]
 async fn join_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
@@ -330,7 +346,14 @@ async fn join_session(
         )
         .await;
     match join_result {
-        Ok((channel, connection_id)) => Some((session_id, outbound_rx, channel, connection_id)),
+        Ok((channel, connection_id)) => {
+            info!(
+                event = telemetry::schema::event::WS_JOIN_SUCCEEDED,
+                connection_id = ?connection_id,
+                "joined websocket session"
+            );
+            Some((session_id, outbound_rx, channel, connection_id))
+        }
         Err(error) => {
             let close_code = match error {
                 ChannelManagerJoinError::ChannelFull => WebSocketCloseCode::ChannelFull,
@@ -338,7 +361,8 @@ async fn join_session(
                     WebSocketCloseCode::AuthFailed
                 }
             };
-            debug!(
+            warn!(
+                event = telemetry::schema::event::WS_JOIN_FAILED,
                 ?session_id,
                 ?error,
                 close_code = u16::from(close_code),
@@ -355,12 +379,14 @@ async fn join_session(
     }
 }
 
-fn record_session_span(channel: &Channel, session_id: &SessionId) {
+fn record_session_span(channel: &Channel, session_id: &SessionId, connection_id: ConnectionId) {
     let current_span = Span::current();
     current_span.record("channel_uuid", field::display(channel.uuid()));
     current_span.record("session_id", field::debug(session_id));
+    current_span.record("connection_id", field::debug(connection_id));
     info!(
         event = telemetry::schema::event::WS_SESSION_ESTABLISHED,
+        connection_id = ?connection_id,
         "websocket session established"
     );
 }
@@ -384,13 +410,22 @@ async fn initialize_session(
             "failed to send welcome payload"
         );
         state.metrics.record_ws_startup_send_failure();
+        warn!(
+            event = telemetry::schema::event::WS_JOIN_FAILED,
+            session_id = ?session_id,
+            connection_id = ?connection_id,
+            outcome = "welcome_send_failed",
+            "failed to send websocket welcome payload"
+        );
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
     }
     if session_protocol.initialize(writer).await.is_err() {
         warn!(
+            event = telemetry::schema::event::WS_JOIN_FAILED,
             ?session_id,
             connection_id = ?connection_id,
+            outcome = "session_initialize_failed",
             "failed to initialize websocket session protocol"
         );
         state.metrics.record_ws_session_initialize_failure();

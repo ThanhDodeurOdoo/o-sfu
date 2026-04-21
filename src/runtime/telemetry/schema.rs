@@ -3,16 +3,17 @@
     reason = "The event catalog intentionally grows ahead of call-site rollout so observability names stay centralized across phases."
 )]
 pub(crate) mod event {
+    pub(crate) const RUNTIME_LOG: &str = "runtime.log";
     pub(crate) const HTTP_LISTENER_READY: &str = "http.listener.ready";
     pub(crate) const RUNTIME_BOOT: &str = "runtime.boot";
     pub(crate) const RUNTIME_SHUTDOWN: &str = "runtime.shutdown";
     pub(crate) const RUNTIME_TELEMETRY_INITIALIZED: &str = "runtime.telemetry_initialized";
-    pub(crate) const WS_CONNECTION_ACCEPTED: &str = "ws.connection.accepted";
-    pub(crate) const WS_CONNECTION_CLOSED: &str = "ws.connection.closed";
-    pub(crate) const WS_AUTH_REJECTED: &str = "ws.auth.rejected";
-    pub(crate) const WS_HANDSHAKE_REJECTED: &str = "ws.handshake.rejected";
-    pub(crate) const WS_JOIN_FAILED: &str = "ws.join.failed";
-    pub(crate) const WS_JOIN_SUCCEEDED: &str = "ws.join.succeeded";
+    pub(crate) const WS_CONNECTION_ACCEPTED: &str = "ws.accepted";
+    pub(crate) const WS_CONNECTION_CLOSED: &str = "ws.closed";
+    pub(crate) const WS_AUTH_REJECTED: &str = "ws.auth_rejected";
+    pub(crate) const WS_HANDSHAKE_REJECTED: &str = "ws.handshake_rejected";
+    pub(crate) const WS_JOIN_FAILED: &str = "ws.join_failed";
+    pub(crate) const WS_JOIN_SUCCEEDED: &str = "ws.join_succeeded";
     pub(crate) const WS_SESSION_ESTABLISHED: &str = "ws.session.established";
     pub(crate) const NEGOTIATION_STARTED: &str = "negotiation.started";
     pub(crate) const NEGOTIATION_SUCCEEDED: &str = "negotiation.succeeded";
@@ -21,6 +22,7 @@ pub(crate) mod event {
     pub(crate) const PUBLISH_COMMITTED: &str = "publish.committed";
     pub(crate) const PUBLISH_ABORTED: &str = "publish.aborted";
     pub(crate) const SUBSCRIBE_PREPARED: &str = "subscribe.prepared";
+    pub(crate) const SUBSCRIBE_SUCCEEDED: &str = "subscribe.succeeded";
     pub(crate) const SUBSCRIBE_REJECTED: &str = "subscribe.rejected";
     pub(crate) const TRANSPORT_ICE_STATE_CHANGED: &str = "transport.ice_state.changed";
     pub(crate) const TRANSPORT_DTLS_CONNECTED: &str = "transport.dtls.connected";

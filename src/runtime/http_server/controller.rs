@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{Instrument, info};
 
 use crate::{
     config::Config,
@@ -69,7 +69,9 @@ pub(crate) fn app(state: RuntimeState) -> Router {
     route = "HttpRoute::Noop"
 )]
 async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
-    axum::Json(NoopResponse::ok())
+    async { axum::Json(NoopResponse::ok()) }
+        .instrument(telemetry::http_request_span("noop"))
+        .await
 }
 
 #[o_sfu_telemetry::measure_http_request(
@@ -78,15 +80,19 @@ async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
     route = "HttpRoute::Stats"
 )]
 async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
-    axum::Json(
-        state
-            .channels
-            .stats_snapshots(&state.transport_adapter)
-            .await
-            .into_iter()
-            .map(http_channel_stats)
-            .collect::<Vec<_>>(),
-    )
+    async {
+        axum::Json(
+            state
+                .channels
+                .stats_snapshots(&state.transport_adapter)
+                .await
+                .into_iter()
+                .map(http_channel_stats)
+                .collect::<Vec<_>>(),
+        )
+    }
+    .instrument(telemetry::http_request_span("stats"))
+    .await
 }
 
 #[o_sfu_telemetry::measure_http_request(
@@ -95,10 +101,14 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     route = "HttpRoute::Metrics"
 )]
 async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
-        render_prometheus(&state.metrics),
-    )
+    async {
+        (
+            [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
+            render_prometheus(&state.metrics),
+        )
+    }
+    .instrument(telemetry::http_request_span("metrics"))
+    .await
 }
 
 /// This is the entry point for the Odoo server to request a channel.
@@ -119,48 +129,52 @@ async fn channel(
     headers: HeaderMap,
     Query(query): Query<CreateChannelQuery>,
 ) -> Response {
-    let Some(token) = authorization_token(&headers) else {
-        state.metrics.record_http_channel_unauthorized();
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let Ok(claims) = auth::verify::<HttpChannelClaims>(token, &state.config.auth_key) else {
-        state.metrics.record_http_channel_unauthorized();
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let Some(issuer) = claims.registered.iss.as_deref() else {
-        state.metrics.record_http_channel_forbidden();
-        return StatusCode::FORBIDDEN.into_response();
-    };
-    if query.recording_address.is_some() && claims.key.is_none() {
-        state.metrics.record_http_channel_bad_request();
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let remote_address = request_remote_address(
-        &headers,
-        &state.config,
-        connect_info.map(|Extension(ConnectInfo(addr))| addr),
-    );
-    let channel = state
-        .channels
-        .create_or_get(
-            issuer,
-            claims.key.as_deref(),
-            &ChannelConfig {
-                web_rtc_enabled: query.web_rtc_enabled(),
-                recording_address: query.recording_address.clone(),
-            },
-            Some(&remote_address),
+    async {
+        let Some(token) = authorization_token(&headers) else {
+            state.metrics.record_http_channel_unauthorized();
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let Ok(claims) = auth::verify::<HttpChannelClaims>(token, &state.config.auth_key) else {
+            state.metrics.record_http_channel_unauthorized();
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let Some(issuer) = claims.registered.iss.as_deref() else {
+            state.metrics.record_http_channel_forbidden();
+            return StatusCode::FORBIDDEN.into_response();
+        };
+        if query.recording_address.is_some() && claims.key.is_none() {
+            state.metrics.record_http_channel_bad_request();
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        let remote_address = request_remote_address(
+            &headers,
+            &state.config,
+            connect_info.map(|Extension(ConnectInfo(addr))| addr),
+        );
+        let channel = state
+            .channels
+            .create_or_get(
+                issuer,
+                claims.key.as_deref(),
+                &ChannelConfig {
+                    web_rtc_enabled: query.web_rtc_enabled(),
+                    recording_address: query.recording_address.clone(),
+                },
+                Some(&remote_address),
+            )
+            .await;
+        state.metrics.record_http_channel_success();
+        (
+            StatusCode::OK,
+            axum::Json(ChannelResponse {
+                uuid: channel.uuid().to_owned(),
+                url: request_base_url(&headers, &state.config),
+            }),
         )
-        .await;
-    state.metrics.record_http_channel_success();
-    (
-        StatusCode::OK,
-        axum::Json(ChannelResponse {
-            uuid: channel.uuid().to_owned(),
-            url: request_base_url(&headers, &state.config),
-        }),
-    )
-        .into_response()
+            .into_response()
+    }
+    .instrument(telemetry::http_request_span("channel"))
+    .await
 }
 
 /// Authorized bulk-disconnect route.
@@ -176,22 +190,26 @@ async fn channel(
     route = "HttpRoute::Disconnect"
 )]
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
-    let Ok(token) = str::from_utf8(&body) else {
-        state.metrics.record_http_disconnect_bad_request();
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
-        state.metrics.record_http_disconnect_unprocessable_entity();
-        return StatusCode::UNPROCESSABLE_ENTITY.into_response();
-    };
-    for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
-        state
-            .channels
-            .disconnect_sessions(channel_uuid, session_ids, &state.transport_adapter)
-            .await;
+    async {
+        let Ok(token) = str::from_utf8(&body) else {
+            state.metrics.record_http_disconnect_bad_request();
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
+            state.metrics.record_http_disconnect_unprocessable_entity();
+            return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+        };
+        for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
+            state
+                .channels
+                .disconnect_sessions(channel_uuid, session_ids, &state.transport_adapter)
+                .await;
+        }
+        state.metrics.record_http_disconnect_success();
+        StatusCode::OK.into_response()
     }
-    state.metrics.record_http_disconnect_success();
-    StatusCode::OK.into_response()
+    .instrument(telemetry::http_request_span("disconnect"))
+    .await
 }
 
 fn authorization_token(headers: &HeaderMap) -> Option<&str> {

@@ -1,3 +1,4 @@
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportAdapterError, TransportSessionKey,
 };
@@ -5,7 +6,7 @@ use crate::runtime::websocket_server::WsWriter;
 use o_sfu_protocol::signaling::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };
-use tracing::warn;
+use tracing::{info, instrument, warn};
 
 use super::super::{
     controller::SessionProtocolOutcome,
@@ -18,7 +19,15 @@ use super::super::{
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
-    // TODO: needs documentation:
+    #[instrument(
+        name = "transport.offer.create",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id
+        )
+    )]
     pub(in crate::runtime::websocket_server) async fn send_initial_offer(
         &mut self,
         writer: &mut WsWriter,
@@ -33,6 +42,9 @@ impl PostAuthSessionProtocol {
             .await
             .map_err(|error| {
                 warn!(
+                    event = telemetry_event::NEGOTIATION_FAILED,
+                    operation = "initial_offer_create",
+                    outcome = "transport_error",
                     session_id = ?self.session_id,
                     connection_id = ?self.connection_id,
                     ?error,
@@ -40,6 +52,12 @@ impl PostAuthSessionProtocol {
                 );
                 WebSocketCloseCode::Error
             })?;
+        info!(
+            event = telemetry_event::NEGOTIATION_STARTED,
+            operation = "initial_offer_create",
+            outcome = "offer_ready",
+            "created initial transport offer"
+        );
         let offer_request = ServerRequest::Offer(SessionDescriptionPayload {
             sdp: offer.into_sdp(),
         });
@@ -62,6 +80,9 @@ impl PostAuthSessionProtocol {
         let request_id = self.request_state.next_request_id();
         if let Err(code) = send_server_request(writer, request_id.clone(), request.clone()).await {
             warn!(
+                event = telemetry_event::NEGOTIATION_FAILED,
+                operation = negotiation_operation_name(&action),
+                outcome = "request_send_failed",
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
                 ?request_id,
@@ -70,11 +91,26 @@ impl PostAuthSessionProtocol {
             );
             return Err(code);
         }
+        info!(
+            event = telemetry_event::NEGOTIATION_STARTED,
+            operation = negotiation_operation_name(&action),
+            outcome = "request_sent",
+            ?request_id,
+            "sent negotiation request"
+        );
         self.negotiation.issue(request_id, request, action);
         Ok(())
     }
 
-    // TODO: needs documentation:
+    #[instrument(
+        name = "transport.renegotiate",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id
+        )
+    )]
     pub(super) async fn request_renegotiation(
         &mut self,
         writer: &mut WsWriter,
@@ -126,6 +162,13 @@ impl PostAuthSessionProtocol {
         {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
+        info!(
+            event = telemetry_event::NEGOTIATION_SUCCEEDED,
+            operation = negotiation_operation_name(&resolved.pending.action),
+            outcome = "answer_applied",
+            ?response_to,
+            "applied negotiation answer"
+        );
         self.commit_staged_publishes().await;
         if matches!(resolved.pending.request, ServerRequest::Ping) {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
@@ -174,6 +217,15 @@ impl PostAuthSessionProtocol {
         Some(resolved)
     }
 
+    #[instrument(
+        name = "transport.answer.apply",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id
+        )
+    )]
     async fn apply_transport_negotiation_answer(
         &self,
         response_to: &RequestId,
@@ -189,6 +241,9 @@ impl PostAuthSessionProtocol {
             .await
         {
             warn!(
+                event = telemetry_event::NEGOTIATION_FAILED,
+                operation = "answer_apply",
+                outcome = "transport_error",
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
                 ?response_to,
@@ -231,6 +286,9 @@ impl PostAuthSessionProtocol {
                     .negotiated_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
                     .map_err(|error| {
                         warn!(
+                            event = telemetry_event::NEGOTIATION_FAILED,
+                            operation = "answer_apply",
+                            outcome = "capability_projection_failed",
                             session_id = ?self.session_id,
                             connection_id = ?self.connection_id,
                             ?error,
@@ -248,6 +306,9 @@ impl PostAuthSessionProtocol {
                     .await
                 {
                     warn!(
+                        event = telemetry_event::NEGOTIATION_FAILED,
+                        operation = "answer_apply",
+                        outcome = "channel_commit_failed",
                         session_id = ?self.session_id,
                         connection_id = ?self.connection_id,
                         "failed to commit negotiated session state after initial answer"
@@ -266,6 +327,9 @@ impl PostAuthSessionProtocol {
                     .await
                 {
                     warn!(
+                        event = telemetry_event::NEGOTIATION_FAILED,
+                        operation = "renegotiation_apply",
+                        outcome = "channel_refresh_failed",
                         session_id = ?self.session_id,
                         connection_id = ?self.connection_id,
                         "failed to refresh session state after renegotiation answer"
@@ -298,11 +362,21 @@ async fn staged_renegotiation_request(
         ) => {
             warn!(
                 ?session_key,
+                event = telemetry_event::NEGOTIATION_FAILED,
+                operation = "renegotiation_offer_create",
+                outcome = "transport_error",
                 ?error,
                 "failed to build a staged renegotiation offer"
             );
             Err(WebSocketCloseCode::Error)
         }
+    }
+}
+
+fn negotiation_operation_name(action: &PendingNegotiationAction) -> &'static str {
+    match action {
+        PendingNegotiationAction::EstablishSession { .. } => "initial_offer_create",
+        PendingNegotiationAction::RefreshSession => "renegotiation_offer_create",
     }
 }
 

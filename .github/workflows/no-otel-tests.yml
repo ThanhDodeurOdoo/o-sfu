@@ -1,0 +1,35 @@
+name: No OTel Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  no-otel-workspace:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check workspace without OpenTelemetry feature
+        run: cargo check --workspace --no-default-features
+
+      - name: Run workspace tests without OpenTelemetry feature
+        run: cargo test --workspace --release --no-default-features
+
+      - name: Run clippy without OpenTelemetry feature
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings

@@ -1,11 +1,23 @@
 use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
+use tracing::{info, instrument};
 
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::websocket_server::WsWriter;
 
 use super::super::controller::SessionProtocolOutcome;
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
+    #[instrument(
+        name = "publish.intent",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id,
+            stream_type = ?stream_type
+        )
+    )]
     pub(super) async fn handle_publish_intent(
         &mut self,
         writer: &mut WsWriter,
@@ -89,14 +101,33 @@ impl PostAuthSessionProtocol {
     }
 
     async fn stage_publish_stream(&self, stream_type: StreamType) -> bool {
-        self.channel
+        let staged = self
+            .channel
             .stage_negotiated_publish(
                 &self.session_id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
             )
-            .await
+            .await;
+        if staged {
+            info!(
+                event = telemetry_event::PUBLISH_PREPARED,
+                operation = "publish_prepare",
+                outcome = "staged",
+                stream_type = ?stream_type,
+                "staged publish stream for negotiation"
+            );
+        } else {
+            info!(
+                event = telemetry_event::PUBLISH_ABORTED,
+                operation = "publish_prepare",
+                outcome = "ignored",
+                stream_type = ?stream_type,
+                "publish intent did not stage new media"
+            );
+        }
+        staged
     }
 
     pub(super) async fn stage_queued_publish_streams(&mut self) -> bool {
@@ -110,6 +141,15 @@ impl PostAuthSessionProtocol {
         staged_any
     }
 
+    #[instrument(
+        name = "publish.commit",
+        skip_all,
+        fields(
+            channel_uuid = %self.channel.uuid(),
+            session_id = ?self.session_id,
+            connection_id = ?self.connection_id
+        )
+    )]
     pub(super) async fn commit_staged_publishes(&self) {
         self.channel
             .commit_staged_publishes(
@@ -118,6 +158,12 @@ impl PostAuthSessionProtocol {
                 &self.transport_adapter,
             )
             .await;
+        info!(
+            event = telemetry_event::PUBLISH_COMMITTED,
+            operation = "publish_commit",
+            outcome = "applied",
+            "committed staged publish streams"
+        );
     }
 }
 

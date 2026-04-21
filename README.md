@@ -67,6 +67,10 @@ flowchart TD
 
 Same general idea than odoo/sfu
 
+The `otel-tracing` cargo feature is enabled by default. Disable it with
+`--no-default-features` when you want a logging-only build that does not compile
+the OpenTelemetry exporter stack.
+
 Note: even during testing public IP shouldn't be a localhost loopback, it should an actual eternally visible IP
 
 ```bash
@@ -130,7 +134,7 @@ docker run --rm \
 | `TELEMETRY_SERVICE_NAME`           | `o-sfu`         |      ✅      | Service name attached to runtime telemetry metadata.                             |
 | `TELEMETRY_DEPLOYMENT_ENVIRONMENT` | `local`         |      ✅      | Deployment environment name attached to runtime telemetry metadata.              |
 | `TELEMETRY_SERVICE_INSTANCE_ID`    | `pid-<pid>`     |      ✅      | Optional stable instance identifier for logs and future traces.                  |
-| `TELEMETRY_OTLP_ENDPOINT`          | disabled        |      ✅      | Reserved owning place for future OTLP trace export configuration.                |
+| `TELEMETRY_OTLP_ENDPOINT`          | disabled        |      ✅      | Optional OTLP/HTTP traces endpoint (for example `http://collector:4318` or `http://collector:4318/v1/traces`). Requires the default `otel-tracing` cargo feature. |
 | `FEATURE_TRANSCRIPTION`            | `false`         |      ✅      | Enable transcription feature flags.                                              |
 | `FEATURE_AUDIO_RECORDING`          | `false`         |      ✅      | Enable audio recording feature flags.                                            |
 | `FEATURE_VIDEO_RECORDING`          | `false`         |      ✅      | Enable video recording feature flags.                                            |
