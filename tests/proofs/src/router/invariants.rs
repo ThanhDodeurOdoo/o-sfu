@@ -25,7 +25,7 @@ impl<
         let mut session_index = 0;
         while let Some(session_slot) = self.sessions.get(session_index) {
             if let Some(session) = session_slot
-                && session.state() != crate::SessionState::Active
+                && session.state() != o_sfu_router::SessionState::Active
             {
                 return false;
             }
@@ -284,7 +284,7 @@ impl<
             if producer.is_some_and(|producer| {
                 self.transport_by_id(producer.transport_id())
                     .is_some_and(|transport| {
-                        transport.direction() != crate::TransportDirection::Receive
+                        transport.direction() != o_sfu_router::TransportDirection::Receive
                     })
             }) {
                 return false;
@@ -294,7 +294,7 @@ impl<
             if consumer.is_some_and(|consumer| {
                 self.transport_by_id(consumer.transport_id())
                     .is_some_and(|transport| {
-                        transport.direction() != crate::TransportDirection::Send
+                        transport.direction() != o_sfu_router::TransportDirection::Send
                     })
             }) {
                 return false;

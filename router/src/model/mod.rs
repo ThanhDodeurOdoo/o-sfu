@@ -15,7 +15,6 @@ mod session;
 #[cfg(test)]
 mod tests;
 mod transport;
-pub(crate) mod verification;
 
 pub use self::consumer::Consumer;
 pub use self::consumer_capability::ConsumerCapability;

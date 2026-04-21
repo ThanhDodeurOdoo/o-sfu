@@ -31,10 +31,13 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       - name: Run protocol decode fuzz target
+        working-directory: tests/fuzz
         run: cargo +nightly fuzz run protocol_decode -- -max_total_time=300
 
       - name: Run protocol sequence fuzz target
+        working-directory: tests/fuzz
         run: cargo +nightly fuzz run protocol_sequence -- -max_total_time=300
 
       - name: Run HTTP disconnect auth fuzz target
+        working-directory: tests/fuzz
         run: cargo +nightly fuzz run http_disconnect_auth -- -max_total_time=300

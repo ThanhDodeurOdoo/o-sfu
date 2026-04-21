@@ -72,4 +72,4 @@ jobs:
           cargo-kani setup --use-local-bundle "$RUNNER_TEMP/$bundle"
 
       - name: Run Kani proofs
-        run: cargo kani -p o-sfu-router
+        run: cargo kani -p o-sfu-proofs

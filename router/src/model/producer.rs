@@ -59,6 +59,12 @@ impl Producer {
         self.paused
     }
 
+    #[must_use]
+    pub fn with_paused(mut self, paused: bool) -> Self {
+        self.paused = paused;
+        self
+    }
+
     pub(super) fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
     }

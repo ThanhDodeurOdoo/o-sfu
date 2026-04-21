@@ -3,8 +3,6 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-mod support;
-
 use std::collections::BTreeMap;
 
 use o_sfu_protocol::{
@@ -23,10 +21,10 @@ use o_sfu::{
     },
 };
 
-use crate::support::protocol_harness::{
+use o_sfu_tests::support::protocol_harness::{
     ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config, read_until_server_message,
 };
-use crate::support::{
+use o_sfu_tests::support::{
     TEST_AUTH_KEY, TEST_CHANNEL_KEY, create_channel, disconnect_sessions_via_http, metrics_text,
     signed_connect_claims,
 };

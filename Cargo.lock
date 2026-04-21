@@ -1192,7 +1192,6 @@ dependencies = [
  "o-sfu-rfc",
  "o-sfu-router",
  "o-sfu-telemetry",
- "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -1205,8 +1204,14 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "trybuild",
  "uuid",
+]
+
+[[package]]
+name = "o-sfu-proofs"
+version = "0.3.0"
+dependencies = [
+ "o-sfu-router",
 ]
 
 [[package]]
@@ -1242,6 +1247,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "o-sfu-tests"
+version = "0.3.0"
+dependencies = [
+ "futures-util",
+ "o-sfu",
+ "o-sfu-protocol",
+ "o-sfu-router",
+ "o-sfu-telemetry",
+ "reqwest",
+ "serde_json",
+ "str0m",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "trybuild",
 ]
 
 [[package]]

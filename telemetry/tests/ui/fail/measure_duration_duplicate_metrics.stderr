@@ -1,5 +1,5 @@
 error: duplicate `metrics` argument
-  --> telemetry/tests/ui/fail/measure_duration_duplicate_metrics.rs:15:15
-   |
-15 |     metrics = "state.metrics",
-   |               ^^^^^^^^^^^^^^^
+ --> $WORKSPACE/telemetry/tests/ui/fail/measure_duration_duplicate_metrics.rs
+  |
+  |     metrics = "state.metrics",
+  |               ^^^^^^^^^^^^^^^

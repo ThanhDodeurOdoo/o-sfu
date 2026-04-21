@@ -33,6 +33,7 @@ pub type TestWebSocket =
 pub const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub const TEST_CHANNEL_KEY: &str = "Y2hhbm5lbC1rZXk=";
 
+#[must_use]
 pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
     Config {
         auth_key: TEST_AUTH_KEY.to_owned(),
@@ -53,6 +54,7 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
     }
 }
 
+#[must_use]
 pub fn signed_connect_claims(
     key: &str,
     channel_uuid: &str,
@@ -85,6 +87,7 @@ pub fn signed_channel_claims(issuer: &str, key: Option<&str>) -> Option<String> 
     .ok()
 }
 
+#[must_use]
 pub fn signed_disconnect_claims(
     session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
 ) -> Option<String> {

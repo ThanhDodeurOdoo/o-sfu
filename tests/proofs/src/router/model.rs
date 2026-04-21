@@ -1,4 +1,4 @@
-use super::super::{
+use o_sfu_router::{
     Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
     Transport, TransportDirection, TransportId,
 };
@@ -179,7 +179,7 @@ impl<K: Copy + Eq, V: Copy + Eq, const MAX_KEYS: usize, const MAX_VALUES: usize>
     }
 }
 
-/// Bounded proof-only representation of [`super::super::Router`].
+/// Bounded proof-only representation of [`o_sfu_router::Router`].
 /// (the other underlying structs are the real ones)
 ///
 /// Kani proofs target router transition semantics, not the
@@ -257,7 +257,7 @@ impl<
     pub(crate) fn update_session_permissions(
         &mut self,
         session_id: SessionId,
-        permissions: crate::SessionPermissions,
+        permissions: o_sfu_router::SessionPermissions,
     ) -> Result<(), ProofRouterError> {
         let Some(session) = self.session_by_id_mut(session_id) else {
             return Err(RouterError::MissingSession(session_id).into());
@@ -313,7 +313,7 @@ impl<
     }
 
     /// The `capability` parameter abstracts the external capability negotiation as a semantic
-    /// compatibility gate. [`crate::ConsumerCapability::Incompatible`] is rejected with
+    /// compatibility gate. [`o_sfu_router::ConsumerCapability::Incompatible`] is rejected with
     /// [`RouterError::IncompatibleCapabilities`].
     ///
     /// # Errors
@@ -322,7 +322,7 @@ impl<
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
     /// consumers, [`RouterError::IncompatibleCapabilities`] when `capability` is
-    /// [`crate::ConsumerCapability::Incompatible`],
+    /// [`o_sfu_router::ConsumerCapability::Incompatible`],
     /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
     /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
     /// stream type does not match its source producer,
@@ -331,7 +331,7 @@ impl<
     pub(crate) fn add_consumer(
         &mut self,
         mut consumer: Consumer,
-        capability: crate::ConsumerCapability,
+        capability: o_sfu_router::ConsumerCapability,
     ) -> Result<(), ProofRouterError> {
         let Some(transport) = self.transport_by_id(consumer.transport_id()) else {
             return Err(RouterError::MissingTransport(consumer.transport_id()).into());
@@ -367,7 +367,7 @@ impl<
         if self.contains_consumer(consumer.id()) {
             return Err(RouterError::DuplicateConsumer(consumer.id()).into());
         }
-        consumer.set_producer_paused(producer.paused());
+        consumer = consumer.with_producer_paused(producer.paused());
         self.insert_consumer(consumer)?;
         self.transport_consumers.insert(
             consumer.transport_id(),
@@ -392,13 +392,13 @@ impl<
         let Some(producer) = self.producer_by_id_mut(producer_id) else {
             return Err(RouterError::MissingProducer(producer_id).into());
         };
-        producer.set_paused(paused);
+        *producer = producer.with_paused(paused);
 
         for consumer in &mut self.consumers {
             if let Some(consumer) = consumer.as_mut()
                 && consumer.producer_id() == producer_id
             {
-                consumer.set_producer_paused(paused);
+                *consumer = consumer.with_producer_paused(paused);
             }
         }
 
@@ -416,7 +416,7 @@ impl<
         let Some(consumer) = self.consumer_by_id_mut(consumer_id) else {
             return Err(RouterError::MissingConsumer(consumer_id).into());
         };
-        consumer.set_paused(paused);
+        *consumer = consumer.with_paused(paused);
         Ok(())
     }
 

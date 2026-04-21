@@ -1,0 +1,14 @@
+[package]
+name = "o-sfu-proofs"
+description = "Formal proofs for o-sfu subsystems"
+
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+o-sfu-router = { path = "../../router" }
+
+[lints]
+workspace = true

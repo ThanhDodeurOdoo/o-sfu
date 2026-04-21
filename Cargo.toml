@@ -1,6 +1,6 @@
 [workspace]
-exclude = ["fuzz"]
-members = ["protocol", "rfc", "router", "telemetry"]
+exclude = ["tests/fuzz"]
+members = ["protocol", "rfc", "router", "telemetry", "tests", "tests/proofs"]
 resolver = "3"
 
 [workspace.package]
@@ -101,6 +101,7 @@ while_float = "warn"
 [package]
 description = "o-sfu"
 name = "o-sfu"
+autotests = false
 
 authors.workspace = true
 edition.workspace = true
@@ -140,14 +141,10 @@ workspace = true
 
 [dev-dependencies]
 criterion = "0.7"
-reqwest = { version = "0.13", default-features = false, features = [
-    "json",
-    "query",
-] }
 tower = { version = "0.5", features = ["util"] }
-trybuild = "1.0.116"
 
 [[bench]]
 harness = false
 name = "rtc_udp_demux"
+path = "tests/benchmarks/rtc_udp_demux.rs"
 required-features = ["internal-benchmarks"]

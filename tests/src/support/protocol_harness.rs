@@ -24,6 +24,7 @@ use super::{
 const RTC_NEGOTIATION_PORT_BASE: u16 = 56_000;
 static NEXT_RTC_NEGOTIATION_PORT: AtomicU16 = AtomicU16::new(RTC_NEGOTIATION_PORT_BASE);
 
+#[must_use]
 pub fn protocol_test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
     test_config(authentication_timeout_ms, channel_size)
 }

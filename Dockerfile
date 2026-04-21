@@ -7,7 +7,7 @@ COPY protocol ./protocol
 COPY router ./router
 COPY rfc ./rfc
 COPY telemetry ./telemetry
-COPY benches ./benches
+COPY tests ./tests
 COPY src ./src
 
 RUN cargo build --release --locked -p o-sfu

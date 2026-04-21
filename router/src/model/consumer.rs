@@ -73,6 +73,18 @@ impl Consumer {
         self.producer_paused
     }
 
+    #[must_use]
+    pub fn with_paused(mut self, paused: bool) -> Self {
+        self.paused = paused;
+        self
+    }
+
+    #[must_use]
+    pub fn with_producer_paused(mut self, producer_paused: bool) -> Self {
+        self.producer_paused = producer_paused;
+        self
+    }
+
     pub(super) fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
     }

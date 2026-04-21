@@ -1,0 +1,28 @@
+[package]
+name = "o-sfu-tests"
+description = "Integration and verification tests for o-sfu"
+
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+o-sfu = { path = ".." }
+o-sfu-protocol = { path = "../protocol" }
+o-sfu-router = { path = "../router" }
+o-sfu-telemetry = { path = "../telemetry" }
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "query",
+] }
+serde_json.workspace = true
+str0m.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+trybuild = "1.0.116"
+
+[lints]
+workspace = true

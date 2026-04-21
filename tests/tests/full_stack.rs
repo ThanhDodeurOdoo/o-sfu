@@ -3,8 +3,6 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-mod support;
-
 use std::time::Duration;
 
 use o_sfu::testing::http::IncomingBitRateStats;
@@ -13,7 +11,7 @@ use o_sfu_protocol::{
     signaling::{ServerMessage, ServerRequest, TrackBinding},
 };
 
-use crate::support::{
+use o_sfu_tests::support::{
     TEST_CHANNEL_KEY,
     fake_media::{FakeClock, FakeMediaSource},
     protocol_full_stack::{ProtocolFakePeer, ProtocolLocalNetwork},

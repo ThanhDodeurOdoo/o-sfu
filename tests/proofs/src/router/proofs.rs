@@ -1,5 +1,5 @@
 use super::{ProofRouterModel, model::ProofRouterError};
-use crate::{
+use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
     SessionId, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
     TransportDirection, TransportId,
@@ -386,7 +386,7 @@ fn producers_are_rejected_on_send_transports() {
             StreamType::Audio,
         )),
         Err(ProofRouterError::Router(
-            crate::RouterError::ProducerRequiresReceiveTransport(transport_id),
+            o_sfu_router::RouterError::ProducerRequiresReceiveTransport(transport_id),
         )),
     );
     assert!(router.satisfies_invariants());
@@ -437,7 +437,7 @@ fn consumers_are_rejected_on_receive_transports() {
             ConsumerCapability::Compatible,
         ),
         Err(ProofRouterError::Router(
-            crate::RouterError::ConsumerRequiresSendTransport(consumer_transport),
+            o_sfu_router::RouterError::ConsumerRequiresSendTransport(consumer_transport),
         )),
     );
     assert!(router.satisfies_invariants());
@@ -488,7 +488,7 @@ fn consumers_are_rejected_when_media_kind_differs_from_producer() {
             ConsumerCapability::Compatible,
         ),
         Err(ProofRouterError::Router(
-            crate::RouterError::ConsumerMediaKindMismatch {
+            o_sfu_router::RouterError::ConsumerMediaKindMismatch {
                 producer_id,
                 expected: MediaKind::Audio,
                 actual: MediaKind::Video,
@@ -543,7 +543,7 @@ fn consumers_are_rejected_when_stream_type_differs_from_producer() {
             ConsumerCapability::Compatible,
         ),
         Err(ProofRouterError::Router(
-            crate::RouterError::ConsumerStreamTypeMismatch {
+            o_sfu_router::RouterError::ConsumerStreamTypeMismatch {
                 producer_id,
                 expected: StreamType::Camera,
                 actual: StreamType::Screen,
@@ -809,7 +809,7 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
             ConsumerCapability::Incompatible,
         ),
         Err(ProofRouterError::Router(
-            crate::RouterError::IncompatibleCapabilities { producer_id },
+            o_sfu_router::RouterError::IncompatibleCapabilities { producer_id },
         )),
     );
     assert!(router.satisfies_invariants());

@@ -1,5 +1,5 @@
 error: unsupported telemetry argument
-  --> telemetry/tests/ui/fail/measure_http_request_unsupported_argument.rs:26:5
-   |
-26 |     unexpected = "boom"
-   |     ^^^^^^^^^^
+ --> $WORKSPACE/telemetry/tests/ui/fail/measure_http_request_unsupported_argument.rs
+  |
+  |     unexpected = "boom"
+  |     ^^^^^^^^^^
