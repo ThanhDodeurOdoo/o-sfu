@@ -23,7 +23,7 @@ impl PostAuthSessionProtocol {
         writer: &mut WsWriter,
         stream_type: StreamType,
     ) -> SessionProtocolOutcome {
-        if self.state.has_queued_publish(stream_type)
+        if self.flow_state.has_queued_publish(stream_type)
             || self
                 .channel
                 .has_staged_publish(&self.session_id, self.connection_id, stream_type)
@@ -47,9 +47,9 @@ impl PostAuthSessionProtocol {
                 .await;
             return SessionProtocolOutcome::Continue;
         }
-        if self.negotiation.awaiting_answer() {
-            self.state.queue_publish_stream(stream_type);
-            let _disposition = self.negotiation.request_renegotiation();
+        if self.flow_state.awaiting_answer() {
+            self.flow_state.queue_publish_stream(stream_type);
+            let _disposition = self.flow_state.request_renegotiation();
             return SessionProtocolOutcome::Continue;
         }
         if !self.stage_publish_stream(stream_type).await {
@@ -66,7 +66,7 @@ impl PostAuthSessionProtocol {
         stream_type: StreamType,
         writer: Option<&mut WsWriter>,
     ) -> SessionProtocolOutcome {
-        if self.state.clear_queued_publish(stream_type) {
+        if self.flow_state.clear_queued_publish(stream_type) {
             return SessionProtocolOutcome::Continue;
         }
         if self
@@ -79,7 +79,7 @@ impl PostAuthSessionProtocol {
             )
             .await
         {
-            let _disposition = self.negotiation.request_renegotiation();
+            let _disposition = self.flow_state.request_renegotiation();
             return SessionProtocolOutcome::Continue;
         }
         if !self
@@ -131,7 +131,7 @@ impl PostAuthSessionProtocol {
     }
 
     pub(super) async fn stage_queued_publish_streams(&mut self) -> bool {
-        let queued_publish_streams = self.state.take_queued_publish_streams();
+        let queued_publish_streams = self.flow_state.take_queued_publish_streams();
         let mut staged_any = false;
         for stream_type in queued_publish_streams {
             if self.stage_publish_stream(stream_type).await {

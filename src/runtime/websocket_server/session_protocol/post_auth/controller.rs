@@ -21,12 +21,11 @@ use tracing::warn;
 
 use super::super::{
     controller::SessionProtocolOutcome,
+    flow_state::SessionFlowState,
     frame_codec::{send_server_messages, send_server_request},
-    negotiation::NegotiationState,
     request_state::SessionRequestState,
     track_projection::RemoteTrackProjection,
 };
-use super::state::PostAuthSessionState;
 
 /// The main orchestrator for an authenticated session.
 ///
@@ -42,9 +41,8 @@ pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) request_state: SessionRequestState,
-    pub(super) negotiation: NegotiationState,
+    pub(super) flow_state: SessionFlowState,
     pub(super) track_projection: RemoteTrackProjection,
-    pub(super) state: PostAuthSessionState,
 }
 
 impl PostAuthSessionProtocol {
@@ -64,9 +62,8 @@ impl PostAuthSessionProtocol {
             transport_adapter,
             metrics,
             request_state: SessionRequestState::default(),
-            negotiation: NegotiationState::default(),
+            flow_state: SessionFlowState::default(),
             track_projection: RemoteTrackProjection::default(),
-            state: PostAuthSessionState::default(),
         }
     }
 

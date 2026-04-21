@@ -10,7 +10,6 @@
 //! |- envelope_dispatch -> routes one client envelope to the correct business flow
 //! |- negotiation_flow  -> offer/answer and renegotiation sequencing
 //! |- publish_flow      -> staged publish commit and cleanup
-//! `- state             -> per-session protocol flags, queues, and pending work
 //! ```
 //!
 //! Read this node as the bridge between the authenticated protocol surface and the
@@ -19,6 +18,5 @@ mod controller;
 mod envelope_dispatch;
 mod negotiation_flow;
 mod publish_flow;
-mod state;
 
 pub(in crate::runtime::websocket_server) use controller::PostAuthSessionProtocol;

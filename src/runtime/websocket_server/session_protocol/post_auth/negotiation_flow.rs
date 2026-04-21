@@ -10,11 +10,10 @@ use tracing::{info, instrument, warn};
 
 use super::super::{
     controller::SessionProtocolOutcome,
-    frame_codec::send_server_request,
-    negotiation::{
-        PendingNegotiationAction, PendingNegotiationRequest, RenegotiationDisposition,
-        ResolvedNegotiation,
+    flow_state::{
+        PendingFlowAction, PendingFlowRequest, RenegotiationDisposition, ResolvedFlowState,
     },
+    frame_codec::send_server_request,
 };
 use super::controller::PostAuthSessionProtocol;
 
@@ -65,7 +64,7 @@ impl PostAuthSessionProtocol {
         self.issue_negotiation_request(
             writer,
             offer_request,
-            PendingNegotiationAction::EstablishSession {
+            PendingFlowAction::EstablishSession {
                 offered_router_rtp_capabilities: router_capabilities,
             },
         )
@@ -76,7 +75,7 @@ impl PostAuthSessionProtocol {
         &mut self,
         writer: &mut WsWriter,
         request: ServerRequest,
-        action: PendingNegotiationAction,
+        action: PendingFlowAction,
     ) -> Result<(), WebSocketCloseCode> {
         let request_id = self.request_state.next_request_id();
         if let Err(code) = send_server_request(writer, request_id.clone(), request.clone()).await {
@@ -100,7 +99,7 @@ impl PostAuthSessionProtocol {
             ?request_id,
             "sent negotiation request"
         );
-        self.negotiation.issue(request_id, request, action);
+        self.flow_state.issue(request_id, request, action);
         Ok(())
     }
 
@@ -117,7 +116,7 @@ impl PostAuthSessionProtocol {
         &mut self,
         writer: &mut WsWriter,
     ) -> Result<bool, WebSocketCloseCode> {
-        match self.negotiation.request_renegotiation() {
+        match self.flow_state.request_renegotiation() {
             RenegotiationDisposition::Skip | RenegotiationDisposition::QueueOnly => Ok(false),
             RenegotiationDisposition::SendNow => {
                 let session_key = self
@@ -132,12 +131,8 @@ impl PostAuthSessionProtocol {
                 else {
                     return Ok(false);
                 };
-                self.issue_negotiation_request(
-                    writer,
-                    request,
-                    PendingNegotiationAction::RefreshSession,
-                )
-                .await?;
+                self.issue_negotiation_request(writer, request, PendingFlowAction::RefreshSession)
+                    .await?;
                 Ok(true)
             }
         }
@@ -208,11 +203,8 @@ impl PostAuthSessionProtocol {
         Ok(())
     }
 
-    fn resolve_negotiation_answer(
-        &mut self,
-        response_to: &RequestId,
-    ) -> Option<ResolvedNegotiation> {
-        let Some(resolved) = self.negotiation.resolve_answer(response_to) else {
+    fn resolve_negotiation_answer(&mut self, response_to: &RequestId) -> Option<ResolvedFlowState> {
+        let Some(resolved) = self.flow_state.resolve_answer(response_to) else {
             warn!(
                 session_id = ?self.session_id,
                 connection_id = ?self.connection_id,
@@ -238,7 +230,7 @@ impl PostAuthSessionProtocol {
         &self,
         response_to: &RequestId,
         answer_sdp: &str,
-        resolved: &ResolvedNegotiation,
+        resolved: &ResolvedFlowState,
     ) -> Result<(), SessionProtocolOutcome> {
         let session_key = self
             .channel
@@ -268,7 +260,7 @@ impl PostAuthSessionProtocol {
     async fn send_follow_up_renegotiation_if_needed(
         &mut self,
         writer: &mut WsWriter,
-        resolved: &ResolvedNegotiation,
+        resolved: &ResolvedFlowState,
     ) -> Result<(), SessionProtocolOutcome> {
         let needs_follow_up =
             self.stage_queued_publish_streams().await || resolved.queued_renegotiation;
@@ -283,11 +275,11 @@ impl PostAuthSessionProtocol {
 
     async fn apply_negotiation_action(
         &self,
-        pending: &PendingNegotiationRequest,
+        pending: &PendingFlowRequest,
         answer_sdp: &str,
     ) -> Result<(), ()> {
         match &pending.action {
-            PendingNegotiationAction::EstablishSession {
+            PendingFlowAction::EstablishSession {
                 offered_router_rtp_capabilities,
             } => {
                 let client_rtp_capabilities = self
@@ -327,7 +319,7 @@ impl PostAuthSessionProtocol {
                     return Err(());
                 }
             }
-            PendingNegotiationAction::RefreshSession => {
+            PendingFlowAction::RefreshSession => {
                 if !self
                     .channel
                     .apply_session_refreshed(
@@ -387,10 +379,10 @@ async fn staged_renegotiation_request(
     }
 }
 
-fn negotiation_operation_name(action: &PendingNegotiationAction) -> &'static str {
+fn negotiation_operation_name(action: &PendingFlowAction) -> &'static str {
     match action {
-        PendingNegotiationAction::EstablishSession { .. } => "initial_offer_create",
-        PendingNegotiationAction::RefreshSession => "renegotiation_offer_create",
+        PendingFlowAction::EstablishSession { .. } => "initial_offer_create",
+        PendingFlowAction::RefreshSession => "renegotiation_offer_create",
     }
 }
 

@@ -7,7 +7,9 @@ use o_sfu_protocol::signaling::{
 };
 use tracing::{debug, info, instrument};
 
-use super::super::{controller::SessionProtocolOutcome, frame_codec::send_server_response};
+use super::super::{
+    controller::SessionProtocolOutcome, flow_state::FlowChange, frame_codec::send_server_response,
+};
 use super::controller::PostAuthSessionProtocol;
 
 impl PostAuthSessionProtocol {
@@ -152,6 +154,30 @@ impl PostAuthSessionProtocol {
         }
     }
 
+    async fn dispatch_flow_change(
+        &mut self,
+        writer: &mut WsWriter,
+        change: FlowChange,
+    ) -> SessionProtocolOutcome {
+        match change {
+            FlowChange::Publish(stream_type) => {
+                self.handle_publish_intent(writer, stream_type).await
+            }
+            FlowChange::Unpublish(stream_type) => {
+                self.handle_unpublish_intent_with_writer(stream_type, Some(writer))
+                    .await
+            }
+            FlowChange::Subscribe {
+                target_session_id,
+                states,
+            } => {
+                self.handle_subscribe_intent(&target_session_id, &states)
+                    .await;
+                SessionProtocolOutcome::Continue
+            }
+        }
+    }
+
     pub(super) async fn dispatch_client_envelope(
         &mut self,
         writer: &mut WsWriter,
@@ -174,16 +200,21 @@ impl PostAuthSessionProtocol {
                 SessionProtocolOutcome::Continue
             }
             ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
-                self.handle_subscribe_intent(&payload.session_id, &payload.states)
-                    .await;
-                SessionProtocolOutcome::Continue
+                self.dispatch_flow_change(
+                    writer,
+                    FlowChange::Subscribe {
+                        target_session_id: payload.session_id,
+                        states: payload.states,
+                    },
+                )
+                .await
             }
             ClientEnvelope::Message(ClientMessage::Publish(payload)) => {
-                self.handle_publish_intent(writer, payload.stream_type)
+                self.dispatch_flow_change(writer, FlowChange::Publish(payload.stream_type))
                     .await
             }
             ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
-                self.handle_unpublish_intent_with_writer(payload.stream_type, Some(writer))
+                self.dispatch_flow_change(writer, FlowChange::Unpublish(payload.stream_type))
                     .await
             }
             ClientEnvelope::Response {
