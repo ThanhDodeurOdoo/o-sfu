@@ -5,7 +5,8 @@
 //!
 //! ```text
 //! http_server
-//! `- controller -> Axum app construction plus channel and disconnect endpoints
+//! |- controller -> Axum app construction plus route-level parsing/response shaping
+//! `- services   -> auth-aware channel/disconnect helpers behind the route handlers
 //! ```
 //!
 //! Read this node before the WebSocket path when you need the server's non-streaming
@@ -13,6 +14,7 @@
 
 pub(crate) mod contract;
 mod controller;
+mod services;
 #[cfg(test)]
 mod tests;
 

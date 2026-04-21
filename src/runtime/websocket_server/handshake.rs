@@ -62,6 +62,14 @@ struct LegacyChannelScopedConnectClaims {
     permissions: Option<SessionPermissions>,
 }
 
+enum HandshakeChannelResolution {
+    ExplicitChannel(Arc<Channel>),
+    GlobalClaims {
+        channel: Arc<Channel>,
+        claims: Box<WebSocketConnectClaims>,
+    },
+}
+
 /// Admit one upgraded socket into an authenticated channel session.
 ///
 /// The first client frame must be exactly one `auth` envelope. On success this function
@@ -239,32 +247,68 @@ async fn authenticate(
     auth_payload: &AuthPayload,
     remote_address: &str,
 ) -> Result<(Arc<Channel>, WebSocketConnectClaims), WebSocketCloseCode> {
-    if let Some(channel_uuid) = auth_payload.channel.as_deref() {
-        let Some(channel) = state.channels.get_by_uuid(channel_uuid).await else {
+    match resolve_handshake_channel(state, auth_payload, remote_address).await? {
+        HandshakeChannelResolution::ExplicitChannel(channel) => {
+            let channel_uuid = channel.uuid();
+            let claims = authenticate_channel_scoped_claims(
+                &auth_payload.jwt,
+                channel.key().unwrap_or(&state.config.auth_key),
+                channel_uuid,
+                remote_address,
+            )?;
+            Ok((channel, claims))
+        }
+        HandshakeChannelResolution::GlobalClaims { channel, claims } => Ok((channel, *claims)),
+    }
+}
+
+async fn resolve_handshake_channel(
+    state: &RuntimeState,
+    auth_payload: &AuthPayload,
+    remote_address: &str,
+) -> Result<HandshakeChannelResolution, WebSocketCloseCode> {
+    let Some(explicit_channel_uuid) = auth_payload.channel.as_deref() else {
+        let claims =
+            auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth_key)
+                .map_err(|_error| {
+                    warn!(
+                        remote_address,
+                        "failed to verify websocket auth token against the global key"
+                    );
+                    WebSocketCloseCode::AuthFailed
+                })?;
+        let channel = resolve_global_claims_channel(state, &claims, remote_address).await?;
+        return Ok(HandshakeChannelResolution::GlobalClaims {
+            channel,
+            claims: Box::new(claims),
+        });
+    };
+    let channel = resolve_explicit_channel(state, explicit_channel_uuid).await?;
+    Ok(HandshakeChannelResolution::ExplicitChannel(channel))
+}
+
+async fn resolve_explicit_channel(
+    state: &RuntimeState,
+    channel_uuid: &str,
+) -> Result<Arc<Channel>, WebSocketCloseCode> {
+    state
+        .channels
+        .get_by_uuid(channel_uuid)
+        .await
+        .ok_or_else(|| {
             debug!(
                 channel_uuid,
                 "authentication referenced an unknown explicit channel"
             );
-            return Err(WebSocketCloseCode::AuthFailed);
-        };
-        let key = channel.key().unwrap_or(&state.config.auth_key);
-        let claims = authenticate_channel_scoped_claims(
-            &auth_payload.jwt,
-            key,
-            channel_uuid,
-            remote_address,
-        )?;
-        return Ok((channel, claims));
-    }
-
-    let claims = auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth_key)
-        .map_err(|_error| {
-            warn!(
-                remote_address,
-                "failed to verify websocket auth token against the global key"
-            );
             WebSocketCloseCode::AuthFailed
-        })?;
+        })
+}
+
+async fn resolve_global_claims_channel(
+    state: &RuntimeState,
+    claims: &WebSocketConnectClaims,
+    _remote_address: &str,
+) -> Result<Arc<Channel>, WebSocketCloseCode> {
     let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
         debug!(
             channel_uuid = claims.sfu_channel_uuid,
@@ -279,7 +323,7 @@ async fn authenticate(
         );
         return Err(WebSocketCloseCode::AuthFailed);
     }
-    Ok((channel, claims))
+    Ok(channel)
 }
 
 fn authenticate_channel_scoped_claims(

@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, str};
+use std::net::SocketAddr;
 
 use anyhow::Result;
 use axum::{
@@ -16,17 +16,19 @@ use crate::{
     config::Config,
     runtime::{
         RuntimeState,
-        auth::{self, HttpChannelClaims, HttpDisconnectClaims},
-        channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
+        channel::RuntimeChannelStatsSnapshot,
         diagnostics::{self, DiagnosticsSessionLookup},
         http_server::contract::{
             CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery,
             DIAGNOSTICS_CHANNELS_PATH, DIAGNOSTICS_SUMMARY_PATH, DISCONNECT_PATH,
             IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
+        http_server::services::{
+            CreateChannelContext, CreateChannelError, DisconnectError, authorization_token,
+            disconnect_sessions, get_or_create_channel,
+        },
         metrics::HttpRoute,
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-        request_origin::{resolve_remote_address, trusted_forwarded_header},
         telemetry, websocket_server,
     },
 };
@@ -143,48 +145,40 @@ async fn channel(
     Query(query): Query<CreateChannelQuery>,
 ) -> Response {
     async {
-        let Some(token) = authorization_token(&headers) else {
-            state.metrics.record_http_channel_unauthorized();
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let Ok(claims) = auth::verify::<HttpChannelClaims>(token, &state.config.auth_key) else {
-            state.metrics.record_http_channel_unauthorized();
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let Some(issuer) = claims.registered.iss.as_deref() else {
-            state.metrics.record_http_channel_forbidden();
-            return StatusCode::FORBIDDEN.into_response();
-        };
-        if query.recording_address.is_some() && claims.key.is_none() {
-            state.metrics.record_http_channel_bad_request();
-            return StatusCode::BAD_REQUEST.into_response();
-        }
-        let remote_address = resolve_remote_address(
-            &headers,
-            &state.config,
-            connect_info.map(|Extension(ConnectInfo(addr))| addr),
-        );
-        let channel = state
-            .channels
-            .create_or_get(
-                issuer,
-                claims.key.as_deref(),
-                &ChannelConfig {
-                    web_rtc_enabled: query.web_rtc_enabled(),
-                    recording_address: query.recording_address.clone(),
-                },
-                Some(&remote_address),
-            )
-            .await;
-        state.metrics.record_http_channel_success();
-        (
-            StatusCode::OK,
-            axum::Json(ChannelResponse {
-                uuid: channel.uuid().to_owned(),
-                url: request_base_url(&headers, &state.config),
-            }),
+        match get_or_create_channel(
+            &state,
+            CreateChannelContext {
+                headers: &headers,
+                connect_address: connect_info.map(|Extension(ConnectInfo(addr))| addr),
+                query: &query,
+            },
         )
-            .into_response()
+        .await
+        {
+            Ok(channel) => {
+                state.metrics.record_http_channel_success();
+                (
+                    StatusCode::OK,
+                    axum::Json(ChannelResponse {
+                        uuid: channel.uuid,
+                        url: channel.base_url,
+                    }),
+                )
+                    .into_response()
+            }
+            Err(CreateChannelError::Unauthorized) => {
+                state.metrics.record_http_channel_unauthorized();
+                StatusCode::UNAUTHORIZED.into_response()
+            }
+            Err(CreateChannelError::Forbidden) => {
+                state.metrics.record_http_channel_forbidden();
+                StatusCode::FORBIDDEN.into_response()
+            }
+            Err(CreateChannelError::BadRequest) => {
+                state.metrics.record_http_channel_bad_request();
+                StatusCode::BAD_REQUEST.into_response()
+            }
+        }
     }
     .instrument(telemetry::http_request_span("channel"))
     .await
@@ -204,22 +198,20 @@ async fn channel(
 )]
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
     async {
-        let Ok(token) = str::from_utf8(&body) else {
-            state.metrics.record_http_disconnect_bad_request();
-            return StatusCode::BAD_REQUEST.into_response();
-        };
-        let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
-            state.metrics.record_http_disconnect_unprocessable_entity();
-            return StatusCode::UNPROCESSABLE_ENTITY.into_response();
-        };
-        for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
-            state
-                .channels
-                .disconnect_sessions(channel_uuid, session_ids, &state.transport_adapter)
-                .await;
+        match disconnect_sessions(&state, &body).await {
+            Ok(()) => {
+                state.metrics.record_http_disconnect_success();
+                StatusCode::OK.into_response()
+            }
+            Err(DisconnectError::BadRequest) => {
+                state.metrics.record_http_disconnect_bad_request();
+                StatusCode::BAD_REQUEST.into_response()
+            }
+            Err(DisconnectError::UnprocessableEntity) => {
+                state.metrics.record_http_disconnect_unprocessable_entity();
+                StatusCode::UNPROCESSABLE_ENTITY.into_response()
+            }
         }
-        state.metrics.record_http_disconnect_success();
-        StatusCode::OK.into_response()
     }
     .instrument(telemetry::http_request_span("disconnect"))
     .await
@@ -320,13 +312,6 @@ async fn diagnostics_session_detail(
     .await
 }
 
-fn authorization_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split_once(' ').map(|(_, token)| token))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiagnosticsAccess {
     Allowed,
@@ -348,20 +333,6 @@ fn ensure_diagnostics_access(headers: &HeaderMap, config: &Config) -> Diagnostic
     } else {
         DiagnosticsAccess::Disabled
     }
-}
-
-fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
-    let scheme = trusted_forwarded_header(headers, config, "x-forwarded-proto").unwrap_or("http");
-    let host = trusted_forwarded_header(headers, config, "x-forwarded-host")
-        .map(str::to_owned)
-        .or_else(|| {
-            headers
-                .get(header::HOST)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| config.bind_address.to_string());
-    format!("{scheme}://{host}")
 }
 
 fn http_channel_stats(snapshot: RuntimeChannelStatsSnapshot) -> ChannelStats {
