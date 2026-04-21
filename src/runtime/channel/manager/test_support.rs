@@ -60,9 +60,10 @@ impl ChannelManager {
         request: JoinSessionRequest,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Result<(Arc<super::super::Channel>, ConnectionId), ChannelManagerJoinError> {
-        let Some((channel, session_count_before, join_result)) = self
+        let Some((channel, session_count_before, media_counts_before, join_result)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
+                let media_counts_before = channel.media_counts().await;
                 let join_result = channel
                     .test_api()
                     .lifecycle()
@@ -74,7 +75,12 @@ impl ChannelManager {
                         transport_adapter,
                     )
                     .await;
-                (channel, session_count_before, join_result)
+                (
+                    channel,
+                    session_count_before,
+                    media_counts_before,
+                    join_result,
+                )
             })
             .await
         else {
@@ -84,7 +90,12 @@ impl ChannelManager {
             super::super::ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
             super::super::ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
         })?;
-        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        self.record_live_count_deltas(
+            session_count_before,
+            media_counts_before,
+            channel.session_count().await,
+            channel.media_counts().await,
+        );
         Ok((channel, connection_id))
     }
 
@@ -95,9 +106,10 @@ impl ChannelManager {
         connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
-        let Some((channel, session_count_before, did_remove_active_session)) = self
-            .with_current_channel(channel_uuid, |channel| async move {
+        let Some((channel, session_count_before, media_counts_before, did_remove_active_session)) =
+            self.with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
+                let media_counts_before = channel.media_counts().await;
                 let did_remove_active_session = channel
                     .test_api()
                     .lifecycle()
@@ -107,7 +119,12 @@ impl ChannelManager {
                         transport_adapter,
                     )
                     .await;
-                (channel, session_count_before, did_remove_active_session)
+                (
+                    channel,
+                    session_count_before,
+                    media_counts_before,
+                    did_remove_active_session,
+                )
             })
             .await
         else {
@@ -117,6 +134,7 @@ impl ChannelManager {
             channel_uuid,
             &channel,
             session_count_before,
+            media_counts_before,
             did_remove_active_session,
         )
         .await;
@@ -129,22 +147,29 @@ impl ChannelManager {
         session_ids: &[SessionId],
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let Some((channel, session_count_before)) = self
+        let Some((channel, session_count_before, media_counts_before)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
+                let media_counts_before = channel.media_counts().await;
                 channel
                     .test_api()
                     .lifecycle()
                     .disconnect_sessions_without_transport_cleanup(session_ids, transport_adapter)
                     .await;
-                (channel, session_count_before)
+                (channel, session_count_before, media_counts_before)
             })
             .await
         else {
             return;
         };
-        self.finish_session_mutation(channel_uuid, &channel, session_count_before, true)
-            .await;
+        self.finish_session_mutation(
+            channel_uuid,
+            &channel,
+            session_count_before,
+            media_counts_before,
+            true,
+        )
+        .await;
     }
 }
 

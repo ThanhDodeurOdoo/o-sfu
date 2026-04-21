@@ -12,7 +12,7 @@ use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::{
-    Channel, SessionOutbound,
+    Channel, ChannelMediaCounts, SessionOutbound,
     state::{
         ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
         PreparedConsumerBootstrap, PreparedPublishedTrack, TransportMediaRemoval,
@@ -163,9 +163,20 @@ impl PublishCommitSnapshot {
         channel: &Channel,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
-        let consumer_targets = {
+        let (media_counts_before, consumer_targets, media_counts_after) = {
             let mut state = channel.state.write().await;
-            state.commit_published_track(self.prepared_track, self.transport_media_id)
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let consumer_targets =
+                state.commit_published_track(self.prepared_track, self.transport_media_id);
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            (media_counts_before, consumer_targets, media_counts_after)
         };
         let Some((producer_id, consumer_targets)) = consumer_targets else {
             channel
@@ -179,6 +190,7 @@ impl PublishCommitSnapshot {
                 .await;
             return None;
         };
+        channel.record_media_count_delta(media_counts_before, media_counts_after);
         channel
             .sync_source_packet_selection_policy(Some(transport_adapter))
             .await;
@@ -213,12 +225,12 @@ pub(super) struct ConsumerBootstrapTransaction {
 }
 
 impl ConsumerBootstrapTransaction {
-    async fn execute(
-        self,
+    async fn declare_consumer_transport_media(
+        &self,
         channel: &Channel,
         transport_adapter: &RuntimeTransportAdapter,
         origin: ConsumerBootstrapOrigin,
-    ) {
+    ) -> Option<(TransportMediaId, Option<String>)> {
         let consumer_session_key = channel.transport_session_key(
             self.target.consumer_session_id(),
             self.target.consumer_connection_id(),
@@ -252,22 +264,48 @@ impl ConsumerBootstrapTransaction {
                     ?origin,
                     "transport adapter rejected consume media declaration"
                 );
-                return;
+                return None;
             }
         };
         let consumer_mid = transport_adapter
             .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
             .await;
-        let outbound = {
+        Some((consumer_transport_media_id, consumer_mid))
+    }
+
+    async fn execute(
+        self,
+        channel: &Channel,
+        transport_adapter: &RuntimeTransportAdapter,
+        origin: ConsumerBootstrapOrigin,
+    ) {
+        let Some((consumer_transport_media_id, consumer_mid)) = self
+            .declare_consumer_transport_media(channel, transport_adapter, origin)
+            .await
+        else {
+            return;
+        };
+        let (media_counts_before, outbound, media_counts_after) = {
             let mut state = channel.state.write().await;
-            state.commit_consumer_bootstrap(
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let outbound = state.commit_consumer_bootstrap(
                 &self.target,
                 self.pending_bootstrap,
                 consumer_transport_media_id,
                 consumer_mid,
-            )
+            );
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            (media_counts_before, outbound, media_counts_after)
         };
         let Some((sender, bootstrap, consumer_active)) = outbound else {
+            channel.record_media_count_delta(media_counts_before, media_counts_after);
             channel
                 .cleanup_transport_media(
                     self.target.consumer_session_id(),
@@ -279,6 +317,7 @@ impl ConsumerBootstrapTransaction {
                 .await;
             return;
         };
+        channel.record_media_count_delta(media_counts_before, media_counts_after);
         channel
             .apply_initial_consumer_pause_state(
                 &self.target,
@@ -351,9 +390,20 @@ impl UnpublishTransaction {
         {
             return false;
         }
-        let Some(outcome) = ({
+        let (media_counts_before, Some(outcome), media_counts_after) = ({
             let mut state = channel.state.write().await;
-            state.unpublish_track(&self.session_id, self.connection_id, self.stream_type)
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let outcome =
+                state.unpublish_track(&self.session_id, self.connection_id, self.stream_type);
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            (media_counts_before, outcome, media_counts_after)
         }) else {
             warn!(
                 session_id = ?self.session_id,
@@ -363,12 +413,29 @@ impl UnpublishTransaction {
             );
             return false;
         };
+        channel.record_media_count_delta(media_counts_before, media_counts_after);
         outcome.emit(&self.session_id, self.stream_type);
         true
     }
 }
 
 impl Channel {
+    pub(super) fn record_media_count_delta(
+        &self,
+        before: ChannelMediaCounts,
+        after: ChannelMediaCounts,
+    ) {
+        let before_publications = i64::try_from(before.publications).unwrap_or(i64::MAX);
+        let after_publications = i64::try_from(after.publications).unwrap_or(i64::MAX);
+        self.metrics
+            .add_active_publications(after_publications.saturating_sub(before_publications));
+
+        let before_subscriptions = i64::try_from(before.subscriptions).unwrap_or(i64::MAX);
+        let after_subscriptions = i64::try_from(after.subscriptions).unwrap_or(i64::MAX);
+        self.metrics
+            .add_active_subscriptions(after_subscriptions.saturating_sub(before_subscriptions));
+    }
+
     pub(crate) async fn has_staged_publish(
         &self,
         session_id: &SessionId,
@@ -569,7 +636,19 @@ impl Channel {
         };
         let pending_bootstrap = {
             let mut state = self.state.write().await;
-            state.prepare_consumer_bootstrap_transaction(target, &prepared)?
+            let media_counts_before = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let pending_bootstrap =
+                state.prepare_consumer_bootstrap_transaction(target, &prepared)?;
+            let media_counts_after = ChannelMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            self.record_media_count_delta(media_counts_before, media_counts_after);
+            pending_bootstrap
         };
         Some(ConsumerBootstrapTransaction {
             target: target.clone(),
@@ -595,7 +674,17 @@ impl Channel {
         target: &PendingConsumerBootstrapTarget,
     ) {
         let mut state = self.state.write().await;
+        let media_counts_before = ChannelMediaCounts {
+            publications: state.publication_count(),
+            subscriptions: state.subscription_count(),
+        };
         state.release_pending_consumer_bootstrap(target);
+        let media_counts_after = ChannelMediaCounts {
+            publications: state.publication_count(),
+            subscriptions: state.subscription_count(),
+        };
+        drop(state);
+        self.record_media_count_delta(media_counts_before, media_counts_after);
     }
 
     pub(super) async fn cleanup_transport_media(

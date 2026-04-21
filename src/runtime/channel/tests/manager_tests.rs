@@ -326,6 +326,105 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
 }
 
 #[tokio::test]
+async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = ChannelManager::new(
+        super::super::ChannelManagerConfig::new(
+            1,
+            super::super::ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(2),
+                RuntimeFeatureFlags::default(),
+                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::new(DiagnosticsStore::default()),
+        Arc::clone(&metrics),
+    );
+    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let channel = manager
+        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let channel_uuid = channel.uuid().to_owned();
+
+    for raw_session_id in [1_i64, 2_i64] {
+        let (sender, _receiver) = test_sender();
+        let joined = manager
+            .join_session_for_test(
+                &channel_uuid,
+                JoinSessionRequest {
+                    session_id: SessionId::Integer(raw_session_id),
+                    label: None,
+                    permissions: SessionPermissions::default(),
+                    sender,
+                },
+                &transport_adapter,
+            )
+            .await;
+        assert!(joined.is_ok(), "session {raw_session_id} should join");
+        channel
+            .test_api()
+            .negotiation()
+            .set_publish_transport_ready(&SessionId::Integer(raw_session_id))
+            .await;
+        channel
+            .test_api()
+            .negotiation()
+            .set_consume_transport_ready(&SessionId::Integer(raw_session_id))
+            .await;
+        channel
+            .test_api()
+            .negotiation()
+            .set_client_rtp_capabilities(
+                &SessionId::Integer(raw_session_id),
+                test_client_rtp_capabilities(),
+            )
+            .await;
+    }
+
+    assert!(
+        channel
+            .test_api()
+            .media()
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_channels, 1);
+    assert_eq!(snapshot.active_sessions, 2);
+    assert_eq!(snapshot.active_publications, 1);
+    assert_eq!(snapshot.active_subscriptions, 1);
+
+    manager
+        .disconnect_sessions_for_test(&channel_uuid, &[SessionId::Integer(1)], &transport_adapter)
+        .await;
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_channels, 1);
+    assert_eq!(snapshot.active_sessions, 1);
+    assert_eq!(snapshot.active_publications, 0);
+    assert_eq!(snapshot.active_subscriptions, 0);
+
+    manager
+        .disconnect_sessions_for_test(&channel_uuid, &[SessionId::Integer(2)], &transport_adapter)
+        .await;
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_channels, 0);
+    assert_eq!(snapshot.active_sessions, 0);
+    assert_eq!(snapshot.active_publications, 0);
+    assert_eq!(snapshot.active_subscriptions, 0);
+}
+
+#[tokio::test]
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = ChannelManager::for_test();
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();

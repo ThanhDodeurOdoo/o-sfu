@@ -78,6 +78,8 @@ mod tests {
     fn assert_live_and_recording_metrics(rendered: &str) {
         assert!(rendered.contains("# TYPE osfu_channels_active gauge"));
         assert!(rendered.contains("osfu_sessions_active 2"));
+        assert!(rendered.contains("osfu_publications_active 3"));
+        assert!(rendered.contains("osfu_subscriptions_active 4"));
         assert!(rendered.contains("osfu_recording_channels_active 1"));
         assert!(rendered.contains("osfu_transport_sessions_active 1"));
         assert!(rendered.contains("osfu_transport_health_sessions{state=\"connected\"} 1"));
@@ -132,6 +134,8 @@ mod tests {
         metrics.record_ws_session_initialize_duration(Duration::from_millis(120));
         metrics.add_active_channels(1);
         metrics.add_active_sessions(2);
+        metrics.add_active_publications(3);
+        metrics.add_active_subscriptions(4);
         metrics.add_active_recording_channels(1);
         metrics.add_active_transport_sessions(1);
         metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));

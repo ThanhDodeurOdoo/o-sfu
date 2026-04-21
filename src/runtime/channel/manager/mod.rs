@@ -4,8 +4,8 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
 use super::{
-    Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelRuntimePolicy,
-    ChannelSessionStatsSnapshot, SessionOutbound,
+    Channel, ChannelConfig, ChannelJoinError, ChannelManagerJoinError, ChannelMediaCounts,
+    ChannelRuntimePolicy, ChannelSessionStatsSnapshot, SessionOutbound,
     directory::{ChannelDirectory, ChannelDirectoryEntry},
     factory::{ChannelCreationIntent, ChannelFactory},
 };
@@ -217,9 +217,10 @@ impl ChannelManager {
         request: JoinSessionRequest,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Result<(Arc<Channel>, ConnectionId), ChannelManagerJoinError> {
-        let Some((channel, session_count_before, join_result)) = self
+        let Some((channel, session_count_before, media_counts_before, join_result)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
+                let media_counts_before = channel.media_counts().await;
                 let join_result = channel
                     .join_session_runtime(
                         request.session_id,
@@ -229,7 +230,12 @@ impl ChannelManager {
                         transport_adapter,
                     )
                     .await;
-                (channel, session_count_before, join_result)
+                (
+                    channel,
+                    session_count_before,
+                    media_counts_before,
+                    join_result,
+                )
             })
             .await
         else {
@@ -239,7 +245,12 @@ impl ChannelManager {
             ChannelJoinError::ChannelFull => ChannelManagerJoinError::ChannelFull,
             ChannelJoinError::RouterState => ChannelManagerJoinError::RouterState,
         })?;
-        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        self.record_live_count_deltas(
+            session_count_before,
+            media_counts_before,
+            channel.session_count().await,
+            channel.media_counts().await,
+        );
         Ok((channel, connection_id))
     }
 
@@ -250,13 +261,19 @@ impl ChannelManager {
         connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
-        let Some((channel, session_count_before, did_remove_active_session)) = self
-            .with_current_channel(channel_uuid, |channel| async move {
+        let Some((channel, session_count_before, media_counts_before, did_remove_active_session)) =
+            self.with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
+                let media_counts_before = channel.media_counts().await;
                 let did_remove_active_session = channel
                     .close_session_runtime(session_id, connection_id, transport_adapter)
                     .await;
-                (channel, session_count_before, did_remove_active_session)
+                (
+                    channel,
+                    session_count_before,
+                    media_counts_before,
+                    did_remove_active_session,
+                )
             })
             .await
         else {
@@ -266,6 +283,7 @@ impl ChannelManager {
             channel_uuid,
             &channel,
             session_count_before,
+            media_counts_before,
             did_remove_active_session,
         )
         .await;
@@ -278,20 +296,27 @@ impl ChannelManager {
         session_ids: &[SessionId],
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let Some((channel, session_count_before)) = self
+        let Some((channel, session_count_before, media_counts_before)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
+                let media_counts_before = channel.media_counts().await;
                 channel
                     .disconnect_sessions_runtime(session_ids, transport_adapter)
                     .await;
-                (channel, session_count_before)
+                (channel, session_count_before, media_counts_before)
             })
             .await
         else {
             return;
         };
-        self.finish_session_mutation(channel_uuid, &channel, session_count_before, true)
-            .await;
+        self.finish_session_mutation(
+            channel_uuid,
+            &channel,
+            session_count_before,
+            media_counts_before,
+            true,
+        )
+        .await;
     }
 
     pub(super) async fn with_current_channel<T, F, Fut>(
@@ -318,9 +343,15 @@ impl ChannelManager {
         channel_uuid: &str,
         channel: &Arc<Channel>,
         session_count_before: usize,
+        media_counts_before: ChannelMediaCounts,
         remove_if_empty: bool,
     ) {
-        self.record_active_session_delta(session_count_before, channel.session_count().await);
+        self.record_live_count_deltas(
+            session_count_before,
+            media_counts_before,
+            channel.session_count().await,
+            channel.media_counts().await,
+        );
         if remove_if_empty && channel.is_empty().await {
             self.remove_entry_if_current(channel_uuid, channel).await;
         }
@@ -367,10 +398,26 @@ impl ChannelManager {
         }
     }
 
-    fn record_active_session_delta(&self, before: usize, after: usize) {
-        let before = i64::try_from(before).unwrap_or(i64::MAX);
-        let after = i64::try_from(after).unwrap_or(i64::MAX);
+    fn record_live_count_deltas(
+        &self,
+        session_count_before: usize,
+        media_counts_before: ChannelMediaCounts,
+        session_count_after: usize,
+        media_counts_after: ChannelMediaCounts,
+    ) {
+        let before = i64::try_from(session_count_before).unwrap_or(i64::MAX);
+        let after = i64::try_from(session_count_after).unwrap_or(i64::MAX);
         self.metrics
             .add_active_sessions(after.saturating_sub(before));
+
+        let before = i64::try_from(media_counts_before.publications).unwrap_or(i64::MAX);
+        let after = i64::try_from(media_counts_after.publications).unwrap_or(i64::MAX);
+        self.metrics
+            .add_active_publications(after.saturating_sub(before));
+
+        let before = i64::try_from(media_counts_before.subscriptions).unwrap_or(i64::MAX);
+        let after = i64::try_from(media_counts_after.subscriptions).unwrap_or(i64::MAX);
+        self.metrics
+            .add_active_subscriptions(after.saturating_sub(before));
     }
 }

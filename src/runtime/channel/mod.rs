@@ -47,8 +47,8 @@ mod topology;
 
 pub use controller::{Channel, ChannelJoinError, ChannelManagerJoinError, SessionOutbound};
 pub(crate) use controller::{
-    ChannelAdmissionPolicy, ChannelConfig, ChannelEventRequest, ChannelRuntimeContext,
-    ChannelRuntimePolicy, ChannelSessionStatsSnapshot, TrackBindingUpdate,
+    ChannelAdmissionPolicy, ChannelConfig, ChannelEventRequest, ChannelMediaCounts,
+    ChannelRuntimeContext, ChannelRuntimePolicy, ChannelSessionStatsSnapshot, TrackBindingUpdate,
 };
 pub(crate) use events::ChannelEventMessage;
 pub(crate) use lifecycle::{ChannelSessionPermissions, SessionCloseReason};

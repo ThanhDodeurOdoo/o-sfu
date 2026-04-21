@@ -22,6 +22,8 @@ fn assert_http_metrics_payload(payload: &str) {
     assert!(payload.contains("osfu_ws_handshake_duration_seconds_count 0"));
     assert!(payload.contains("osfu_channels_active 0"));
     assert!(payload.contains("osfu_sessions_active 0"));
+    assert!(payload.contains("osfu_publications_active 0"));
+    assert!(payload.contains("osfu_subscriptions_active 0"));
     assert!(payload.contains("osfu_recording_channels_active 0"));
 }
 
@@ -56,6 +58,8 @@ fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.ws_handshake_duration.count, 0);
     assert_eq!(snapshot.active_channels, 0);
     assert_eq!(snapshot.active_sessions, 0);
+    assert_eq!(snapshot.active_publications, 0);
+    assert_eq!(snapshot.active_subscriptions, 0);
     assert_eq!(snapshot.active_recording_channels, 0);
     assert_eq!(snapshot.active_transport_sessions, 0);
     assert_eq!(snapshot.connected_transport_sessions, 0);

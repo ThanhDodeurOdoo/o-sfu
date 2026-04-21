@@ -17,6 +17,18 @@ pub(super) fn append_live_gauges(output: &mut String, snapshot: &RuntimeMetricsS
     );
     append_gauge(
         output,
+        "osfu_publications_active",
+        "Current number of committed or pending published media entries owned by this runtime.",
+        snapshot.active_publications,
+    );
+    append_gauge(
+        output,
+        "osfu_subscriptions_active",
+        "Current number of committed or pending consumer subscriptions owned by this runtime.",
+        snapshot.active_subscriptions,
+    );
+    append_gauge(
+        output,
         "osfu_transport_sessions_active",
         "Current number of live RTC transport sessions on this runtime.",
         snapshot.active_transport_sessions,

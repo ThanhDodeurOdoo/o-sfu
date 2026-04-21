@@ -45,6 +45,8 @@ pub(crate) struct RuntimeMetrics {
     pub(super) ws_session_initialize_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) active_channels: UpDownCounter,
     pub(super) active_sessions: UpDownCounter,
+    pub(super) active_publications: UpDownCounter,
+    pub(super) active_subscriptions: UpDownCounter,
     pub(super) active_recording_channels: UpDownCounter,
     pub(super) active_transport_sessions: UpDownCounter,
     pub(super) connected_transport_sessions: UpDownCounter,
@@ -239,6 +241,14 @@ impl RuntimeMetrics {
 
     pub(crate) fn add_active_sessions(&self, delta: i64) {
         self.active_sessions.add(delta);
+    }
+
+    pub(crate) fn add_active_publications(&self, delta: i64) {
+        self.active_publications.add(delta);
+    }
+
+    pub(crate) fn add_active_subscriptions(&self, delta: i64) {
+        self.active_subscriptions.add(delta);
     }
 
     pub(crate) fn add_active_recording_channels(&self, delta: i64) {

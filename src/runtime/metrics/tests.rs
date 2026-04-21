@@ -12,6 +12,8 @@ use super::{
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.active_channels, 1);
     assert_eq!(snapshot.active_sessions, 2);
+    assert_eq!(snapshot.active_publications, 3);
+    assert_eq!(snapshot.active_subscriptions, 4);
     assert_eq!(snapshot.active_recording_channels, 1);
     assert_eq!(snapshot.active_transport_sessions, 1);
     assert_eq!(snapshot.connected_transport_sessions, 1);
@@ -173,6 +175,8 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     let metrics = RuntimeMetrics::default();
     metrics.add_active_channels(1);
     metrics.add_active_sessions(2);
+    metrics.add_active_publications(3);
+    metrics.add_active_subscriptions(4);
     metrics.add_active_recording_channels(1);
     metrics.add_active_transport_sessions(1);
     metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));

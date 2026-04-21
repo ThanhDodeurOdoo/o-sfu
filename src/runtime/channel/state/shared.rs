@@ -305,6 +305,16 @@ impl ChannelState {
         self.sessions.len()
     }
 
+    pub(in crate::runtime::channel) fn publication_count(&self) -> usize {
+        self.producers.len()
+    }
+
+    pub(in crate::runtime::channel) fn subscription_count(&self) -> usize {
+        self.consumer_index
+            .len()
+            .saturating_add(self.pending_consumer_bootstraps.len())
+    }
+
     pub(in crate::runtime::channel) fn is_empty(&self) -> bool {
         self.sessions.is_empty()
     }

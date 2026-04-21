@@ -146,6 +146,12 @@ pub(crate) struct ChannelSessionStatsSnapshot {
     pub(crate) screen_count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ChannelMediaCounts {
+    pub(crate) publications: usize,
+    pub(crate) subscriptions: usize,
+}
+
 /// Analogus to a odoo discuss channel
 ///
 /// `Channel` owns immutable room definition plus the guarded mutable state needed to run
@@ -306,6 +312,14 @@ impl Channel {
             count,
             camera_count,
             screen_count,
+        }
+    }
+
+    pub(crate) async fn media_counts(&self) -> ChannelMediaCounts {
+        let state = self.state.read().await;
+        ChannelMediaCounts {
+            publications: state.publication_count(),
+            subscriptions: state.subscription_count(),
         }
     }
 
