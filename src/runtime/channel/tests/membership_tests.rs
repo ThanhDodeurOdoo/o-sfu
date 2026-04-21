@@ -579,27 +579,23 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     );
 
     assert!(
-        !channel
-            .test_api()
-            .negotiation()
-            .apply_publish_transport_ready(
-                &SessionId::Integer(1),
-                first_connection,
-                &transport_adapter,
-            )
-            .await
+        !apply_publish_transport_ready(
+            &channel,
+            &SessionId::Integer(1),
+            first_connection,
+            &transport_adapter,
+        )
+        .await
     );
     assert!(
-        !channel
-            .test_api()
-            .negotiation()
-            .apply_client_rtp_capabilities(
-                &SessionId::Integer(1),
-                first_connection,
-                test_client_rtp_capabilities(),
-                &transport_adapter,
-            )
-            .await
+        !apply_client_rtp_capabilities(
+            &channel,
+            &SessionId::Integer(1),
+            first_connection,
+            test_client_rtp_capabilities(),
+            &transport_adapter,
+        )
+        .await
     );
     assert!(
         !channel

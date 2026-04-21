@@ -12,7 +12,9 @@ use super::fixtures::*;
 use o_sfu_router::{MediaKind, MediaStream};
 
 use crate::runtime::channel::Channel;
-use crate::runtime::test_rtp_samples::sample_video_rtp_parameters;
+use crate::runtime::test_rtp_samples::{
+    sample_client_rtp_capabilities, sample_video_rtp_parameters,
+};
 use o_sfu_protocol::shared::{DownloadStates, StreamType};
 
 fn test_video_rtp_parameters(ssrc: u64) -> MediaStream {
@@ -36,9 +38,12 @@ async fn publish_video_stream(
     };
     assert!(
         channel
-            .test_api()
-            .negotiation()
-            .apply_publish_transport_ready(session_id, connection_id, transport_adapter)
+            .apply_session_negotiated(
+                session_id,
+                connection_id,
+                sample_client_rtp_capabilities(),
+                transport_adapter,
+            )
             .await
     );
     assert!(
@@ -148,20 +153,6 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         .await;
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
-    let Some(bob_connection_id) = bob_join.ok() else {
-        return;
-    };
-    assert!(
-        channel
-            .test_api()
-            .negotiation()
-            .apply_consume_transport_ready(
-                &bob_session_id,
-                bob_connection_id,
-                &state.transport_adapter
-            )
-            .await
-    );
     publish_video_stream(
         &channel,
         &alice_session_id,
@@ -184,12 +175,6 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
             &state.transport_adapter,
         )
         .await;
-    channel
-        .test_api()
-        .media()
-        .bootstrap_missing_consumers(&bob_session_id, &state.transport_adapter)
-        .await;
-
     let channels_request = build_request(Request::get(DIAGNOSTICS_CHANNELS_PATH), Body::empty());
     assert!(channels_request.is_some());
     let Some(channels_request) = channels_request else {

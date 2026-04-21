@@ -2,7 +2,9 @@ use super::fixtures::*;
 use o_sfu_router::{MediaKind, MediaStream};
 
 use crate::runtime::channel::Channel;
-use crate::runtime::test_rtp_samples::sample_video_rtp_parameters;
+use crate::runtime::test_rtp_samples::{
+    sample_client_rtp_capabilities, sample_video_rtp_parameters,
+};
 use o_sfu_protocol::shared::StreamType;
 
 fn test_video_rtp_parameters(ssrc: u64) -> MediaStream {
@@ -17,11 +19,16 @@ async fn publish_video_stream(
     ssrc: u64,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
-    channel
-        .test_api()
-        .negotiation()
-        .apply_publish_transport_ready(session_id, connection_id, transport_adapter)
-        .await;
+    assert!(
+        channel
+            .apply_session_negotiated(
+                session_id,
+                connection_id,
+                sample_client_rtp_capabilities(),
+                transport_adapter,
+            )
+            .await
+    );
     assert!(
         channel
             .test_api()

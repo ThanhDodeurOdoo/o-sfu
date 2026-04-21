@@ -13,6 +13,9 @@ pub(super) use super::super::{
     SessionCloseReason, SessionOutbound, topology::ChannelTopology,
 };
 pub(super) use crate::runtime::ConnectionId;
+use crate::runtime::channel::session_negotiation::{
+    SessionNegotiationUpdate, SessionTransportReady,
+};
 use crate::runtime::test_rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
     sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
@@ -64,6 +67,213 @@ pub(super) fn fake_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>
 
 pub(super) fn test_connection_id(raw: u64) -> ConnectionId {
     ConnectionId::from_raw(raw)
+}
+
+pub(super) async fn session_connection_id(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+) -> ConnectionId {
+    channel
+        .test_api()
+        .inspect()
+        .session_connection_id(session_id)
+        .await
+        .expect("test fixture requires a live session connection")
+}
+
+pub(super) async fn set_publish_transport_ready(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+) -> SessionNegotiationUpdate {
+    set_transport_ready(channel, session_id, SessionTransportReady::Publish).await
+}
+
+pub(super) async fn set_consume_transport_ready(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+) -> SessionNegotiationUpdate {
+    set_transport_ready(channel, session_id, SessionTransportReady::Consume).await
+}
+
+async fn set_transport_ready(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    readiness: SessionTransportReady,
+) -> SessionNegotiationUpdate {
+    let connection_id = session_connection_id(channel, session_id).await;
+    let mut state = channel.state.write().await;
+    state.set_transport_ready_for_test(session_id, connection_id, readiness)
+}
+
+pub(super) async fn set_client_rtp_capabilities(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    capabilities: MediaCapabilities,
+) -> SessionNegotiationUpdate {
+    let connection_id = session_connection_id(channel, session_id).await;
+    let mut state = channel.state.write().await;
+    state.set_client_rtp_capabilities_for_test(session_id, connection_id, &capabilities)
+}
+
+pub(super) async fn apply_publish_transport_ready(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    apply_transport_ready(
+        channel,
+        session_id,
+        connection_id,
+        SessionTransportReady::Publish,
+        transport_adapter,
+    )
+    .await
+}
+
+pub(super) async fn apply_consume_transport_ready(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    apply_transport_ready(
+        channel,
+        session_id,
+        connection_id,
+        SessionTransportReady::Consume,
+        transport_adapter,
+    )
+    .await
+}
+
+async fn apply_transport_ready(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    readiness: SessionTransportReady,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    let update = {
+        let mut state = channel.state.write().await;
+        state.set_transport_ready_for_test(session_id, connection_id, readiness)
+    };
+    apply_negotiation_update(
+        channel,
+        session_id,
+        connection_id,
+        update,
+        transport_adapter,
+    )
+    .await
+}
+
+pub(super) async fn apply_client_rtp_capabilities(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    capabilities: MediaCapabilities,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    let update = {
+        let mut state = channel.state.write().await;
+        state.set_client_rtp_capabilities_for_test(session_id, connection_id, &capabilities)
+    };
+    apply_negotiation_update(
+        channel,
+        session_id,
+        connection_id,
+        update,
+        transport_adapter,
+    )
+    .await
+}
+
+async fn apply_negotiation_update(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    update: SessionNegotiationUpdate,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    if !update.session_present {
+        return false;
+    }
+    if update.became_consumer_ready {
+        return channel
+            .bootstrap_missing_consumers_for_connection(
+                session_id,
+                connection_id,
+                transport_adapter,
+            )
+            .await;
+    }
+    true
+}
+
+pub(super) async fn make_session_ready(channel: &super::super::Channel, session_id: &SessionId) {
+    let _ = set_publish_transport_ready(channel, session_id).await;
+    let _ = set_consume_transport_ready(channel, session_id).await;
+    let _ = set_client_rtp_capabilities(channel, session_id, test_client_rtp_capabilities()).await;
+}
+
+pub(super) async fn refresh_session_consumers(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    channel
+        .apply_session_refreshed(
+            session_id,
+            session_connection_id(channel, session_id).await,
+            transport_adapter,
+        )
+        .await
+}
+
+pub(super) async fn stage_negotiated_publish(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    stream_type: StreamType,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    channel
+        .stage_negotiated_publish(session_id, connection_id, stream_type, transport_adapter)
+        .await
+}
+
+pub(super) async fn rollback_staged_publish(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    stream_type: StreamType,
+    transport_adapter: &RuntimeTransportAdapter,
+) -> bool {
+    channel
+        .rollback_staged_publish(session_id, connection_id, stream_type, transport_adapter)
+        .await
+}
+
+pub(super) async fn commit_staged_publishes(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    transport_adapter: &RuntimeTransportAdapter,
+) {
+    channel
+        .commit_staged_publishes(session_id, connection_id, transport_adapter)
+        .await;
+}
+
+pub(super) async fn staged_publish_count(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+) -> usize {
+    channel
+        .staged_publish_count_for_connection(session_id, connection_id)
+        .await
 }
 
 #[derive(Clone, Copy)]
@@ -142,21 +352,7 @@ async fn setup_ready_session_scenario(
         (RuntimeTransportAdapter::fake_for_testing(), None)
     };
 
-    channel
-        .test_api()
-        .negotiation()
-        .set_publish_transport_ready(&SessionId::Integer(1))
-        .await;
-    channel
-        .test_api()
-        .negotiation()
-        .set_consume_transport_ready(&SessionId::Integer(1))
-        .await;
-    channel
-        .test_api()
-        .negotiation()
-        .set_client_rtp_capabilities(&SessionId::Integer(1), test_client_rtp_capabilities())
-        .await;
+    make_session_ready(&channel, &SessionId::Integer(1)).await;
 
     if options.publish_camera_before_subscriber_ready {
         channel
@@ -173,21 +369,7 @@ async fn setup_ready_session_scenario(
     }
 
     if !options.publish_camera_before_subscriber_ready {
-        channel
-            .test_api()
-            .negotiation()
-            .set_publish_transport_ready(&SessionId::Integer(2))
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_consume_transport_ready(&SessionId::Integer(2))
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
-            .await;
+        make_session_ready(&channel, &SessionId::Integer(2)).await;
     }
 
     ReadySessionScenario {

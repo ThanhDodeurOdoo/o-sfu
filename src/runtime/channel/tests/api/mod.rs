@@ -5,12 +5,10 @@ use super::super::{Channel, ChannelManager};
 mod inspect;
 mod lifecycle;
 mod media;
-mod negotiation;
 
 pub(crate) use inspect::ChannelTestInspect;
 pub(crate) use lifecycle::ChannelTestLifecycle;
 pub(crate) use media::{ChannelTestMedia, NegotiatedPublish};
-pub(crate) use negotiation::ChannelTestNegotiation;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelTestApi<'a> {
@@ -40,13 +38,6 @@ impl<'a> ChannelTestApi<'a> {
     #[must_use]
     pub(crate) const fn lifecycle(self) -> ChannelTestLifecycle<'a> {
         ChannelTestLifecycle {
-            channel: self.channel,
-        }
-    }
-
-    #[must_use]
-    pub(crate) const fn negotiation(self) -> ChannelTestNegotiation<'a> {
-        ChannelTestNegotiation {
             channel: self.channel,
         }
     }

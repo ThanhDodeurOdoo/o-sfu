@@ -215,21 +215,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
             )
             .await
             .expect("session should join");
-        channel
-            .test_api()
-            .negotiation()
-            .set_publish_transport_ready(&session_id)
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_consume_transport_ready(&session_id)
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
-            .await;
+        make_session_ready(&channel, &session_id).await;
     }
 
     assert!(
@@ -397,21 +383,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
             )
             .await
             .expect("session should join");
-        channel
-            .test_api()
-            .negotiation()
-            .set_publish_transport_ready(&session_id)
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_consume_transport_ready(&session_id)
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
-            .await;
+        make_session_ready(&channel, &session_id).await;
     }
 
     assert!(
@@ -494,21 +466,7 @@ async fn setup_ready_sessions_with_fake(
             )
             .await
             .expect("session should join");
-        channel
-            .test_api()
-            .negotiation()
-            .set_publish_transport_ready(&session_id)
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_consume_transport_ready(&session_id)
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(&session_id, test_client_rtp_capabilities())
-            .await;
+        make_session_ready(&channel, &session_id).await;
     }
     (channel, adapter, fake)
 }
@@ -893,15 +851,13 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
 async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
     assert!(
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(
-                &SessionId::Integer(2),
-                test_client_rtp_capabilities_without_video_rtx(),
-            )
-            .await
-            .session_present
+        set_client_rtp_capabilities(
+            &channel,
+            &SessionId::Integer(2),
+            test_client_rtp_capabilities_without_video_rtx(),
+        )
+        .await
+        .session_present
     );
 
     channel
@@ -1455,27 +1411,20 @@ async fn late_join_bootstrap_releases_channel_lock_while_waiting_on_transport_ad
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
-    channel
-        .test_api()
-        .negotiation()
-        .set_consume_transport_ready(&SessionId::Integer(2))
-        .await;
-    channel
-        .test_api()
-        .negotiation()
-        .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
-        .await;
+    let _ = set_consume_transport_ready(&channel, &SessionId::Integer(2)).await;
+    let _ = set_client_rtp_capabilities(
+        &channel,
+        &SessionId::Integer(2),
+        test_client_rtp_capabilities(),
+    )
+    .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
 
     let bootstrap_task = tokio::spawn({
         let channel = Arc::clone(&channel);
         let adapter = transport_adapter.clone();
         async move {
-            channel
-                .test_api()
-                .media()
-                .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
-                .await;
+            let _ = refresh_session_consumers(&channel, &SessionId::Integer(2), &adapter).await;
         }
     });
 
@@ -1538,27 +1487,20 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
-    channel
-        .test_api()
-        .negotiation()
-        .set_consume_transport_ready(&SessionId::Integer(2))
-        .await;
-    channel
-        .test_api()
-        .negotiation()
-        .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
-        .await;
+    let _ = set_consume_transport_ready(&channel, &SessionId::Integer(2)).await;
+    let _ = set_client_rtp_capabilities(
+        &channel,
+        &SessionId::Integer(2),
+        test_client_rtp_capabilities(),
+    )
+    .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
 
     let bootstrap_task = tokio::spawn({
         let channel = Arc::clone(&channel);
         let adapter = transport_adapter.clone();
         async move {
-            channel
-                .test_api()
-                .media()
-                .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
-                .await;
+            let _ = refresh_session_consumers(&channel, &SessionId::Integer(2), &adapter).await;
         }
     });
 
@@ -1588,27 +1530,20 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
-    channel
-        .test_api()
-        .negotiation()
-        .set_consume_transport_ready(&SessionId::Integer(2))
-        .await;
-    channel
-        .test_api()
-        .negotiation()
-        .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
-        .await;
+    let _ = set_consume_transport_ready(&channel, &SessionId::Integer(2)).await;
+    let _ = set_client_rtp_capabilities(
+        &channel,
+        &SessionId::Integer(2),
+        test_client_rtp_capabilities(),
+    )
+    .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
 
     let bootstrap_task = tokio::spawn({
         let channel = Arc::clone(&channel);
         let adapter = transport_adapter.clone();
         async move {
-            channel
-                .test_api()
-                .media()
-                .bootstrap_missing_consumers(&SessionId::Integer(2), &adapter)
-                .await;
+            let _ = refresh_session_consumers(&channel, &SessionId::Integer(2), &adapter).await;
         }
     });
 
@@ -1684,11 +1619,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
     })
     .await;
 
-    channel
-        .test_api()
-        .media()
-        .bootstrap_missing_consumers(&SessionId::Integer(2), &transport_adapter)
-        .await;
+    let _ = refresh_session_consumers(&channel, &SessionId::Integer(2), &transport_adapter).await;
 
     assert!(
         publish_task
@@ -1773,30 +1704,19 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
-    let download_update = channel
-        .test_api()
-        .negotiation()
-        .set_consume_transport_ready(&SessionId::Integer(2))
-        .await;
+    let download_update = set_consume_transport_ready(&channel, &SessionId::Integer(2)).await;
     assert!(download_update.session_present);
     assert!(!download_update.became_consumer_ready);
 
     assert!(
-        channel
-            .test_api()
-            .negotiation()
-            .apply_client_rtp_capabilities(
-                &SessionId::Integer(2),
-                channel
-                    .test_api()
-                    .inspect()
-                    .session_connection_id(&SessionId::Integer(2))
-                    .await
-                    .unwrap_or(test_connection_id(u64::MAX)),
-                test_client_rtp_capabilities(),
-                &transport_adapter,
-            )
-            .await
+        apply_client_rtp_capabilities(
+            &channel,
+            &SessionId::Integer(2),
+            session_connection_id(&channel, &SessionId::Integer(2)).await,
+            test_client_rtp_capabilities(),
+            &transport_adapter,
+        )
+        .await
     );
     assert!(
         channel
@@ -1833,11 +1753,12 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
-    let capabilities_update = channel
-        .test_api()
-        .negotiation()
-        .set_client_rtp_capabilities(&SessionId::Integer(2), test_client_rtp_capabilities())
-        .await;
+    let capabilities_update = set_client_rtp_capabilities(
+        &channel,
+        &SessionId::Integer(2),
+        test_client_rtp_capabilities(),
+    )
+    .await;
     assert!(capabilities_update.session_present);
     assert!(!capabilities_update.became_consumer_ready);
     assert!(
@@ -1849,20 +1770,13 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
     );
 
     assert!(
-        channel
-            .test_api()
-            .negotiation()
-            .apply_consume_transport_ready(
-                &SessionId::Integer(2),
-                channel
-                    .test_api()
-                    .inspect()
-                    .session_connection_id(&SessionId::Integer(2))
-                    .await
-                    .unwrap_or(test_connection_id(u64::MAX)),
-                &transport_adapter,
-            )
-            .await
+        apply_consume_transport_ready(
+            &channel,
+            &SessionId::Integer(2),
+            session_connection_id(&channel, &SessionId::Integer(2)).await,
+            &transport_adapter,
+        )
+        .await
     );
 
     wait_for_fake_event(&fake, |event| {
@@ -2162,9 +2076,11 @@ async fn settle_refresh_offer(scenario: &mut RealRtcRefreshScenario, offer: Sess
 
     scenario
         .channel
-        .test_api()
-        .media()
-        .bootstrap_missing_consumers(&scenario.subscriber_session_id, &scenario.transport_adapter)
+        .apply_session_refreshed(
+            &scenario.subscriber_session_id,
+            session_connection_id(&scenario.channel, &scenario.subscriber_session_id).await,
+            &scenario.transport_adapter,
+        )
         .await;
 }
 
@@ -2181,45 +2097,33 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         .expect("publisher should have a live connection");
 
     assert!(
-        channel
-            .test_api()
-            .media()
-            .stage_negotiated_publish_for_test(
-                &session_id,
-                connection_id,
-                StreamType::Camera,
-                &adapter,
-            )
-            .await
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
     );
     assert_eq!(
-        channel
-            .test_api()
-            .media()
-            .staged_publish_count(&session_id, connection_id)
-            .await,
+        staged_publish_count(&channel, &session_id, connection_id).await,
         1
     );
 
     assert!(
-        channel
-            .test_api()
-            .media()
-            .rollback_staged_publish_for_test(
-                &session_id,
-                connection_id,
-                StreamType::Camera,
-                &adapter,
-            )
-            .await
+        rollback_staged_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
     );
 
     assert_eq!(
-        channel
-            .test_api()
-            .media()
-            .staged_publish_count(&session_id, connection_id)
-            .await,
+        staged_publish_count(&channel, &session_id, connection_id).await,
         0
     );
     assert_eq!(channel.test_api().inspect().producer_count().await, 0);
@@ -2258,38 +2162,24 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
         .expect("publisher should have a live connection");
 
     assert!(
-        channel
-            .test_api()
-            .media()
-            .stage_negotiated_publish_for_test(
-                &session_id,
-                connection_id,
-                StreamType::Camera,
-                &adapter,
-            )
-            .await
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
     );
     assert_eq!(
-        channel
-            .test_api()
-            .media()
-            .staged_publish_count(&session_id, connection_id)
-            .await,
+        staged_publish_count(&channel, &session_id, connection_id).await,
         1
     );
 
-    channel
-        .test_api()
-        .media()
-        .commit_staged_publishes_for_test(&session_id, connection_id, &adapter)
-        .await;
+    commit_staged_publishes(&channel, &session_id, connection_id, &adapter).await;
 
     assert_eq!(
-        channel
-            .test_api()
-            .media()
-            .staged_publish_count(&session_id, connection_id)
-            .await,
+        staged_publish_count(&channel, &session_id, connection_id).await,
         0
     );
     assert!(

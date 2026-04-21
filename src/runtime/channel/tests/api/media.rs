@@ -45,30 +45,6 @@ impl ChannelTestMedia<'_> {
             .await
     }
 
-    pub(crate) async fn bootstrap_missing_consumers(
-        self,
-        session_id: &SessionId,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
-        let Some(connection_id) = self
-            .channel
-            .test_api()
-            .inspect()
-            .session_connection_id(session_id)
-            .await
-        else {
-            return;
-        };
-        let _ = self
-            .channel
-            .bootstrap_missing_consumers_for_connection(
-                session_id,
-                connection_id,
-                transport_adapter,
-            )
-            .await;
-    }
-
     pub(crate) async fn publish_track(
         self,
         session_id: &SessionId,
@@ -181,50 +157,5 @@ impl ChannelTestMedia<'_> {
                 transport_adapter,
             )
             .await;
-    }
-
-    pub(crate) async fn stage_negotiated_publish_for_test(
-        self,
-        session_id: &SessionId,
-        connection_id: ConnectionId,
-        stream_type: StreamType,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        self.channel
-            .stage_negotiated_publish(session_id, connection_id, stream_type, transport_adapter)
-            .await
-    }
-
-    pub(crate) async fn rollback_staged_publish_for_test(
-        self,
-        session_id: &SessionId,
-        connection_id: ConnectionId,
-        stream_type: StreamType,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        self.channel
-            .rollback_staged_publish(session_id, connection_id, stream_type, transport_adapter)
-            .await
-    }
-
-    pub(crate) async fn commit_staged_publishes_for_test(
-        self,
-        session_id: &SessionId,
-        connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
-        self.channel
-            .commit_staged_publishes(session_id, connection_id, transport_adapter)
-            .await;
-    }
-
-    pub(crate) async fn staged_publish_count(
-        self,
-        session_id: &SessionId,
-        connection_id: ConnectionId,
-    ) -> usize {
-        self.channel
-            .staged_publish_count_for_connection(session_id, connection_id)
-            .await
     }
 }

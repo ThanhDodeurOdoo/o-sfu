@@ -362,24 +362,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
             )
             .await;
         assert!(joined.is_ok(), "session {raw_session_id} should join");
-        channel
-            .test_api()
-            .negotiation()
-            .set_publish_transport_ready(&SessionId::Integer(raw_session_id))
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_consume_transport_ready(&SessionId::Integer(raw_session_id))
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(
-                &SessionId::Integer(raw_session_id),
-                test_client_rtp_capabilities(),
-            )
-            .await;
+        make_session_ready(&channel, &SessionId::Integer(raw_session_id)).await;
     }
 
     assert!(
@@ -450,24 +433,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
             )
             .await
             .expect("session join should succeed");
-        channel
-            .test_api()
-            .negotiation()
-            .set_publish_transport_ready(&SessionId::Integer(raw_session_id))
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_consume_transport_ready(&SessionId::Integer(raw_session_id))
-            .await;
-        channel
-            .test_api()
-            .negotiation()
-            .set_client_rtp_capabilities(
-                &SessionId::Integer(raw_session_id),
-                test_client_rtp_capabilities(),
-            )
-            .await;
+        make_session_ready(&channel, &SessionId::Integer(raw_session_id)).await;
     }
     for raw_session_id in [1_i64, 2_i64] {
         publish_audio_and_camera(
