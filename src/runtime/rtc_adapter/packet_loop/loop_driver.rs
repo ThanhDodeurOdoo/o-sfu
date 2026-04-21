@@ -30,7 +30,8 @@ use super::{
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::{
-    metrics::RuntimeMetrics, recording::MediaTap, transport_adapter::SourcePolicySignal,
+    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
+    transport_adapter::SourcePolicySignal,
 };
 
 pub(crate) struct PacketLoopConfig {
@@ -39,6 +40,7 @@ pub(crate) struct PacketLoopConfig {
     pub(crate) max_bitrate_out_bps: u64,
     pub(crate) rtc_port_range: RtcPortRange,
     pub(crate) codec_flags: MediaCodecFlags,
+    pub(crate) diagnostics: Arc<DiagnosticsStore>,
     pub(crate) media_tap: Arc<MediaTap>,
     pub(crate) relay_registry: Arc<RelayRegistry>,
     pub(crate) source_policy_signal: Arc<SourcePolicySignal>,
@@ -315,7 +317,14 @@ fn snapshot_and_pump(
         )
     };
     let now = Instant::now();
-    drain_ready_sessions(state, snapshot_state, &config.metrics, buffers, now);
+    drain_ready_sessions(
+        state,
+        snapshot_state,
+        &config.diagnostics,
+        &config.metrics,
+        buffers,
+        now,
+    );
     drain_relay_packets(
         relay_rx,
         &mut buffers.pending_packets,

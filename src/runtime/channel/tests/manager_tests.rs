@@ -1,5 +1,6 @@
 use super::fixtures::*;
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
+use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
 use std::time::Instant;
@@ -273,6 +274,7 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
             ),
         ),
         Arc::new(MediaTap::default()),
+        Arc::new(DiagnosticsStore::default()),
         Arc::clone(&metrics),
     );
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();

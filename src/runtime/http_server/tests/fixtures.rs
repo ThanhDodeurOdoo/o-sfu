@@ -16,7 +16,10 @@ pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
 pub(super) use crate::{
-    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig},
+    config::{
+        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
+        TelemetryConfig,
+    },
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
@@ -24,9 +27,14 @@ pub(super) use crate::{
             ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
             ChannelRuntimePolicy, rtp_capabilities,
         },
+        diagnostics::{
+            DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
+            DiagnosticsSessionLookupConflict, DiagnosticsStore, DiagnosticsSummaryResponse,
+        },
         http_server::contract::{
-            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH,
-            NOOP_PATH, NoopResponse, STATS_PATH, StatsResponse,
+            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DIAGNOSTICS_CHANNELS_PATH,
+            DIAGNOSTICS_SUMMARY_PATH, DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse,
+            STATS_PATH, StatsResponse,
         },
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -42,6 +50,7 @@ pub(super) fn test_config() -> Config {
         bind_address: SocketAddr::from(([127, 0, 0, 1], 8070)),
         authentication_timeout_ms: 10_000,
         channel_size: 100,
+        diagnostics: DiagnosticsConfig::default(),
         session_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
         trust_proxy_headers: false,
@@ -58,6 +67,7 @@ pub(super) fn test_config() -> Config {
 
 pub(super) fn test_state() -> RuntimeState {
     let config = test_config();
+    let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     RuntimeState {
         channels: Arc::new(ChannelManager::new(
@@ -70,9 +80,11 @@ pub(super) fn test_state() -> RuntimeState {
                 ),
             ),
             Arc::new(MediaTap::default()),
+            Arc::clone(&diagnostics),
             Arc::clone(&metrics),
         )),
         config,
+        diagnostics,
         metrics,
         transport_adapter: RuntimeTransportAdapter::fake_for_testing(),
     }

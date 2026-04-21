@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
+use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use crate::runtime::{ConnectionId, metrics::RuntimeMetrics};
@@ -48,6 +49,7 @@ impl ChannelManager {
         Self::new(
             config,
             Arc::new(MediaTap::default()),
+            Arc::new(DiagnosticsStore::default()),
             Arc::new(RuntimeMetrics::default()),
         )
     }

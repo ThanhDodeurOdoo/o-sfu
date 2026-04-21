@@ -25,7 +25,9 @@ pub(super) use super::super::{
     state::TransportSessionHealth,
     test_support::test_transport_session_key,
 };
-pub(super) use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
+pub(super) use crate::runtime::{
+    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
+};
 pub(super) use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::transport_adapter::{
@@ -89,6 +91,7 @@ pub(super) fn rtc_adapter_with_bitrate_limits(
             SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
             RtcPortRange::new(40_000, 49_999),
             MediaCodecFlags::default(),
+            Arc::new(DiagnosticsStore::default()),
             Arc::new(MediaTap::default()),
             Arc::new(RuntimeMetrics::default()),
         ),

@@ -2,6 +2,7 @@ use super::fixtures::*;
 use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
 use crate::runtime::{
     channel::{ChannelManagerConfig, ChannelRuntimePolicy, rtp_capabilities},
+    diagnostics::DiagnosticsStore,
     metrics::RuntimeMetrics,
     recording::MediaTap,
 };
@@ -55,6 +56,7 @@ async fn build_recording_channel_with(
             ),
         ),
         Arc::new(MediaTap::default()),
+        Arc::new(DiagnosticsStore::default()),
         Arc::clone(&metrics),
     );
     let channel = manager

@@ -5,6 +5,8 @@ use o_sfu_protocol::{
 
 use super::{Channel, ChannelSessionPermissions};
 use crate::runtime::ConnectionId;
+use crate::runtime::diagnostics::DiagnosticsEventData;
+use crate::runtime::telemetry::schema::event as telemetry_event;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecordingPermissions {
@@ -68,6 +70,16 @@ impl Channel {
                 fanout.emit();
             }
             self.metrics.record_recording_start_accepted();
+            self.diagnostics.record(
+                DiagnosticsEventData::for_session(
+                    self.uuid(),
+                    session_id,
+                    telemetry_event::RECORDING_STARTED,
+                )
+                .with_connection_id(connection_id.as_u64())
+                .with_media_worker_id(self.media_worker_id())
+                .insert_field("transcription", transcription),
+            );
             return true;
         }
 
@@ -105,6 +117,18 @@ impl Channel {
         }
         self.metrics.record_recording_start_accepted();
         self.metrics.add_active_recording_channels(1);
+        self.diagnostics.record(
+            DiagnosticsEventData::for_session(
+                self.uuid(),
+                session_id,
+                telemetry_event::RECORDING_STARTED,
+            )
+            .with_connection_id(connection_id.as_u64())
+            .with_media_worker_id(self.media_worker_id())
+            .insert_field("audio", wants_audio)
+            .insert_field("transcription", wants_transcription)
+            .insert_field("video", wants_video),
+        );
         true
     }
 
@@ -155,6 +179,16 @@ impl Channel {
         }
         self.metrics.record_recording_stop_accepted();
         self.metrics.add_active_recording_channels(-1);
+        self.diagnostics.record(
+            DiagnosticsEventData::for_session(
+                self.uuid(),
+                session_id,
+                telemetry_event::RECORDING_STOPPED,
+            )
+            .with_connection_id(connection_id.as_u64())
+            .with_media_worker_id(self.media_worker_id())
+            .insert_field("stop_code", "user_request"),
+        );
         true
     }
 

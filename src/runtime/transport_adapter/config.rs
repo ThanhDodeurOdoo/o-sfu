@@ -1,6 +1,7 @@
 use std::{net::IpAddr, sync::Arc};
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
+use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 
@@ -43,6 +44,7 @@ pub(crate) struct RtcTransportAdapterConfig {
     bitrate_limits: SessionBitrateLimits,
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
+    diagnostics: Arc<DiagnosticsStore>,
     media_tap: Arc<MediaTap>,
     metrics: Arc<RuntimeMetrics>,
 }
@@ -54,6 +56,7 @@ impl RtcTransportAdapterConfig {
         bitrate_limits: SessionBitrateLimits,
         rtc_port_range: RtcPortRange,
         codec_flags: MediaCodecFlags,
+        diagnostics: Arc<DiagnosticsStore>,
         media_tap: Arc<MediaTap>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
@@ -62,6 +65,7 @@ impl RtcTransportAdapterConfig {
             bitrate_limits,
             rtc_port_range,
             codec_flags,
+            diagnostics,
             media_tap,
             metrics,
         }
@@ -74,6 +78,7 @@ impl RtcTransportAdapterConfig {
             bitrate_limits: self.bitrate_limits,
             rtc_port_range,
             codec_flags: self.codec_flags,
+            diagnostics: Arc::clone(&self.diagnostics),
             media_tap: Arc::clone(&self.media_tap),
             metrics: Arc::clone(&self.metrics),
         }
@@ -109,6 +114,11 @@ impl RtcTransportAdapterConfig {
     }
 
     #[must_use]
+    pub(crate) fn diagnostics(&self) -> Arc<DiagnosticsStore> {
+        Arc::clone(&self.diagnostics)
+    }
+
+    #[must_use]
     pub(crate) fn metrics(&self) -> Arc<RuntimeMetrics> {
         Arc::clone(&self.metrics)
     }
@@ -121,6 +131,10 @@ pub(crate) struct RtcTransportAdapterShardSetConfig {
 }
 
 impl RtcTransportAdapterShardSetConfig {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "transport shard-set construction keeps network, codec, and shared runtime services explicit"
+    )]
     #[must_use]
     pub(crate) fn new(
         public_ip: IpAddr,
@@ -128,6 +142,7 @@ impl RtcTransportAdapterShardSetConfig {
         rtc_port_range: RtcPortRange,
         worker_count: usize,
         codec_flags: MediaCodecFlags,
+        diagnostics: Arc<DiagnosticsStore>,
         media_tap: Arc<MediaTap>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
@@ -138,6 +153,7 @@ impl RtcTransportAdapterShardSetConfig {
                 bitrate_limits,
                 rtc_port_range,
                 codec_flags,
+                diagnostics,
                 media_tap,
                 metrics,
             ),

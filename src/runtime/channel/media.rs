@@ -1,6 +1,8 @@
 use tracing::warn;
 
 use crate::runtime::ConnectionId;
+use crate::runtime::diagnostics::DiagnosticsEventData;
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
@@ -86,6 +88,18 @@ impl Channel {
                 "transport adapter failed to update producer route activity"
             );
         }
+        self.diagnostics.record(
+            DiagnosticsEventData::for_session(
+                self.uuid(),
+                session_id,
+                telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
+            )
+            .with_connection_id(connection_id.as_u64())
+            .with_media_worker_id(self.media_worker_id())
+            .with_transport_media_id(outcome.transport_media_id.as_u64())
+            .insert_field("active", outcome.active)
+            .insert_field("stream_type", format!("{stream_type:?}").to_lowercase()),
+        );
         outcome.fanout.emit();
     }
 
@@ -126,6 +140,29 @@ impl Channel {
                     "transport adapter failed to update consumer route activity"
                 );
             }
+            self.diagnostics.record(
+                DiagnosticsEventData::for_session(
+                    self.uuid(),
+                    session_id,
+                    telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
+                )
+                .with_connection_id(connection_id.as_u64())
+                .with_media_worker_id(self.media_worker_id())
+                .with_transport_media_id(route_update.consumer_media().as_u64())
+                .insert_field("active", route_update.active())
+                .insert_field(
+                    "producer_session_id",
+                    serde_json::to_value(target_session_id).unwrap_or(serde_json::Value::Null),
+                )
+                .insert_field(
+                    "source_transport_media_id",
+                    route_update.source_media().as_u64(),
+                )
+                .insert_field(
+                    "stream_type",
+                    format!("{:?}", route_update.stream_type()).to_lowercase(),
+                ),
+            );
         }
     }
 

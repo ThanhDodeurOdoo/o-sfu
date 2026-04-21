@@ -9,6 +9,7 @@ use super::{
         ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig, ChannelRuntimePolicy,
         ConsumerRouteState, rtp_capabilities::router_rtp_capabilities,
     },
+    diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
     recording::MediaTap,
@@ -158,6 +159,7 @@ impl Drop for TestServer {
 ///
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
+    let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let recording_media_tap = Arc::new(MediaTap::default());
     let channels = Arc::new(ChannelManager::new(
@@ -170,13 +172,19 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
             ),
         ),
         Arc::clone(&recording_media_tap),
+        Arc::clone(&diagnostics),
         Arc::clone(&metrics),
     ));
-    let transport_adapter =
-        build_transport_adapter(&config, recording_media_tap, Arc::clone(&metrics));
+    let transport_adapter = build_transport_adapter(
+        &config,
+        Arc::clone(&diagnostics),
+        recording_media_tap,
+        Arc::clone(&metrics),
+    );
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
+        diagnostics,
         metrics,
         transport_adapter,
     };

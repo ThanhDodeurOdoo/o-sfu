@@ -32,6 +32,7 @@ use super::super::{
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::{
+    diagnostics::DiagnosticsStore,
     metrics::RuntimeMetrics,
     recording::MediaTap,
     transport_adapter::{
@@ -76,6 +77,7 @@ pub(crate) struct RtcTransportAdapter {
     pub(super) max_bitrate_out_bps: u64,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
+    pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) media_tap: Arc<MediaTap>,
     pub(super) relay_registry: Arc<RelayRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
@@ -117,6 +119,7 @@ impl RtcTransportAdapter {
             max_bitrate_out_bps: config.max_bitrate_out_bps(),
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
+            diagnostics: config.diagnostics(),
             media_tap: config.media_tap(),
             relay_registry: Arc::new(RelayRegistry::default()),
             source_policy_signal,

@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use tracing::warn;
 
 use crate::runtime::ConnectionId;
+use crate::runtime::diagnostics::DiagnosticsEventData;
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportAdapterError, TransportMediaId,
 };
@@ -189,6 +191,16 @@ impl PublishCommitSnapshot {
                 )
                 .await;
         }
+        channel.diagnostics.record(
+            DiagnosticsEventData::for_session(
+                channel.uuid(),
+                &self.session_id,
+                telemetry_event::PUBLISH_COMMITTED,
+            )
+            .with_connection_id(self.connection_id.as_u64())
+            .with_media_worker_id(channel.media_worker_id())
+            .with_transport_media_id(self.transport_media_id.as_u64()),
+        );
         Some(producer_id.into_wire_id())
     }
 }
@@ -276,6 +288,29 @@ impl ConsumerBootstrapTransaction {
                 origin,
             )
             .await;
+        channel.diagnostics.record(
+            DiagnosticsEventData::for_session(
+                channel.uuid(),
+                self.target.consumer_session_id(),
+                telemetry_event::SUBSCRIBE_SUCCEEDED,
+            )
+            .with_connection_id(self.target.consumer_connection_id().as_u64())
+            .with_media_worker_id(channel.media_worker_id())
+            .with_transport_media_id(consumer_transport_media_id.as_u64())
+            .insert_field(
+                "producer_session_id",
+                serde_json::to_value(self.target.producer_session_id())
+                    .unwrap_or(serde_json::Value::Null),
+            )
+            .insert_field(
+                "source_transport_media_id",
+                self.target.transport_media_id().as_u64(),
+            )
+            .insert_field(
+                "stream_type",
+                format!("{:?}", self.target.stream_type()).to_lowercase(),
+            ),
+        );
         let _ = sender.send(SessionOutbound::Request(Box::new(
             bootstrap.into_channel_event_request(),
         )));

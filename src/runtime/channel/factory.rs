@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use o_sfu_router::RouterId;
 
 use crate::runtime::ChannelRuntimeId;
+use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 
@@ -36,6 +37,7 @@ struct ChannelRuntimeAllocator {
 pub(crate) struct ChannelFactory {
     media_worker_count: usize,
     runtime_policy: ChannelRuntimePolicy,
+    diagnostics: Arc<DiagnosticsStore>,
     recording_media_tap: Arc<MediaTap>,
     metrics: Arc<RuntimeMetrics>,
     allocator: Mutex<ChannelRuntimeAllocator>,
@@ -47,11 +49,13 @@ impl ChannelFactory {
         media_worker_count: usize,
         runtime_policy: ChannelRuntimePolicy,
         recording_media_tap: Arc<MediaTap>,
+        diagnostics: Arc<DiagnosticsStore>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
             media_worker_count: media_worker_count.max(1),
             runtime_policy,
+            diagnostics,
             recording_media_tap,
             metrics,
             allocator: Mutex::new(ChannelRuntimeAllocator {
@@ -70,6 +74,7 @@ impl ChannelFactory {
             intent.issuer,
             intent.key,
             intent.config,
+            Arc::clone(&self.diagnostics),
             Arc::clone(&self.recording_media_tap),
             Arc::clone(&self.metrics),
         ))

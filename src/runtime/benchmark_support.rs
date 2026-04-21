@@ -13,6 +13,7 @@ use tokio::runtime::Builder;
 
 use super::{
     ChannelRuntimeId, ConnectionId,
+    diagnostics::DiagnosticsStore,
     metrics::RuntimeMetrics,
     recording::MediaTap,
     rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
@@ -56,6 +57,7 @@ impl RtcUdpDemuxBenchmarkFixture {
                 SessionBitrateLimits::new(8_000_000, 10_000_000),
                 BENCHMARK_PORT_RANGE,
                 MediaCodecFlags::default(),
+                Arc::new(DiagnosticsStore::default()),
                 Arc::new(MediaTap::default()),
                 Arc::new(RuntimeMetrics::default()),
             ),

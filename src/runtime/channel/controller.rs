@@ -24,6 +24,10 @@ use o_sfu_protocol::{
 };
 
 use crate::config::RuntimeFeatureFlags;
+use crate::runtime::diagnostics::{
+    DiagnosticsQualitySummary, DiagnosticsSessionTransport, DiagnosticsSessionView,
+    DiagnosticsStore,
+};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
@@ -149,6 +153,7 @@ pub(crate) struct ChannelSessionStatsSnapshot {
 /// room-level intents through this facade, while process-level lookup and lifecycle
 /// serialization stay in [`super::manager::ChannelManager`].
 pub struct Channel {
+    pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) definition: ChannelDefinition,
     #[allow(
         dead_code,
@@ -161,12 +166,17 @@ pub struct Channel {
 }
 
 impl Channel {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "channel construction keeps runtime identity, policy, and shared services explicit at the boundary"
+    )]
     pub(crate) fn new(
         runtime_context: ChannelRuntimeContext,
         runtime_policy: ChannelRuntimePolicy,
         issuer: String,
         key: Option<String>,
         config: ChannelConfig,
+        diagnostics: Arc<DiagnosticsStore>,
         recording_media_tap: Arc<MediaTap>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
@@ -179,6 +189,7 @@ impl Channel {
             Arc::clone(&metrics),
         ));
         Self {
+            diagnostics,
             definition,
             recording_service: Arc::clone(&recording_service),
             metrics,
@@ -309,8 +320,73 @@ impl Channel {
     }
 
     #[must_use]
+    pub(crate) fn media_worker_id(&self) -> usize {
+        self.definition.media_worker_id()
+    }
+
+    #[must_use]
+    pub(crate) fn runtime_id(&self) -> ChannelRuntimeId {
+        self.definition.runtime_id()
+    }
+
+    #[must_use]
     pub(crate) fn feature_flags(&self) -> RuntimeFeatureFlags {
         self.definition.feature_flags()
+    }
+
+    pub(crate) async fn diagnostics_session_views(
+        &self,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Vec<DiagnosticsSessionView> {
+        let state = self.state.read().await;
+        let session_entries = state.transport_session_entries();
+        let session_keys = session_entries
+            .iter()
+            .map(|(session_id, connection_id)| {
+                self.transport_session_key(session_id, *connection_id)
+            })
+            .collect::<Vec<_>>();
+        let transport_snapshot = transport_adapter.transport_bitrate_snapshot(&session_keys);
+        let incoming_bitrate_by_session =
+            state.diagnostics_incoming_bitrate_by_session(&transport_snapshot.per_media);
+        let transport_by_session = session_entries
+            .into_iter()
+            .map(|(session_id, connection_id)| {
+                let transport = DiagnosticsSessionTransport {
+                    connection_id: connection_id.as_u64(),
+                    health: transport_adapter
+                        .session_transport_health(
+                            &self.transport_session_key(&session_id, connection_id),
+                        )
+                        .map(Into::into),
+                    media_worker_id: self.definition.media_worker_id(),
+                    quality_summary: DiagnosticsQualitySummary {
+                        current_incoming_bitrate: incoming_bitrate_by_session
+                            .get(&session_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        sampled_metrics_available: false,
+                    },
+                };
+                (session_id, transport)
+            })
+            .collect();
+        state.diagnostics_session_views(self.definition.media_worker_id(), &transport_by_session)
+    }
+
+    pub(crate) async fn diagnostics_matching_session(
+        &self,
+        requested_session_id: &str,
+        transport_adapter: &RuntimeTransportAdapter,
+    ) -> Option<(DiagnosticsSessionView, SessionId)> {
+        self.diagnostics_session_views(transport_adapter)
+            .await
+            .into_iter()
+            .find(|session| session_id_matches(&session.session_id, requested_session_id))
+            .map(|session| {
+                let session_id = session.session_id.clone();
+                (session, session_id)
+            })
     }
 }
 
@@ -324,5 +400,12 @@ impl fmt::Debug for Channel {
             .field("issuer", &self.definition.issuer())
             .field("web_rtc_enabled", &self.definition.web_rtc_enabled())
             .finish_non_exhaustive()
+    }
+}
+
+fn session_id_matches(session_id: &SessionId, requested_session_id: &str) -> bool {
+    match session_id {
+        SessionId::Integer(value) => value.to_string() == requested_session_id,
+        SessionId::String(value) => value == requested_session_id,
     }
 }

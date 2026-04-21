@@ -10,8 +10,10 @@ use super::{
     factory::{ChannelCreationIntent, ChannelFactory},
 };
 use crate::runtime::ConnectionId;
+use crate::runtime::diagnostics::{DiagnosticsEventData, DiagnosticsStore};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
@@ -50,6 +52,30 @@ pub(crate) struct JoinSessionRequest {
     pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeChannelDirectorySnapshot {
+    channel: Arc<Channel>,
+    create_date: String,
+    remote_address: String,
+}
+
+impl RuntimeChannelDirectorySnapshot {
+    #[must_use]
+    pub(crate) fn channel(&self) -> &Arc<Channel> {
+        &self.channel
+    }
+
+    #[must_use]
+    pub(crate) fn create_date(&self) -> &str {
+        &self.create_date
+    }
+
+    #[must_use]
+    pub(crate) fn remote_address(&self) -> &str {
+        &self.remote_address
+    }
+}
+
 /// global owner of live channels keyed by issuer and UUID.
 ///
 /// `ChannelManager` keeps channel creation idempotent by issuer and centralizes per-room
@@ -60,6 +86,7 @@ pub(crate) struct JoinSessionRequest {
 #[derive(Debug)]
 pub struct ChannelManager {
     directory: RwLock<ChannelDirectory>,
+    diagnostics: Arc<DiagnosticsStore>,
     factory: ChannelFactory,
     metrics: Arc<RuntimeMetrics>,
 }
@@ -69,16 +96,19 @@ impl ChannelManager {
     pub fn new(
         config: ChannelManagerConfig,
         recording_media_tap: Arc<MediaTap>,
+        diagnostics: Arc<DiagnosticsStore>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         let factory = ChannelFactory::new(
             config.media_worker_count,
             config.runtime_policy,
             recording_media_tap,
+            Arc::clone(&diagnostics),
             Arc::clone(&metrics),
         );
         Self {
             directory: RwLock::new(ChannelDirectory::default()),
+            diagnostics,
             factory,
             metrics,
         }
@@ -110,6 +140,14 @@ impl ChannelManager {
         directory.insert(Arc::clone(&channel), remote_address);
         drop(directory);
         self.metrics.add_active_channels(1);
+        self.diagnostics
+            .register_channel_runtime(channel.runtime_id(), channel.uuid());
+        self.diagnostics.record(
+            DiagnosticsEventData::for_channel(channel.uuid(), telemetry_event::CHANNEL_CREATED)
+                .with_media_worker_id(channel.media_worker_id())
+                .insert_field("remote_address", remote_address.unwrap_or("unknown"))
+                .insert_field("web_rtc_enabled", config.web_rtc_enabled),
+        );
         channel
     }
 
@@ -122,15 +160,36 @@ impl ChannelManager {
         &self,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Vec<RuntimeChannelStatsSnapshot> {
-        let entries = {
-            let directory = self.directory.read().await;
-            directory.entries()
-        };
+        let entries = self.directory_entries().await;
         let mut snapshots = Vec::with_capacity(entries.len());
         for entry in entries {
             snapshots.push(self.entry_stats_snapshot(entry, transport_adapter).await);
         }
         snapshots
+    }
+
+    pub(crate) async fn directory_snapshots(&self) -> Vec<RuntimeChannelDirectorySnapshot> {
+        self.directory_entries()
+            .await
+            .into_iter()
+            .map(|entry| RuntimeChannelDirectorySnapshot {
+                channel: entry.channel(),
+                create_date: entry.create_date().to_owned(),
+                remote_address: entry.remote_address().to_owned(),
+            })
+            .collect()
+    }
+
+    pub(crate) async fn directory_snapshot(
+        &self,
+        channel_uuid: &str,
+    ) -> Option<RuntimeChannelDirectorySnapshot> {
+        let entry = self.entry(channel_uuid).await?;
+        Some(RuntimeChannelDirectorySnapshot {
+            channel: entry.channel(),
+            create_date: entry.create_date().to_owned(),
+            remote_address: entry.remote_address().to_owned(),
+        })
     }
 
     pub(crate) async fn sync_source_packet_selection_policies(
@@ -272,6 +331,11 @@ impl ChannelManager {
         directory.entry(channel_uuid)
     }
 
+    async fn directory_entries(&self) -> Vec<ChannelDirectoryEntry> {
+        let directory = self.directory.read().await;
+        directory.entries()
+    }
+
     async fn entry_stats_snapshot(
         &self,
         entry: ChannelDirectoryEntry,
@@ -299,6 +363,7 @@ impl ChannelManager {
         drop(directory);
         if removed {
             self.metrics.add_active_channels(-1);
+            self.diagnostics.forget_channel(channel_uuid);
         }
     }
 

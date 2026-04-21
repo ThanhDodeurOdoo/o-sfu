@@ -55,6 +55,7 @@ pub(crate) use lifecycle::{ChannelSessionPermissions, SessionCloseReason};
 pub use manager::ChannelManager;
 pub(crate) use manager::ChannelManagerConfig;
 pub(crate) use manager::JoinSessionRequest;
+pub(crate) use manager::RuntimeChannelDirectorySnapshot;
 pub(crate) use manager::RuntimeChannelStatsSnapshot;
 #[cfg(test)]
 pub(in crate::runtime::channel) use membership::SessionCleanup;

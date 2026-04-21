@@ -49,6 +49,7 @@ pub(in crate::runtime::channel) struct SessionCloseRequest {
 pub(in crate::runtime::channel) struct JoinSessionOutcome {
     pub(in crate::runtime::channel) connection_id: ConnectionId,
     pub(in crate::runtime::channel) effects: LifecycleEffects,
+    pub(in crate::runtime::channel) session_id: SessionId,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
 
@@ -71,6 +72,7 @@ impl SessionInfoUpdateOutcome {
 
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct DisconnectSessionsOutcome {
+    pub(in crate::runtime::channel) disconnected_session_ids: Vec<SessionId>,
     pub(in crate::runtime::channel) effects: LifecycleEffects,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
@@ -218,6 +220,7 @@ impl ChannelState {
         Ok(JoinSessionOutcome {
             connection_id,
             effects,
+            session_id: session_id.clone(),
             transport_removals,
         })
     }
@@ -360,6 +363,7 @@ impl ChannelState {
     ) -> DisconnectSessionsOutcome {
         let mut transport_removals = Vec::new();
         let mut close_requests = Vec::new();
+        let mut disconnected_session_ids = Vec::new();
         let mut fanouts = Vec::new();
         for session_id in session_ids {
             if !self.sessions.contains_key(session_id) {
@@ -377,6 +381,7 @@ impl ChannelState {
             );
             if let Some(session) = self.sessions.remove(session_id) {
                 self.purge_session_media_state(session_id);
+                disconnected_session_ids.push(session_id.clone());
                 close_requests.push(SessionCloseRequest {
                     sender: session.sender,
                     reason: SessionCloseReason::RemovedByRuntime,
@@ -387,6 +392,7 @@ impl ChannelState {
             }
         }
         DisconnectSessionsOutcome {
+            disconnected_session_ids,
             effects: LifecycleEffects {
                 close_requests,
                 fanouts,

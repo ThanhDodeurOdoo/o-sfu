@@ -40,7 +40,8 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     use crate::config::{
-        Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
+        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
+        TelemetryConfig,
     };
 
     use super::{resolve_remote_address, trusted_forwarded_header};
@@ -56,6 +57,7 @@ mod tests {
             trust_proxy_headers,
             feature_flags: RuntimeFeatureFlags::default(),
             codec_flags: MediaCodecFlags::default(),
+            diagnostics: DiagnosticsConfig::default(),
             telemetry: TelemetryConfig::default(),
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             max_bitrate_in_bps: 8_000_000,

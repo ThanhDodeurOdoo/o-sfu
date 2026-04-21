@@ -3,6 +3,8 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::runtime::ConnectionId;
+use crate::runtime::diagnostics::DiagnosticsEventData;
+use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
@@ -356,7 +358,17 @@ impl Channel {
                 self.sync_source_packet_selection_policy(cleanup.transport_adapter())
                     .await;
                 let connection_id = outcome.connection_id;
+                let session_id = outcome.session_id.clone();
                 Self::emit_lifecycle_effects(outcome.effects);
+                self.diagnostics.record(
+                    DiagnosticsEventData::for_session(
+                        self.uuid(),
+                        &session_id,
+                        telemetry_event::SESSION_JOINED,
+                    )
+                    .with_connection_id(connection_id.as_u64())
+                    .with_media_worker_id(self.media_worker_id()),
+                );
                 SessionTransitionResult::Joined(connection_id)
             }
             SessionTransitionOutcome::Close {
@@ -375,6 +387,16 @@ impl Channel {
                         .await;
                 }
                 if had_state {
+                    self.diagnostics.record(
+                        DiagnosticsEventData::for_session(
+                            self.uuid(),
+                            &session_id,
+                            telemetry_event::SESSION_CLOSED,
+                        )
+                        .with_connection_id(connection_id.as_u64())
+                        .with_media_worker_id(self.media_worker_id()),
+                    );
+                    self.diagnostics.forget_session(self.uuid(), &session_id);
                     self.sync_source_packet_selection_policy(cleanup.transport_adapter())
                         .await;
                 }
@@ -383,6 +405,17 @@ impl Channel {
             SessionTransitionOutcome::Disconnect(outcome) => {
                 self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
                     .await;
+                for session_id in &outcome.disconnected_session_ids {
+                    self.diagnostics.record(
+                        DiagnosticsEventData::for_session(
+                            self.uuid(),
+                            session_id,
+                            telemetry_event::SESSION_DISCONNECTED,
+                        )
+                        .with_media_worker_id(self.media_worker_id()),
+                    );
+                    self.diagnostics.forget_session(self.uuid(), session_id);
+                }
                 self.sync_source_packet_selection_policy(cleanup.transport_adapter())
                     .await;
                 Self::emit_lifecycle_effects(outcome.effects);

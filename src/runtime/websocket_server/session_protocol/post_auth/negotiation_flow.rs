@@ -408,6 +408,7 @@ mod tests {
     use crate::{
         config::{MediaCodecFlags, RtcPortRange},
         runtime::{
+            diagnostics::DiagnosticsStore,
             metrics::RuntimeMetrics,
             recording::MediaTap,
             rtc_adapter::test_support::test_transport_session_key,
@@ -425,6 +426,7 @@ mod tests {
             RtcPortRange::new(port_min, port_min.saturating_add(99)),
             1,
             MediaCodecFlags::default(),
+            Arc::new(DiagnosticsStore::default()),
             Arc::new(MediaTap::default()),
             Arc::new(RuntimeMetrics::default()),
         ))

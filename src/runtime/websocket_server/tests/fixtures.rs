@@ -21,7 +21,10 @@ pub(super) use tokio_tungstenite::{
 };
 
 pub(super) use crate::{
-    config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig},
+    config::{
+        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
+        TelemetryConfig,
+    },
     runtime::{
         RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -31,6 +34,7 @@ pub(super) use crate::{
             ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
             ChannelRuntimePolicy,
         },
+        diagnostics::DiagnosticsStore,
         http_server::app,
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -83,6 +87,7 @@ pub(super) fn test_config(
         trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
+        diagnostics: DiagnosticsConfig::default(),
         telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
@@ -139,6 +144,7 @@ async fn spawn_test_server_impl(
         channel_size,
     );
     config.feature_flags = feature_flags;
+    let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let channels = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
@@ -150,11 +156,13 @@ async fn spawn_test_server_impl(
             ),
         ),
         Arc::new(MediaTap::default()),
+        Arc::clone(&diagnostics),
         Arc::clone(&metrics),
     ));
     let state = RuntimeState {
         config,
         channels: Arc::clone(&channels),
+        diagnostics,
         metrics,
         transport_adapter,
     };
@@ -229,6 +237,7 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
         RtcPortRange::new(47_200, 47_299),
         1,
         MediaCodecFlags::default(),
+        Arc::new(DiagnosticsStore::default()),
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ))

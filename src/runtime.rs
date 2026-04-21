@@ -30,6 +30,7 @@ pub(crate) mod auth;
 #[doc(hidden)]
 pub mod benchmark_support;
 pub(crate) mod channel;
+pub(crate) mod diagnostics;
 pub(crate) mod http_server;
 mod ids;
 mod metrics;
@@ -49,6 +50,7 @@ use channel::ChannelAdmissionPolicy;
 use channel::ChannelManager;
 use channel::ChannelManagerConfig;
 use channel::ChannelRuntimePolicy;
+use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
 pub(crate) use ids::{ChannelRuntimeId, ConnectionId};
 use metrics::RuntimeMetrics;
@@ -67,6 +69,7 @@ use transport_adapter::{
 pub struct Runtime {
     pub config: Config,
     channels: Arc<ChannelManager>,
+    diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
 }
@@ -75,6 +78,7 @@ pub struct Runtime {
 pub(super) struct RuntimeState {
     config: Config,
     channels: Arc<ChannelManager>,
+    diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
 }
@@ -82,10 +86,12 @@ pub(super) struct RuntimeState {
 impl Runtime {
     #[must_use]
     pub fn new(config: Config) -> Self {
+        let diagnostics = Arc::new(DiagnosticsStore::default());
         let metrics = Arc::new(RuntimeMetrics::default());
         let recording_media_tap = Arc::new(MediaTap::default());
         let transport_adapter = build_transport_adapter(
             &config,
+            Arc::clone(&diagnostics),
             Arc::clone(&recording_media_tap),
             Arc::clone(&metrics),
         );
@@ -105,8 +111,10 @@ impl Runtime {
             channels: Arc::new(ChannelManager::new(
                 ChannelManagerConfig::new(rtc_media_worker_count, channel_runtime_policy),
                 recording_media_tap,
+                Arc::clone(&diagnostics),
                 Arc::clone(&metrics),
             )),
+            diagnostics,
             metrics,
             transport_adapter,
         }
@@ -120,6 +128,7 @@ impl Runtime {
         let result = serve_http(RuntimeState {
             config: self.config,
             channels: self.channels,
+            diagnostics: self.diagnostics,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,
         })
@@ -162,6 +171,7 @@ fn spawn_source_packet_policy_update_task(
 
 fn build_transport_adapter(
     config: &Config,
+    diagnostics: Arc<DiagnosticsStore>,
     recording_media_tap: Arc<MediaTap>,
     metrics: Arc<RuntimeMetrics>,
 ) -> RuntimeTransportAdapter {
@@ -171,6 +181,7 @@ fn build_transport_adapter(
         config.rtc_port_range,
         config.rtc_media_worker_count,
         config.codec_flags,
+        diagnostics,
         recording_media_tap,
         metrics,
     ))

@@ -4,7 +4,7 @@ use anyhow::Result;
 use axum::{
     Extension, Router,
     body::Bytes,
-    extract::{ConnectInfo, DefaultBodyLimit, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -18,8 +18,10 @@ use crate::{
         RuntimeState,
         auth::{self, HttpChannelClaims, HttpDisconnectClaims},
         channel::{ChannelConfig, RuntimeChannelStatsSnapshot},
+        diagnostics::{self, DiagnosticsSessionLookup},
         http_server::contract::{
-            CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery, DISCONNECT_PATH,
+            CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery,
+            DIAGNOSTICS_CHANNELS_PATH, DIAGNOSTICS_SUMMARY_PATH, DISCONNECT_PATH,
             IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH, SessionsStats,
         },
         metrics::HttpRoute,
@@ -57,6 +59,16 @@ pub(crate) fn app(state: RuntimeState) -> Router {
         .route(NOOP_PATH, get(noop))
         .route(STATS_PATH, get(stats))
         .route(CHANNEL_PATH, get(channel))
+        .route(DIAGNOSTICS_SUMMARY_PATH, get(diagnostics_summary))
+        .route(DIAGNOSTICS_CHANNELS_PATH, get(diagnostics_channels))
+        .route(
+            "/internal/diagnostics/channels/{uuid}",
+            get(diagnostics_channel_detail),
+        )
+        .route(
+            "/internal/diagnostics/sessions/{id}",
+            get(diagnostics_session_detail),
+        )
         .route(
             DISCONNECT_PATH,
             post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
@@ -213,11 +225,129 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
     .await
 }
 
+async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.config) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        axum::Json(
+            diagnostics::summary_response(
+                &state.channels,
+                &state.transport_adapter,
+                &state.diagnostics,
+            )
+            .await,
+        )
+        .into_response()
+    }
+    .await
+}
+
+async fn diagnostics_channels(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.config) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        axum::Json(
+            diagnostics::channels_response(
+                &state.channels,
+                &state.transport_adapter,
+                &state.diagnostics,
+            )
+            .await,
+        )
+        .into_response()
+    }
+    .await
+}
+
+async fn diagnostics_channel_detail(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(channel_uuid): Path<String>,
+) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.config) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        let Some(payload) = diagnostics::channel_detail_response(
+            &state.channels,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &channel_uuid,
+        )
+        .await
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        axum::Json(payload).into_response()
+    }
+    .await
+}
+
+async fn diagnostics_session_detail(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.config) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        match diagnostics::session_detail_response(
+            &state.channels,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &session_id,
+        )
+        .await
+        {
+            DiagnosticsSessionLookup::Missing => StatusCode::NOT_FOUND.into_response(),
+            DiagnosticsSessionLookup::Found(payload) => axum::Json(payload).into_response(),
+            DiagnosticsSessionLookup::Conflict(payload) => {
+                (StatusCode::CONFLICT, axum::Json(payload)).into_response()
+            }
+        }
+    }
+    .await
+}
+
 fn authorization_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split_once(' ').map(|(_, token)| token))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticsAccess {
+    Allowed,
+    Unauthorized,
+    Disabled,
+}
+
+fn ensure_diagnostics_access(headers: &HeaderMap, config: &Config) -> DiagnosticsAccess {
+    if let Some(expected_token) = config.diagnostics.auth_token.as_deref() {
+        return match authorization_token(headers) {
+            Some(actual_token) if actual_token == expected_token => DiagnosticsAccess::Allowed,
+            _ => DiagnosticsAccess::Unauthorized,
+        };
+    }
+    // Without an explicit token we only allow diagnostics on loopback listeners.
+    // for example if a reverse proxy is the network boundary we expect it handle that
+    if config.bind_address.ip().is_loopback() {
+        DiagnosticsAccess::Allowed
+    } else {
+        DiagnosticsAccess::Disabled
+    }
 }
 
 fn request_base_url(headers: &HeaderMap, config: &Config) -> String {

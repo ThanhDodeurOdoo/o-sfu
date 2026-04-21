@@ -15,6 +15,7 @@ use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
         ChannelRuntimeId, ConnectionId,
+        diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
@@ -185,6 +186,7 @@ fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> Runtim
         rtc_port_range,
         worker_count,
         MediaCodecFlags::default(),
+        Arc::new(DiagnosticsStore::default()),
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ))
@@ -229,6 +231,7 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
         RtcPortRange::new(46_100, 46_199),
         1,
         MediaCodecFlags::default(),
+        Arc::new(DiagnosticsStore::default()),
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));
@@ -249,6 +252,7 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
         RtcPortRange::new(46_000, 46_003),
         2,
         MediaCodecFlags::default(),
+        Arc::new(DiagnosticsStore::default()),
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));
@@ -440,6 +444,7 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
         RtcPortRange::new(46_300, 46_599),
         3,
         MediaCodecFlags::default(),
+        Arc::new(DiagnosticsStore::default()),
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));

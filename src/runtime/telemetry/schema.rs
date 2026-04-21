@@ -8,6 +8,10 @@ pub(crate) mod event {
     pub(crate) const RUNTIME_BOOT: &str = "runtime.boot";
     pub(crate) const RUNTIME_SHUTDOWN: &str = "runtime.shutdown";
     pub(crate) const RUNTIME_TELEMETRY_INITIALIZED: &str = "runtime.telemetry_initialized";
+    pub(crate) const CHANNEL_CREATED: &str = "channel.created";
+    pub(crate) const SESSION_JOINED: &str = "session.joined";
+    pub(crate) const SESSION_CLOSED: &str = "session.closed";
+    pub(crate) const SESSION_DISCONNECTED: &str = "session.disconnected";
     pub(crate) const WS_CONNECTION_ACCEPTED: &str = "ws.accepted";
     pub(crate) const WS_CONNECTION_CLOSED: &str = "ws.closed";
     pub(crate) const WS_AUTH_REJECTED: &str = "ws.auth_rejected";
@@ -24,7 +28,10 @@ pub(crate) mod event {
     pub(crate) const SUBSCRIBE_PREPARED: &str = "subscribe.prepared";
     pub(crate) const SUBSCRIBE_SUCCEEDED: &str = "subscribe.succeeded";
     pub(crate) const SUBSCRIBE_REJECTED: &str = "subscribe.rejected";
+    pub(crate) const SUBSCRIPTION_ACTIVITY_CHANGED: &str = "subscription.activity_changed";
+    pub(crate) const PUBLICATION_ACTIVITY_CHANGED: &str = "publication.activity_changed";
     pub(crate) const TRANSPORT_ICE_STATE_CHANGED: &str = "transport.ice_state.changed";
+    pub(crate) const TRANSPORT_HEALTH_CHANGED: &str = "transport.health.changed";
     pub(crate) const TRANSPORT_DTLS_CONNECTED: &str = "transport.dtls.connected";
     pub(crate) const RECORDING_STARTED: &str = "recording.started";
     pub(crate) const RECORDING_STOPPED: &str = "recording.stopped";

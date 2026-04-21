@@ -7,6 +7,7 @@ use std::{
 use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
+        diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         recording::MediaTap,
         transport_adapter::{
@@ -498,6 +499,7 @@ impl Default for RtcTransportAdapter {
                 SessionBitrateLimits::new(8_000_000, 10_000_000),
                 RtcPortRange::new(40_000, 49_999),
                 MediaCodecFlags::default(),
+                Arc::new(DiagnosticsStore::default()),
                 Arc::new(MediaTap::default()),
                 Arc::new(RuntimeMetrics::default()),
             ),

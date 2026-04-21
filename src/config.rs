@@ -24,6 +24,11 @@ const DEFAULT_AUDIO_RECORDING_FEATURE: bool = false;
 const DEFAULT_VIDEO_RECORDING_FEATURE: bool = false;
 const DEFAULT_TRUST_PROXY_HEADERS: bool = false;
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiagnosticsConfig {
+    pub auth_token: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeFeatureFlags {
     pub transcription: bool,
@@ -273,6 +278,7 @@ pub struct Config {
     pub bind_address: SocketAddr,
     pub authentication_timeout_ms: u64,
     pub channel_size: usize,
+    pub diagnostics: DiagnosticsConfig,
     pub session_timeout_ms: u64,
     pub ping_interval_ms: u64,
     pub trust_proxy_headers: bool,
@@ -344,6 +350,7 @@ impl Config {
         .unwrap_or(DEFAULT_TRUST_PROXY_HEADERS);
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
+        let diagnostics = load_diagnostics_config(&mut get_var)?;
         let telemetry = load_telemetry_config(&mut get_var)?;
         let transport = load_transport_config(&mut get_var)?;
         ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
@@ -360,6 +367,7 @@ impl Config {
             bind_address,
             authentication_timeout_ms,
             channel_size,
+            diagnostics,
             session_timeout_ms,
             ping_interval_ms,
             trust_proxy_headers,
@@ -409,6 +417,17 @@ impl fmt::Display for ConfigLogView<'_> {
         writeln!(formatter, "    - ping_interval_ms={}", config.ping_interval_ms)?;
         writeln!(formatter, "    - channel_size={}", config.channel_size)?;
         writeln!(formatter, "    - trust_proxy_headers={}", config.trust_proxy_headers)?;
+        writeln!(
+            formatter,
+            "    - diagnostics_access={}",
+            if config.diagnostics.auth_token.is_some() {
+                "bearer_token"
+            } else if config.bind_address.ip().is_loopback() {
+                "loopback_only"
+            } else {
+                "disabled"
+            }
+        )?;
         writeln!(formatter, "  - rtc_transport:")?;
         writeln!(formatter, "    - max_bitrate_in_bps={}", config.max_bitrate_in_bps)?;
         writeln!(formatter, "    - max_bitrate_out_bps={}", config.max_bitrate_out_bps)?;
@@ -429,6 +448,14 @@ impl fmt::Display for ConfigLogView<'_> {
         writeln!(formatter, "    - vp9={}", config.codec_flags.vp9_enabled())?;
         write!(formatter, "    - av1={}", config.codec_flags.av1_enabled())
     }
+}
+
+fn load_diagnostics_config(
+    mut get_var: impl FnMut(&str) -> Option<String>,
+) -> Result<DiagnosticsConfig> {
+    Ok(DiagnosticsConfig {
+        auth_token: parse_optional_non_empty_env(&mut get_var, "DIAGNOSTICS_AUTH_TOKEN")?,
+    })
 }
 
 fn load_runtime_feature_flags(

@@ -142,6 +142,7 @@ impl RtcTransportAdapter {
                 max_bitrate_out_bps: self.max_bitrate_out_bps,
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
+                diagnostics: Arc::clone(&self.diagnostics),
                 media_tap: Arc::clone(&self.media_tap),
                 relay_registry: Arc::clone(&self.relay_registry),
                 source_policy_signal: Arc::clone(&self.source_policy_signal),

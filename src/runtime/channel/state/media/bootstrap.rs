@@ -339,7 +339,7 @@ impl PendingConsumerBootstrapTarget {
         self.producer.transport_media_id
     }
 
-    fn stream_type(&self) -> StreamType {
+    pub(in crate::runtime::channel) const fn stream_type(&self) -> StreamType {
         self.producer.stream_type
     }
 }

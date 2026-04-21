@@ -10,6 +10,8 @@ pub const NOOP_PATH: &str = "/v1/noop";
 pub const STATS_PATH: &str = "/v1/stats";
 pub const CHANNEL_PATH: &str = "/v1/channel";
 pub const DISCONNECT_PATH: &str = "/v1/disconnect";
+pub const DIAGNOSTICS_SUMMARY_PATH: &str = "/internal/diagnostics/summary";
+pub const DIAGNOSTICS_CHANNELS_PATH: &str = "/internal/diagnostics/channels";
 
 /// Response payload for the `/v1/noop` health-check endpoint.
 /// used by the operators (infra team) to check if the SFU is up

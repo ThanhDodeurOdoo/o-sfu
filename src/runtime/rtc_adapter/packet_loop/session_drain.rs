@@ -12,12 +12,14 @@ use super::{
     event_observation::{log_rtc_event, observe_rtc_event},
     keyframe_requests::PendingKeyframeRequest,
 };
+use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::TransportSessionKey;
 
 pub(super) fn drain_ready_sessions(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    diagnostics: &Arc<DiagnosticsStore>,
     metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
@@ -28,7 +30,14 @@ pub(super) fn drain_ready_sessions(
             let Some(session_state) = state.sessions.get_mut(&session_id) else {
                 continue;
             };
-            drain_single_session(&session_id, session_state, snapshot_state, metrics, buffers)
+            drain_single_session(
+                &session_id,
+                session_state,
+                snapshot_state,
+                diagnostics,
+                metrics,
+                buffers,
+            )
         };
         state.update_session_timeout(&session_id, session_timeout);
     }
@@ -41,6 +50,7 @@ fn drain_single_session(
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    diagnostics: &Arc<DiagnosticsStore>,
     metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<Instant> {
@@ -72,7 +82,7 @@ fn drain_single_session(
                 );
             }
             Ok(Output::Event(event)) => {
-                observe_rtc_event(snapshot_state, metrics, session_key, &event);
+                observe_rtc_event(snapshot_state, diagnostics, metrics, session_key, &event);
                 log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {

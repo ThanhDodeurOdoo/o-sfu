@@ -12,6 +12,7 @@
 //! `media` owns producer/consumer bootstrap and routing-side media bookkeeping.
 //! `test_support` owns read-only state inspectors used only by tests.
 
+mod diagnostics;
 mod fanout;
 mod ids;
 mod layout;

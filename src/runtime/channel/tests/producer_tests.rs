@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::channel::Channel;
+use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
@@ -2315,6 +2316,7 @@ fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
         RtcPortRange::new(46_200, 46_299),
         1,
         MediaCodecFlags::default(),
+        Arc::new(DiagnosticsStore::default()),
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ))
