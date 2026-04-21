@@ -251,7 +251,6 @@ struct RecordingStateUpdateInput {
 enum ServerRequestInput {
     Offer(Label),
     Renegotiate(Label),
-    Ping,
 }
 
 #[derive(Debug, Clone, Arbitrary)]
@@ -615,7 +614,6 @@ impl ServerRequestInput {
             Self::Renegotiate(label) => ServerRequest::Renegotiate(SessionDescriptionPayload {
                 sdp: label.into_sdp("renegotiate-"),
             }),
-            Self::Ping => ServerRequest::Ping,
         }
     }
 }

@@ -8,7 +8,6 @@
 //! |- controller      -> facade between the socket loop and protocol subflows
 //! |- frame_codec     -> frame and envelope encoding/decoding
 //! |- flow_state      -> unified session-scoped negotiation and queued-change state
-//! |- request_state   -> in-flight request correlation and completion
 //! |- track_projection-> server track state projected into protocol payloads
 //! `- post_auth       -> steady-state authenticated signaling orchestration
 //!
@@ -16,7 +15,6 @@ mod controller;
 mod flow_state;
 pub(super) mod frame_codec;
 mod post_auth;
-mod request_state;
 mod track_projection;
 
 pub(super) use controller::{SessionProtocol, SessionProtocolOutcome};

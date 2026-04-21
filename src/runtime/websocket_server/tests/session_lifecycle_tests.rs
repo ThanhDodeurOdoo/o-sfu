@@ -2,7 +2,7 @@ use super::fixtures::*;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 
 #[tokio::test]
-async fn websocket_sends_ping_requests_and_accepts_responses() {
+async fn websocket_sends_ping_frames_and_accepts_pongs() {
     let server = spawn_test_server_with_timeouts(
         1_000,
         200,
@@ -32,20 +32,16 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
             .is_some()
     );
 
-    let server_request = timeout(
-        Duration::from_secs(1),
-        wait_for_protocol_server_request(&mut websocket),
-    )
-    .await;
+    let ping_payload = timeout(Duration::from_secs(1), read_websocket_ping(&mut websocket)).await;
     assert!(
-        server_request.is_ok(),
-        "server should send ping request promptly: {server_request:?}"
+        ping_payload.is_ok(),
+        "server should send a websocket ping promptly: {ping_payload:?}"
     );
-    let Some((request_id, ServerRequest::Ping)) = server_request.ok().flatten() else {
-        panic!("expected PING server request");
+    let Some(ping_payload) = ping_payload.ok().flatten() else {
+        panic!("expected websocket ping frame");
     };
     assert!(
-        respond_to_protocol_ping(&mut websocket, request_id)
+        send_websocket_pong(&mut websocket, ping_payload)
             .await
             .is_some()
     );
@@ -58,7 +54,7 @@ async fn websocket_sends_ping_requests_and_accepts_responses() {
 }
 
 #[tokio::test]
-async fn websocket_closes_when_ping_response_times_out() {
+async fn websocket_closes_when_pong_times_out() {
     let server = spawn_test_server_with_timeouts(
         1_000,
         30,
@@ -95,23 +91,16 @@ async fn websocket_closes_when_ping_response_times_out() {
             .is_some()
     );
 
-    let server_request = timeout(
+    sleep(Duration::from_millis(80)).await;
+
+    let close_code = timeout(
         Duration::from_secs(1),
-        wait_for_protocol_server_request(&mut websocket),
+        read_close_code_without_answering_ping(&mut websocket),
     )
     .await;
     assert!(
-        server_request.is_ok(),
-        "server should send ping request promptly: {server_request:?}"
-    );
-    let Some((_request_id, ServerRequest::Ping)) = server_request.ok().flatten() else {
-        panic!("expected PING server request");
-    };
-
-    let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
-    assert!(
         close_code.is_ok(),
-        "server should close after ping timeout: {close_code:?}"
+        "server should close after websocket pong timeout: {close_code:?}"
     );
     assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
 

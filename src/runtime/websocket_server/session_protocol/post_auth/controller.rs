@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 use o_sfu_protocol::{
     shared::SessionId,
-    signaling::{ClientEnvelope, ServerMessage, ServerRequest, WebSocketCloseCode},
+    signaling::{ClientEnvelope, RequestId, ServerMessage, WebSocketCloseCode},
 };
 use tokio::runtime::Handle;
 
@@ -20,12 +20,22 @@ use crate::runtime::{
 use tracing::warn;
 
 use super::super::{
-    controller::SessionProtocolOutcome,
-    flow_state::SessionFlowState,
-    frame_codec::{send_server_messages, send_server_request},
-    request_state::SessionRequestState,
-    track_projection::RemoteTrackProjection,
+    controller::SessionProtocolOutcome, flow_state::SessionFlowState,
+    frame_codec::send_server_messages, track_projection::RemoteTrackProjection,
 };
+
+#[derive(Debug, Default)]
+pub(super) struct ServerRequestIdState {
+    next_request_counter: u64,
+}
+
+impl ServerRequestIdState {
+    pub(super) fn next_request_id(&mut self) -> RequestId {
+        let request_id = RequestId::new(format!("server-{}", self.next_request_counter));
+        self.next_request_counter = self.next_request_counter.saturating_add(1);
+        request_id
+    }
+}
 
 /// The main orchestrator for an authenticated session.
 ///
@@ -40,7 +50,7 @@ pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) channel: Arc<Channel>,
     pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) metrics: Arc<RuntimeMetrics>,
-    pub(super) request_state: SessionRequestState,
+    pub(super) request_ids: ServerRequestIdState,
     pub(super) flow_state: SessionFlowState,
     pub(super) track_projection: RemoteTrackProjection,
 }
@@ -61,14 +71,10 @@ impl PostAuthSessionProtocol {
             channel,
             transport_adapter,
             metrics,
-            request_state: SessionRequestState::default(),
+            request_ids: ServerRequestIdState::default(),
             flow_state: SessionFlowState::default(),
             track_projection: RemoteTrackProjection::default(),
         }
-    }
-
-    pub(in crate::runtime::websocket_server) fn awaiting_ping_response(&self) -> bool {
-        self.request_state.awaiting_ping_response()
     }
 
     pub(in crate::runtime::websocket_server) fn transport_close_code(
@@ -83,16 +89,6 @@ impl PostAuthSessionProtocol {
                 TransportSessionHealth::Disconnected => Some(WebSocketCloseCode::Error),
                 TransportSessionHealth::Connected => None,
             })
-    }
-
-    pub(in crate::runtime::websocket_server) async fn send_ping(
-        &mut self,
-        writer: &mut WsWriter,
-    ) -> Result<(), WebSocketCloseCode> {
-        let Some(request_id) = self.request_state.start_ping() else {
-            return Ok(());
-        };
-        send_server_request(writer, request_id, ServerRequest::Ping).await
     }
 
     pub(in crate::runtime::websocket_server) async fn handle_frame(

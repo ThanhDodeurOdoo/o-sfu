@@ -72,17 +72,6 @@ pub(super) fn handle_server_request(
         ServerRequest::Renegotiate(payload) => {
             handle_negotiation_request(core, request_id, NegotiationKind::Renegotiate, payload)
         }
-        ServerRequest::Ping => {
-            let Some(envelope) = ClientEnvelope::Response {
-                response_to: request_id,
-                response: ClientResponse::Ping,
-            }
-            .into_envelope()
-            .ok() else {
-                return Vec::new();
-            };
-            core.enqueue_envelope(envelope, FlushMode::Immediate)
-        }
     }
 }
 

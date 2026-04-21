@@ -475,32 +475,11 @@ pub(super) async fn respond_to_protocol_negotiation_request(
         ServerRequest::Renegotiate(_) => ClientResponse::Renegotiate(SessionDescriptionPayload {
             sdp: sdp.to_owned(),
         }),
-        ServerRequest::Ping => return None,
     };
     let frame = serde_json::to_string(&vec![
         ClientEnvelope::Response {
             response_to,
             response,
-        }
-        .into_envelope()
-        .ok()?,
-    ])
-    .ok()?;
-    websocket
-        .send(tungstenite::Message::Text(frame.into()))
-        .await
-        .ok()?;
-    Some(())
-}
-
-pub(super) async fn respond_to_protocol_ping(
-    websocket: &mut TestWebSocket,
-    response_to: RequestId,
-) -> Option<()> {
-    let frame = serde_json::to_string(&vec![
-        ClientEnvelope::Response {
-            response_to,
-            response: ClientResponse::Ping,
         }
         .into_envelope()
         .ok()?,
@@ -519,20 +498,81 @@ pub(super) async fn read_message(
     websocket.next().await
 }
 
+pub(super) async fn read_websocket_ping(websocket: &mut TestWebSocket) -> Option<Vec<u8>> {
+    loop {
+        let message = read_message(websocket).await?;
+        match message.ok()? {
+            tungstenite::Message::Ping(payload) => return Some(payload.to_vec()),
+            tungstenite::Message::Pong(_) => {}
+            tungstenite::Message::Text(_)
+            | tungstenite::Message::Binary(_)
+            | tungstenite::Message::Close(_)
+            | tungstenite::Message::Frame(_) => return None,
+        }
+    }
+}
+
+pub(super) async fn send_websocket_pong(
+    websocket: &mut TestWebSocket,
+    payload: Vec<u8>,
+) -> Option<()> {
+    websocket
+        .send(tungstenite::Message::Pong(payload.into()))
+        .await
+        .ok()?;
+    Some(())
+}
+
 pub(super) async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> {
-    let message = read_message(websocket).await?;
-    let message = message.ok()?;
-    match message {
-        tungstenite::Message::Text(payload) => Some(payload.to_string()),
-        _ => None,
+    loop {
+        let message = read_message(websocket).await?;
+        match message.ok()? {
+            tungstenite::Message::Text(payload) => return Some(payload.to_string()),
+            tungstenite::Message::Ping(payload) => {
+                websocket
+                    .send(tungstenite::Message::Pong(payload))
+                    .await
+                    .ok()?;
+            }
+            tungstenite::Message::Pong(_) => {}
+            tungstenite::Message::Binary(_)
+            | tungstenite::Message::Close(_)
+            | tungstenite::Message::Frame(_) => return None,
+        }
     }
 }
 
 pub(super) async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
     loop {
         let message = read_message(websocket).await?;
-        if let tungstenite::Message::Close(frame) = message.ok()? {
-            return frame.map(|frame| frame.code);
+        match message.ok()? {
+            tungstenite::Message::Close(frame) => return frame.map(|frame| frame.code),
+            tungstenite::Message::Ping(payload) => {
+                websocket
+                    .send(tungstenite::Message::Pong(payload))
+                    .await
+                    .ok()?;
+            }
+            tungstenite::Message::Pong(_)
+            | tungstenite::Message::Text(_)
+            | tungstenite::Message::Binary(_)
+            | tungstenite::Message::Frame(_) => {}
+        }
+    }
+}
+
+pub(super) async fn read_close_code_without_answering_ping(
+    websocket: &mut TestWebSocket,
+) -> Option<CloseCode> {
+    loop {
+        let message = read_message(websocket).await?;
+        match message.ok()? {
+            tungstenite::Message::Close(frame) => return frame.map(|frame| frame.code),
+            tungstenite::Message::Ping(_)
+            | tungstenite::Message::Pong(_)
+            | tungstenite::Message::Text(_)
+            | tungstenite::Message::Binary(_)
+            | tungstenite::Message::Frame(_) => {}
         }
     }
 }

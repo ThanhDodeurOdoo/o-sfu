@@ -322,7 +322,6 @@ impl ProtocolFakePeer {
             ServerRequest::Renegotiate(payload) => {
                 ClientResponse::Renegotiate(self.rtc_peer.answer_offer(&payload.sdp)?)
             }
-            ServerRequest::Ping => ClientResponse::Ping,
         };
         self.websocket
             .send(tungstenite::Message::Text(
@@ -358,7 +357,6 @@ async fn answer_next_server_request(
         ServerRequest::Renegotiate(payload) => {
             ClientResponse::Renegotiate(rtc_peer.answer_offer(&payload.sdp)?)
         }
-        ServerRequest::Ping => ClientResponse::Ping,
     };
     websocket
         .send(tungstenite::Message::Text(

@@ -9,7 +9,6 @@ use super::{
 pub enum ClientResponse {
     Offer(SessionDescriptionPayload),
     Renegotiate(SessionDescriptionPayload),
-    Ping,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

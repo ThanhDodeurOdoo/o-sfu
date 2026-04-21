@@ -112,8 +112,7 @@ export type ClientRequestEnvelope =
 
 export type ClientResponseEnvelope =
     | ResponseEnvelope<"offer", SessionDescriptionPayload>
-    | ResponseEnvelope<"renegotiate", SessionDescriptionPayload>
-    | ResponseEnvelope<"ping">;
+    | ResponseEnvelope<"renegotiate", SessionDescriptionPayload>;
 
 export type ClientOutboundEnvelope =
     | ClientMessageEnvelope
@@ -131,8 +130,7 @@ export type ServerMessageEnvelope =
 
 export type ServerRequestEnvelope =
     | RequestEnvelope<"offer", SessionDescriptionPayload>
-    | RequestEnvelope<"renegotiate", SessionDescriptionPayload>
-    | RequestEnvelope<"ping">;
+    | RequestEnvelope<"renegotiate", SessionDescriptionPayload>;
 
 export type ServerResponseEnvelope =
     | ResponseEnvelope<"startrecording", RecordingActionResult>

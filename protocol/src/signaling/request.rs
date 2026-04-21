@@ -74,7 +74,6 @@ impl ClientRequest {
 pub enum ServerRequest {
     Offer(SessionDescriptionPayload),
     Renegotiate(SessionDescriptionPayload),
-    Ping,
 }
 
 impl ServerRequest {
@@ -82,7 +81,6 @@ impl ServerRequest {
         match self {
             Self::Offer(_) => "offer",
             Self::Renegotiate(_) => "renegotiate",
-            Self::Ping => "ping",
         }
     }
 
@@ -95,12 +93,9 @@ impl ServerRequest {
         Ok(Envelope::request(
             self.tag(),
             request_id,
-            match self {
-                Self::Offer(payload) | Self::Renegotiate(payload) => {
-                    Some(serde_json::to_value(payload)?)
-                }
-                Self::Ping => None,
-            },
+            Some(match self {
+                Self::Offer(payload) | Self::Renegotiate(payload) => serde_json::to_value(payload)?,
+            }),
         ))
     }
 }

@@ -172,30 +172,12 @@ impl ProtocolWebSocketClient {
             ServerRequest::Renegotiate(payload) => {
                 ClientResponse::Renegotiate(self.rtc_peer.answer_offer(&payload.sdp)?)
             }
-            ServerRequest::Ping => {
-                self.respond_to_ping(response_to).await?;
-                return Some(());
-            }
         };
         self.websocket
             .send(tungstenite::Message::Text(
                 encode_client_batch(vec![ClientEnvelope::Response {
                     response_to,
                     response,
-                }])?
-                .into(),
-            ))
-            .await
-            .ok()?;
-        Some(())
-    }
-
-    pub async fn respond_to_ping(&mut self, response_to: RequestId) -> Option<()> {
-        self.websocket
-            .send(tungstenite::Message::Text(
-                encode_client_batch(vec![ClientEnvelope::Response {
-                    response_to,
-                    response: ClientResponse::Ping,
                 }])?
                 .into(),
             ))

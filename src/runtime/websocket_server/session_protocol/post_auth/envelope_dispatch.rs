@@ -219,12 +219,6 @@ impl PostAuthSessionProtocol {
             }
             ClientEnvelope::Response {
                 response_to,
-                response: ClientResponse::Ping,
-            } if self.request_state.resolve_ping_response(&response_to) => {
-                SessionProtocolOutcome::Continue
-            }
-            ClientEnvelope::Response {
-                response_to,
                 response: ClientResponse::Offer(answer) | ClientResponse::Renegotiate(answer),
             } => {
                 self.handle_negotiation_response(writer, response_to, answer)
@@ -241,7 +235,7 @@ impl PostAuthSessionProtocol {
                 request_id,
                 request: ClientRequest::StopRecording,
             } => self.handle_stop_recording_request(writer, request_id).await,
-            ClientEnvelope::Response { .. } | ClientEnvelope::Message(ClientMessage::Auth(_)) => {
+            ClientEnvelope::Message(ClientMessage::Auth(_)) => {
                 SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
             }
         }

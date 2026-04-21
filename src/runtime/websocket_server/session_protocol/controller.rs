@@ -53,21 +53,10 @@ impl SessionProtocol {
         self.0.send_initial_offer(writer).await.map_err(|_error| ())
     }
 
-    pub(in crate::runtime::websocket_server) fn awaiting_ping_response(&self) -> bool {
-        self.0.awaiting_ping_response()
-    }
-
     pub(in crate::runtime::websocket_server) fn transport_close_code(
         &self,
     ) -> Option<WebSocketCloseCode> {
         self.0.transport_close_code()
-    }
-
-    pub(in crate::runtime::websocket_server) async fn send_ping(
-        &mut self,
-        writer: &mut WsWriter,
-    ) -> Result<(), WebSocketCloseCode> {
-        self.0.send_ping(writer).await
     }
 
     pub(in crate::runtime::websocket_server) async fn handle_frame(

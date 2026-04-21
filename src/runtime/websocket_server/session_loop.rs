@@ -1,5 +1,5 @@
 use axum::{Error as AxumError, extract::ws::Message};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until};
@@ -16,6 +16,21 @@ use super::{
     WsWriter,
     session_protocol::{SessionProtocol, SessionProtocolOutcome},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LivenessState {
+    Idle,
+    WaitingForPong { deadline: Instant },
+}
+
+impl LivenessState {
+    const fn pong_deadline(self) -> Option<Instant> {
+        match self {
+            Self::Idle => None,
+            Self::WaitingForPong { deadline } => Some(deadline),
+        }
+    }
+}
 
 /// Drives a live authenticated WebSocket session until it terminates.
 ///
@@ -36,12 +51,13 @@ pub(super) async fn run(
     let ping_timeout = Duration::from_millis(session_timeout_ms);
     let mut next_ping_at = Instant::now() + ping_interval;
     let mut next_transport_state_check_at = next_ping_at;
-    let mut ping_response_deadline: Option<Instant> = None;
+    let mut liveness_state = LivenessState::Idle;
     loop {
         let transport_state_tick = sleep_until(next_transport_state_check_at);
         tokio::pin!(transport_state_tick);
         let ping_tick = sleep_until(next_ping_at);
         tokio::pin!(ping_tick);
+        let pong_deadline = liveness_state.pong_deadline();
         tokio::select! {
             () = &mut transport_state_tick => {
                 next_transport_state_check_at = Instant::now() + ping_interval;
@@ -49,36 +65,32 @@ pub(super) async fn run(
                     return reason;
                 }
             }
-            () = &mut ping_tick, if ping_response_deadline.is_none() => {
+            () = &mut ping_tick, if matches!(liveness_state, LivenessState::Idle) => {
                 if let Some(reason) = handle_transport_state_tick(writer, session_protocol).await {
                     return reason;
                 }
                 if let Some(reason) = handle_ping_tick(
                     writer,
-                    session_protocol,
                     ping_interval,
                     ping_timeout,
                     &mut next_ping_at,
-                    &mut ping_response_deadline,
+                    &mut liveness_state,
                 ).await {
                     return reason;
                 }
             }
             () = async {
-                if let Some(deadline) = ping_response_deadline {
+                if let Some(deadline) = pong_deadline {
                     sleep_until(deadline).await;
                 }
-            }, if ping_response_deadline.is_some() => {
-                debug!("timed out waiting for websocket bus ping response");
+            }, if pong_deadline.is_some() => {
+                debug!("timed out waiting for websocket pong");
                 close_writer(writer, WebSocketCloseCode::Error).await;
                 return WsSessionLoopExitReason::PingTimeout;
             }
             message = reader.next() => {
-                if let Some(reason) = handle_incoming_socket_event(writer, session_protocol, message).await {
+                if let Some(reason) = handle_incoming_socket_event(writer, session_protocol, message, &mut liveness_state).await {
                     return reason;
-                }
-                if !session_protocol.awaiting_ping_response() {
-                    ping_response_deadline = None;
                 }
             }
             outbound = outbound_rx.recv() => {
@@ -92,19 +104,20 @@ pub(super) async fn run(
 
 async fn handle_ping_tick(
     writer: &mut WsWriter,
-    session_protocol: &mut SessionProtocol,
     ping_interval: Duration,
     ping_timeout: Duration,
     next_ping_at: &mut Instant,
-    ping_response_deadline: &mut Option<Instant>,
+    liveness_state: &mut LivenessState,
 ) -> Option<WsSessionLoopExitReason> {
-    if session_protocol.send_ping(writer).await.is_err() {
-        debug!("failed to send websocket bus ping request");
+    if writer.send(Message::Ping(Vec::new().into())).await.is_err() {
+        debug!("failed to send websocket ping frame");
         return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
     }
     let now = Instant::now();
     *next_ping_at = now + ping_interval;
-    *ping_response_deadline = Some(now + ping_timeout);
+    *liveness_state = LivenessState::WaitingForPong {
+        deadline: now + ping_timeout,
+    };
     None
 }
 
@@ -125,9 +138,12 @@ async fn handle_incoming_socket_event(
     writer: &mut WsWriter,
     session_protocol: &mut SessionProtocol,
     message: Option<Result<Message, AxumError>>,
+    liveness_state: &mut LivenessState,
 ) -> Option<WsSessionLoopExitReason> {
     match message {
-        Some(Ok(message)) => handle_incoming_frame(writer, session_protocol, message).await,
+        Some(Ok(message)) => {
+            handle_incoming_frame(writer, session_protocol, message, liveness_state).await
+        }
         Some(Err(_error)) => {
             debug!("websocket reader returned an error");
             Some(WsSessionLoopExitReason::ReaderError)
@@ -143,7 +159,22 @@ async fn handle_incoming_frame(
     writer: &mut WsWriter,
     session_protocol: &mut SessionProtocol,
     message: Message,
+    liveness_state: &mut LivenessState,
 ) -> Option<WsSessionLoopExitReason> {
+    match message {
+        Message::Ping(payload) => {
+            if writer.send(Message::Pong(payload)).await.is_err() {
+                debug!("failed to send websocket pong frame");
+                return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
+            }
+            return None;
+        }
+        Message::Pong(_) => {
+            *liveness_state = LivenessState::Idle;
+            return None;
+        }
+        Message::Text(_) | Message::Binary(_) | Message::Close(_) => {}
+    }
     match session_protocol.handle_frame(writer, message).await {
         SessionProtocolOutcome::Continue => None,
         SessionProtocolOutcome::Break => Some(WsSessionLoopExitReason::BusBreak),

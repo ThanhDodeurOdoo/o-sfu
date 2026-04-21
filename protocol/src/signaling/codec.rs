@@ -67,7 +67,6 @@ impl ClientEnvelope {
                     response_to,
                     Some(serde_json::to_value(payload)?),
                 )),
-                ClientResponse::Ping => Ok(Envelope::response("ping", response_to, None)),
             },
         }
     }
@@ -188,10 +187,6 @@ fn decode_client_response(
     let response = match tag {
         "offer" => ClientResponse::Offer(parse_payload(tag, payload)?),
         "renegotiate" => ClientResponse::Renegotiate(parse_payload(tag, payload)?),
-        "ping" => {
-            ensure_empty_payload(tag, payload.as_ref())?;
-            ClientResponse::Ping
-        }
         _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     };
     Ok(ClientEnvelope::Response {
@@ -238,10 +233,6 @@ fn decode_server_request(
     let request = match tag {
         "offer" => ServerRequest::Offer(parse_payload(tag, payload)?),
         "renegotiate" => ServerRequest::Renegotiate(parse_payload(tag, payload)?),
-        "ping" => {
-            ensure_empty_payload(tag, payload.as_ref())?;
-            ServerRequest::Ping
-        }
         _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     };
     Ok(ServerEnvelope::Request {

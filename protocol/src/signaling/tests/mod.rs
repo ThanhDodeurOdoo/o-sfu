@@ -427,15 +427,6 @@ fn protocol_server_requests_and_responses_round_trip_to_wire_envelopes() -> serd
         })
     );
 
-    let ping = ServerRequest::Ping.into_envelope(RequestId::new("4"))?;
-    assert_eq!(
-        serde_json::to_value(&ping)?,
-        json!({
-            "t": "ping",
-            "q": "4",
-        })
-    );
-
     let start_recording = ServerResponse::StartRecording(RecordingActionResult { ok: true })
         .into_envelope(RequestId::new("3"))?;
     assert_eq!(

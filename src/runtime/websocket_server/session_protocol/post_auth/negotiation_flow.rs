@@ -77,7 +77,7 @@ impl PostAuthSessionProtocol {
         request: ServerRequest,
         action: PendingFlowAction,
     ) -> Result<(), WebSocketCloseCode> {
-        let request_id = self.request_state.next_request_id();
+        let request_id = self.request_ids.next_request_id();
         if let Err(code) = send_server_request(writer, request_id.clone(), request.clone()).await {
             warn!(
                 event = telemetry_event::NEGOTIATION_FAILED,
@@ -171,9 +171,6 @@ impl PostAuthSessionProtocol {
             "applied negotiation answer"
         );
         self.commit_staged_publishes().await;
-        if matches!(resolved.pending.request, ServerRequest::Ping) {
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
-        }
         if let Err(outcome) = self
             .send_follow_up_renegotiation_if_needed(writer, &resolved)
             .await

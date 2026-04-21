@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 use reqwest::StatusCode;
 use tokio::net::TcpStream;
@@ -159,19 +159,28 @@ pub async fn read_message(websocket: &mut TestWebSocket) -> Option<WebSocketResu
 }
 
 pub async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> {
-    let message = read_message(websocket).await?;
-    let message = message.ok()?;
-    match message {
-        Message::Text(payload) => Some(payload.to_string()),
-        _ => None,
+    loop {
+        let message = read_message(websocket).await?;
+        match message.ok()? {
+            Message::Text(payload) => return Some(payload.to_string()),
+            Message::Ping(payload) => {
+                websocket.send(Message::Pong(payload)).await.ok()?;
+            }
+            Message::Pong(_) => {}
+            Message::Binary(_) | Message::Close(_) | Message::Frame(_) => return None,
+        }
     }
 }
 
 pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
     loop {
         let message = read_message(websocket).await?;
-        if let Message::Close(frame) = message.ok()? {
-            return frame.map(|frame| frame.code);
+        match message.ok()? {
+            Message::Close(frame) => return frame.map(|frame| frame.code),
+            Message::Ping(payload) => {
+                websocket.send(Message::Pong(payload)).await.ok()?;
+            }
+            Message::Pong(_) | Message::Text(_) | Message::Binary(_) | Message::Frame(_) => {}
         }
     }
 }
