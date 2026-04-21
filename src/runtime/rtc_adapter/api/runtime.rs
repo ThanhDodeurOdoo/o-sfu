@@ -21,10 +21,12 @@
 //! the worker while keeping the worker itself synchronous and focused on the
 //! media hot-path.
 use std::{
+    collections::BTreeSet,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
 };
@@ -213,6 +215,15 @@ impl RtcTransportAdapter {
     pub(crate) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
         self.observability().next_active_speaker_deadline().await
     }
+
+    pub(crate) async fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        self.observability()
+            .expired_active_speaker_channel_runtime_ids(now)
+            .await
+    }
 }
 
 impl RtcTransportObservabilityFacade<'_> {
@@ -261,5 +272,20 @@ impl RtcTransportObservabilityFacade<'_> {
             .await
             .ok()
             .flatten()
+    }
+
+    pub(crate) async fn expired_active_speaker_channel_runtime_ids(
+        self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+            return BTreeSet::new();
+        };
+        self.adapter
+            .send_worker_command(&worker_handle, |response| {
+                RtcWorkerCommand::ExpiredActiveSpeakerChannelRuntimeIds { now, response }
+            })
+            .await
+            .unwrap_or_default()
     }
 }

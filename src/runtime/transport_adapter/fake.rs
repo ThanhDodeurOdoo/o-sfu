@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 
 use super::source_policy::SourcePolicySignal;
+#[cfg(test)]
+use crate::runtime::ChannelRuntimeId;
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 
@@ -61,6 +63,7 @@ pub(crate) enum FakeWebRtcEvent {
 pub(crate) struct FakeWebRtcAdapter {
     events: Arc<Mutex<Vec<FakeWebRtcEvent>>>,
     next_media_id: Arc<AtomicU64>,
+    media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     delays: Arc<Mutex<FakeWebRtcAdapterDelays>>,
@@ -157,6 +160,26 @@ impl FakeWebRtcAdapter {
 
     #[cfg(test)]
     pub(crate) fn set_active_speaker_source_snapshot(&self, sources: Vec<ActiveSpeakerSource>) {
+        let dirty_channel_runtime_ids = match self.media_owners.lock() {
+            Ok(media_owners) => sources
+                .iter()
+                .filter_map(|source| {
+                    media_owners
+                        .get(&source.transport_media_id())
+                        .map(TransportSessionKey::channel_runtime_id)
+                })
+                .collect::<Vec<_>>(),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .iter()
+                .filter_map(|(transport_media_id, session_key)| {
+                    sources
+                        .iter()
+                        .any(|source| source.transport_media_id() == *transport_media_id)
+                        .then_some(session_key.channel_runtime_id())
+                })
+                .collect::<Vec<_>>(),
+        };
         match self.active_speaker_sources.lock() {
             Ok(mut active_speaker_sources) => {
                 *active_speaker_sources = sources;
@@ -165,7 +188,14 @@ impl FakeWebRtcAdapter {
                 *poisoned.into_inner() = sources;
             }
         }
-        self.source_policy_signal.mark_dirty();
+        for channel_runtime_id in dirty_channel_runtime_ids {
+            self.source_policy_signal.mark_dirty(channel_runtime_id);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_source_policy_dirty(&self, channel_runtime_id: ChannelRuntimeId) {
+        self.source_policy_signal.mark_dirty(channel_runtime_id);
     }
 }
 
@@ -241,6 +271,16 @@ impl FakeWebRtcAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
+        match self.media_owners.lock() {
+            Ok(mut media_owners) => {
+                media_owners.retain(|_, owner| owner != session_key);
+            }
+            Err(poisoned) => {
+                poisoned
+                    .into_inner()
+                    .retain(|_, owner| owner != session_key);
+            }
+        }
         self.record_event(FakeWebRtcEvent::SessionClosed {
             session_id: session_key.session_id().clone(),
         });
@@ -259,6 +299,14 @@ impl FakeWebRtcAdapter {
         match self.negotiated_producer_parameters.lock() {
             Ok(mut parameters) => {
                 parameters.remove(&transport_media_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&transport_media_id);
+            }
+        }
+        match self.media_owners.lock() {
+            Ok(mut media_owners) => {
+                media_owners.remove(&transport_media_id);
             }
             Err(poisoned) => {
                 poisoned.into_inner().remove(&transport_media_id);
@@ -319,6 +367,16 @@ impl FakeWebRtcAdapter {
             }
             Err(poisoned) => {
                 poisoned.into_inner().insert(transport_media_id, negotiated);
+            }
+        }
+        match self.media_owners.lock() {
+            Ok(mut media_owners) => {
+                media_owners.insert(transport_media_id, session_key.clone());
+            }
+            Err(poisoned) => {
+                poisoned
+                    .into_inner()
+                    .insert(transport_media_id, session_key.clone());
             }
         }
         Ok(transport_media_id)

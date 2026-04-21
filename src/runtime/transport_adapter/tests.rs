@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::{Duration, Instant},
@@ -335,16 +336,14 @@ async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updat
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
     let subscription = adapter.source_policy_subscription();
+    let dirty_channel_runtime_id = ChannelRuntimeId::from_raw(27);
 
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        TransportMediaId::new(88),
-        Instant::now(),
-    )]);
+    fake.mark_source_policy_dirty(dirty_channel_runtime_id);
 
-    assert!(
-        timeout(Duration::from_secs(1), subscription.wait_for_update())
-            .await
-            .is_ok()
+    let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
+    assert_eq!(
+        updates.ok(),
+        Some(BTreeSet::from([dirty_channel_runtime_id]))
     );
 }
 

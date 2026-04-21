@@ -9,32 +9,39 @@
 //!
 //! This module is that bridge. It deliberatley does not store the policy itself,
 //! any room state, or any queued work items. Instead it exposes one coalescing
-//! dirty bit plus a wake primitive:
+//! dirty bit, a coalesced room-id set, and a wake primitive:
 //!
 //! - `SourcePolicyDirtyState` tracks whether at least one transport-side change
 //!   happened since the last policy sync
-//! - `SourcePolicySignal::mark_dirty()` transitions the state from clean to dirty
-//!   and only wakes the listener on that edge.
+//! - `SourcePolicySignal::mark_dirty()` records the affected room runtime id,
+//!   transitions the state from clean to dirty, and only wakes the listener on
+//!   that edge.
 //! - `SourcePolicyUpdateSubscription::wait_for_update()` consumes the dirty state
-//!   before sleeping again, so a previously observed update cannot be lost if it
-//!   races with the wait path
+//!   plus the coalesced room-id set before sleeping again, so a previously
+//!   observed update cannot be lost if it races with the wait path
 //!
 //! The important property is coalescingL: Multiple RTP packets can arrive
 //! while the channel sync task is still busy, but those packets do not need
 //! an equal number of wakeups or replayed jobs. The channel task only needs to
-//! know that "something changed" and then re-read the current transport-owned
-//! observation state from the adapter. This keeps the signaling between packet-loop
-//! activity and policy recomputation bounded and avoids turning hot-path packet
-//! observation into an unbounded event queue.
+//! know which room runtime ids changed and then re-read the current
+//! transport-owned observation state from the adapter. This keeps the signaling
+//! between packet-loop activity and policy recomputation bounded and avoids
+//! turning hot-path packet observation into an unbounded event queue.
 //!
 //! Tokio's `Notify` handles the async wakeup in production, while the dirty-bit
 //! logic remains separately (so it can be tested in Loom)
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::BTreeSet,
+    mem,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use tokio::sync::Notify;
+
+use crate::runtime::ChannelRuntimeId;
 
 #[derive(Debug, Default)]
 pub(crate) struct SourcePolicyDirtyState {
@@ -55,26 +62,58 @@ impl SourcePolicyDirtyState {
     }
 }
 
+#[derive(Debug, Default)]
+struct DirtyChannelRegistry {
+    channel_runtime_ids: Mutex<BTreeSet<ChannelRuntimeId>>,
+}
+
+impl DirtyChannelRegistry {
+    fn insert(&self, channel_runtime_id: ChannelRuntimeId) {
+        let mut dirty_channels = self
+            .channel_runtime_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        dirty_channels.insert(channel_runtime_id);
+    }
+
+    fn drain(&self) -> BTreeSet<ChannelRuntimeId> {
+        let mut dirty_channels = self
+            .channel_runtime_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        mem::take(&mut *dirty_channels)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SourcePolicyUpdateSubscription {
     dirty: Arc<SourcePolicyDirtyState>,
+    dirty_channels: Arc<DirtyChannelRegistry>,
     notify: Arc<Notify>,
 }
 
 impl SourcePolicyUpdateSubscription {
-    pub(crate) async fn wait_for_update(&self) {
+    pub(crate) async fn wait_for_update(&self) -> BTreeSet<ChannelRuntimeId> {
         loop {
             if self.dirty.take_dirty() {
-                return;
+                return self.dirty_channels.drain();
             }
             self.notify.notified().await;
         }
+    }
+
+    pub(crate) fn take_pending_updates(&self) -> BTreeSet<ChannelRuntimeId> {
+        if self.dirty.take_dirty() {
+            return self.dirty_channels.drain();
+        }
+        BTreeSet::new()
     }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SourcePolicySignal {
     dirty: Arc<SourcePolicyDirtyState>,
+    dirty_channels: Arc<DirtyChannelRegistry>,
     notify: Arc<Notify>,
 }
 
@@ -83,11 +122,13 @@ impl SourcePolicySignal {
     pub(crate) fn subscribe(&self) -> SourcePolicyUpdateSubscription {
         SourcePolicyUpdateSubscription {
             dirty: Arc::clone(&self.dirty),
+            dirty_channels: Arc::clone(&self.dirty_channels),
             notify: Arc::clone(&self.notify),
         }
     }
 
-    pub(crate) fn mark_dirty(&self) {
+    pub(crate) fn mark_dirty(&self, channel_runtime_id: ChannelRuntimeId) {
+        self.dirty_channels.insert(channel_runtime_id);
         if self.dirty.mark_dirty() {
             self.notify.notify_one();
         }
@@ -96,23 +137,25 @@ impl SourcePolicySignal {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::Duration;
 
     use tokio::{task::yield_now, time::timeout};
 
     use super::SourcePolicySignal;
+    use crate::runtime::ChannelRuntimeId;
 
     #[tokio::test]
     async fn wait_for_update_observes_dirty_state_marked_before_wait() {
         let signal = SourcePolicySignal::default();
         let subscription = signal.subscribe();
-        signal.mark_dirty();
+        signal.mark_dirty(ChannelRuntimeId::from_raw(7));
 
-        assert!(
-            timeout(Duration::from_secs(1), subscription.wait_for_update())
-                .await
-                .is_ok()
+        let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
+        assert_eq!(
+            updates.ok(),
+            Some(BTreeSet::from([ChannelRuntimeId::from_raw(7)]))
         );
     }
 
@@ -124,17 +167,35 @@ mod tests {
         let waiter = tokio::spawn(async move {
             timeout(Duration::from_secs(1), subscription.wait_for_update())
                 .await
-                .is_ok()
+                .ok()
         });
 
         yield_now().await;
-        signal.mark_dirty();
+        signal.mark_dirty(ChannelRuntimeId::from_raw(9));
 
         let waiter_result = waiter.await;
         assert!(waiter_result.is_ok());
         let Ok(woke) = waiter_result else {
             return;
         };
-        assert!(woke);
+        assert_eq!(woke, Some(BTreeSet::from([ChannelRuntimeId::from_raw(9)])));
+    }
+
+    #[tokio::test]
+    async fn wait_for_update_coalesces_multiple_dirty_marks_per_channel() {
+        let signal = SourcePolicySignal::default();
+        let subscription = signal.subscribe();
+        signal.mark_dirty(ChannelRuntimeId::from_raw(4));
+        signal.mark_dirty(ChannelRuntimeId::from_raw(4));
+        signal.mark_dirty(ChannelRuntimeId::from_raw(6));
+
+        let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
+        assert_eq!(
+            updates.ok(),
+            Some(BTreeSet::from([
+                ChannelRuntimeId::from_raw(4),
+                ChannelRuntimeId::from_raw(6),
+            ]))
+        );
     }
 }

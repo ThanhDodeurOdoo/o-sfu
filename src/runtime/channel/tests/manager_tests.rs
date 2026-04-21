@@ -3,6 +3,7 @@ use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
 use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 async fn publish_audio_and_camera(
@@ -459,7 +460,10 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     )]);
 
     manager
-        .sync_source_packet_selection_policies(&transport_adapter)
+        .sync_source_packet_selection_policies_for_runtime_ids(
+            &BTreeSet::from([channel.runtime_id()]),
+            &transport_adapter,
+        )
         .await;
 
     let events = fake.snapshot_events();

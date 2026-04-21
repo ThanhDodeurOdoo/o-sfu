@@ -6,12 +6,14 @@
 //! through the immutable runtime context that those handlers need.
 
 use std::{
+    collections::BTreeSet,
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportAdapterError};
 use tokio::sync::oneshot;
@@ -96,6 +98,7 @@ fn handle_core_worker_command(
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
         | RtcWorkerCommand::NextActiveSpeakerDeadline { .. }
+        | RtcWorkerCommand::ExpiredActiveSpeakerChannelRuntimeIds { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
             handle_negotiation_command(state, context, command);
@@ -175,6 +178,9 @@ fn handle_negotiation_command(
         RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
             respond_next_active_speaker_deadline(state, response);
         }
+        RtcWorkerCommand::ExpiredActiveSpeakerChannelRuntimeIds { now, response } => {
+            respond_expired_active_speaker_channel_runtime_ids(state, now, response);
+        }
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,
@@ -210,6 +216,15 @@ fn respond_next_active_speaker_deadline(
         .route_control
         .next_active_speaker_deadline(Instant::now());
     let _ = response.send(Ok(deadline));
+}
+
+fn respond_expired_active_speaker_channel_runtime_ids(
+    state: &RtcBootstrapState,
+    now: Instant,
+    response: oneshot::Sender<Result<BTreeSet<ChannelRuntimeId>, TransportAdapterError>>,
+) {
+    let channel_runtime_ids = state.expired_active_speaker_channel_runtime_ids(now);
+    let _ = response.send(Ok(channel_runtime_ids));
 }
 
 fn handle_media_command(

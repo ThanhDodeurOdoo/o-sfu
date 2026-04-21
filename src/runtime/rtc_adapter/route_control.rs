@@ -221,6 +221,23 @@ impl RouteControlState {
             .min()
     }
 
+    pub(super) fn expired_active_speaker_source_ids(&self, now: Instant) -> Vec<TransportMediaId> {
+        self.sources
+            .iter()
+            .filter_map(|(source_transport_media_id, source_control)| {
+                source_control
+                    .source_audio_policy
+                    .as_ref()
+                    .and_then(|source_audio_policy| {
+                        source_audio_policy
+                            .active_until
+                            .filter(|deadline| *deadline <= now)
+                    })
+                    .map(|_| *source_transport_media_id)
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(super) fn set_packet_gate(
         &mut self,

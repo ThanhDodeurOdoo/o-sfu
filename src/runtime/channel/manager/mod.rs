@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -9,12 +10,12 @@ use super::{
     directory::{ChannelDirectory, ChannelDirectoryEntry},
     factory::{ChannelCreationIntent, ChannelFactory},
 };
-use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::{DiagnosticsEventData, DiagnosticsStore};
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
+use crate::runtime::{ChannelRuntimeId, ConnectionId};
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
 #[cfg(test)]
@@ -192,21 +193,27 @@ impl ChannelManager {
         })
     }
 
-    pub(crate) async fn sync_source_packet_selection_policies(
+    pub(crate) async fn sync_source_packet_selection_policies_for_runtime_ids(
         &self,
+        channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let channels = {
-            let directory = self.directory.read().await;
-            directory
-                .entries()
-                .into_iter()
-                .map(|entry| entry.channel())
-                .collect::<Vec<_>>()
-        };
+        if channel_runtime_ids.is_empty() {
+            return;
+        }
+        let channels = self
+            .directory_entries_for_runtime_ids(channel_runtime_ids)
+            .await;
+        if channels.is_empty() {
+            return;
+        }
+        let active_speaker_sources = transport_adapter.active_speaker_source_snapshot().await;
         for channel in channels {
             channel
-                .sync_source_packet_selection_policy(Some(transport_adapter))
+                .sync_source_packet_selection_policy_from_active_speakers(
+                    &active_speaker_sources,
+                    transport_adapter,
+                )
                 .await;
         }
     }
@@ -365,6 +372,18 @@ impl ChannelManager {
     async fn directory_entries(&self) -> Vec<ChannelDirectoryEntry> {
         let directory = self.directory.read().await;
         directory.entries()
+    }
+
+    async fn directory_entries_for_runtime_ids(
+        &self,
+        channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
+    ) -> Vec<Arc<Channel>> {
+        let directory = self.directory.read().await;
+        channel_runtime_ids
+            .iter()
+            .filter_map(|channel_runtime_id| directory.entry_by_runtime_id(*channel_runtime_id))
+            .map(|entry| entry.channel())
+            .collect()
     }
 
     async fn entry_stats_snapshot(

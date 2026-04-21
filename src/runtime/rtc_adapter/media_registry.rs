@@ -4,11 +4,13 @@
 //! `(session_key, mid)` reverse lookup within `RtcBootstrapState`, plus the
 //! worker-local remote-source placeholders used by cross-worker relay routes.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use str0m::media::Mid;
 use str0m::rtp::Ssrc;
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
@@ -264,6 +266,19 @@ impl RtcBootstrapState {
         self.route_control.active_speaker_sources(now)
     }
 
+    pub(super) fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        self.route_control
+            .expired_active_speaker_source_ids(now)
+            .into_iter()
+            .filter_map(|source_transport_media_id| {
+                self.source_channel_runtime_id(source_transport_media_id)
+            })
+            .collect()
+    }
+
     pub(super) fn source_transport_media_id_for_mid(
         &self,
         source_session_key: &TransportSessionKey,
@@ -301,6 +316,18 @@ impl RtcBootstrapState {
                 consumer_mid,
             ))
             .copied()
+    }
+
+    fn source_channel_runtime_id(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<ChannelRuntimeId> {
+        self.media_handle(source_transport_media_id)
+            .map(|handle| handle.session_key().channel_runtime_id())
+            .or_else(|| {
+                self.remote_source_registration(source_transport_media_id)
+                    .map(|registration| registration.source_session_key().channel_runtime_id())
+            })
     }
 
     pub(super) fn remove_session_media_handles(
@@ -391,6 +418,8 @@ impl RtcBootstrapState {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
@@ -526,6 +555,37 @@ mod tests {
         assert_eq!(
             state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(second_ssrc)),
             Some(transport_media_id)
+        );
+    }
+
+    #[test]
+    fn expired_active_speaker_channels_are_resolved_from_source_owners() {
+        let mut state = RtcBootstrapState::default();
+        let first_session = test_transport_session_key(31, 0, 32, SessionId::Integer(33));
+        let second_session = test_transport_session_key(34, 0, 35, SessionId::Integer(36));
+        let first_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: first_session.clone(),
+            mid: Mid::from("cam-up-a"),
+        });
+        let second_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: second_session,
+            mid: Mid::from("cam-up-b"),
+        });
+        let start = Instant::now();
+
+        state
+            .route_control
+            .observe_audio_activity(first_media_id, Some(true), None, start);
+        state.route_control.observe_audio_activity(
+            second_media_id,
+            Some(true),
+            None,
+            start + Duration::from_millis(100),
+        );
+
+        assert_eq!(
+            state.expired_active_speaker_channel_runtime_ids(start + Duration::from_millis(251)),
+            BTreeSet::from([first_session.channel_runtime_id()])
         );
     }
 }

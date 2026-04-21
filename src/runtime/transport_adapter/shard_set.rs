@@ -1,7 +1,13 @@
 #[cfg(test)]
 use std::iter;
-use std::{cmp::Reverse, collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Instant,
+};
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::rtc_adapter::{RelayCleanup, RtcTransportAdapter};
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use crate::runtime::transport_adapter::config::RtcTransportAdapterShardSetConfig;
@@ -145,6 +151,20 @@ impl RtcTransportAdapterShardSet {
             };
         }
         next_deadline
+    }
+
+    pub(super) async fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        let mut channel_runtime_ids = self
+            .primary_shard
+            .expired_active_speaker_channel_runtime_ids(now)
+            .await;
+        for shard in &self.extra_shards {
+            channel_runtime_ids.extend(shard.expired_active_speaker_channel_runtime_ids(now).await);
+        }
+        channel_runtime_ids
     }
 
     pub(super) fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {

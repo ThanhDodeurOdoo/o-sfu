@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -9,6 +10,7 @@ use super::types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
@@ -93,6 +95,11 @@ trait TransportBackend {
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource>;
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant>;
+
+    async fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId>;
 
     fn session_transport_health(
         &self,
@@ -347,6 +354,17 @@ impl RuntimeTransportAdapter {
     pub(crate) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
         dispatch_transport_backend!(self, |backend| {
             backend.next_active_speaker_deadline().await
+        })
+    }
+
+    pub(crate) async fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        dispatch_transport_backend!(self, |backend| {
+            backend
+                .expired_active_speaker_channel_runtime_ids(now)
+                .await
         })
     }
 
@@ -623,6 +641,13 @@ impl TransportBackend for RtcTransportAdapterShardSet {
         Self::next_active_speaker_deadline(self).await
     }
 
+    async fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        Self::expired_active_speaker_channel_runtime_ids(self, now).await
+    }
+
     fn session_transport_health(
         &self,
         session_key: &TransportSessionKey,
@@ -791,6 +816,13 @@ impl TransportBackend for FakeWebRtcAdapter {
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant> {
         None
+    }
+
+    async fn expired_active_speaker_channel_runtime_ids(
+        &self,
+        _now: Instant,
+    ) -> BTreeSet<ChannelRuntimeId> {
+        BTreeSet::new()
     }
 
     fn session_transport_health(

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use crate::runtime::ChannelRuntimeId;
 use crate::time::rfc3339_now;
 
 use super::Channel;
@@ -51,6 +52,7 @@ impl ChannelDirectoryEntry {
 #[derive(Debug, Default)]
 pub(crate) struct ChannelDirectory {
     channels_by_uuid: BTreeMap<String, ChannelDirectoryEntry>,
+    uuids_by_runtime_id: BTreeMap<ChannelRuntimeId, String>,
     uuids_by_issuer: BTreeMap<String, String>,
 }
 
@@ -74,6 +76,15 @@ impl ChannelDirectory {
     }
 
     #[must_use]
+    pub(crate) fn entry_by_runtime_id(
+        &self,
+        channel_runtime_id: ChannelRuntimeId,
+    ) -> Option<ChannelDirectoryEntry> {
+        let uuid = self.uuids_by_runtime_id.get(&channel_runtime_id)?;
+        self.entry(uuid)
+    }
+
+    #[must_use]
     pub(crate) fn entries(&self) -> Vec<ChannelDirectoryEntry> {
         self.channels_by_uuid.values().cloned().collect()
     }
@@ -82,6 +93,8 @@ impl ChannelDirectory {
         let channel_uuid = channel.uuid().to_owned();
         self.uuids_by_issuer
             .insert(channel.issuer().to_owned(), channel_uuid.clone());
+        self.uuids_by_runtime_id
+            .insert(channel.runtime_id(), channel_uuid.clone());
         self.channels_by_uuid.insert(
             channel_uuid,
             ChannelDirectoryEntry::new(channel, remote_address),
@@ -104,6 +117,7 @@ impl ChannelDirectory {
         }
         self.channels_by_uuid.remove(uuid);
         self.uuids_by_issuer.remove(channel.issuer());
+        self.uuids_by_runtime_id.remove(&channel.runtime_id());
         true
     }
 }

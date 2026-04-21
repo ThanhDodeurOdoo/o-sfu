@@ -15,7 +15,7 @@
 //! `- metrics              -> process-global metrics state and Prometheus export snapshot
 //! ```
 
-use std::{process, sync::Arc};
+use std::{process, sync::Arc, time::Instant as StdInstant};
 
 use anyhow::Result;
 use tokio::runtime::Builder;
@@ -153,17 +153,28 @@ fn spawn_source_packet_policy_update_task(
     tokio::spawn(async move {
         loop {
             let next_deadline = transport_adapter.next_active_speaker_deadline().await;
-            match next_deadline {
+            let mut dirty_channel_runtime_ids = match next_deadline {
                 Some(next_deadline) => {
                     tokio::select! {
-                        () = updates.wait_for_update() => {}
-                        () = time::sleep_until(Instant::from_std(next_deadline)) => {}
+                        dirty_channel_runtime_ids = updates.wait_for_update() => dirty_channel_runtime_ids,
+                        () = time::sleep_until(Instant::from_std(next_deadline)) => {
+                            transport_adapter
+                                .expired_active_speaker_channel_runtime_ids(StdInstant::now())
+                                .await
+                        }
                     }
                 }
                 None => updates.wait_for_update().await,
+            };
+            dirty_channel_runtime_ids.extend(updates.take_pending_updates());
+            if dirty_channel_runtime_ids.is_empty() {
+                continue;
             }
             channels
-                .sync_source_packet_selection_policies(&transport_adapter)
+                .sync_source_packet_selection_policies_for_runtime_ids(
+                    &dirty_channel_runtime_ids,
+                    &transport_adapter,
+                )
                 .await;
         }
     })

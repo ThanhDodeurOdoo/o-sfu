@@ -5,10 +5,12 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
+use std::collections::BTreeSet;
 #[cfg(feature = "internal-benchmarks")]
 use std::net::SocketAddr;
 use std::time::Instant;
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
 };
@@ -176,6 +178,10 @@ pub(super) enum RtcWorkerCommand {
     },
     NextActiveSpeakerDeadline {
         response: RtcWorkerResponse<Option<Instant>>,
+    },
+    ExpiredActiveSpeakerChannelRuntimeIds {
+        now: Instant,
+        response: RtcWorkerResponse<BTreeSet<ChannelRuntimeId>>,
     },
     ApplySessionAnswer {
         session_key: TransportSessionKey,
