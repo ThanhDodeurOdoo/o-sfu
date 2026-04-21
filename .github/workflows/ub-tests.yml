@@ -1,0 +1,35 @@
+name: UB Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust nightly with Miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Bootstrap Miri
+        run: cargo +nightly miri setup
+
+      - name: Run targeted UB-oriented tests
+        run: cargo +nightly miri test -p o-sfu-tests --test miri_router_protocol

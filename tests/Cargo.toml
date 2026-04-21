@@ -7,8 +7,12 @@ edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+loom-tests = ["dep:loom"]
+
 [dependencies]
 futures-util.workspace = true
+loom = { version = "0.7.2", optional = true }
 o-sfu = { path = ".." }
 o-sfu-protocol = { path = "../protocol" }
 o-sfu-router = { path = "../router" }
@@ -26,3 +30,12 @@ trybuild = "1.0.116"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "miri_router_protocol"
+path = "miri/router_protocol.rs"
+
+[[test]]
+name = "loom_source_policy_coordination"
+path = "loom/source_policy_coordination.rs"
+required-features = ["loom-tests"]

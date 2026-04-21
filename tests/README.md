@@ -4,6 +4,8 @@
 
 - `tests/`: `o-sfu-tests` workspace crate for integration tests and shared harness code.
 - `tests/tests/`: black-box integration targets.
+- `tests/miri/`: dedicated Miri-friendly pure verification targets.
+- `tests/loom/`: dedicated Loom model checks for narrow coordination contracts.
 - `tests/src/support/`: shared integration harness helpers.
 - `tests/benchmarks/`: root-package benchmark sources
 - `tests/fuzz/`: cargo-fuzz package
@@ -20,6 +22,65 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --release
 npm --prefix client run verify
 ```
+
+## CI-oriented Rust tests
+
+The default CI test workflow use `cargo nextest` for the pure library
+crates and keeps the root `o-sfu` crate, the `o-sfu-tests` integration crate
+and doctests on plain `cargo test`.
+
+Install
+
+```bash
+cargo install cargo-nextest --locked
+```
+
+Run the same split locally:
+
+```bash
+cargo nextest run -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
+cargo test -p o-sfu
+cargo test -p o-sfu-tests
+cargo test --workspace --doc
+```
+
+## Dependency policy
+
+Install once:
+
+```bash
+cargo install cargo-deny --locked
+```
+
+Run the enforced policy checks:
+
+```bash
+cargo deny check advisories bans sources
+```
+
+## UB tests
+
+Install once:
+
+```bash
+rustup toolchain install nightly --component miri
+cargo +nightly miri setup
+```
+
+Run the targeted Miri suite:
+
+```bash
+cargo +nightly miri test -p o-sfu-tests --test miri_router_protocol
+```
+
+## Concurrency tests
+
+Run the Loom transport coordination model:
+
+```bash
+cargo test -p o-sfu-tests --test loom_source_policy_coordination --features loom-tests
+```
+
 
 ## Benchmarks
 

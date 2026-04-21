@@ -13,7 +13,9 @@ pub(crate) use config::{
     RtcTransportAdapterConfig, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
 };
 pub(crate) use facade::RuntimeTransportAdapter;
-pub(crate) use source_policy::{SourcePolicySignal, SourcePolicyUpdateSubscription};
+pub(crate) use source_policy::{
+    SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
+};
 pub(crate) use types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
     TransportBitrateSnapshot, TransportMediaId, TransportResult, TransportSessionKey,

@@ -3,6 +3,9 @@
 [![Client Browser](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml)
 [![Fuzzing](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml)
 [![Formal Verification](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml)
+[![Concurrency Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/concurrency-tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/concurrency-tests.yml)
+[![UB Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/ub-tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/ub-tests.yml)
+[![Cargo Deny](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml)
 [![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql)
 
 # o-sfu
@@ -17,6 +20,73 @@ MISSING FEATURES [Odoo SFU](https://github.com/odoo/sfu):
 - Multi-server sharding
 
 Comments may be a bit lacking (although I added some for the most important parts in recent commits) because I don't want to write big comments when the code is still changing a lot (the code could get outdated and I forget to change the comments).
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[HTTP API] --> B[Runtime]
+    C[WebSocket Signaling] --> B
+    B --> D[Channel Manager]
+    D --> E[Channel]
+    E --> F[Pure Router Core]
+    E --> G[Transport Adapter]
+    G --> H[RTC Adapter Shards]
+    H --> I[WebRTC / RTP / UDP]
+    E --> J[Recording Service / Media Tap]
+    B --> K[Metrics Export]
+    B --> L[Telemetry / Tracing]
+    M[Browser Client] --> C
+    M --> I
+```
+
+## Running the server
+
+(will write a dedicated md doc later)
+
+Same general idea than odoo/sfu
+
+Note: even during testing public IP shouldn't be a localhost loopback, it should an actual eternally visible IP
+
+```bash
+AUTH_KEY="$(openssl rand -base64 32)" \
+PUBLIC_IP=192.168.1.99 \
+BIND_ADDRESS=127.0.0.1:8070 \
+RTC_MIN_PORT=40000 \
+RTC_MAX_PORT=40031 \
+cargo run --release -p o-sfu
+```
+
+the command above do: the HTTP and WebSocket listener on `BIND_ADDRESS` and uses the
+configured UDP range for RTC traffic. 
+
+use `PROXY=false` for direct-exposed development. 
+uet `PROXY=true` only when `o-sfu` sits behind a trusted reverse
+proxy that overwrites `x-forwarded-*` headers before forwarding requests.
+
+For reverse-proxy deployments, keep two networking rules in mind:
+
+- expose the TCP listener at `BIND_ADDRESS` for HTTP and WebSocket traffic
+- expose the full UDP range from `RTC_MIN_PORT` through `RTC_MAX_PORT`
+- do not put media UDP traffic through NGINX;
+- `PUBLIC_IP` is the externally visible IP, it will be used by RTC to connect
+
+example with doker container:
+
+```bash
+docker build --tag o-sfu:local .
+
+docker run --rm \
+  -e AUTH_KEY="$(openssl rand -base64 32)" \
+  -e PUBLIC_IP=203.0.113.10 \
+  -e PROXY=true \
+  -e RTC_MIN_PORT=40000 \
+  -e RTC_MAX_PORT=40031 \
+  -p 8070:8070 \
+  -p 40000-40031:40000-40031/udp \
+  o-sfu:local
+```
+
 
 
 ## Env variables (based on odoo/sfu)

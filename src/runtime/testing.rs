@@ -17,6 +17,23 @@ use crate::config::Config;
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_protocol::signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
 
+#[derive(Debug, Default)]
+pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
+
+impl SourcePolicyDirtyState {
+    pub fn take_dirty(&self) -> bool {
+        self.0.take_dirty()
+    }
+
+    pub fn mark_dirty(&self) -> bool {
+        self.0.mark_dirty()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.0.is_dirty()
+    }
+}
+
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
 pub struct TestServer {

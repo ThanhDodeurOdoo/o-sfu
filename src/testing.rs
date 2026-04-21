@@ -24,3 +24,7 @@ pub mod server {
         TestServer, decode_protocol_welcome_batch, spawn_test_server,
     };
 }
+
+pub mod concurrency {
+    pub use crate::runtime::testing::SourcePolicyDirtyState;
+}
