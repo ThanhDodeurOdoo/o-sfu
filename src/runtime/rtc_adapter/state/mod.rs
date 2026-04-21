@@ -24,7 +24,7 @@ use tokio::net::UdpSocket;
 use crate::runtime::transport_adapter::{
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::media_registry::{

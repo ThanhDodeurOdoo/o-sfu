@@ -15,7 +15,7 @@ use crate::{
         },
     },
 };
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid};
 use tokio::sync::oneshot;
 

@@ -216,7 +216,7 @@ impl ChannelState {
 fn desired_source_packet_selection(
     session_count: usize,
     stream_type: StreamType,
-    producer_rtp_parameters: &o_sfu_router::RtpParameters,
+    producer_rtp_parameters: &o_sfu_router::MediaStream,
     cleared_camera_session_ids: &BTreeSet<SessionId>,
     owner_session_id: &SessionId,
 ) -> Option<SourcePacketSelection> {
@@ -233,7 +233,7 @@ fn desired_source_packet_selection(
     Some(shared_selection)
 }
 
-fn lowest_declared_rid(producer_rtp_parameters: &o_sfu_router::RtpParameters) -> Option<String> {
+fn lowest_declared_rid(producer_rtp_parameters: &o_sfu_router::MediaStream) -> Option<String> {
     let encodings = producer_rtp_parameters.encodings().collect::<Vec<_>>();
     if encodings.len() < 2 || encodings.iter().any(|encoding| encoding.rid().is_none()) {
         return None;

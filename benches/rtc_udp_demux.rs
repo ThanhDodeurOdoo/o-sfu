@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use o_sfu::runtime::benchmark_support::{
+use o_sfu::benchmark_support::{
     RtcUdpDemuxBenchmarkFixture, RtcUnknownSourceRecoveryBenchmarkFixture,
 };
 

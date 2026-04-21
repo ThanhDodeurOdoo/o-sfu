@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, time::Instant};
 
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
 use str0m::rtp::Ssrc;
 use tokio::sync::mpsc;

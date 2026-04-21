@@ -1,10 +1,10 @@
+use o_sfu_rfc::{rtp, webrtc};
 use o_sfu_router::{
-    CodecSetting, MediaKind, RtcpFeedback, RtcpFeedbackKind, RtpCapabilities, RtpCodecCapability,
-    RtpHeaderExtension,
+    CodecSetting, HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaKind,
+    RtcpFeedback, RtcpFeedbackKind,
 };
 
 use crate::config::MediaCodecFlags;
-use crate::rfc::{rtp, webrtc};
 
 const AUDIO_PAYLOAD_TYPE_PCMU: u8 = 0;
 const AUDIO_PAYLOAD_TYPE_PCMA: u8 = 8;
@@ -39,7 +39,7 @@ const HEADER_EXTENSION_ID_ABS_SEND_TIME: u8 = 4;
 const HEADER_EXTENSION_ID_TRANSPORT_WIDE_CC: u8 = 5;
 const HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL: u8 = 10;
 
-pub(crate) fn router_rtp_capabilities(codec_flags: MediaCodecFlags) -> RtpCapabilities {
+pub(crate) fn router_rtp_capabilities(codec_flags: MediaCodecFlags) -> MediaCapabilities {
     let mut codecs = Vec::new();
     if codec_flags.opus_enabled() {
         codecs.push(opus_codec_capability());
@@ -89,21 +89,21 @@ pub(crate) fn router_rtp_capabilities(codec_flags: MediaCodecFlags) -> RtpCapabi
         ));
     }
 
-    RtpCapabilities::new(codecs, default_header_extensions())
+    MediaCapabilities::new(codecs, default_header_extensions())
 }
 
-fn default_header_extensions() -> Vec<RtpHeaderExtension> {
+fn default_header_extensions() -> Vec<HeaderExtension> {
     vec![
-        RtpHeaderExtension::new(webrtc::RtpHeaderExtensionUri::Mid, HEADER_EXTENSION_ID_MID),
-        RtpHeaderExtension::new(
+        HeaderExtension::new(webrtc::RtpHeaderExtensionUri::Mid, HEADER_EXTENSION_ID_MID),
+        HeaderExtension::new(
             webrtc::RtpHeaderExtensionUri::AbsSendTime,
             HEADER_EXTENSION_ID_ABS_SEND_TIME,
         ),
-        RtpHeaderExtension::new(
+        HeaderExtension::new(
             webrtc::RtpHeaderExtensionUri::TransportWideCcDraft01,
             HEADER_EXTENSION_ID_TRANSPORT_WIDE_CC,
         ),
-        RtpHeaderExtension::new(
+        HeaderExtension::new(
             webrtc::RtpHeaderExtensionUri::SsrcAudioLevel,
             HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL,
         ),
@@ -115,8 +115,8 @@ fn audio_codec_capability(
     payload_type: u8,
     clock_rate: u32,
     channels: Option<u16>,
-) -> RtpCodecCapability {
-    let codec = RtpCodecCapability::new(MediaKind::Audio, codec_name, clock_rate)
+) -> MediaCodecCapability {
+    let codec = MediaCodecCapability::new(MediaKind::Audio, codec_name, clock_rate)
         .with_preferred_payload_type(payload_type)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None));
     match channels {
@@ -125,7 +125,7 @@ fn audio_codec_capability(
     }
 }
 
-fn opus_codec_capability() -> RtpCodecCapability {
+fn opus_codec_capability() -> MediaCodecCapability {
     audio_codec_capability(
         rtp::CodecName::Opus,
         AUDIO_PAYLOAD_TYPE_OPUS,
@@ -135,8 +135,8 @@ fn opus_codec_capability() -> RtpCodecCapability {
     .with_setting(CodecSetting::UseInBandFec(true))
 }
 
-fn video_codec_capability(codec_name: rtp::CodecName, payload_type: u8) -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Video, codec_name, 90_000)
+fn video_codec_capability(codec_name: rtp::CodecName, payload_type: u8) -> MediaCodecCapability {
+    MediaCodecCapability::new(MediaKind::Video, codec_name, 90_000)
         .with_preferred_payload_type(payload_type)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
@@ -145,7 +145,7 @@ fn video_codec_capability(codec_name: rtp::CodecName, payload_type: u8) -> RtpCo
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
 }
 
-fn h264_codec_capabilities() -> [RtpCodecCapability; 12] {
+fn h264_codec_capabilities() -> [MediaCodecCapability; 12] {
     [
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED,
@@ -208,7 +208,7 @@ fn h264_codec_capability(
     payload_type: u8,
     packetization_mode: u8,
     profile_level_id: &str,
-) -> RtpCodecCapability {
+) -> MediaCodecCapability {
     video_codec_capability(rtp::CodecName::H264, payload_type)
         .with_setting(CodecSetting::H264PacketizationMode(packetization_mode))
         .with_setting(CodecSetting::H264ProfileLevelId(
@@ -216,7 +216,7 @@ fn h264_codec_capability(
         ))
 }
 
-fn vp9_codec_capabilities() -> [RtpCodecCapability; 4] {
+fn vp9_codec_capabilities() -> [MediaCodecCapability; 4] {
     [
         vp9_codec_capability(VIDEO_PAYLOAD_TYPE_VP9_PROFILE_0, 0),
         video_rtx_codec_capability(
@@ -231,13 +231,16 @@ fn vp9_codec_capabilities() -> [RtpCodecCapability; 4] {
     ]
 }
 
-fn vp9_codec_capability(payload_type: u8, profile_id: u8) -> RtpCodecCapability {
+fn vp9_codec_capability(payload_type: u8, profile_id: u8) -> MediaCodecCapability {
     video_codec_capability(rtp::CodecName::from("VP9"), payload_type)
         .with_parameter(rtp::fmtp::VP9_PROFILE_ID, profile_id.to_string())
 }
 
-fn video_rtx_codec_capability(payload_type: u8, associated_payload_type: u8) -> RtpCodecCapability {
-    RtpCodecCapability::new(MediaKind::Video, rtp::CodecName::Rtx, 90_000)
+fn video_rtx_codec_capability(
+    payload_type: u8,
+    associated_payload_type: u8,
+) -> MediaCodecCapability {
+    MediaCodecCapability::new(MediaKind::Video, rtp::CodecName::Rtx, 90_000)
         .with_preferred_payload_type(payload_type)
         .with_setting(CodecSetting::RtxAssociation(associated_payload_type.into()))
 }

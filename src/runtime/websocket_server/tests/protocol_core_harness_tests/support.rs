@@ -847,6 +847,6 @@ pub(super) fn peer_reached_state(peer: &ProtocolHarnessPeer, state: BundleConnec
         .any(|change| change.state == state && change.cause.is_none())
 }
 
-pub(super) fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::RtpParameters {
+pub(super) fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::MediaStream {
     router_sample_video_rtp_parameters(Some(mid), 22_222)
 }

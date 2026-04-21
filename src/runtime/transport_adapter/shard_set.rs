@@ -13,7 +13,7 @@ use crate::runtime::transport_adapter::types::{
 #[derive(Debug)]
 /// Process-local collection of RTC transport shards keyed by media-worker id.
 ///
-/// The runtime-facing transport selector stays above this type; `ShardSet`
+/// The runtime-facing transport selector stays above this type: `ShardSet`
 /// only owns shard assignment plus cross-shard relay cleanup fan-out.
 pub(crate) struct RtcTransportAdapterShardSet {
     primary_shard: Arc<RtcTransportAdapter>,

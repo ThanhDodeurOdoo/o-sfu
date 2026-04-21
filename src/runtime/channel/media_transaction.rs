@@ -7,7 +7,7 @@ use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportAdapterError, TransportMediaId,
 };
 use o_sfu_protocol::shared::{SessionId, StreamType};
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::{
     Channel, SessionOutbound,

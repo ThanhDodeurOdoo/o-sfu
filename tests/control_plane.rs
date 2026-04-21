@@ -17,8 +17,10 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use o_sfu::{
     config::RtcPortRange,
-    runtime::testing::spawn_test_server,
-    testing::http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
+    testing::{
+        http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
+        server::spawn_test_server,
+    },
 };
 
 use crate::support::protocol_harness::{

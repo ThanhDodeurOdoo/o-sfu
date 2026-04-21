@@ -7,10 +7,11 @@
 
 use std::collections::BTreeSet;
 
+use o_sfu_rfc::rtp as rfc_rtp;
 use o_sfu_router::{
     HeaderExtension as RouterHeaderExtension, MediaFormat as RouterMediaFormat,
-    MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
-    RtpParameters as RouterRtpParameters, StreamBinding,
+    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, RtcpFeedback,
+    RtcpFeedbackKind, StreamBinding,
 };
 use str0m::bwe::Bitrate;
 use str0m::{
@@ -22,9 +23,8 @@ use str0m::{
 use tokio::sync::oneshot;
 use tracing::warn;
 
-use crate::{
-    rfc::rtp as rfc_rtp,
-    runtime::transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 use super::super::{

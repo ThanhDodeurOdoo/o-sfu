@@ -108,7 +108,7 @@ pub(in crate::runtime::channel) struct PublishedProducer {
     pub(super) owner_connection_id: ConnectionId,
     pub(super) stream_type: StreamType,
     pub(super) media_kind: MediaKind,
-    pub(super) consumable_rtp_parameters: o_sfu_router::RtpParameters,
+    pub(super) consumable_rtp_parameters: o_sfu_router::MediaStream,
     pub(super) routed_producer_id: RoutedProducerId,
     pub(super) transport_media_id: Option<TransportMediaId>,
     pub(super) source_packet_selection: Option<SourcePacketSelection>,

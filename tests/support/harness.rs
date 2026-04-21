@@ -17,13 +17,13 @@ use tokio_tungstenite::{
 
 use o_sfu::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig},
-    runtime::testing::TestServer,
     testing::{
         auth::{
             HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
             sign,
         },
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH},
+        server::TestServer,
     },
 };
 

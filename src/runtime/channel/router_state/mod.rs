@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
-    MediaKind as RouterMediaKind, Producer as RouterProducer, ProducerId as RouterProducerId,
-    Router, RouterError, RouterId, RtpCapabilities, Session as RouterSession,
+    MediaCapabilities, MediaKind as RouterMediaKind, Producer as RouterProducer,
+    ProducerId as RouterProducerId, Router, RouterError, RouterId, Session as RouterSession,
     SessionId as RouterSessionId, SessionPermissions as RouterSessionPermissions,
     StreamType as RouterStreamType, Transport as RouterTransport,
     TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
@@ -21,7 +21,7 @@ const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
 #[derive(Debug, Clone)]
 pub(super) struct ChannelRouterState {
     router: Router<RecordingRouterObserver>,
-    rtp_capabilities: RtpCapabilities,
+    rtp_capabilities: MediaCapabilities,
     router_session_ids_by_session_id: BTreeMap<SessionId, RouterSessionId>,
     transport_ids_by_session_id: BTreeMap<SessionId, SessionTransportIds>,
     next_transport_id: u64,
@@ -38,7 +38,7 @@ struct SessionTransportIds {
 impl ChannelRouterState {
     pub(super) fn new_with_recording_service(
         router_id: RouterId,
-        rtp_capabilities: RtpCapabilities,
+        rtp_capabilities: MediaCapabilities,
         recording_service: Arc<RecordingService>,
     ) -> Self {
         Self {
@@ -55,7 +55,7 @@ impl ChannelRouterState {
         }
     }
 
-    pub(super) fn rtp_capabilities(&self) -> &RtpCapabilities {
+    pub(super) fn rtp_capabilities(&self) -> &MediaCapabilities {
         &self.rtp_capabilities
     }
 

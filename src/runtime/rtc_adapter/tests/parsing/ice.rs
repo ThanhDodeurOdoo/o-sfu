@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
-use crate::rfc::webrtc;
+use o_sfu_rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 
@@ -341,7 +341,7 @@ mod tests {
     use o_sfu_router::ParseDiagnosticKind;
 
     use super::parse_ice_candidate;
-    use crate::rfc::webrtc;
+    use o_sfu_rfc::webrtc;
 
     #[test]
     fn parse_ice_candidate_accepts_supported_udp_host_candidate() {

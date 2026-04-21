@@ -5,7 +5,7 @@ use std::{
 };
 
 use o_sfu_router::{
-    MediaCodecCapability, MediaKind, MediaKind as RouterMediaKind, RtpEncoding, RtpParameters,
+    MediaCodecCapability, MediaKind, MediaKind as RouterMediaKind, MediaStream, StreamBinding,
 };
 use str0m::media::Mid;
 use tokio::time::timeout;
@@ -26,7 +26,7 @@ use crate::{
     },
 };
 use o_sfu_protocol::shared::SessionId;
-use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
+use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
 fn test_session_key(
     channel_runtime_id: u64,
@@ -53,8 +53,8 @@ fn sample_router_capabilities() -> RouterRtpCapabilities {
     )
 }
 
-fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> RtpParameters {
-    RtpParameters::new(vec![], vec![], vec![RtpEncoding::new().with_ssrc(ssrc)])
+fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
+    MediaStream::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(ssrc)])
         .with_mid(String::from(mid))
 }
 
@@ -79,7 +79,7 @@ async fn prepare_rtc_sessions(
 async fn publish_audio(
     adapter: &RuntimeTransportAdapter,
     session_key: &TransportSessionKey,
-    rtp_parameters: &RtpParameters,
+    rtp_parameters: &MediaStream,
 ) -> Option<TransportMediaId> {
     let result = adapter
         .publish_media(session_key, MediaKind::Audio, rtp_parameters)
@@ -93,7 +93,7 @@ async fn consume_audio(
     consumer_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
-    rtp_parameters: &RtpParameters,
+    rtp_parameters: &MediaStream,
 ) -> Option<TransportMediaId> {
     let result = adapter
         .consume_media(

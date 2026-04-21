@@ -2002,7 +2002,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         .publish_media(
             &publisher_session_key,
             MediaKind::Video,
-            &o_sfu_router::RtpParameters::new(vec![], vec![], vec![]),
+            &o_sfu_router::MediaStream::new(vec![], vec![], vec![]),
         )
         .await
         .expect("protocol publish intent should stage a recv-only media line");
@@ -2377,6 +2377,6 @@ async fn apply_offer_answer(
     );
 }
 
-fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> RtpParameters {
+fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> MediaStream {
     router_sample_video_rtp_parameters(Some(mid), ssrc)
 }

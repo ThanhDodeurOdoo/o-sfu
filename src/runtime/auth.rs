@@ -13,7 +13,7 @@ use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 
 use crate::time::secs_since_epoch;
 
-pub use o_sfu_rfc::jwt::{JwtAudience, RegisteredJwtClaims};
+pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -208,12 +208,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, JwtAudience,
-        RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, secs_since_epoch, sign,
-        sign_hs256, verify,
+        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
+        WebSocketConnectClaims, decode_base64, secs_since_epoch, sign, sign_hs256, verify,
     };
     use o_sfu_protocol::shared::{SessionId, SessionPermissions};
-    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
+    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtAudience, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 
     const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

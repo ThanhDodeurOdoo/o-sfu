@@ -309,7 +309,7 @@ fn sample_forwarded_packet_without_mid(
 mod tests {
     use super::*;
 
-    use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
+    use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 
     use crate::runtime::rtc_adapter::{
         media_registry::RegisteredMediaHandle, test_support::test_transport_session_key,

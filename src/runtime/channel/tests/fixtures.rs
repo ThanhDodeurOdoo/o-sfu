@@ -1,8 +1,8 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
 pub(super) use o_sfu_router::{
-    ConsumerCapability, MediaKind, MediaKind as RouterMediaKind, RouterId, RtpCapabilities,
-    RtpParameters, SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
+    ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
+    RouterId, SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
 };
 pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::{task::yield_now, time::timeout};
@@ -27,23 +27,23 @@ pub(super) use o_sfu_protocol::shared::{
 };
 
 /// Realistic client RTP capabilities (default codecs)
-pub(super) fn test_client_rtp_capabilities() -> RtpCapabilities {
+pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {
     sample_client_rtp_capabilities()
 }
 
-pub(super) fn test_audio_rtp_parameters() -> RtpParameters {
+pub(super) fn test_audio_rtp_parameters() -> MediaStream {
     sample_audio_rtp_parameters(11_111)
 }
 
-pub(super) fn test_client_rtp_capabilities_without_video_rtx() -> RtpCapabilities {
+pub(super) fn test_client_rtp_capabilities_without_video_rtx() -> MediaCapabilities {
     sample_client_rtp_capabilities_without_video_rtx()
 }
 
-pub(super) fn test_video_rtp_parameters() -> RtpParameters {
+pub(super) fn test_video_rtp_parameters() -> MediaStream {
     sample_video_rtp_parameters(None, 22_222)
 }
 
-pub(super) fn test_simulcast_video_rtp_parameters() -> RtpParameters {
+pub(super) fn test_simulcast_video_rtp_parameters() -> MediaStream {
     sample_simulcast_video_rtp_parameters(None)
 }
 

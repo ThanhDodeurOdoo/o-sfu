@@ -19,8 +19,10 @@ use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use o_sfu::{
     config::Config,
-    runtime::testing::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
-    testing::http::{METRICS_PATH, STATS_PATH, StatsResponse},
+    testing::{
+        http::{METRICS_PATH, STATS_PATH, StatsResponse},
+        server::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
+    },
 };
 
 use super::{

@@ -1,5 +1,5 @@
 use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
-use crate::rfc::webrtc;
+use o_sfu_rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
 

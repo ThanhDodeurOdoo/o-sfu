@@ -2,7 +2,7 @@ use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 use serde::Serialize;
 use tracing::{error, trace, warn};
 
-use crate::rfc::webrtc as rfc_webrtc;
+use o_sfu_rfc::webrtc as rfc_webrtc;
 use o_sfu_router::RfcReference;
 
 const ROLE_PATH: &str = "$.role";

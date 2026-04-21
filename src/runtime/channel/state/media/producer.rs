@@ -1,4 +1,4 @@
-use o_sfu_router::{MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters};
+use o_sfu_router::{MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters};
 use std::collections::BTreeMap;
 use tracing::{error, warn};
 

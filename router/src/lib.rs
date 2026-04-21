@@ -15,9 +15,3 @@ pub use self::model::{
     StreamBinding, StreamType, Transport, TransportDirection, TransportId, can_consume,
     derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
-pub use self::model::{
-    HeaderExtension as RtpHeaderExtension, MediaCapabilities as RtpCapabilities,
-    MediaCodecCapability as RtpCodecCapability, MediaFormat as RtpCodecParameters,
-    MediaStream as RtpParameters, StreamBinding as RtpEncoding,
-};
-pub use o_sfu_rfc as rfc;

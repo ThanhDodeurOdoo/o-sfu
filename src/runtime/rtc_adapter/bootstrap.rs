@@ -11,6 +11,7 @@ use std::{
     time::Instant,
 };
 
+use o_sfu_rfc::webrtc;
 use str0m::bwe::Bitrate;
 use str0m::{Candidate, Rtc};
 use tokio::net::UdpSocket;
@@ -19,7 +20,6 @@ use tracing::info;
 use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
 use crate::config::MediaCodecFlags;
 use crate::config::RtcPortRange;
-use crate::rfc::webrtc;
 use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
 pub(super) fn bind_shared_rtc_socket(
     public_ip: IpAddr,

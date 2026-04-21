@@ -1,3 +1,4 @@
+use o_sfu_rfc::rtp as rfc_rtp;
 use o_sfu_router::{
     HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability,
     MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
@@ -6,8 +7,6 @@ use str0m::{
     change::SdpAnswer,
     format::{Codec, PayloadParams},
 };
-
-use crate::rfc::rtp as rfc_rtp;
 
 pub(crate) fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
     let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
@@ -137,7 +136,7 @@ fn rtcp_feedback(payload: &PayloadParams) -> Vec<RtcpFeedback> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use crate::rfc::rtp as rfc_rtp;
+    use o_sfu_rfc::rtp as rfc_rtp;
 
     use super::client_rtp_capabilities_from_answer;
 

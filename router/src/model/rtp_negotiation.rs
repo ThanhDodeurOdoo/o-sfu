@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::rfc::rtp as rfc_rtp;
+use o_sfu_rfc::rtp as rfc_rtp;
 
 use super::{
     CodecSetting, HeaderExtension, HeaderExtensionUri, MediaCapabilities, MediaCodec,
@@ -506,15 +506,17 @@ fn h264_critical_settings_match(
             // RFC 6184 section 8.2.2 matches H264 by profile and allows a receiver to declare a
             // higher supported level than the stream it accepts, so same-profile lower-or-equal
             // stream levels are accepted here.
-            (Some(format_profile_level_id), Some(capability_profile_level_id)) => {
+            (Some(parsed_format_profile_level_id), Some(parsed_capability_profile_level_id)) => {
                 // Same profile is required because different profiles define different
                 // bitstream constraints and decoding tools (e.g. baseline vs high).
                 //
                 // Level is a decoder capability bound. A receiver that advertises a higher
                 // level can accept streams encoded at a lower or equal level, so we allow
                 // format_level <= capability_level here.
-                format_profile_level_id.profile() == capability_profile_level_id.profile()
-                    && format_profile_level_id.level() <= capability_profile_level_id.level()
+                parsed_format_profile_level_id.profile()
+                    == parsed_capability_profile_level_id.profile()
+                    && parsed_format_profile_level_id.level()
+                        <= parsed_capability_profile_level_id.level()
             }
             // If a profile-level-id token is malformed, fall back to exact equality so we do not
             // silently widen compatibility beyond what the raw fmtp values literally express.

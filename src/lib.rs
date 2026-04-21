@@ -1,6 +1,8 @@
 pub mod config;
-pub mod runtime;
+mod runtime;
 #[doc(hidden)]
 pub mod testing;
-pub use o_sfu_rfc as rfc;
+#[cfg(feature = "internal-benchmarks")]
+pub use self::runtime::benchmark_support;
+pub use self::runtime::run;
 pub(crate) mod time;

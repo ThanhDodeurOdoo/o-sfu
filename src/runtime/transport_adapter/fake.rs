@@ -10,8 +10,8 @@ use crate::runtime::transport_adapter::{
 };
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{
-    MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind, RtcpFeedback,
-    RtcpFeedbackKind, RtpParameters as RouterRtpParameters, StreamBinding,
+    MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind,
+    MediaStream as RouterRtpParameters, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
@@ -187,8 +187,8 @@ impl FakeWebRtcAdapter {
 
     pub(crate) fn project_answered_client_rtp_capabilities(
         answer_sdp: &str,
-        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
-    ) -> Result<o_sfu_router::RtpCapabilities, TransportAdapterError> {
+        offered_router_capabilities: &o_sfu_router::MediaCapabilities,
+    ) -> Result<o_sfu_router::MediaCapabilities, TransportAdapterError> {
         if !answer_sdp.trim_start().starts_with("v=0") {
             return Err(TransportAdapterError::InvalidInput);
         }

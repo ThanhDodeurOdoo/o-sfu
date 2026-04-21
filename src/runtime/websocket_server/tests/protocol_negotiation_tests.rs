@@ -166,6 +166,6 @@ fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
     }
 }
 
-fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::RtpParameters {
+fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::MediaStream {
     router_sample_video_rtp_parameters(Some(mid), 22_222)
 }

@@ -5,8 +5,8 @@ use std::{
 
 use o_sfu_router::SessionPermissions as RouterSessionPermissions;
 use o_sfu_router::{
-    ConsumerCapability, ConsumerId as RouterConsumerId, MediaKind as RouterMediaKind,
-    ProducerId as RouterProducerId, RouterError, RouterId, RtpCapabilities,
+    ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
+    MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterError, RouterId,
     SessionId as RouterSessionId, StreamType as RouterStreamType,
 };
 
@@ -97,7 +97,7 @@ impl ChannelRouterObserverFactory {
     fn build_router_state(
         &self,
         router_id: RouterId,
-        router_rtp_capabilities: RtpCapabilities,
+        router_rtp_capabilities: MediaCapabilities,
     ) -> ChannelRouterState {
         ChannelRouterState::new_with_recording_service(
             router_id,
@@ -110,7 +110,7 @@ impl ChannelRouterObserverFactory {
 impl ChannelTopology {
     pub(super) fn new_with_recording_observer_factory(
         primary_router_id: RouterId,
-        router_rtp_capabilities: RtpCapabilities,
+        router_rtp_capabilities: MediaCapabilities,
         router_observer_factory: &ChannelRouterObserverFactory,
     ) -> Self {
         let mut routers = BTreeMap::new();
@@ -125,7 +125,7 @@ impl ChannelTopology {
         }
     }
 
-    pub(super) fn rtp_capabilities(&self) -> &RtpCapabilities {
+    pub(super) fn rtp_capabilities(&self) -> &MediaCapabilities {
         let Some(primary_router) = self.routers.get(&self.primary_router) else {
             return empty_router_capabilities();
         };
@@ -260,7 +260,7 @@ impl ChannelTopology {
     }
 }
 
-fn empty_router_capabilities() -> &'static RtpCapabilities {
-    static EMPTY: OnceLock<RtpCapabilities> = OnceLock::new();
-    EMPTY.get_or_init(|| RtpCapabilities::new(Vec::new(), Vec::new()))
+fn empty_router_capabilities() -> &'static MediaCapabilities {
+    static EMPTY: OnceLock<MediaCapabilities> = OnceLock::new();
+    EMPTY.get_or_init(|| MediaCapabilities::new(Vec::new(), Vec::new()))
 }

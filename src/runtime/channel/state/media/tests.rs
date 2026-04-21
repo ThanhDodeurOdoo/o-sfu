@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId, RtpParameters,
+    ConsumerCapability, MediaKind as RouterMediaKind, MediaStream, ProducerId, RouterId,
     StreamType as RouterStreamType,
 };
 use tokio::sync::mpsc;
@@ -136,7 +136,7 @@ fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
             owner_connection_id: connection_id,
             stream_type: StreamType::Camera,
             media_kind: RouterMediaKind::Video,
-            consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
+            consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
             routed_producer_id,
             transport_media_id: Some(transport_media_id),
             source_packet_selection: None,

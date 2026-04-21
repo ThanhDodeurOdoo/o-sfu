@@ -11,7 +11,7 @@ use super::types::{
 };
 use crate::runtime::rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
-use o_sfu_router::{MediaCapabilities, MediaKind, RtpParameters as RouterRtpParameters};
+use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 use str0m::media::MediaKind as Str0mMediaKind;
 use tracing::warn;
 
@@ -49,7 +49,7 @@ trait TransportBackend {
     fn negotiated_client_rtp_capabilities(
         &self,
         answer_sdp: &str,
-        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+        offered_router_capabilities: &o_sfu_router::MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError>;
 
     async fn close_session(
@@ -206,7 +206,7 @@ impl RuntimeTransportAdapter {
     pub(crate) fn negotiated_client_rtp_capabilities(
         &self,
         answer_sdp: &str,
-        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+        offered_router_capabilities: &o_sfu_router::MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         let result = dispatch_transport_backend!(self, |backend| {
             backend.negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
@@ -495,7 +495,7 @@ impl TransportBackend for RtcTransportAdapterShardSet {
     fn negotiated_client_rtp_capabilities(
         &self,
         answer_sdp: &str,
-        _offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+        _offered_router_capabilities: &o_sfu_router::MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         client_rtp_capabilities_from_answer(answer_sdp).ok_or(TransportAdapterError::InvalidInput)
     }
@@ -722,7 +722,7 @@ impl TransportBackend for FakeWebRtcAdapter {
     fn negotiated_client_rtp_capabilities(
         &self,
         answer_sdp: &str,
-        offered_router_capabilities: &o_sfu_router::RtpCapabilities,
+        offered_router_capabilities: &o_sfu_router::MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         Self::project_answered_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
     }

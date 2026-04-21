@@ -11,7 +11,7 @@
 //!   to hand out a second local offer while the previous one still awaits an
 //!   answer
 
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::bwe::Bitrate;
 use str0m::{
     media::{Direction, MediaKind, Mid, Rid},

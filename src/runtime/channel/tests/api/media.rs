@@ -1,6 +1,6 @@
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 use o_sfu_router::{
-    MediaKind, RtpParameters as RouterRtpParameters, derive_consumable_rtp_parameters,
+    MediaKind, MediaStream as RouterRtpParameters, derive_consumable_rtp_parameters,
 };
 use tracing::warn;
 
@@ -17,7 +17,7 @@ pub(crate) struct NegotiatedPublish {
     pub(crate) stream_type: StreamType,
     pub(crate) media_kind: MediaKind,
     pub(crate) transport_media_id: TransportMediaId,
-    pub(crate) consumable_rtp_parameters: o_sfu_router::RtpParameters,
+    pub(crate) consumable_rtp_parameters: o_sfu_router::MediaStream,
 }
 
 #[derive(Clone, Copy)]

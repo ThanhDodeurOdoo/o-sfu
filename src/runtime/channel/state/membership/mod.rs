@@ -424,7 +424,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use o_sfu_router::{ConsumerId, ProducerId, RouterId, RtpParameters};
+    use o_sfu_router::{ConsumerId, MediaStream, ProducerId, RouterId};
     use tokio::sync::mpsc;
 
     use super::*;
@@ -476,7 +476,7 @@ mod tests {
                 owner_connection_id: connection_id,
                 stream_type,
                 media_kind: MediaKind::Video,
-                consumable_rtp_parameters: RtpParameters::new(vec![], vec![], vec![]),
+                consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
                 routed_producer_id,
                 transport_media_id,
                 source_packet_selection: None,

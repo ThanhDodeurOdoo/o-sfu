@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 
 use super::MediaKind;
-use crate::rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 
 pub type MediaCodec = rfc_rtp::CodecName;
 pub type HeaderExtensionUri = rfc_webrtc::RtpHeaderExtensionUri;

@@ -327,7 +327,7 @@ impl RtcBootstrapState {
         &mut self,
         session_key: &TransportSessionKey,
         mid: Mid,
-        parameters: &o_sfu_router::RtpParameters,
+        parameters: &o_sfu_router::MediaStream,
     ) {
         let Some(transport_media_id) = self
             .producer_mid_registry
@@ -393,7 +393,7 @@ impl RtcBootstrapState {
 mod tests {
     use super::*;
 
-    use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
+    use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 
     use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
     use o_sfu_protocol::shared::SessionId;

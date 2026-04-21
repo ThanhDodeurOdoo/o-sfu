@@ -1,6 +1,6 @@
 //! Small request and ownership transfer objects shared by worker media modules.
 
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};

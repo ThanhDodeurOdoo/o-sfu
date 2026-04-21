@@ -1,5 +1,5 @@
 use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, RtpParameters as RouterRtpParameters,
+    ConsumerCapability, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
     can_consume, negotiate_consumer_rtp_parameters,
 };
 use tracing::{error, warn};

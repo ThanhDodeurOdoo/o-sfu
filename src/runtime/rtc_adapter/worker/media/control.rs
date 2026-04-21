@@ -32,7 +32,7 @@
 //! The `respond_*` functions at the top are command-adapter entry points
 //! for the worker dispatcher
 
-use o_sfu_router::RtpParameters as RouterRtpParameters;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{Mid, Rid};
 use tokio::sync::oneshot;
 

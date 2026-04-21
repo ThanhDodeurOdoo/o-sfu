@@ -5,8 +5,6 @@
 //! sessions, and get metrics.
 
 use serde::{Deserialize, Serialize};
-
-pub const API_VERSION: u16 = 1;
 pub const METRICS_PATH: &str = "/metrics";
 pub const NOOP_PATH: &str = "/v1/noop";
 pub const STATS_PATH: &str = "/v1/stats";
@@ -109,8 +107,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        API_VERSION, ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats,
-        NoopResponse, SessionsStats, StatsResponse,
+        ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats, NoopResponse,
+        SessionsStats, StatsResponse,
     };
 
     #[test]
@@ -188,9 +186,6 @@ mod tests {
             serde_json::from_value::<StatsResponse>(expected_stats)?,
             stats
         );
-
-        assert_eq!(API_VERSION, 1);
-
         Ok(())
     }
 }
