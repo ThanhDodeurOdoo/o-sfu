@@ -2,14 +2,14 @@ name: Fuzzing
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '30 0 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  protocol-decode-fuzz:
+  fuzz-targets:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -20,22 +20,31 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-04-01
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-fuzz
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Run protocol decode fuzz target
+      - name: Run fuzz targets
         working-directory: tests/fuzz
-        run: cargo +nightly fuzz run protocol_decode -- -max_total_time=300
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in protocol_decode protocol_sequence http_disconnect_auth; do
+            cargo +nightly-2026-04-01 fuzz run "$target" -- -max_total_time=300
+          done
 
-      - name: Run protocol sequence fuzz target
-        working-directory: tests/fuzz
-        run: cargo +nightly fuzz run protocol_sequence -- -max_total_time=300
-
-      - name: Run HTTP disconnect auth fuzz target
-        working-directory: tests/fuzz
-        run: cargo +nightly fuzz run http_disconnect_auth -- -max_total_time=300
+      - name: Upload fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: |
+            tests/fuzz/artifacts
+            tests/fuzz/corpus
+          retention-days: 7

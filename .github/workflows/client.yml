@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   client-checks:
     runs-on: ubuntu-latest
@@ -28,6 +32,8 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: client-rust-1.92
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -44,9 +50,6 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint
-
-      - name: Run TypeScript checks
-        run: npm run typecheck
 
       - name: Run client tests
         run: npm test

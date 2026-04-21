@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   miri:
     runs-on: ubuntu-latest
@@ -22,14 +26,16 @@ jobs:
       - name: Install Rust nightly with Miri
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-04-01
           components: miri
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-miri
 
       - name: Bootstrap Miri
-        run: cargo +nightly miri setup
+        run: cargo +nightly-2026-04-01 miri setup
 
       - name: Run targeted UB-oriented tests
-        run: cargo +nightly miri test -p o-sfu-tests --test miri_router_protocol
+        run: cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_router_protocol

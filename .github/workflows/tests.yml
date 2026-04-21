@@ -5,11 +5,16 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   workspace-checks:
@@ -30,6 +35,8 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-1.92-mainline
 
       - name: Check formatting
         run: cargo fmt --check
@@ -53,6 +60,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   coverage-report:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
 
     steps:
@@ -70,6 +78,8 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-1.92-mainline
 
       - name: Generate workspace coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
@@ -84,6 +94,7 @@ jobs:
           path: |
             lcov.info
             coverage-summary.json
+          retention-days: 7
 
   container-build:
     runs-on: ubuntu-latest

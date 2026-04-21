@@ -24,6 +24,8 @@ jobs:
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-1.92-mainline
 
       - name: Check workspace without OpenTelemetry feature
         run: cargo check --workspace --no-default-features
