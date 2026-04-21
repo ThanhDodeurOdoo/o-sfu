@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use o_sfu_router::RouterId;
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 
@@ -80,8 +81,8 @@ impl ChannelFactory {
                 .allocator
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let channel_runtime_id = allocator.next_channel_runtime_id;
-            allocator.next_channel_runtime_id = allocator.next_channel_runtime_id.saturating_add(1);
+            let channel_runtime_id =
+                ChannelRuntimeId::allocate(&mut allocator.next_channel_runtime_id);
             let router_id = RouterId(allocator.next_router_id);
             allocator.next_router_id = allocator.next_router_id.saturating_add(1);
             drop(allocator);
@@ -94,8 +95,8 @@ impl ChannelFactory {
         }
     }
 
-    fn media_worker_id_for_channel_runtime(&self, channel_runtime_id: u64) -> usize {
+    fn media_worker_id_for_channel_runtime(&self, channel_runtime_id: ChannelRuntimeId) -> usize {
         let media_worker_count_u64 = u64::try_from(self.media_worker_count).unwrap_or(1);
-        usize::try_from(channel_runtime_id % media_worker_count_u64).unwrap_or(0)
+        usize::try_from(channel_runtime_id.as_u64() % media_worker_count_u64).unwrap_or(0)
     }
 }

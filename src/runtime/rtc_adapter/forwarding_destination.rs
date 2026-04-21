@@ -256,7 +256,7 @@ mod tests {
     use super::*;
     use crate::runtime::rtc_adapter::{
         relay_registry::InterNodeRelaySender, route_control::PacketLayerGate,
-        sample_forwarded_packet,
+        sample_forwarded_packet, test_support::test_transport_session_key,
     };
     use crate::runtime::transport_adapter::TransportMediaId;
     use o_sfu_protocol::shared::SessionId;
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn packet_forward_wraps_local_route_destinations_in_the_named_contract() {
-        let dest_session = TransportSessionKey::new(11, 0, 12, SessionId::Integer(13));
+        let dest_session = test_transport_session_key(11, 0, 12, SessionId::Integer(13));
         let route_destination = MediaRouteDestination {
             dest_session: dest_session.clone(),
             dest_transport_media_id: TransportMediaId::default(),
@@ -323,7 +323,7 @@ mod tests {
     fn packet_forward_wraps_intra_node_relay_sinks_in_the_named_contract() {
         let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
         let packet = sample_forwarded_packet(
-            TransportSessionKey::new(11, 0, 12, SessionId::Integer(13)),
+            test_transport_session_key(11, 0, 12, SessionId::Integer(13)),
             "aud-up",
             b"payload",
         );
@@ -348,7 +348,7 @@ mod tests {
     fn packet_forward_wraps_inter_node_relay_sinks_in_the_named_contract() {
         let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
         let packet = sample_forwarded_packet(
-            TransportSessionKey::new(21, 0, 22, SessionId::Integer(23)),
+            test_transport_session_key(21, 0, 22, SessionId::Integer(23)),
             "aud-up",
             b"payload",
         );

@@ -14,6 +14,7 @@ use super::RuntimeTransportAdapter;
 use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
+        ChannelRuntimeId, ConnectionId,
         metrics::RuntimeMetrics,
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
@@ -26,6 +27,20 @@ use crate::{
 };
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::RtpCapabilities as RouterRtpCapabilities;
+
+fn test_session_key(
+    channel_runtime_id: u64,
+    media_worker_id: usize,
+    connection_id: u64,
+    session_id: SessionId,
+) -> TransportSessionKey {
+    TransportSessionKey::new(
+        ChannelRuntimeId::from_raw(channel_runtime_id),
+        media_worker_id,
+        ConnectionId::from_raw(connection_id),
+        session_id,
+    )
+}
 
 fn sample_router_capabilities() -> RouterRtpCapabilities {
     RouterRtpCapabilities::new(
@@ -237,9 +252,9 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));
-    let first_channel_session = TransportSessionKey::new(10, 0, 1, SessionId::Integer(1));
-    let second_channel_session = TransportSessionKey::new(11, 1, 1, SessionId::Integer(2));
-    let same_shard_session = TransportSessionKey::new(12, 0, 1, SessionId::Integer(3));
+    let first_channel_session = test_session_key(10, 0, 1, SessionId::Integer(1));
+    let second_channel_session = test_session_key(11, 1, 1, SessionId::Integer(2));
+    let same_shard_session = test_session_key(12, 0, 1, SessionId::Integer(3));
 
     let first_offer = adapter
         .create_initial_session_offer(&first_channel_session)
@@ -282,7 +297,7 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
 async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
-    let session_key = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
+    let session_key = test_session_key(18, 0, 19, SessionId::Integer(20));
     let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
     fake.set_active_speaker_source_snapshot(vec![speaker_source]);
 
@@ -332,8 +347,8 @@ async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updat
 #[tokio::test]
 async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
     let adapter = test_rtc_adapter(2, RtcPortRange::new(46_200, 46_299));
-    let source_session = TransportSessionKey::new(20, 0, 1, SessionId::Integer(1));
-    let consumer_session = TransportSessionKey::new(20, 1, 2, SessionId::Integer(2));
+    let source_session = test_session_key(20, 0, 1, SessionId::Integer(1));
+    let consumer_session = test_session_key(20, 1, 2, SessionId::Integer(2));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 41_000);
     let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 42_000);
 
@@ -428,9 +443,9 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));
-    let source_session = TransportSessionKey::new(30, 0, 1, SessionId::Integer(1));
-    let first_consumer_session = TransportSessionKey::new(30, 1, 2, SessionId::Integer(2));
-    let second_consumer_session = TransportSessionKey::new(30, 2, 3, SessionId::Integer(3));
+    let source_session = test_session_key(30, 0, 1, SessionId::Integer(1));
+    let first_consumer_session = test_session_key(30, 1, 2, SessionId::Integer(2));
+    let second_consumer_session = test_session_key(30, 2, 3, SessionId::Integer(3));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 51_000);
     let first_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-1", 52_000);
     let second_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-2", 53_000);
@@ -520,8 +535,8 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
 #[tokio::test]
 async fn rtc_adapter_rejects_stale_session_removal_without_dropping_consumer_handle() {
     let adapter = test_rtc_adapter(1, RtcPortRange::new(46_600, 46_649));
-    let source_session = TransportSessionKey::new(35, 0, 1, SessionId::Integer(1));
-    let consumer_session = TransportSessionKey::new(35, 0, 2, SessionId::Integer(2));
+    let source_session = test_session_key(35, 0, 1, SessionId::Integer(1));
+    let consumer_session = test_session_key(35, 0, 2, SessionId::Integer(2));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
     let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 55_000);
 
@@ -577,9 +592,9 @@ async fn rtc_adapter_rejects_stale_session_removal_without_dropping_consumer_han
 #[tokio::test]
 async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes() {
     let adapter = test_rtc_adapter(2, RtcPortRange::new(46_600, 46_699));
-    let source_session = TransportSessionKey::new(40, 0, 1, SessionId::Integer(1));
-    let local_consumer_session = TransportSessionKey::new(40, 0, 2, SessionId::Integer(2));
-    let remote_consumer_session = TransportSessionKey::new(40, 1, 3, SessionId::Integer(3));
+    let source_session = test_session_key(40, 0, 1, SessionId::Integer(1));
+    let local_consumer_session = test_session_key(40, 0, 2, SessionId::Integer(2));
+    let remote_consumer_session = test_session_key(40, 1, 3, SessionId::Integer(3));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 61_000);
     let local_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-local", 62_000);
     let remote_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-remote", 63_000);

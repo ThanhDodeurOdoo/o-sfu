@@ -12,7 +12,7 @@ fn test_video_rtp_parameters(ssrc: u64) -> RtpParameters {
 async fn publish_video_stream(
     channel: &Channel,
     session_id: &SessionId,
-    connection_id: u64,
+    connection_id: ConnectionId,
     stream_type: StreamType,
     ssrc: u64,
     transport_adapter: &RuntimeTransportAdapter,

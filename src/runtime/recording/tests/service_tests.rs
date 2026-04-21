@@ -4,8 +4,9 @@ use o_sfu_router::{
     MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, StreamType, TransportId,
 };
 
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::transport_adapter::TransportMediaId;
 use crate::runtime::{
+    ChannelRuntimeId,
     metrics::RuntimeMetrics,
     recording::{
         MediaSource, MediaTap, RecordingService,
@@ -13,7 +14,7 @@ use crate::runtime::{
             RecordingLifecycleState, into_media_source, is_channel_active, transition_error_state,
         },
     },
-    rtc_adapter::sample_forwarded_packet,
+    rtc_adapter::{sample_forwarded_packet, test_support::test_transport_session_key},
 };
 use o_sfu_protocol::shared::SessionId as SignalingSessionId;
 
@@ -22,8 +23,12 @@ fn recording_service_counts_packets_without_recounting_streams() {
     let media_tap = Arc::new(MediaTap::default());
     let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
     let metrics = Arc::new(RuntimeMetrics::default());
-    let service = RecordingService::new(30, media_source, Arc::clone(&metrics));
-    let session_key = TransportSessionKey::new(30, 0, 1, SignalingSessionId::Integer(9));
+    let service = RecordingService::new(
+        ChannelRuntimeId::from_raw(30),
+        media_source,
+        Arc::clone(&metrics),
+    );
+    let session_key = test_transport_session_key(30, 0, 1, SignalingSessionId::Integer(9));
     let first_packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"first");
     let second_packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"second");
     let third_packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"third");
@@ -52,7 +57,11 @@ fn recording_service_counts_packets_without_recounting_streams() {
 fn recording_service_allows_only_legal_state_machine_transitions() {
     let media_tap = Arc::new(MediaTap::default());
     let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
-    let service = RecordingService::new(17, media_source, Arc::new(RuntimeMetrics::default()));
+    let service = RecordingService::new(
+        ChannelRuntimeId::from_raw(17),
+        media_source,
+        Arc::new(RuntimeMetrics::default()),
+    );
 
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
     assert!(service.start().is_ok());
@@ -60,7 +69,10 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
         service.snapshot().lifecycle,
         RecordingLifecycleState::Recording
     );
-    assert!(is_channel_active(&media_tap, 17));
+    assert!(is_channel_active(
+        &media_tap,
+        ChannelRuntimeId::from_raw(17)
+    ));
 
     let invalid_start = service.start();
     assert!(invalid_start.is_err());
@@ -71,13 +83,20 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
 
     assert!(service.stop().is_ok());
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
-    assert!(!is_channel_active(&media_tap, 17));
+    assert!(!is_channel_active(
+        &media_tap,
+        ChannelRuntimeId::from_raw(17)
+    ));
 }
 
 #[test]
 fn recording_service_tracks_router_observer_inventory() {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
-    let service = RecordingService::new(22, media_source, Arc::new(RuntimeMetrics::default()));
+    let service = RecordingService::new(
+        ChannelRuntimeId::from_raw(22),
+        media_source,
+        Arc::new(RuntimeMetrics::default()),
+    );
     let session_id = RouterSessionId(9);
 
     service.handle_router_event(RouterEvent::SessionJoined { session_id });

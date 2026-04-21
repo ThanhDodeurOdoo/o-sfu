@@ -1,6 +1,7 @@
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::MediaCapabilities;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 
 use super::super::super::Channel;
@@ -15,7 +16,7 @@ impl ChannelTestNegotiation<'_> {
     pub(crate) async fn apply_client_rtp_capabilities(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         capabilities: MediaCapabilities,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -30,7 +31,7 @@ impl ChannelTestNegotiation<'_> {
     pub(crate) async fn apply_publish_transport_ready(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         self.apply_transport_ready_for_test(
@@ -45,7 +46,7 @@ impl ChannelTestNegotiation<'_> {
     pub(crate) async fn apply_consume_transport_ready(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         self.apply_transport_ready_for_test(
@@ -60,7 +61,7 @@ impl ChannelTestNegotiation<'_> {
     async fn apply_transport_ready_for_test(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         readiness: SessionTransportReady,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -75,7 +76,7 @@ impl ChannelTestNegotiation<'_> {
     async fn apply_negotiation_update_for_test(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         update: SessionNegotiationUpdate,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -101,7 +102,9 @@ impl ChannelTestNegotiation<'_> {
         capabilities: MediaCapabilities,
     ) -> SessionNegotiationUpdate {
         let mut state = self.channel.state.write().await;
-        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
+        let connection_id = state
+            .session_connection_id(session_id)
+            .unwrap_or(ConnectionId::from_raw(u64::MAX));
         state.set_client_rtp_capabilities_for_test(session_id, connection_id, &capabilities)
     }
 
@@ -110,7 +113,9 @@ impl ChannelTestNegotiation<'_> {
         session_id: &SessionId,
     ) -> SessionNegotiationUpdate {
         let mut state = self.channel.state.write().await;
-        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
+        let connection_id = state
+            .session_connection_id(session_id)
+            .unwrap_or(ConnectionId::from_raw(u64::MAX));
         state.set_transport_ready_for_test(
             session_id,
             connection_id,
@@ -123,7 +128,9 @@ impl ChannelTestNegotiation<'_> {
         session_id: &SessionId,
     ) -> SessionNegotiationUpdate {
         let mut state = self.channel.state.write().await;
-        let connection_id = state.session_connection_id(session_id).unwrap_or(u64::MAX);
+        let connection_id = state
+            .session_connection_id(session_id)
+            .unwrap_or(ConnectionId::from_raw(u64::MAX));
         state.set_transport_ready_for_test(
             session_id,
             connection_id,

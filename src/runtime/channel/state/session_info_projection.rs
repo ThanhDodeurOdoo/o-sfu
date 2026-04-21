@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::runtime::ConnectionId;
 use o_sfu_protocol::shared::SessionInfo;
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_protocol::signaling::PeerSnapshot;
@@ -100,7 +101,11 @@ impl ChannelState {
         )
     }
 
-    fn session_media_view(&self, session_id: &SessionId, connection_id: u64) -> SessionMediaView {
+    fn session_media_view(
+        &self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+    ) -> SessionMediaView {
         SessionMediaView {
             camera_active: self.stream_activity(session_id, connection_id, StreamType::Camera),
             screen_active: self.stream_activity(session_id, connection_id, StreamType::Screen),
@@ -110,7 +115,7 @@ impl ChannelState {
     fn stream_activity(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<bool> {
         let producer_id = self

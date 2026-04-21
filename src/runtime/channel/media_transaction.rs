@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use tracing::warn;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::{
     RuntimeTransportAdapter, TransportAdapterError, TransportMediaId,
 };
@@ -28,7 +29,7 @@ pub(super) struct PendingPublishTransactions {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingPublishKey {
     session_id: SessionId,
-    connection_id: u64,
+    connection_id: ConnectionId,
     stream_type: StreamType,
 }
 
@@ -41,7 +42,7 @@ pub(super) struct StagedPublishTransaction {
 #[derive(Debug)]
 pub(super) struct PublishCommitSnapshot {
     session_id: SessionId,
-    connection_id: u64,
+    connection_id: ConnectionId,
     prepared_track: PreparedPublishedTrack,
     transport_media_id: TransportMediaId,
 }
@@ -57,7 +58,7 @@ impl PendingPublishTransactions {
     pub(super) fn contains(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
         self.staged.contains_key(&PendingPublishKey::new(
@@ -74,7 +75,7 @@ impl PendingPublishTransactions {
     pub(super) fn take(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<StagedPublishTransaction> {
         self.staged.remove(&PendingPublishKey::new(
@@ -87,7 +88,7 @@ impl PendingPublishTransactions {
     pub(super) fn take_for_connection(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Vec<StagedPublishTransaction> {
         let matching_keys = self
             .staged
@@ -103,7 +104,11 @@ impl PendingPublishTransactions {
 }
 
 impl PendingPublishKey {
-    pub(super) fn new(session_id: &SessionId, connection_id: u64, stream_type: StreamType) -> Self {
+    pub(super) fn new(
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+        stream_type: StreamType,
+    ) -> Self {
         Self {
             session_id: session_id.clone(),
             connection_id,
@@ -226,9 +231,9 @@ impl ConsumerBootstrapTransaction {
                     .await;
                 warn!(
                     consumer_session_id = ?self.target.consumer_session_id(),
-                    consumer_connection_id = self.target.consumer_connection_id(),
+                    consumer_connection_id = ?self.target.consumer_connection_id(),
                     producer_session_id = ?self.target.producer_session_id(),
-                    producer_connection_id = self.target.producer_connection_id(),
+                    producer_connection_id = ?self.target.producer_connection_id(),
                     source_transport_media_id = ?self.target.transport_media_id(),
                     error = ?error,
                     consumer_mid = self.prepared.consumer_rtp_parameters().mid(),
@@ -280,7 +285,7 @@ impl ConsumerBootstrapTransaction {
 #[derive(Debug)]
 pub(super) struct UnpublishTransaction {
     session_id: SessionId,
-    connection_id: u64,
+    connection_id: ConnectionId,
     stream_type: StreamType,
     transport_removals: Vec<TransportMediaRemoval>,
 }
@@ -288,7 +293,7 @@ pub(super) struct UnpublishTransaction {
 impl UnpublishTransaction {
     pub(super) fn new(
         session_id: SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         transport_removals: Vec<TransportMediaRemoval>,
     ) -> Self {
@@ -317,7 +322,7 @@ impl UnpublishTransaction {
         }) else {
             warn!(
                 session_id = ?self.session_id,
-                connection_id = self.connection_id,
+                connection_id = ?self.connection_id,
                 stream_type = ?self.stream_type,
                 "transport cleanup succeeded but channel state commit failed"
             );
@@ -332,7 +337,7 @@ impl Channel {
     pub(crate) async fn has_staged_publish(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
         self.pending_publish_transactions.lock().await.contains(
@@ -345,7 +350,7 @@ impl Channel {
     pub(crate) async fn stage_negotiated_publish(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -373,7 +378,7 @@ impl Channel {
             Err(_error) => {
                 warn!(
                     ?session_id,
-                    connection_id,
+                    connection_id = ?connection_id,
                     ?stream_type,
                     "failed to stage negotiated publish stream"
                 );
@@ -409,7 +414,7 @@ impl Channel {
     pub(crate) async fn rollback_staged_publish(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -435,7 +440,7 @@ impl Channel {
     pub(crate) async fn rollback_staged_publishes_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         let staged_publishes = self
@@ -458,7 +463,7 @@ impl Channel {
     pub(crate) async fn commit_staged_publishes(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         let staged_publishes = self
@@ -499,7 +504,7 @@ impl Channel {
                 StagedPublishCommitOutcome::LoadParametersFailed(error) => {
                     warn!(
                         ?session_id,
-                        connection_id,
+                        connection_id = ?connection_id,
                         ?stream_type,
                         ?transport_media_id,
                         ?error,
@@ -509,7 +514,7 @@ impl Channel {
                 StagedPublishCommitOutcome::PublishRejected => {
                     warn!(
                         ?session_id,
-                        connection_id,
+                        connection_id = ?connection_id,
                         ?stream_type,
                         ?transport_media_id,
                         "channel rejected staged negotiated publish during commit"
@@ -561,7 +566,7 @@ impl Channel {
     pub(super) async fn cleanup_transport_media(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
         transport_adapter: &RuntimeTransportAdapter,
         failure_message: &str,
@@ -576,7 +581,7 @@ impl Channel {
         {
             warn!(
                 ?session_id,
-                connection_id,
+                connection_id = ?connection_id,
                 ?transport_media_id,
                 "{failure_message}"
             );
@@ -599,7 +604,7 @@ impl Channel {
             {
                 warn!(
                     session_id = ?removal.session(),
-                    connection_id = removal.connection(),
+                    connection_id = ?removal.connection(),
                     transport_media_id = ?removal.transport_media(),
                     "transport adapter failed to remove transport media during channel cleanup"
                 );

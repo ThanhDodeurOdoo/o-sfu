@@ -1,5 +1,6 @@
 use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::TransportMediaId;
 
 use super::super::super::Channel;
@@ -49,7 +50,10 @@ impl ChannelTestInspect<'_> {
             .parsed_client_rtp_capabilities(session_id)
     }
 
-    pub(crate) async fn session_connection_id(self, session_id: &SessionId) -> Option<u64> {
+    pub(crate) async fn session_connection_id(
+        self,
+        session_id: &SessionId,
+    ) -> Option<ConnectionId> {
         self.channel
             .state
             .read()
@@ -76,7 +80,7 @@ impl ChannelTestInspect<'_> {
     pub(crate) async fn producer_transport_media_id(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<TransportMediaId> {
         self.channel.state.read().await.producer_transport_media_id(
@@ -89,7 +93,7 @@ impl ChannelTestInspect<'_> {
     pub(crate) async fn has_producer_route_target(
         self,
         owner_session_id: &SessionId,
-        owner_connection_id: u64,
+        owner_connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
         self.channel

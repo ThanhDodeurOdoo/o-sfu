@@ -2,6 +2,7 @@ use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 use o_sfu_protocol::signaling::RecordingOptions;
 use tokio::sync::mpsc;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 
 use super::super::super::{Channel, ChannelJoinError, SessionCleanup, SessionOutbound};
@@ -18,7 +19,7 @@ impl ChannelTestLifecycle<'_> {
         label: Option<String>,
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
-    ) -> Result<u64, ChannelJoinError> {
+    ) -> Result<ConnectionId, ChannelJoinError> {
         self.channel
             .join_session_with_cleanup(
                 session_id,
@@ -38,7 +39,7 @@ impl ChannelTestLifecycle<'_> {
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
         transport_adapter: &RuntimeTransportAdapter,
-    ) -> Result<u64, ChannelJoinError> {
+    ) -> Result<ConnectionId, ChannelJoinError> {
         self.channel
             .join_session_with_cleanup(
                 session_id,
@@ -51,7 +52,11 @@ impl ChannelTestLifecycle<'_> {
             .await
     }
 
-    pub(crate) async fn leave_session(self, session_id: &SessionId, connection_id: u64) -> bool {
+    pub(crate) async fn leave_session(
+        self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+    ) -> bool {
         self.leave_session_with_cleanup(session_id, connection_id, SessionCleanup::state_only(None))
             .await
     }
@@ -59,7 +64,7 @@ impl ChannelTestLifecycle<'_> {
     pub(crate) async fn leave_session_runtime(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         self.leave_session_with_cleanup(
@@ -73,7 +78,7 @@ impl ChannelTestLifecycle<'_> {
     pub(crate) async fn leave_session_without_transport_cleanup(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         self.leave_session_with_cleanup(
@@ -87,7 +92,7 @@ impl ChannelTestLifecycle<'_> {
     async fn leave_session_with_cleanup(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         cleanup: SessionCleanup<'_>,
     ) -> bool {
         let channel = self.channel;

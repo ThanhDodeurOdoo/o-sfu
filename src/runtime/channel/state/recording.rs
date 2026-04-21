@@ -2,6 +2,7 @@ use o_sfu_protocol::shared::{RecordingState, RecordingStateUpdate, SessionId, St
 
 use super::super::{ChannelEventMessage, ChannelSessionPermissions, outbound::MessageFanout};
 use super::shared::ChannelState;
+use crate::runtime::ConnectionId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct RecordingRequestContext {
@@ -25,7 +26,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn recording_request_context(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Option<RecordingRequestContext> {
         let session = self.session_for_connection(session_id, connection_id)?;
         Some(RecordingRequestContext {

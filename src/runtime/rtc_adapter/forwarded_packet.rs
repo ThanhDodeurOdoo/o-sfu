@@ -311,12 +311,14 @@ mod tests {
 
     use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
 
-    use crate::runtime::rtc_adapter::media_registry::RegisteredMediaHandle;
+    use crate::runtime::rtc_adapter::{
+        media_registry::RegisteredMediaHandle, test_support::test_transport_session_key,
+    };
     use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn forwarded_packet_resolves_transport_media_id_through_the_registry() {
-        let session_key = TransportSessionKey::new(41, 0, 9, SessionId::Integer(7));
+        let session_key = test_transport_session_key(41, 0, 9, SessionId::Integer(7));
         let mut state = RtcBootstrapState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),
@@ -332,7 +334,7 @@ mod tests {
 
     #[test]
     fn forwarded_packet_exposes_recording_payload_and_received_at() {
-        let session_key = TransportSessionKey::new(42, 0, 10, SessionId::Integer(8));
+        let session_key = test_transport_session_key(42, 0, 10, SessionId::Integer(8));
         let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
 
         assert_eq!(packet.source_session_key(), &session_key);
@@ -343,7 +345,7 @@ mod tests {
 
     #[test]
     fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
-        let session_key = TransportSessionKey::new(43, 0, 11, SessionId::Integer(9));
+        let session_key = test_transport_session_key(43, 0, 11, SessionId::Integer(9));
         let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
         let mut relay_packet = packet.share_for_relay(TransportMediaId::new(18));
 
@@ -357,7 +359,7 @@ mod tests {
 
     #[test]
     fn forwarded_packet_falls_back_to_ssrc_when_mid_is_missing() {
-        let session_key = TransportSessionKey::new(44, 0, 12, SessionId::Integer(10));
+        let session_key = test_transport_session_key(44, 0, 12, SessionId::Integer(10));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 65_432_u32;
         let mut state = RtcBootstrapState::default();
@@ -386,7 +388,7 @@ mod tests {
 
     #[test]
     fn forwarded_packet_caches_the_resolved_source_transport_media_id() {
-        let session_key = TransportSessionKey::new(45, 0, 13, SessionId::Integer(11));
+        let session_key = test_transport_session_key(45, 0, 13, SessionId::Integer(11));
         let mut state = RtcBootstrapState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),

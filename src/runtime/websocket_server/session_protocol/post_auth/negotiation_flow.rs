@@ -34,7 +34,7 @@ impl PostAuthSessionProtocol {
             .map_err(|error| {
                 warn!(
                     session_id = ?self.session_id,
-                    connection_id = self.connection_id,
+                    connection_id = ?self.connection_id,
                     ?error,
                     "failed to create initial transport offer"
                 );
@@ -63,7 +63,7 @@ impl PostAuthSessionProtocol {
         if let Err(code) = send_server_request(writer, request_id.clone(), request.clone()).await {
             warn!(
                 session_id = ?self.session_id,
-                connection_id = self.connection_id,
+                connection_id = ?self.connection_id,
                 ?request_id,
                 close_code = u16::from(code),
                 "failed to send negotiation request over websocket"
@@ -147,7 +147,7 @@ impl PostAuthSessionProtocol {
         if answer.sdp.is_empty() {
             warn!(
                 session_id = ?self.session_id,
-                connection_id = self.connection_id,
+                connection_id = ?self.connection_id,
                 ?response_to,
                 "received empty SDP answer for negotiation request"
             );
@@ -165,7 +165,7 @@ impl PostAuthSessionProtocol {
         let Some(resolved) = self.negotiation.resolve_answer(response_to) else {
             warn!(
                 session_id = ?self.session_id,
-                connection_id = self.connection_id,
+                connection_id = ?self.connection_id,
                 ?response_to,
                 "received negotiation answer for an unknown or stale request"
             );
@@ -190,7 +190,7 @@ impl PostAuthSessionProtocol {
         {
             warn!(
                 session_id = ?self.session_id,
-                connection_id = self.connection_id,
+                connection_id = ?self.connection_id,
                 ?response_to,
                 request = ?resolved.pending.request,
                 ?error,
@@ -232,7 +232,7 @@ impl PostAuthSessionProtocol {
                     .map_err(|error| {
                         warn!(
                             session_id = ?self.session_id,
-                            connection_id = self.connection_id,
+                            connection_id = ?self.connection_id,
                             ?error,
                             "failed to project client RTP capabilities from the answered SDP"
                         );
@@ -249,7 +249,7 @@ impl PostAuthSessionProtocol {
                 {
                     warn!(
                         session_id = ?self.session_id,
-                        connection_id = self.connection_id,
+                        connection_id = ?self.connection_id,
                         "failed to commit negotiated session state after initial answer"
                     );
                     return Err(());
@@ -267,7 +267,7 @@ impl PostAuthSessionProtocol {
                 {
                     warn!(
                         session_id = ?self.session_id,
-                        connection_id = self.connection_id,
+                        connection_id = ?self.connection_id,
                         "failed to refresh session state after renegotiation answer"
                     );
                     return Err(());
@@ -322,9 +322,9 @@ mod tests {
         runtime::{
             metrics::RuntimeMetrics,
             recording::MediaTap,
+            rtc_adapter::test_support::test_transport_session_key,
             transport_adapter::{
                 RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
-                TransportSessionKey,
             },
         },
     };
@@ -357,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn staged_renegotiation_request_returns_none_without_pending_offer() {
         let transport_adapter = build_real_rtc_transport_adapter(58_100);
-        let session_key = TransportSessionKey::new(7, 0, 11, SessionId::Integer(19));
+        let session_key = test_transport_session_key(7, 0, 11, SessionId::Integer(19));
         let initial_offer_result = transport_adapter
             .create_initial_session_offer(&session_key)
             .await;
@@ -393,7 +393,7 @@ mod tests {
     #[tokio::test]
     async fn staged_renegotiation_request_keeps_transport_errors_fatal() {
         let transport_adapter = build_real_rtc_transport_adapter(58_400);
-        let missing_session_key = TransportSessionKey::new(8, 0, 12, SessionId::Integer(20));
+        let missing_session_key = test_transport_session_key(8, 0, 12, SessionId::Integer(20));
 
         let renegotiation_request =
             staged_renegotiation_request(&transport_adapter, &missing_session_key).await;

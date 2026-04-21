@@ -10,6 +10,7 @@ use std::{
 
 use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId, TransportId};
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
@@ -119,7 +120,7 @@ struct RecordingServiceState {
 
 // TODO: needs documentation:
 pub(crate) struct RecordingService {
-    channel_runtime_id: u64,
+    channel_runtime_id: ChannelRuntimeId,
     media_source: Arc<dyn MediaSource>,
     lifecycle: Arc<AtomicU8>,
     sessions: Arc<Mutex<RecordingServiceState>>,
@@ -130,7 +131,7 @@ pub(crate) struct RecordingService {
 
 impl RecordingService {
     pub(crate) fn new(
-        channel_runtime_id: u64,
+        channel_runtime_id: ChannelRuntimeId,
         media_source: Arc<dyn MediaSource>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {

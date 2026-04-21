@@ -4,6 +4,7 @@ use axum::extract::ws::Message;
 use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 
 use crate::runtime::{
+    ConnectionId,
     channel::{Channel, SessionCloseReason, SessionOutbound},
     metrics::RuntimeMetrics,
     transport_adapter::RuntimeTransportAdapter,
@@ -29,7 +30,7 @@ pub(in crate::runtime::websocket_server) struct SessionProtocol(PostAuthSessionP
 impl SessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
         session_id: SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,

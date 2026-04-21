@@ -27,6 +27,7 @@ use crate::config::RuntimeFeatureFlags;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportSessionKey};
+use crate::runtime::{ChannelRuntimeId, ConnectionId};
 
 use super::{
     definition::ChannelDefinition,
@@ -83,7 +84,7 @@ impl ChannelAdmissionPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChannelRuntimeContext {
-    pub(crate) runtime: u64,
+    pub(crate) runtime: ChannelRuntimeId,
     pub(crate) media_worker: usize,
     pub(crate) router: RouterId,
 }
@@ -200,7 +201,7 @@ impl Channel {
     pub(crate) fn transport_session_key(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> TransportSessionKey {
         self.definition
             .transport_session_key(session_id, connection_id)

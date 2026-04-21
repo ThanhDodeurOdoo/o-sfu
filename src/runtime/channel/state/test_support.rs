@@ -1,6 +1,7 @@
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::TransportMediaId;
 
 use super::shared::{ChannelState, ProducerKey};
@@ -57,7 +58,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn producer_transport_media_id(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<TransportMediaId> {
         let producer_id = self

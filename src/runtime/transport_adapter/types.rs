@@ -3,6 +3,8 @@ use std::{sync::Arc, time::Instant};
 use o_sfu_protocol::shared::SessionId;
 use thiserror::Error;
 
+use crate::runtime::{ChannelRuntimeId, ConnectionId};
+
 /// Channel-scoped transport-adapter session identity.
 ///
 /// A `SessionId` alone is not unique across the server: the same id can appear
@@ -11,18 +13,18 @@ use thiserror::Error;
 /// signaling connection, and session id.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TransportSessionKey {
-    channel_runtime: u64,
+    channel_runtime: ChannelRuntimeId,
     media_worker: usize,
-    connection: u64,
+    connection: ConnectionId,
     session: Arc<SessionId>,
 }
 
 impl TransportSessionKey {
     #[must_use]
     pub(crate) fn new(
-        channel_runtime_id: u64,
+        channel_runtime_id: ChannelRuntimeId,
         media_worker_id: usize,
-        connection_id: u64,
+        connection_id: ConnectionId,
         session_id: SessionId,
     ) -> Self {
         Self {
@@ -34,7 +36,7 @@ impl TransportSessionKey {
     }
 
     #[must_use]
-    pub(crate) fn channel_runtime_id(&self) -> u64 {
+    pub(crate) const fn channel_runtime_id(&self) -> ChannelRuntimeId {
         self.channel_runtime
     }
 

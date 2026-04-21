@@ -2,10 +2,11 @@ use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::MediaCapabilities;
 
 use super::{super::shared::ChannelState, PendingConsumerBootstrapTarget};
+use crate::runtime::ConnectionId;
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PublishPrerequisites {
-    connection_id: u64,
+    connection_id: ConnectionId,
     router_capabilities: MediaCapabilities,
 }
 
@@ -39,7 +40,7 @@ impl ChannelState {
 }
 
 impl PublishPrerequisites {
-    pub(in crate::runtime::channel) const fn connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn connection_id(&self) -> ConnectionId {
         self.connection_id
     }
 

@@ -4,6 +4,7 @@ use o_sfu_router::{
 };
 use tracing::{error, warn};
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{SessionId, StreamType};
 
@@ -17,14 +18,14 @@ use super::router_stream_type::to_router_stream_type;
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PendingConsumerBootstrapTarget {
     pub(super) consumer_session_id: SessionId,
-    pub(super) consumer_connection_id: u64,
+    pub(super) consumer_connection_id: ConnectionId,
     producer: ConsumerBootstrapProducerSnapshot,
 }
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct ConsumerBootstrapProducerSnapshot {
     owner_session_id: SessionId,
-    owner_connection_id: u64,
+    owner_connection_id: ConnectionId,
     producer_id: ProducerRuntimeId,
     stream_type: StreamType,
     media_kind: RouterMediaKind,
@@ -72,7 +73,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn missing_consumer_targets_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Option<Vec<PendingConsumerBootstrapTarget>> {
         let session = self.sessions.get(session_id)?;
         if session.connection_id != connection_id {
@@ -87,7 +88,7 @@ impl ChannelState {
     pub(super) fn collect_missing_consumer_targets(
         &self,
         session_id: &SessionId,
-        consumer_connection_id: u64,
+        consumer_connection_id: ConnectionId,
     ) -> Vec<PendingConsumerBootstrapTarget> {
         self.producers
             .iter()
@@ -300,7 +301,7 @@ impl ChannelState {
 impl PendingConsumerBootstrapTarget {
     pub(in crate::runtime::channel) fn new(
         consumer_session_id: SessionId,
-        consumer_connection_id: u64,
+        consumer_connection_id: ConnectionId,
         producer: ConsumerBootstrapProducerSnapshot,
     ) -> Self {
         Self {
@@ -314,7 +315,7 @@ impl PendingConsumerBootstrapTarget {
         &self.producer
     }
 
-    pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_connection_id
     }
 
@@ -326,7 +327,7 @@ impl PendingConsumerBootstrapTarget {
         self.producer.media_kind
     }
 
-    pub(in crate::runtime::channel) const fn producer_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn producer_connection_id(&self) -> ConnectionId {
         self.producer.owner_connection_id
     }
 
@@ -352,7 +353,7 @@ impl PreparedConsumerBootstrap {
 impl ConsumerBootstrapProducerSnapshot {
     pub(in crate::runtime::channel) fn pending(
         owner_session_id: SessionId,
-        owner_connection_id: u64,
+        owner_connection_id: ConnectionId,
         producer_id: ProducerRuntimeId,
         stream_type: StreamType,
         media_kind: RouterMediaKind,

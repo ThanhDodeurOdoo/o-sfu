@@ -20,7 +20,7 @@ impl PostAuthSessionProtocol {
         }
         debug!(
             session_id = ?self.session_id,
-            connection_id = self.connection_id,
+            connection_id = ?self.connection_id,
             "rejecting client envelope from a stale websocket connection"
         );
         true

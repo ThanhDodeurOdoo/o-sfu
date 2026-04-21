@@ -12,6 +12,7 @@ use std::{
 use tokio::runtime::Builder;
 
 use super::{
+    ChannelRuntimeId, ConnectionId,
     metrics::RuntimeMetrics,
     recording::MediaTap,
     rtc_adapter::{RemoteAddrDemux, RtcTransportAdapter},
@@ -205,9 +206,9 @@ fn benchmark_session_key(idx: usize) -> Option<TransportSessionKey> {
     let session_id = SessionId::Integer(i64::try_from(idx).ok()?);
     let connection_id = BENCHMARK_FIRST_CONNECTION_ID.saturating_add(u64::try_from(idx).ok()?);
     Some(TransportSessionKey::new(
-        BENCHMARK_CHANNEL_RUNTIME_ID,
+        ChannelRuntimeId::from_raw(BENCHMARK_CHANNEL_RUNTIME_ID),
         BENCHMARK_MEDIA_WORKER_ID,
-        connection_id,
+        ConnectionId::from_raw(connection_id),
         session_id,
     ))
 }

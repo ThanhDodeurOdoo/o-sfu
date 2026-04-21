@@ -249,7 +249,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
     drain_outbound(&mut rx2);
 
     // Session 1 leaves.
-    let connection_id = 0; // first join gets connection_id 0
+    let connection_id = test_connection_id(0); // first join gets connection_id 0
     channel
         .test_api()
         .lifecycle()

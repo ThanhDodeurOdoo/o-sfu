@@ -114,7 +114,11 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     let Some(transport_media_id) = channel
         .test_api()
         .inspect()
-        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .producer_transport_media_id(
+            &SessionId::Integer(1),
+            test_connection_id(0),
+            StreamType::Camera,
+        )
         .await
     else {
         panic!("published camera should expose a transport media id");
@@ -122,7 +126,12 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 
     assert!(
         channel
-            .unpublish_track(&SessionId::Integer(1), 0, StreamType::Camera, &adapter)
+            .unpublish_track(
+                &SessionId::Integer(1),
+                test_connection_id(0),
+                StreamType::Camera,
+                &adapter,
+            )
             .await
     );
 
@@ -132,7 +141,11 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         !channel
             .test_api()
             .inspect()
-            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .has_producer_route_target(
+                &SessionId::Integer(1),
+                test_connection_id(0),
+                StreamType::Camera,
+            )
             .await
     );
     assert!(
@@ -236,7 +249,11 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
     let Some(transport_media_id) = channel
         .test_api()
         .inspect()
-        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .producer_transport_media_id(
+            &SessionId::Integer(1),
+            test_connection_id(0),
+            StreamType::Camera,
+        )
         .await
     else {
         panic!("published camera should expose a transport media id");
@@ -319,7 +336,11 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
     let Some(transport_media_id) = channel
         .test_api()
         .inspect()
-        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .producer_transport_media_id(
+            &SessionId::Integer(1),
+            test_connection_id(0),
+            StreamType::Camera,
+        )
         .await
     else {
         panic!("published camera should expose a transport media id");
@@ -410,7 +431,11 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     let Some(transport_media_id) = channel
         .test_api()
         .inspect()
-        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .producer_transport_media_id(
+            &SessionId::Integer(1),
+            test_connection_id(0),
+            StreamType::Camera,
+        )
         .await
     else {
         panic!("published camera should expose a transport media id");
@@ -420,7 +445,11 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
         channel
             .test_api()
             .lifecycle()
-            .leave_session_without_transport_cleanup(&SessionId::Integer(3), 2, &adapter,)
+            .leave_session_without_transport_cleanup(
+                &SessionId::Integer(3),
+                test_connection_id(2),
+                &adapter,
+            )
             .await
     );
 
@@ -555,6 +584,35 @@ async fn source_media_ids(
         panic!("camera producer should expose a transport media id");
     };
     (audio_media_id, camera_media_id)
+}
+
+async fn assert_transport_media_mapping_is_missing(
+    channel: &Arc<Channel>,
+    transport_media_id: TransportMediaId,
+) {
+    assert!(
+        channel
+            .test_api()
+            .inspect()
+            .producer_stream_type_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+}
+
+async fn assert_session_has_no_producer_route_target(
+    channel: &Arc<Channel>,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    stream_type: StreamType,
+) {
+    assert!(
+        !channel
+            .test_api()
+            .inspect()
+            .has_producer_route_target(session_id, connection_id, stream_type)
+            .await
+    );
 }
 
 fn assert_source_packet_selection_update(
@@ -909,7 +967,11 @@ async fn session_replacement_purges_stale_published_media_state() {
         channel
             .test_api()
             .inspect()
-            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .has_producer_route_target(
+                &SessionId::Integer(1),
+                test_connection_id(0),
+                StreamType::Camera,
+            )
             .await
     );
 
@@ -944,7 +1006,11 @@ async fn session_replacement_purges_stale_published_media_state() {
         !channel
             .test_api()
             .inspect()
-            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .has_producer_route_target(
+                &SessionId::Integer(1),
+                test_connection_id(0),
+                StreamType::Camera,
+            )
             .await
     );
 }
@@ -994,12 +1060,20 @@ async fn session_replacement_purges_all_published_stream_mappings() {
     let camera_transport_media_id = channel
         .test_api()
         .inspect()
-        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Camera)
+        .producer_transport_media_id(
+            &SessionId::Integer(1),
+            test_connection_id(0),
+            StreamType::Camera,
+        )
         .await;
     let audio_transport_media_id = channel
         .test_api()
         .inspect()
-        .producer_transport_media_id(&SessionId::Integer(1), 0, StreamType::Audio)
+        .producer_transport_media_id(
+            &SessionId::Integer(1),
+            test_connection_id(0),
+            StreamType::Audio,
+        )
         .await;
     assert!(camera_transport_media_id.is_some());
     assert!(audio_transport_media_id.is_some());
@@ -1021,40 +1095,30 @@ async fn session_replacement_purges_all_published_stream_mappings() {
 
     assert_eq!(channel.test_api().inspect().producer_count().await, 0);
     assert_eq!(channel.test_api().inspect().consumer_count().await, 0);
-    assert!(
-        channel
-            .test_api()
-            .inspect()
-            .producer_stream_type_for_transport_media_id(
-                camera_transport_media_id.expect("camera producer should expose a transport id")
-            )
-            .await
-            .is_none()
-    );
-    assert!(
-        channel
-            .test_api()
-            .inspect()
-            .producer_stream_type_for_transport_media_id(
-                audio_transport_media_id.expect("audio producer should expose a transport id")
-            )
-            .await
-            .is_none()
-    );
-    assert!(
-        !channel
-            .test_api()
-            .inspect()
-            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
-            .await
-    );
-    assert!(
-        !channel
-            .test_api()
-            .inspect()
-            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Audio)
-            .await
-    );
+    assert_transport_media_mapping_is_missing(
+        &channel,
+        camera_transport_media_id.expect("camera producer should expose a transport id"),
+    )
+    .await;
+    assert_transport_media_mapping_is_missing(
+        &channel,
+        audio_transport_media_id.expect("audio producer should expose a transport id"),
+    )
+    .await;
+    assert_session_has_no_producer_route_target(
+        &channel,
+        &SessionId::Integer(1),
+        test_connection_id(0),
+        StreamType::Camera,
+    )
+    .await;
+    assert_session_has_no_producer_route_target(
+        &channel,
+        &SessionId::Integer(1),
+        test_connection_id(0),
+        StreamType::Audio,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1191,7 +1255,11 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
         channel
             .test_api()
             .inspect()
-            .has_producer_route_target(&SessionId::Integer(1), 0, StreamType::Camera)
+            .has_producer_route_target(
+                &SessionId::Integer(1),
+                test_connection_id(0),
+                StreamType::Camera,
+            )
             .await
     );
 }
@@ -1234,7 +1302,7 @@ async fn publish_track_cleans_up_transport_media_when_session_leaves_mid_publish
         channel
             .test_api()
             .lifecycle()
-            .leave_session(&SessionId::Integer(1), 0)
+            .leave_session(&SessionId::Integer(1), test_connection_id(0))
             .await
     );
     assert!(publish_task.await.unwrap().is_none());
@@ -1559,7 +1627,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_session_leaves_mid_c
         channel
             .test_api()
             .lifecycle()
-            .leave_session(&SessionId::Integer(2), 1)
+            .leave_session(&SessionId::Integer(2), test_connection_id(1))
             .await
     );
     bootstrap_task.await.unwrap();
@@ -1660,7 +1728,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         channel
             .unpublish_track(
                 &SessionId::Integer(1),
-                0,
+                test_connection_id(0),
                 StreamType::Camera,
                 &transport_adapter
             )
@@ -1723,7 +1791,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
                     .inspect()
                     .session_connection_id(&SessionId::Integer(2))
                     .await
-                    .unwrap_or(u64::MAX),
+                    .unwrap_or(test_connection_id(u64::MAX)),
                 test_client_rtp_capabilities(),
                 &transport_adapter,
             )
@@ -1790,7 +1858,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
                     .inspect()
                     .session_connection_id(&SessionId::Integer(2))
                     .await
-                    .unwrap_or(u64::MAX),
+                    .unwrap_or(test_connection_id(u64::MAX)),
                 &transport_adapter,
             )
             .await

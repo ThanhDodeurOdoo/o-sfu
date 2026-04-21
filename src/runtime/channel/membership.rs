@@ -2,6 +2,7 @@ use o_sfu_router::MediaCapabilities;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
@@ -60,7 +61,7 @@ enum SessionTransition<'a> {
     },
     Close {
         session_id: &'a SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     },
     Disconnect {
         session_ids: &'a [SessionId],
@@ -68,7 +69,7 @@ enum SessionTransition<'a> {
 }
 
 enum SessionTransitionResult {
-    Joined(u64),
+    Joined(ConnectionId),
     Applied,
     Missing,
 }
@@ -78,7 +79,7 @@ enum SessionTransitionOutcome {
     Close {
         outcome: Option<LeaveSessionOutcome>,
         session_id: SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     },
     Disconnect(DisconnectSessionsOutcome),
 }
@@ -91,7 +92,7 @@ impl Channel {
         permissions: SessionPermissions,
         sender: mpsc::UnboundedSender<SessionOutbound>,
         transport_adapter: &RuntimeTransportAdapter,
-    ) -> Result<u64, ChannelJoinError> {
+    ) -> Result<ConnectionId, ChannelJoinError> {
         self.join_session_with_cleanup(
             session_id,
             label,
@@ -113,7 +114,7 @@ impl Channel {
         sender: mpsc::UnboundedSender<SessionOutbound>,
         cleanup: SessionCleanup<'_>,
         emit_joined_fanout: bool,
-    ) -> Result<u64, ChannelJoinError> {
+    ) -> Result<ConnectionId, ChannelJoinError> {
         let SessionTransitionResult::Joined(connection_id) = self
             .run_session_transition(
                 SessionTransition::Join {
@@ -135,7 +136,7 @@ impl Channel {
     pub(crate) async fn close_session_runtime(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         self.run_session_transition(
@@ -152,7 +153,7 @@ impl Channel {
     pub(crate) async fn broadcast_runtime(
         &self,
         sender_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         message: serde_json::Value,
     ) {
         let fanout = {
@@ -164,14 +165,18 @@ impl Channel {
         }
     }
 
-    pub(crate) async fn has_connection(&self, session_id: &SessionId, connection_id: u64) -> bool {
+    pub(crate) async fn has_connection(
+        &self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+    ) -> bool {
         self.state.read().await.session_connection_id(session_id) == Some(connection_id)
     }
 
     pub(crate) async fn update_session_info_runtime_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         info: SessionInfo,
         need_refresh: bool,
         transport_adapter: &RuntimeTransportAdapter,
@@ -189,7 +194,7 @@ impl Channel {
     async fn update_session_info_with_transport(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         info: SessionInfo,
         need_refresh: bool,
         transport_adapter: Option<&RuntimeTransportAdapter>,
@@ -205,7 +210,7 @@ impl Channel {
         } else {
             warn!(
                 ?session_id,
-                connection_id,
+                connection_id = ?connection_id,
                 ?info,
                 need_refresh,
                 "session info update was rejected by channel state"
@@ -258,7 +263,7 @@ impl Channel {
             {
                 warn!(
                     session_id = ?removal.session(),
-                    connection_id = removal.connection(),
+                    connection_id = ?removal.connection(),
                     transport_media_id = ?removal.transport_media(),
                     "transport adapter failed to remove transport media during channel cleanup"
                 );
@@ -269,7 +274,7 @@ impl Channel {
     async fn close_transport_session(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         if transport_adapter
@@ -279,7 +284,8 @@ impl Channel {
         {
             warn!(
                 ?session_id,
-                connection_id, "transport adapter failed to close session during channel cleanup"
+                connection_id = ?connection_id,
+                "transport adapter failed to close session during channel cleanup"
             );
         }
     }
@@ -401,7 +407,7 @@ impl Channel {
     pub(crate) async fn apply_session_negotiated(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         capabilities: MediaCapabilities,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -416,7 +422,7 @@ impl Channel {
     async fn apply_negotiation_update(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         update: SessionNegotiationUpdate,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -438,7 +444,7 @@ impl Channel {
     pub(crate) async fn apply_session_refreshed(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         self.bootstrap_missing_consumers_for_connection(

@@ -320,7 +320,9 @@ async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peer
     assert_eq!(channel.session_count().await, 2);
 }
 
-async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, u64) {
+async fn join_same_session_twice(
+    channel: &Arc<super::super::Channel>,
+) -> (ConnectionId, ConnectionId) {
     let (tx1, _rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let first_connection = channel
@@ -333,7 +335,7 @@ async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, 
             tx1,
         )
         .await
-        .unwrap_or(u64::MAX);
+        .unwrap_or(test_connection_id(u64::MAX));
     let second_connection = channel
         .test_api()
         .lifecycle()
@@ -344,7 +346,7 @@ async fn join_same_session_twice(channel: &Arc<super::super::Channel>) -> (u64, 
             tx2,
         )
         .await
-        .unwrap_or(u64::MAX);
+        .unwrap_or(test_connection_id(u64::MAX));
     (first_connection, second_connection)
 }
 
@@ -702,8 +704,8 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_session() {
 struct StaleRefreshScenario {
     channel: Arc<super::super::Channel>,
     transport_adapter: RuntimeTransportAdapter,
-    first_subscriber_connection: u64,
-    second_subscriber_connection: u64,
+    first_subscriber_connection: ConnectionId,
+    second_subscriber_connection: ConnectionId,
     second_subscriber_rx: mpsc::UnboundedReceiver<SessionOutbound>,
 }
 

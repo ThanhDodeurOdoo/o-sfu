@@ -4,6 +4,7 @@ use o_sfu_router::{
 };
 use tracing::warn;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::{RuntimeTransportAdapter, TransportMediaId};
 
 use super::super::super::{
@@ -12,7 +13,7 @@ use super::super::super::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct NegotiatedPublish {
-    pub(crate) connection_id: u64,
+    pub(crate) connection_id: ConnectionId,
     pub(crate) stream_type: StreamType,
     pub(crate) media_kind: MediaKind,
     pub(crate) transport_media_id: TransportMediaId,
@@ -113,7 +114,7 @@ impl ChannelTestMedia<'_> {
             Err(_error) => {
                 warn!(
                     ?session_id,
-                    connection_id = publisher_connection_id,
+                    connection_id = ?publisher_connection_id,
                     ?stream_type,
                     "transport adapter rejected publish media declaration"
                 );
@@ -183,7 +184,7 @@ impl ChannelTestMedia<'_> {
     pub(crate) async fn stage_negotiated_publish_for_test(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -195,7 +196,7 @@ impl ChannelTestMedia<'_> {
     pub(crate) async fn rollback_staged_publish_for_test(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
@@ -207,7 +208,7 @@ impl ChannelTestMedia<'_> {
     pub(crate) async fn commit_staged_publishes_for_test(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         self.channel
@@ -218,7 +219,7 @@ impl ChannelTestMedia<'_> {
     pub(crate) async fn staged_publish_count(
         self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> usize {
         self.channel
             .staged_publish_count_for_connection(session_id, connection_id)

@@ -153,13 +153,14 @@ fn write_rtp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::rtc_adapter::sample_forwarded_packet;
-    use crate::runtime::transport_adapter::TransportSessionKey;
+    use crate::runtime::rtc_adapter::{
+        sample_forwarded_packet, test_support::test_transport_session_key,
+    };
     use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn local_send_contract_keeps_payload_inside_the_adapter_boundary() {
-        let session_key = TransportSessionKey::new(45, 0, 12, SessionId::Integer(9));
+        let session_key = test_transport_session_key(45, 0, 12, SessionId::Integer(9));
         let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
         let rtp = packet.local_send_packet();
 

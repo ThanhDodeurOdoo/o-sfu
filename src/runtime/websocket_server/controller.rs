@@ -38,7 +38,7 @@ use tokio::sync::mpsc;
 use tracing::{Instrument, field, info, info_span};
 
 use crate::runtime::{
-    RuntimeState,
+    ConnectionId, RuntimeState,
     channel::{Channel, SessionOutbound},
     telemetry,
 };
@@ -50,7 +50,7 @@ pub(super) type WsReader = SplitStream<WebSocket>;
 pub(super) struct ConnectedSession {
     pub(super) channel: Arc<Channel>,
     pub(super) session_id: SessionId,
-    pub(super) connection_id: u64,
+    pub(super) connection_id: ConnectionId,
     pub(super) outbound_rx: mpsc::UnboundedReceiver<SessionOutbound>,
     pub(super) session_protocol: SessionProtocol,
 }
@@ -96,7 +96,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState) {
         state.metrics.record_ws_session_loop_exit(exit_reason);
         info!(
             event = telemetry::schema::event::WS_CONNECTION_CLOSED,
-            connection_id = session.connection_id,
+            connection_id = ?session.connection_id,
             ?exit_reason,
             "closing websocket session"
         );

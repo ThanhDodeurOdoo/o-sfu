@@ -20,6 +20,7 @@ use crate::runtime::rtc_adapter::{
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     route_control::PacketLayerGate,
     state::RtcBootstrapState,
+    test_support::test_transport_session_key,
 };
 use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportMediaId, TransportSessionKey,
@@ -57,7 +58,7 @@ fn prepare_source_session(
 
 #[test]
 fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
-    let source_session = TransportSessionKey::new(101, 0, 102, SessionId::Integer(103));
+    let source_session = test_transport_session_key(101, 0, 102, SessionId::Integer(103));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
@@ -88,7 +89,7 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
 
 #[test]
 fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
-    let source_session = TransportSessionKey::new(111, 0, 112, SessionId::Integer(113));
+    let source_session = test_transport_session_key(111, 0, 112, SessionId::Integer(113));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
@@ -139,7 +140,7 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
 
 #[test]
 fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
-    let source_session = TransportSessionKey::new(121, 0, 122, SessionId::Integer(123));
+    let source_session = test_transport_session_key(121, 0, 122, SessionId::Integer(123));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let source_transport_media_id =
@@ -180,8 +181,8 @@ fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
 
 #[test]
 fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is_missing() {
-    let source_session = TransportSessionKey::new(151, 0, 152, SessionId::Integer(153));
-    let consumer_session = TransportSessionKey::new(151, 1, 154, SessionId::Integer(155));
+    let source_session = test_transport_session_key(151, 0, 152, SessionId::Integer(153));
+    let consumer_session = test_transport_session_key(151, 1, 154, SessionId::Integer(155));
     let mut state = RtcBootstrapState::default();
     let source_transport_media_id = TransportMediaId::new(33);
     let (command_tx, _command_rx) = mpsc::channel(1);
@@ -215,7 +216,7 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
 
 #[test]
 fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
-    let session_key = TransportSessionKey::new(161, 0, 162, SessionId::Integer(163));
+    let session_key = test_transport_session_key(161, 0, 162, SessionId::Integer(163));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_100));
     let producer_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
@@ -263,8 +264,8 @@ fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
 
 #[test]
 fn request_keyframe_ignores_wrong_source_owner() {
-    let source_session = TransportSessionKey::new(131, 0, 132, SessionId::Integer(133));
-    let wrong_session = TransportSessionKey::new(131, 0, 134, SessionId::Integer(135));
+    let source_session = test_transport_session_key(131, 0, 132, SessionId::Integer(133));
+    let wrong_session = test_transport_session_key(131, 0, 134, SessionId::Integer(135));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
@@ -289,8 +290,8 @@ fn request_keyframe_ignores_wrong_source_owner() {
 
 #[test]
 fn remote_source_packet_gate_ignores_wrong_source_owner() {
-    let source_session = TransportSessionKey::new(141, 0, 142, SessionId::Integer(143));
-    let wrong_session = TransportSessionKey::new(141, 0, 144, SessionId::Integer(145));
+    let source_session = test_transport_session_key(141, 0, 142, SessionId::Integer(143));
+    let wrong_session = test_transport_session_key(141, 0, 144, SessionId::Integer(145));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let source_transport_media_id =

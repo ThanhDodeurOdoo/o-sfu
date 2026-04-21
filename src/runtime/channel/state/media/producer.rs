@@ -2,6 +2,7 @@ use o_sfu_router::{MediaKind as RouterMediaKind, RtpParameters as RouterRtpParam
 use std::collections::BTreeMap;
 use tracing::{error, warn};
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 
@@ -23,7 +24,7 @@ use super::{bootstrap::PendingConsumerBootstrapTarget, router_stream_type::to_ro
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct ProducerRouteTarget {
     producer_id: ProducerRuntimeId,
-    owner_connection_id: u64,
+    owner_connection_id: ConnectionId,
     routed_producer_id: RoutedProducerId,
     transport_media_id: TransportMediaId,
 }
@@ -31,7 +32,7 @@ pub(in crate::runtime::channel) struct ProducerRouteTarget {
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct ValidatedPublishDescriptor {
     owner_session_id: SessionId,
-    owner_connection_id: u64,
+    owner_connection_id: ConnectionId,
     stream_type: StreamType,
     media_kind: RouterMediaKind,
 }
@@ -39,7 +40,7 @@ pub(in crate::runtime::channel) struct ValidatedPublishDescriptor {
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PreparedPublishedTrack {
     owner_session_id: SessionId,
-    owner_connection_id: u64,
+    owner_connection_id: ConnectionId,
     stream_type: StreamType,
     media_kind: RouterMediaKind,
     consumable_rtp_parameters: RouterRtpParameters,
@@ -62,14 +63,14 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn validate_publish_descriptor(
         &self,
         session_id: &SessionId,
-        publisher_connection_id: u64,
+        publisher_connection_id: ConnectionId,
         stream_type: StreamType,
         media_kind: RouterMediaKind,
     ) -> Option<ValidatedPublishDescriptor> {
         let Some(session) = self.sessions.get(session_id) else {
             warn!(
                 ?session_id,
-                publisher_connection_id,
+                publisher_connection_id = ?publisher_connection_id,
                 ?stream_type,
                 "cannot prepare negotiated publish because the session is missing from channel state"
             );
@@ -78,8 +79,8 @@ impl ChannelState {
         if session.connection_id != publisher_connection_id {
             warn!(
                 ?session_id,
-                publisher_connection_id,
-                current_connection_id = session.connection_id,
+                publisher_connection_id = ?publisher_connection_id,
+                current_connection_id = ?session.connection_id,
                 ?stream_type,
                 "cannot prepare negotiated publish because the connection is stale"
             );
@@ -88,7 +89,7 @@ impl ChannelState {
         if !session.negotiation.can_publish() {
             warn!(
                 ?session_id,
-                publisher_connection_id,
+                publisher_connection_id = ?publisher_connection_id,
                 ?stream_type,
                 "cannot prepare negotiated publish because the session is not publish-ready"
             );
@@ -110,7 +111,7 @@ impl ChannelState {
         let Some(session) = self.sessions.get(&pending.owner_session_id) else {
             warn!(
                 session_id = ?pending.owner_session_id,
-                owner_connection_id = pending.owner_connection_id,
+                owner_connection_id = ?pending.owner_connection_id,
                 ?pending.stream_type,
                 ?transport_media_id,
                 "cannot commit negotiated publish because the session is missing from channel state"
@@ -122,8 +123,8 @@ impl ChannelState {
         {
             warn!(
                 session_id = ?pending.owner_session_id,
-                owner_connection_id = pending.owner_connection_id,
-                current_connection_id = session.connection_id,
+                owner_connection_id = ?pending.owner_connection_id,
+                current_connection_id = ?session.connection_id,
                 publish_ready = session.negotiation.can_publish(),
                 ?pending.stream_type,
                 ?transport_media_id,
@@ -180,7 +181,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn publish_consumer_targets(
         &self,
         producer_session_id: &SessionId,
-        producer_connection_id: u64,
+        producer_connection_id: ConnectionId,
         producer_id: ProducerRuntimeId,
         stream_type: StreamType,
         media_kind: RouterMediaKind,
@@ -230,7 +231,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn producer_route_target(
         &self,
         owner_session_id: &SessionId,
-        owner_connection_id: u64,
+        owner_connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<ProducerRouteTarget> {
         let producer_id = *self
@@ -261,7 +262,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn unpublish_transport_removals(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<Vec<TransportMediaRemoval>> {
         let producer_target = self.producer_route_target(session_id, connection_id, stream_type)?;
@@ -288,7 +289,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn unpublish_track(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<UnpublishTrackOutcome> {
         let producer_target = self.producer_route_target(session_id, connection_id, stream_type)?;
@@ -375,7 +376,7 @@ impl ChannelState {
 }
 
 impl ValidatedPublishDescriptor {
-    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> ConnectionId {
         self.owner_connection_id
     }
 
@@ -402,7 +403,7 @@ impl ValidatedPublishDescriptor {
 }
 
 impl ProducerRouteTarget {
-    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> ConnectionId {
         self.owner_connection_id
     }
 }

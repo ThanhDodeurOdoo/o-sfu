@@ -1,5 +1,6 @@
 use tracing::error;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
@@ -23,7 +24,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn apply_download_state_update(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         target_session_id: &SessionId,
         states: &DownloadStates,
     ) -> Vec<ConsumerRouteUpdate> {
@@ -118,7 +119,7 @@ impl ChannelState {
 }
 
 impl ConsumerRouteUpdate {
-    pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_state.consumer_connection_id
     }
 
@@ -126,7 +127,7 @@ impl ConsumerRouteUpdate {
         self.consumer_state.consumer_media
     }
 
-    pub(in crate::runtime::channel) const fn source_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn source_connection_id(&self) -> ConnectionId {
         self.consumer_state.source_connection_id
     }
 

@@ -1,12 +1,14 @@
 use o_sfu_protocol::shared::SessionId;
 
+use crate::runtime::ConnectionId;
+
 use super::{Channel, PendingPublishTransactions};
 
 impl PendingPublishTransactions {
     pub(in crate::runtime::channel) fn staged_count_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> usize {
         self.staged
             .keys()
@@ -19,7 +21,7 @@ impl Channel {
     pub(in crate::runtime::channel) async fn staged_publish_count_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> usize {
         self.pending_publish_transactions
             .lock()

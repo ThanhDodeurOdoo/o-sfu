@@ -39,7 +39,7 @@ impl Channel {
             {
                 warn!(
                     session_id = ?update.owner_session_id(),
-                    connection_id = update.owner_connection_id(),
+                    connection_id = ?update.owner_connection_id(),
                     transport_media_id = ?update.transport_media_id(),
                     "transport adapter rejected the room-owned source packet selection update"
                 );

@@ -259,11 +259,12 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use super::RemoteAddrDemux;
+    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
     use crate::runtime::transport_adapter::TransportSessionKey;
     use o_sfu_protocol::shared::SessionId;
 
     fn session_key(channel_runtime_id: u64, session_numeric_id: i64) -> TransportSessionKey {
-        TransportSessionKey::new(
+        test_transport_session_key(
             0,
             0,
             channel_runtime_id,

@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
+use crate::runtime::ChannelRuntimeId;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 pub(crate) trait MediaPacketSink: Send + Sync {
@@ -13,8 +14,12 @@ pub(crate) trait MediaPacketSink: Send + Sync {
 }
 
 pub(crate) trait MediaSource: Send + Sync {
-    fn activate_channel(&self, channel_runtime_id: u64, sink: Arc<dyn MediaPacketSink>);
-    fn deactivate_channel(&self, channel_runtime_id: u64);
+    fn activate_channel(
+        &self,
+        channel_runtime_id: ChannelRuntimeId,
+        sink: Arc<dyn MediaPacketSink>,
+    );
+    fn deactivate_channel(&self, channel_runtime_id: ChannelRuntimeId);
 }
 
 pub(crate) fn into_packet_sink<T>(sink: Arc<T>) -> Arc<dyn MediaPacketSink>

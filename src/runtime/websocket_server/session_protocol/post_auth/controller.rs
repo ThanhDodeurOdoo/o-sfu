@@ -8,6 +8,7 @@ use o_sfu_protocol::{
 use tokio::runtime::Handle;
 
 use crate::runtime::{
+    ConnectionId,
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
     metrics::RuntimeMetrics,
     rtc_adapter::TransportSessionHealth,
@@ -35,7 +36,7 @@ use super::state::PostAuthSessionState;
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
     pub(super) session_id: SessionId,
-    pub(super) connection_id: u64,
+    pub(super) connection_id: ConnectionId,
     pub(super) channel: Arc<Channel>,
     pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) metrics: Arc<RuntimeMetrics>,
@@ -48,7 +49,7 @@ pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
 impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
         session_id: SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         channel: Arc<Channel>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,
@@ -119,7 +120,7 @@ impl PostAuthSessionProtocol {
             self.metrics.record_ws_bus_invalid_input_failure();
             warn!(
                 session_id = ?self.session_id,
-                connection_id = self.connection_id,
+                connection_id = ?self.connection_id,
                 payload_len = payload.len(),
                 max_len = MAX_CLIENT_FRAME_BYTES,
                 "received oversized websocket binary frame"
@@ -132,7 +133,7 @@ impl PostAuthSessionProtocol {
                 self.metrics.record_ws_bus_invalid_input_failure();
                 warn!(
                     session_id = ?self.session_id,
-                    connection_id = self.connection_id,
+                    connection_id = ?self.connection_id,
                     "received websocket binary frame with invalid UTF-8"
                 );
                 SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
@@ -153,7 +154,7 @@ impl PostAuthSessionProtocol {
                         self.metrics.record_ws_bus_invalid_input_failure();
                         warn!(
                             session_id = ?self.session_id,
-                            connection_id = self.connection_id,
+                            connection_id = ?self.connection_id,
                             "failed to decode client websocket batch because the payload was invalid"
                         );
                     }
@@ -161,7 +162,7 @@ impl PostAuthSessionProtocol {
                         self.metrics.record_ws_bus_unsupported_feature_failure();
                         warn!(
                             session_id = ?self.session_id,
-                            connection_id = self.connection_id,
+                            connection_id = ?self.connection_id,
                             "failed to decode client websocket batch because it used an unsupported feature"
                         );
                     }

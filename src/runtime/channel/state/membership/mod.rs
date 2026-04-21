@@ -4,6 +4,8 @@ use o_sfu_protocol::shared::{SessionId, SessionInfo};
 use o_sfu_router::RouterError;
 use tracing::{debug, error, warn};
 
+use crate::runtime::ConnectionId;
+
 use super::super::{
     ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
     outbound::{MessageFanout, OutboundSender},
@@ -45,7 +47,7 @@ pub(in crate::runtime::channel) struct SessionCloseRequest {
 
 #[derive(Debug)]
 pub(in crate::runtime::channel) struct JoinSessionOutcome {
-    pub(in crate::runtime::channel) connection_id: u64,
+    pub(in crate::runtime::channel) connection_id: ConnectionId,
     pub(in crate::runtime::channel) effects: LifecycleEffects,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
@@ -77,13 +79,17 @@ impl ChannelState {
     fn apply_join_topology(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         permissions: ChannelSessionPermissions,
         is_new: bool,
     ) -> Result<(), ChannelJoinError> {
         let mut topology = self.topology.clone();
         if topology
-            .apply_client_join(session_id, connection_id, permissions.router_permissions())
+            .apply_client_join(
+                session_id,
+                connection_id.as_u64(),
+                permissions.router_permissions(),
+            )
             .is_err()
         {
             error!(
@@ -124,7 +130,7 @@ impl ChannelState {
         label: Option<String>,
         permissions: ChannelSessionPermissions,
         sender: OutboundSender,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Option<OutboundSender> {
         if let Some(session) = self.sessions.get_mut(session_id) {
             let old_sender = session.sender.clone();
@@ -168,10 +174,9 @@ impl ChannelState {
         if is_new && self.sessions.len() >= self.admission_policy.max_sessions {
             return Err(ChannelJoinError::ChannelFull);
         }
-        let connection_id = self.next_connection_id;
+        let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
         self.apply_join_topology(session_id, connection_id, permissions, is_new)?;
         let transport_removals = self.join_transport_removals(session_id, is_new);
-        self.next_connection_id = self.next_connection_id.saturating_add(1);
 
         let previous_sender =
             self.install_joined_session(session_id, label, permissions, sender, connection_id);
@@ -250,7 +255,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn apply_leave(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Option<LeaveSessionOutcome> {
         let session = self.sessions.get(session_id)?;
         if session.connection_id != connection_id {
@@ -289,14 +294,14 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn apply_presence_update(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         info: &SessionInfo,
         need_refresh: bool,
     ) -> Option<SessionInfoUpdateOutcome> {
         let Some(current_session) = self.sessions.get(session_id) else {
             warn!(
                 ?session_id,
-                connection_id,
+                connection_id = ?connection_id,
                 ?info,
                 need_refresh,
                 "discarding session presence update because the session is missing"
@@ -306,8 +311,8 @@ impl ChannelState {
         if current_session.connection_id != connection_id {
             warn!(
                 ?session_id,
-                connection_id,
-                current_connection_id = current_session.connection_id,
+                connection_id = ?connection_id,
+                current_connection_id = ?current_session.connection_id,
                 ?info,
                 need_refresh,
                 "discarding session presence update because the connection is stale"
@@ -325,7 +330,7 @@ impl ChannelState {
         };
         debug!(
             ?session_id,
-            connection_id,
+            connection_id = ?connection_id,
             ?info,
             need_refresh,
             snapshot_len = snapshot.len(),
@@ -339,7 +344,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn set_session_negotiated(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         capabilities: &o_sfu_router::MediaCapabilities,
     ) -> SessionNegotiationUpdate {
         let Some(session) = self.session_mut_for_connection(session_id, connection_id) else {
@@ -393,7 +398,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn broadcast_fanout(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         message: serde_json::Value,
     ) -> Option<MessageFanout> {
         self.session_for_connection(session_id, connection_id)?;
@@ -433,6 +438,7 @@ mod tests {
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
+    use crate::runtime::{ChannelRuntimeId, ConnectionId};
     use o_sfu_protocol::shared::{SessionPermissions, StreamType};
     use o_sfu_router::MediaKind;
 
@@ -443,7 +449,7 @@ mod tests {
             ChannelAdmissionPolicy::new(4),
             router_rtp_capabilities(MediaCodecFlags::default()),
             Arc::new(RecordingService::new(
-                0,
+                ChannelRuntimeId::from_raw(0),
                 media_source,
                 Arc::new(RuntimeMetrics::default()),
             )),
@@ -453,7 +459,7 @@ mod tests {
     fn install_test_published_producer(
         state: &mut ChannelState,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         routed_producer_id: RoutedProducerId,
         transport_media_id: Option<TransportMediaId>,
@@ -599,7 +605,7 @@ mod tests {
 
         let fanout = state.broadcast_fanout(
             &SessionId::Integer(1),
-            999,
+            ConnectionId::from_raw(999),
             serde_json::Value::String(String::from("hello")),
         );
 
@@ -624,7 +630,7 @@ mod tests {
 
         let outcome = state.apply_presence_update(
             &SessionId::Integer(1),
-            999,
+            ConnectionId::from_raw(999),
             &SessionInfo::default(),
             false,
         );

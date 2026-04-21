@@ -4,6 +4,7 @@ use o_sfu_protocol::{
 };
 
 use super::{Channel, ChannelSessionPermissions};
+use crate::runtime::ConnectionId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecordingPermissions {
@@ -25,7 +26,7 @@ impl Channel {
     pub(crate) async fn start_recording_runtime(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         options: RecordingOptions,
     ) -> bool {
         let request_context = {
@@ -111,7 +112,7 @@ impl Channel {
     pub(crate) async fn stop_recording_runtime(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> bool {
         let request_context = {
             let state = self.state.read().await;

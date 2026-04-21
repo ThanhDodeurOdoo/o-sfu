@@ -7,13 +7,15 @@ use std::{
     },
 };
 
-use crate::runtime::{rtc_adapter::ForwardedPacket, transport_adapter::TransportMediaId};
+use crate::runtime::{
+    ChannelRuntimeId, rtc_adapter::ForwardedPacket, transport_adapter::TransportMediaId,
+};
 
 use super::{MediaPacketSink, MediaSource};
 
 pub(crate) struct MediaTap {
     any_active: AtomicBool,
-    active_channels: RwLock<HashMap<u64, Arc<dyn MediaPacketSink>>>,
+    active_channels: RwLock<HashMap<ChannelRuntimeId, Arc<dyn MediaPacketSink>>>,
 }
 
 impl Default for MediaTap {
@@ -28,7 +30,7 @@ impl Default for MediaTap {
 impl MediaTap {
     pub(crate) fn sink_for_channel(
         &self,
-        channel_runtime_id: u64,
+        channel_runtime_id: ChannelRuntimeId,
     ) -> Option<Arc<dyn MediaPacketSink>> {
         if !self.any_active.load(Ordering::Acquire) {
             return None;
@@ -57,7 +59,7 @@ impl MediaTap {
         );
     }
 
-    pub(super) fn has_active_channel(&self, channel_runtime_id: u64) -> bool {
+    pub(super) fn has_active_channel(&self, channel_runtime_id: ChannelRuntimeId) -> bool {
         self.active_channels
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -73,7 +75,11 @@ impl MediaTap {
 }
 
 impl MediaSource for MediaTap {
-    fn activate_channel(&self, channel_runtime_id: u64, sink: Arc<dyn MediaPacketSink>) {
+    fn activate_channel(
+        &self,
+        channel_runtime_id: ChannelRuntimeId,
+        sink: Arc<dyn MediaPacketSink>,
+    ) {
         self.active_channels
             .write()
             .unwrap_or_else(PoisonError::into_inner)
@@ -81,7 +87,7 @@ impl MediaSource for MediaTap {
         self.any_active.store(true, Ordering::Release);
     }
 
-    fn deactivate_channel(&self, channel_runtime_id: u64) {
+    fn deactivate_channel(&self, channel_runtime_id: ChannelRuntimeId) {
         let mut active_channels = self
             .active_channels
             .write()

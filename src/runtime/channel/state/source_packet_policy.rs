@@ -1,3 +1,4 @@
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportMediaId};
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use std::collections::BTreeSet;
@@ -15,7 +16,7 @@ const ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT: usize = 5;
 pub(in crate::runtime::channel) struct SourcePacketSelectionUpdate {
     producer_id: ProducerRuntimeId,
     owner_session_id: SessionId,
-    owner_connection_id: u64,
+    owner_connection_id: ConnectionId,
     transport_media_id: TransportMediaId,
     selection: Option<SourcePacketSelection>,
 }
@@ -29,7 +30,7 @@ impl SourcePacketSelectionUpdate {
         &self.owner_session_id
     }
 
-    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> ConnectionId {
         self.owner_connection_id
     }
 

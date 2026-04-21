@@ -12,6 +12,7 @@ pub(super) use super::super::{
     ChannelJoinError, ChannelManager, ChannelManagerJoinError, JoinSessionRequest,
     SessionCloseReason, SessionOutbound, topology::ChannelTopology,
 };
+pub(super) use crate::runtime::ConnectionId;
 use crate::runtime::test_rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
     sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
@@ -59,6 +60,10 @@ pub(super) fn fake_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>
         RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
         adapter,
     )
+}
+
+pub(super) fn test_connection_id(raw: u64) -> ConnectionId {
+    ConnectionId::from_raw(raw)
 }
 
 #[derive(Clone, Copy)]

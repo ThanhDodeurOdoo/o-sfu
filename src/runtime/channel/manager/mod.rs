@@ -9,6 +9,7 @@ use super::{
     directory::{ChannelDirectory, ChannelDirectoryEntry},
     factory::{ChannelCreationIntent, ChannelFactory},
 };
+use crate::runtime::ConnectionId;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
@@ -156,7 +157,7 @@ impl ChannelManager {
         channel_uuid: &str,
         request: JoinSessionRequest,
         transport_adapter: &RuntimeTransportAdapter,
-    ) -> Result<(Arc<Channel>, u64), ChannelManagerJoinError> {
+    ) -> Result<(Arc<Channel>, ConnectionId), ChannelManagerJoinError> {
         let Some((channel, session_count_before, join_result)) = self
             .with_current_channel(channel_uuid, |channel| async move {
                 let session_count_before = channel.session_count().await;
@@ -187,7 +188,7 @@ impl ChannelManager {
         &self,
         channel_uuid: &str,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let Some((channel, session_count_before, did_remove_active_session)) = self

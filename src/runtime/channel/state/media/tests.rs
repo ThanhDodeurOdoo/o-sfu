@@ -25,6 +25,7 @@ use crate::runtime::channel::{
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::TransportMediaId;
+use crate::runtime::{ChannelRuntimeId, ConnectionId};
 use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
 
 fn test_state() -> ChannelState {
@@ -34,7 +35,7 @@ fn test_state() -> ChannelState {
         ChannelAdmissionPolicy::new(4),
         router_rtp_capabilities(MediaCodecFlags::default()),
         Arc::new(RecordingService::new(
-            0,
+            ChannelRuntimeId::from_raw(0),
             media_source,
             Arc::new(RuntimeMetrics::default()),
         )),
@@ -60,7 +61,7 @@ fn install_test_consumer_route(
     state: &mut ChannelState,
     producer_session_id: &SessionId,
     consumer_session_id: &SessionId,
-) -> (ConsumerKey, u64) {
+) -> (ConsumerKey, ConnectionId) {
     let producer_connection_id = state
         .session_connection_id(producer_session_id)
         .expect("producer session should have a connection id");
@@ -117,7 +118,9 @@ fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
         false,
     );
     assert!(join.is_ok());
-    let connection_id = state.session_connection_id(&session_id).unwrap_or(u64::MAX);
+    let connection_id = state
+        .session_connection_id(&session_id)
+        .unwrap_or(ConnectionId::from_raw(u64::MAX));
 
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(777));

@@ -395,14 +395,14 @@ mod tests {
 
     use o_sfu_router::{RtpParameters as RouterRtpParameters, StreamBinding};
 
-    use crate::runtime::transport_adapter::TransportSessionKey;
+    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
     use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn consumer_media_lookup_uses_the_reverse_index() {
         let mut state = RtcBootstrapState::default();
         let source_transport_media_id = TransportMediaId::new(8);
-        let consumer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(14));
+        let consumer_session = test_transport_session_key(12, 0, 13, SessionId::Integer(14));
         let consumer_mid = Mid::from("aud-down");
 
         let _consumer_transport_media_id =
@@ -422,7 +422,7 @@ mod tests {
     fn consumer_media_lookup_clears_when_the_handle_is_removed() {
         let mut state = RtcBootstrapState::default();
         let source_transport_media_id = TransportMediaId::new(9);
-        let consumer_session = TransportSessionKey::new(15, 0, 16, SessionId::Integer(17));
+        let consumer_session = test_transport_session_key(15, 0, 16, SessionId::Integer(17));
         let consumer_mid = Mid::from("cam-down");
 
         let consumer_transport_media_id =
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
-        let producer_session = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
+        let producer_session = test_transport_session_key(18, 0, 19, SessionId::Integer(20));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 55_555_u32;
         let mut state = RtcBootstrapState::default();
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn producer_ssrc_lookup_refresh_replaces_stale_bindings() {
-        let producer_session = TransportSessionKey::new(21, 0, 22, SessionId::Integer(23));
+        let producer_session = test_transport_session_key(21, 0, 22, SessionId::Integer(23));
         let producer_mid = Mid::from("cam-up");
         let first_ssrc = 77_777_u32;
         let second_ssrc = 88_888_u32;

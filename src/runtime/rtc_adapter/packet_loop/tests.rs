@@ -26,6 +26,7 @@ use crate::runtime::rtc_adapter::{
     route_control::{KeyframeRequestDecision, PacketLayerGate},
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
     state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
+    test_support::test_transport_session_key,
 };
 use crate::runtime::transport_adapter::{
     SourcePolicySignal, TransportMediaId, TransportSessionKey,
@@ -256,8 +257,8 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
-    let first_session = TransportSessionKey::new(51, 0, 52, SessionId::Integer(53));
-    let second_session = TransportSessionKey::new(51, 0, 54, SessionId::Integer(55));
+    let first_session = test_transport_session_key(51, 0, 52, SessionId::Integer(53));
+    let second_session = test_transport_session_key(51, 0, 54, SessionId::Integer(55));
     let packet = [22, 0, 0, 0];
     let unknown_source_addr = SocketAddr::from(([127, 0, 0, 1], 45_041));
 
@@ -298,7 +299,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
 
 #[test]
 fn recording_forward_destination_captures_packets_without_bypassing_the_contract() {
-    let producer_session = TransportSessionKey::new(18, 0, 19, SessionId::Integer(20));
+    let producer_session = test_transport_session_key(18, 0, 19, SessionId::Integer(20));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
     let relay_registry = RelayRegistry::default();
@@ -338,7 +339,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 
 #[test]
 fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
-    let source_session = TransportSessionKey::new(118, 0, 119, SessionId::Integer(120));
+    let source_session = test_transport_session_key(118, 0, 119, SessionId::Integer(120));
     let source_transport_media_id = TransportMediaId::new(121);
     let mut state = RtcBootstrapState::default();
     let sink = Arc::new(CountingSink::new());
@@ -392,8 +393,8 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
 
 #[test]
 fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_tracking() {
-    let producer_session = TransportSessionKey::new(28, 0, 29, SessionId::Integer(30));
-    let consumer_session = TransportSessionKey::new(28, 0, 31, SessionId::Integer(32));
+    let producer_session = test_transport_session_key(28, 0, 29, SessionId::Integer(30));
+    let consumer_session = test_transport_session_key(28, 0, 31, SessionId::Integer(32));
     let mut state = RtcBootstrapState::default();
     let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
     let media_tap = MediaTap::default();
@@ -457,7 +458,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
 
 #[test]
 fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
-    let source_session = TransportSessionKey::new(25, 0, 26, SessionId::Integer(27));
+    let source_session = test_transport_session_key(25, 0, 26, SessionId::Integer(27));
     let packet = sample_forwarded_packet(source_session.clone(), "aud-up", b"payload");
     let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
     let mut pending_packets = Vec::new();
@@ -485,7 +486,7 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
 
 #[test]
 fn drain_relay_packets_stops_at_the_configured_cap() {
-    let source_session = TransportSessionKey::new(26, 0, 27, SessionId::Integer(28));
+    let source_session = test_transport_session_key(26, 0, 27, SessionId::Integer(28));
     let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
     let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
     let mut pending_packets = Vec::new();
@@ -502,7 +503,7 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
 
 #[test]
 fn flush_forward_routes_records_relay_overload_drops() {
-    let source_session = TransportSessionKey::new(29, 0, 30, SessionId::Integer(31));
+    let source_session = test_transport_session_key(29, 0, 30, SessionId::Integer(31));
     let source_transport_media_id = TransportMediaId::new(32);
     let mut state = RtcBootstrapState::default();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
@@ -513,7 +514,7 @@ fn flush_forward_routes_records_relay_overload_drops() {
 
     relay_mailbox.forward_packet(
         &sample_forwarded_packet(
-            TransportSessionKey::new(29, 0, 30, SessionId::Integer(31)),
+            test_transport_session_key(29, 0, 30, SessionId::Integer(31)),
             "aud-up",
             b"prefill",
         ),
@@ -538,8 +539,8 @@ fn flush_forward_routes_records_relay_overload_drops() {
 #[test]
 fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_050));
-    let source_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(63));
-    let consumer_session = TransportSessionKey::new(61, 0, 64, SessionId::Integer(65));
+    let source_session = test_transport_session_key(61, 0, 62, SessionId::Integer(63));
+    let consumer_session = test_transport_session_key(61, 0, 64, SessionId::Integer(65));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let mut state = RtcBootstrapState::default();
@@ -592,8 +593,8 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
 
 #[test]
 fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id() {
-    let source_session = TransportSessionKey::new(71, 0, 72, SessionId::Integer(73));
-    let consumer_session = TransportSessionKey::new(71, 1, 74, SessionId::Integer(75));
+    let source_session = test_transport_session_key(71, 0, 72, SessionId::Integer(73));
+    let consumer_session = test_transport_session_key(71, 1, 74, SessionId::Integer(75));
     let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(91);
     let mut state = RtcBootstrapState::default();
@@ -645,9 +646,9 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
 
 #[test]
 fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
-    let source_session = TransportSessionKey::new(81, 0, 82, SessionId::Integer(83));
-    let first_consumer_session = TransportSessionKey::new(81, 1, 84, SessionId::Integer(85));
-    let second_consumer_session = TransportSessionKey::new(81, 1, 86, SessionId::Integer(87));
+    let source_session = test_transport_session_key(81, 0, 82, SessionId::Integer(83));
+    let first_consumer_session = test_transport_session_key(81, 1, 84, SessionId::Integer(85));
+    let second_consumer_session = test_transport_session_key(81, 1, 86, SessionId::Integer(87));
     let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(101);
     let mut state = RtcBootstrapState::default();
@@ -717,9 +718,9 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
 #[test]
 fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_flush() {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_060));
-    let source_session = TransportSessionKey::new(91, 0, 92, SessionId::Integer(93));
-    let first_consumer_session = TransportSessionKey::new(91, 0, 94, SessionId::Integer(95));
-    let second_consumer_session = TransportSessionKey::new(91, 0, 96, SessionId::Integer(97));
+    let source_session = test_transport_session_key(91, 0, 92, SessionId::Integer(93));
+    let first_consumer_session = test_transport_session_key(91, 0, 94, SessionId::Integer(95));
+    let second_consumer_session = test_transport_session_key(91, 0, 96, SessionId::Integer(97));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let mut buffers = PacketLoopBuffers::new();

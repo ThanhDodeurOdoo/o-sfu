@@ -43,7 +43,7 @@ use super::{
     session_protocol::SessionProtocol,
 };
 use crate::runtime::{
-    RuntimeState,
+    ConnectionId, RuntimeState,
     auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
     channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
     telemetry,
@@ -312,7 +312,7 @@ async fn join_session(
     SessionId,
     mpsc::UnboundedReceiver<SessionOutbound>,
     Arc<Channel>,
-    u64,
+    ConnectionId,
 )> {
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
     let session_id = claims.session_id.clone();
@@ -374,11 +374,15 @@ async fn initialize_session(
     writer: &mut WsWriter,
     channel: &Arc<Channel>,
     session_id: &SessionId,
-    connection_id: u64,
+    connection_id: ConnectionId,
     session_protocol: &mut SessionProtocol,
 ) -> Option<()> {
     if send_welcome(channel, session_id, writer).await.is_err() {
-        debug!(?session_id, connection_id, "failed to send welcome payload");
+        debug!(
+            ?session_id,
+            connection_id = ?connection_id,
+            "failed to send welcome payload"
+        );
         state.metrics.record_ws_startup_send_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
         return None;
@@ -386,7 +390,8 @@ async fn initialize_session(
     if session_protocol.initialize(writer).await.is_err() {
         warn!(
             ?session_id,
-            connection_id, "failed to initialize websocket session protocol"
+            connection_id = ?connection_id,
+            "failed to initialize websocket session protocol"
         );
         state.metrics.record_ws_session_initialize_failure();
         cleanup_failed_session(state, channel, session_id, connection_id).await;
@@ -399,7 +404,7 @@ async fn cleanup_failed_session(
     state: &RuntimeState,
     channel: &Channel,
     session_id: &SessionId,
-    connection_id: u64,
+    connection_id: ConnectionId,
 ) {
     let _ = state
         .channels

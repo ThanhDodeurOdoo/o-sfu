@@ -24,6 +24,7 @@ pub(super) use super::super::{
     commands::debug::{DebugPacketGate, DebugRouteEntry},
     shared_payload::SharedPayload,
     state::TransportSessionHealth,
+    test_support::test_transport_session_key,
 };
 pub(super) use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
 pub(super) use crate::{
@@ -49,7 +50,7 @@ pub(super) fn transport_key_on_worker(
     connection_id: u64,
     session_id: SessionId,
 ) -> TransportSessionKey {
-    TransportSessionKey::new(
+    test_transport_session_key(
         channel_runtime_id,
         media_worker_id,
         connection_id,

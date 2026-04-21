@@ -5,6 +5,7 @@ use o_sfu_router::{
     MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, MediaKind, RouterId,
 };
 
+use crate::runtime::ConnectionId;
 use crate::runtime::recording::RecordingService;
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use o_sfu_protocol::shared::{DownloadStates, RecordingState, SessionId, StreamType};
@@ -97,14 +98,14 @@ pub(in crate::runtime::channel) struct ActiveSession {
     pub(super) negotiation: SessionNegotiation,
     pub(super) desired_download_states: BTreeMap<SessionId, DownloadStates>,
     pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
-    pub(super) connection_id: u64,
+    pub(super) connection_id: ConnectionId,
     pub(super) sender: OutboundSender,
 }
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PublishedProducer {
     pub(super) owner_session_id: SessionId,
-    pub(super) owner_connection_id: u64,
+    pub(super) owner_connection_id: ConnectionId,
     pub(super) stream_type: StreamType,
     pub(super) media_kind: MediaKind,
     pub(super) consumable_rtp_parameters: o_sfu_router::RtpParameters,
@@ -130,8 +131,8 @@ impl From<&SourcePacketSelection> for SourcePacketGate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct ConsumerState {
     pub(super) routed_consumer_id: RoutedConsumerId,
-    pub(super) consumer_connection_id: u64,
-    pub(super) source_connection_id: u64,
+    pub(super) consumer_connection_id: ConnectionId,
+    pub(super) source_connection_id: ConnectionId,
     pub(super) source_media: TransportMediaId,
     pub(super) consumer_media: TransportMediaId,
 }
@@ -139,7 +140,7 @@ pub(in crate::runtime::channel) struct ConsumerState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct TransportMediaRemoval {
     pub(in crate::runtime::channel) session: SessionId,
-    pub(in crate::runtime::channel) connection: u64,
+    pub(in crate::runtime::channel) connection: ConnectionId,
     pub(in crate::runtime::channel) transport_media: TransportMediaId,
 }
 
@@ -253,7 +254,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn session_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Option<&ActiveSession> {
         let session = self.sessions.get(session_id)?;
         if session.connection_id != connection_id {
@@ -265,7 +266,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn session_mut_for_connection(
         &mut self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> Option<&mut ActiveSession> {
         let session = self.sessions.get_mut(session_id)?;
         if session.connection_id != connection_id {
@@ -282,7 +283,9 @@ impl ChannelState {
         self.topology.rtp_capabilities().clone()
     }
 
-    pub(in crate::runtime::channel) fn transport_session_entries(&self) -> Vec<(SessionId, u64)> {
+    pub(in crate::runtime::channel) fn transport_session_entries(
+        &self,
+    ) -> Vec<(SessionId, ConnectionId)> {
         self.sessions
             .iter()
             .map(|(session_id, session)| (session_id.clone(), session.connection_id))
@@ -292,7 +295,7 @@ impl ChannelState {
     pub(in crate::runtime::channel) fn session_connection_id(
         &self,
         session_id: &SessionId,
-    ) -> Option<u64> {
+    ) -> Option<ConnectionId> {
         self.sessions
             .get(session_id)
             .map(|session| session.connection_id)
@@ -312,7 +315,7 @@ impl TransportMediaRemoval {
         &self.session
     }
 
-    pub(in crate::runtime::channel) const fn connection(&self) -> u64 {
+    pub(in crate::runtime::channel) const fn connection(&self) -> ConnectionId {
         self.connection
     }
 

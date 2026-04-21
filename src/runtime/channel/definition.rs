@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::config::RuntimeFeatureFlags;
 use crate::runtime::transport_adapter::TransportSessionKey;
+use crate::runtime::{ChannelRuntimeId, ConnectionId};
 
 use super::{ChannelConfig, ChannelRuntimeContext, ChannelRuntimePolicy};
 
@@ -25,7 +26,7 @@ impl ChannelIdentity {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChannelDefinition {
-    runtime_id: u64,
+    runtime_id: ChannelRuntimeId,
     media_worker_id: usize,
     identity: ChannelIdentity,
     config: ChannelConfig,
@@ -79,7 +80,7 @@ impl ChannelDefinition {
     pub(crate) fn transport_session_key(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
     ) -> TransportSessionKey {
         TransportSessionKey::new(
             self.runtime_id,
@@ -110,7 +111,7 @@ impl ChannelDefinition {
     }
 
     #[must_use]
-    pub(crate) const fn runtime_id(&self) -> u64 {
+    pub(crate) const fn runtime_id(&self) -> ChannelRuntimeId {
         self.runtime_id
     }
 }

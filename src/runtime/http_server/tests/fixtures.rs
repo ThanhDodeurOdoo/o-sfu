@@ -18,7 +18,7 @@ pub(super) use super::super::app;
 pub(super) use crate::{
     config::{Config, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig},
     runtime::{
-        RuntimeState,
+        ConnectionId, RuntimeState,
         auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
         channel::{
             ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,

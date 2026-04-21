@@ -1,5 +1,6 @@
 use tracing::warn;
 
+use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::RuntimeTransportAdapter;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
@@ -13,7 +14,7 @@ impl Channel {
     pub(crate) async fn bootstrap_missing_consumers_for_connection(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
         let Some(targets) = ({
@@ -50,7 +51,7 @@ impl Channel {
     pub(crate) async fn set_publication_active_runtime(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         active: bool,
         transport_adapter: &RuntimeTransportAdapter,
@@ -93,7 +94,7 @@ impl Channel {
     pub(crate) async fn update_subscription_runtime(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         target_session_id: &SessionId,
         states: &DownloadStates,
         transport_adapter: &RuntimeTransportAdapter,
@@ -143,7 +144,7 @@ impl Channel {
     pub(crate) async fn unpublish_track(
         &self,
         session_id: &SessionId,
-        connection_id: u64,
+        connection_id: ConnectionId,
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {

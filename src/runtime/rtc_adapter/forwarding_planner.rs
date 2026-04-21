@@ -125,8 +125,10 @@ mod tests {
         relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId},
         route_control::PacketLayerGate,
         sample_forwarded_packet, sample_forwarded_packet_with_rid,
+        test_support::test_transport_session_key,
     };
     use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+    use crate::runtime::{ChannelRuntimeId, ConnectionId};
     use o_sfu_protocol::shared::SessionId;
 
     struct CountingSink {
@@ -155,8 +157,18 @@ mod tests {
 
     #[test]
     fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
-        let producer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(14));
-        let consumer_session = TransportSessionKey::new(12, 0, 13, SessionId::Integer(15));
+        let producer_session = TransportSessionKey::new(
+            ChannelRuntimeId::from_raw(12),
+            0,
+            ConnectionId::from_raw(13),
+            SessionId::Integer(14),
+        );
+        let consumer_session = TransportSessionKey::new(
+            ChannelRuntimeId::from_raw(12),
+            0,
+            ConnectionId::from_raw(13),
+            SessionId::Integer(15),
+        );
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
@@ -213,8 +225,8 @@ mod tests {
 
     #[test]
     fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together() {
-        let producer_session = TransportSessionKey::new(21, 0, 22, SessionId::Integer(23));
-        let consumer_session = TransportSessionKey::new(21, 0, 22, SessionId::Integer(24));
+        let producer_session = test_transport_session_key(21, 0, 22, SessionId::Integer(23));
+        let consumer_session = test_transport_session_key(21, 0, 22, SessionId::Integer(24));
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
@@ -278,8 +290,8 @@ mod tests {
 
     #[test]
     fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc_flush_order() {
-        let producer_session = TransportSessionKey::new(31, 0, 32, SessionId::Integer(33));
-        let consumer_session = TransportSessionKey::new(31, 0, 32, SessionId::Integer(34));
+        let producer_session = test_transport_session_key(31, 0, 32, SessionId::Integer(33));
+        let consumer_session = test_transport_session_key(31, 0, 32, SessionId::Integer(34));
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
@@ -373,8 +385,8 @@ mod tests {
 
     #[test]
     fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_relay_sinks() {
-        let producer_session = TransportSessionKey::new(41, 0, 42, SessionId::Integer(43));
-        let consumer_session = TransportSessionKey::new(41, 1, 44, SessionId::Integer(45));
+        let producer_session = test_transport_session_key(41, 0, 42, SessionId::Integer(43));
+        let consumer_session = test_transport_session_key(41, 1, 44, SessionId::Integer(45));
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
@@ -440,9 +452,9 @@ mod tests {
 
     #[test]
     fn populate_forward_routes_only_relays_the_registered_source_media() {
-        let first_producer_session = TransportSessionKey::new(52, 0, 53, SessionId::Integer(54));
-        let second_producer_session = TransportSessionKey::new(52, 0, 53, SessionId::Integer(55));
-        let remote_consumer_session = TransportSessionKey::new(52, 1, 56, SessionId::Integer(57));
+        let first_producer_session = test_transport_session_key(52, 0, 53, SessionId::Integer(54));
+        let second_producer_session = test_transport_session_key(52, 0, 53, SessionId::Integer(55));
+        let remote_consumer_session = test_transport_session_key(52, 1, 56, SessionId::Integer(57));
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
@@ -522,7 +534,7 @@ mod tests {
 
     #[test]
     fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_shape() {
-        let producer_session = TransportSessionKey::new(58, 0, 59, SessionId::Integer(60));
+        let producer_session = test_transport_session_key(58, 0, 59, SessionId::Integer(60));
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
@@ -575,10 +587,10 @@ mod tests {
     )]
     #[test]
     fn populate_forward_routes_gates_only_the_selected_source_media() {
-        let gated_producer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(63));
-        let open_producer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(64));
-        let gated_consumer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(65));
-        let open_consumer_session = TransportSessionKey::new(61, 0, 62, SessionId::Integer(66));
+        let gated_producer_session = test_transport_session_key(61, 0, 62, SessionId::Integer(63));
+        let open_producer_session = test_transport_session_key(61, 0, 62, SessionId::Integer(64));
+        let gated_consumer_session = test_transport_session_key(61, 0, 62, SessionId::Integer(65));
+        let open_consumer_session = test_transport_session_key(61, 0, 62, SessionId::Integer(66));
         let mut state = RtcBootstrapState::default();
         let media_tap = MediaTap::default();
         let relay_registry = RelayRegistry::default();
