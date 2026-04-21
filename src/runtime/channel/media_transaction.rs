@@ -13,6 +13,7 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::{
     Channel, ChannelMediaCounts, SessionOutbound,
+    effects::StagedPublishCommitEffectPlan,
     state::{
         ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
         PreparedConsumerBootstrap, PreparedPublishedTrack, TransportMediaRemoval,
@@ -163,7 +164,7 @@ impl PublishCommitSnapshot {
         channel: &Channel,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> Option<String> {
-        let (media_counts_before, consumer_targets, media_counts_after) = {
+        let effect_plan = {
             let mut state = channel.state.write().await;
             let media_counts_before = ChannelMediaCounts {
                 publications: state.publication_count(),
@@ -176,44 +177,28 @@ impl PublishCommitSnapshot {
                 subscriptions: state.subscription_count(),
             };
             drop(state);
-            (media_counts_before, consumer_targets, media_counts_after)
-        };
-        let Some((producer_id, consumer_targets)) = consumer_targets else {
-            channel
-                .cleanup_transport_media(
-                    &self.session_id,
+            match consumer_targets {
+                Some((producer_id, consumer_targets)) => StagedPublishCommitEffectPlan::committed(
+                    producer_id.into_wire_id(),
+                    (media_counts_before, media_counts_after),
+                    consumer_targets,
+                    DiagnosticsEventData::for_session(
+                        channel.uuid(),
+                        &self.session_id,
+                        telemetry_event::PUBLISH_COMMITTED,
+                    )
+                    .with_connection_id(self.connection_id.as_u64())
+                    .with_media_worker_id(channel.media_worker_id())
+                    .with_transport_media_id(self.transport_media_id.as_u64()),
+                ),
+                None => StagedPublishCommitEffectPlan::rejected(
+                    self.session_id.clone(),
                     self.connection_id,
                     self.transport_media_id,
-                    transport_adapter,
-                    "transport adapter failed to remove published transport media after channel commit failed",
-                )
-                .await;
-            return None;
+                ),
+            }
         };
-        channel.record_media_count_delta(media_counts_before, media_counts_after);
-        channel
-            .sync_source_packet_selection_policy(Some(transport_adapter))
-            .await;
-        for target in consumer_targets {
-            channel
-                .execute_consumer_bootstrap(
-                    target,
-                    transport_adapter,
-                    ConsumerBootstrapOrigin::Publish,
-                )
-                .await;
-        }
-        channel.diagnostics.record(
-            DiagnosticsEventData::for_session(
-                channel.uuid(),
-                &self.session_id,
-                telemetry_event::PUBLISH_COMMITTED,
-            )
-            .with_connection_id(self.connection_id.as_u64())
-            .with_media_worker_id(channel.media_worker_id())
-            .with_transport_media_id(self.transport_media_id.as_u64()),
-        );
-        Some(producer_id.into_wire_id())
+        effect_plan.execute(channel, transport_adapter).await
     }
 }
 
@@ -353,69 +338,6 @@ impl ConsumerBootstrapTransaction {
         let _ = sender.send(SessionOutbound::Request(Box::new(
             bootstrap.into_channel_event_request(),
         )));
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct UnpublishTransaction {
-    session_id: SessionId,
-    connection_id: ConnectionId,
-    stream_type: StreamType,
-    transport_removals: Vec<TransportMediaRemoval>,
-}
-
-impl UnpublishTransaction {
-    pub(super) fn new(
-        session_id: SessionId,
-        connection_id: ConnectionId,
-        stream_type: StreamType,
-        transport_removals: Vec<TransportMediaRemoval>,
-    ) -> Self {
-        Self {
-            session_id,
-            connection_id,
-            stream_type,
-            transport_removals,
-        }
-    }
-
-    pub(super) async fn commit(
-        self,
-        channel: &Channel,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) -> bool {
-        if !channel
-            .cleanup_transport_removals_strict(transport_adapter, &self.transport_removals)
-            .await
-        {
-            return false;
-        }
-        let (media_counts_before, Some(outcome), media_counts_after) = ({
-            let mut state = channel.state.write().await;
-            let media_counts_before = ChannelMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
-            let outcome =
-                state.unpublish_track(&self.session_id, self.connection_id, self.stream_type);
-            let media_counts_after = ChannelMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
-            drop(state);
-            (media_counts_before, outcome, media_counts_after)
-        }) else {
-            warn!(
-                session_id = ?self.session_id,
-                connection_id = ?self.connection_id,
-                stream_type = ?self.stream_type,
-                "transport cleanup succeeded but channel state commit failed"
-            );
-            return false;
-        };
-        channel.record_media_count_delta(media_counts_before, media_counts_after);
-        outcome.emit(&self.session_id, self.stream_type);
-        true
     }
 }
 
@@ -712,7 +634,7 @@ impl Channel {
         }
     }
 
-    async fn cleanup_transport_removals_strict(
+    pub(super) async fn cleanup_transport_removals_strict(
         &self,
         transport_adapter: &RuntimeTransportAdapter,
         removals: &[TransportMediaRemoval],

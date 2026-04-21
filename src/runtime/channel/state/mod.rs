@@ -29,11 +29,15 @@ mod test_support;
 pub(crate) use self::media::ConsumerRouteState;
 pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
-    ConsumerBootstrapOrigin, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
-    PreparedConsumerBootstrap, PreparedPublishedTrack, ValidatedPublishDescriptor,
+    ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
+    PendingConsumerBootstrapTarget, PreparedConsumerBootstrap, PreparedPublishedTrack,
+    ValidatedPublishDescriptor,
 };
 pub(in crate::runtime::channel) use self::membership::LifecycleEffects;
 pub(in crate::runtime::channel) use self::membership::{
     DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome,
 };
 pub(in crate::runtime::channel) use self::shared::{ChannelState, TransportMediaRemoval};
+pub(in crate::runtime::channel) use self::source_packet_policy::{
+    FeaturedSessionUpdate, SourcePacketSelectionUpdate,
+};

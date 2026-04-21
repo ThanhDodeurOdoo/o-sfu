@@ -8,7 +8,7 @@ use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
 use super::{
     Channel,
-    media_transaction::UnpublishTransaction,
+    effects::{SubscriptionEffectPlan, UnpublishEffectPlan},
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget},
 };
 
@@ -113,57 +113,22 @@ impl Channel {
         states: &DownloadStates,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
-        let committed_updates = {
+        let effect_plan = {
             let mut state = self.state.write().await;
-            state.apply_download_state_update(session_id, connection_id, target_session_id, states)
-        };
-        for route_update in committed_updates {
-            if transport_adapter
-                .set_consumer_active(
-                    &self.transport_session_key(session_id, route_update.consumer_connection_id()),
-                    route_update.consumer_media(),
-                    &self.transport_session_key(
-                        target_session_id,
-                        route_update.source_connection_id(),
-                    ),
-                    route_update.source_media(),
-                    route_update.active(),
-                )
-                .await
-                .is_err()
-            {
-                warn!(
-                    ?session_id,
-                    ?target_session_id,
-                    stream_type = ?route_update.stream_type(),
-                    active = route_update.active(),
-                    "transport adapter failed to update consumer route activity"
-                );
-            }
-            self.diagnostics.record(
-                DiagnosticsEventData::for_session(
-                    self.uuid(),
+            SubscriptionEffectPlan::from_route_updates(
+                self,
+                session_id,
+                connection_id,
+                target_session_id,
+                state.apply_download_state_update(
                     session_id,
-                    telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
-                )
-                .with_connection_id(connection_id.as_u64())
-                .with_media_worker_id(self.media_worker_id())
-                .with_transport_media_id(route_update.consumer_media().as_u64())
-                .insert_field("active", route_update.active())
-                .insert_field(
-                    "producer_session_id",
-                    serde_json::to_value(target_session_id).unwrap_or(serde_json::Value::Null),
-                )
-                .insert_field(
-                    "source_transport_media_id",
-                    route_update.source_media().as_u64(),
-                )
-                .insert_field(
-                    "stream_type",
-                    format!("{:?}", route_update.stream_type()).to_lowercase(),
+                    connection_id,
+                    target_session_id,
+                    states,
                 ),
-            );
-        }
+            )
+        };
+        effect_plan.execute(self, transport_adapter).await;
     }
 
     pub(crate) async fn is_stream_published(
@@ -185,19 +150,21 @@ impl Channel {
         stream_type: StreamType,
         transport_adapter: &RuntimeTransportAdapter,
     ) -> bool {
-        let Some(transport_removals) = ({
+        let Some(effect_plan) = ({
             let state = self.state.read().await;
-            state.unpublish_transport_removals(session_id, connection_id, stream_type)
+            state
+                .unpublish_transport_removals(session_id, connection_id, stream_type)
+                .map(|transport_removals| {
+                    UnpublishEffectPlan::new(
+                        session_id.clone(),
+                        connection_id,
+                        stream_type,
+                        transport_removals,
+                    )
+                })
         }) else {
             return false;
         };
-        UnpublishTransaction::new(
-            session_id.clone(),
-            connection_id,
-            stream_type,
-            transport_removals,
-        )
-        .commit(self, transport_adapter)
-        .await
+        effect_plan.execute(self, transport_adapter).await
     }
 }

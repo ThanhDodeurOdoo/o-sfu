@@ -22,6 +22,7 @@ pub(in crate::runtime::channel) use self::bootstrap::{
     PreparedConsumerBootstrap,
 };
 pub(crate) use self::download::ConsumerRouteState;
+pub(in crate::runtime::channel) use self::download::ConsumerRouteUpdate;
 pub(in crate::runtime::channel) use self::producer::{
     PreparedPublishedTrack, ValidatedPublishDescriptor,
 };

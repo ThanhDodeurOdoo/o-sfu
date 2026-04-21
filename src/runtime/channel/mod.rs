@@ -9,6 +9,7 @@
 //! `- Channel
 //!    |- controller          -> room-facing facade and immutable accessors
 //!    |- lifecycle           -> single owner of join, leave, and cleanup sequencing
+//!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
 //!    |- state               -> locked mutable room model
 //!    |- membership          -> session presence, permissions, and fanout
 //!    |- session_negotiation -> per-session transport readiness
@@ -27,6 +28,7 @@
 mod controller;
 mod definition;
 mod directory;
+mod effects;
 mod events;
 mod factory;
 mod lifecycle;
