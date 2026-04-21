@@ -187,6 +187,64 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
 }
 
 #[tokio::test]
+async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiation() {
+    let server =
+        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_transport_adapter())
+            .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(
+        &server,
+        "issuer-rtc-disconnect-negotiating",
+        None,
+        CreateChannelQuery::default(),
+    )
+    .await;
+    let session_id = SessionId::Integer(413);
+    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_with_jwt(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+    assert!(read_welcome(&mut websocket).await.is_some());
+    assert!(
+        read_protocol_server_batch(&mut websocket).await.is_some(),
+        "session should receive the initial offer before the transport disconnect is injected"
+    );
+
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await;
+    assert!(connection_id.is_some());
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    server
+        .state
+        .transport_adapter
+        .debug_set_session_transport_health(
+            &channel.transport_session_key(&session_id, connection_id),
+            TransportSessionHealth::Disconnected,
+        );
+
+    let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
+    assert!(
+        close_code.is_ok(),
+        "server should close even when the RTC transport disconnects before the initial answer: {close_code:?}"
+    );
+    assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
+}
+
+#[tokio::test]
 async fn websocket_closure_emits_fake_webrtc_session_closed_event() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
