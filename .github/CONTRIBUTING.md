@@ -1,5 +1,20 @@
 # Contributing
 
+## Learning resources
+
+- [The Rust Book](https://doc.rust-lang.org/book/)
+- [The Rustonomicon (unsafe/advanced)](https://doc.rust-lang.org/nomicon/)
+- [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
+- [Rust Cookbook](https://github.com/rust-lang-nursery/rust-cookbook/)
+- [Idiomatic Rust snippets](https://idiomatic-rust-snippets.org/)
+- [The Rust Programming Language by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
+- [Living with Rust Long-Term by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
+
+
+## Glossary
+
+- 
+
 ## Style guidelines
 
 ### General Rules
@@ -35,6 +50,71 @@ We follow standard Rust idioms and enforce strict safety.
 ## Verification
 
 Verification commands and the `tests/` layout are at [tests/README.md](../tests/README.md).
+
+## Running the server
+
+(will write a dedicated md doc later)
+
+Same general idea than odoo/sfu
+
+The `otel-tracing` cargo feature is enabled by default. Disable it with
+`--no-default-features` when you want a logging-only build that does not compile
+the OpenTelemetry exporter stack.
+
+
+To generate a key, a 32 bytes long crypto-safe base64 string is recomended, eg:
+(it must be the same for odoo's `ODOO_SFU_KEY`)
+
+```bash
+openssl rand -base64 32
+```
+
+the bind address is the address that listens for HTTP and WebSocket, when testing
+it should be the same as `ODOO_SFU_URL` in odoo.
+
+> [!WARNING]  
+> `PUBLIC_IP` shouldn't be a localhost loopback, it should an actual eternally visible IP,
+> at least your local IP, and on production, your server's public IP.
+>
+
+```bash
+AUTH_KEY="" \
+PUBLIC_IP=192.168.1.99 \
+BIND_ADDRESS=127.0.0.1:8070 \
+RTC_MIN_PORT=40000 \
+RTC_MAX_PORT=40031 \
+cargo run --release -p o-sfu
+```
+
+the command above do: the HTTP and WebSocket listener on `BIND_ADDRESS` and uses the
+configured UDP range for RTC traffic. 
+
+use `PROXY=false` for direct-exposed development. 
+uet `PROXY=true` only when `o-sfu` sits behind a trusted reverse
+proxy that overwrites `x-forwarded-*` headers before forwarding requests.
+
+For reverse-proxy deployments, keep two networking rules in mind:
+
+- expose the TCP listener at `BIND_ADDRESS` for HTTP and WebSocket traffic
+- expose the full UDP range from `RTC_MIN_PORT` through `RTC_MAX_PORT`
+- do not put media UDP traffic through NGINX;
+- `PUBLIC_IP` is the externally visible IP, it will be used by RTC to connect
+
+example with doker container:
+
+```bash
+docker build --tag o-sfu:local .
+
+docker run --rm \
+  -e AUTH_KEY="$(openssl rand -base64 32)" \
+  -e PUBLIC_IP=203.0.113.10 \
+  -e PROXY=true \
+  -e RTC_MIN_PORT=40000 \
+  -e RTC_MAX_PORT=40031 \
+  -p 8070:8070 \
+  -p 40000-40031:40000-40031/udp \
+  o-sfu:local
+```
 
 ## testing with container image
 

@@ -6,8 +6,6 @@ use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
 use std::collections::BTreeSet;
-#[cfg(feature = "internal-benchmarks")]
-use std::net::SocketAddr;
 use std::time::Instant;
 
 use crate::runtime::ChannelRuntimeId;
@@ -262,12 +260,6 @@ pub(super) enum RtcWorkerCommand {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         active: bool,
-        response: RtcWorkerResponse<()>,
-    },
-    #[cfg(feature = "internal-benchmarks")]
-    RememberRemoteAddr {
-        source_addr: SocketAddr,
-        session_key: TransportSessionKey,
         response: RtcWorkerResponse<()>,
     },
 }

@@ -29,9 +29,6 @@
 mod facade;
 mod runtime;
 
-#[cfg(feature = "internal-benchmarks")]
-mod benchmarks;
-
 #[cfg(test)]
 mod test_support;
 

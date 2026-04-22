@@ -239,7 +239,7 @@ fn route_packet_with_cached_session(
         .remember_remote_addr(source_addr, &session_key)
         && let Ok(mut snapshot) = snapshot_state.lock()
     {
-        snapshot
+        let _ = snapshot
             .remote_addr_demux
             .remember_remote_addr(source_addr, &session_key);
     }
@@ -456,7 +456,7 @@ fn route_packet_to_session(
         .remember_remote_addr(route.source_addr, session_key)
         && let Ok(mut snapshot) = route.snapshot_state.lock()
     {
-        snapshot
+        let _ = snapshot
             .remote_addr_demux
             .remember_remote_addr(route.source_addr, session_key);
         match previous_session_key {

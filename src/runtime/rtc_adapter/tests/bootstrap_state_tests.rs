@@ -8,7 +8,7 @@ fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
     let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
     let second_session_key = transport_key_on_worker(2, 1, 30, SessionId::Integer(30));
 
-    bootstrap_state
+    let _ = bootstrap_state
         .remote_addr_demux
         .remember_remote_addr(source_addr, &first_session_key);
     assert_eq!(
@@ -18,7 +18,7 @@ fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
         Some(&first_session_key)
     );
 
-    bootstrap_state
+    let _ = bootstrap_state
         .remote_addr_demux
         .remember_remote_addr(source_addr, &second_session_key);
 

@@ -37,7 +37,6 @@ mod route_control;
 mod routing_miss;
 mod shared_payload;
 mod state;
-#[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
@@ -46,8 +45,7 @@ mod worker;
 pub(crate) use api::RtcTransportAdapter;
 pub use api::WorkerHandleSlot;
 pub(crate) use commands::RelayCleanup;
-#[cfg(feature = "internal-benchmarks")]
-pub(crate) use demux::RemoteAddrDemux;
+pub use demux::RemoteAddrDemux;
 pub(crate) use forwarded_packet::ForwardedPacket;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet;

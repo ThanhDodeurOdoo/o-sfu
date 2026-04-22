@@ -19,9 +19,10 @@ pub(crate) use facade::{
 pub(crate) use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
+pub use types::TransportSessionKey;
 pub(crate) use types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportResult, TransportSessionKey,
+    TransportBitrateSnapshot, TransportMediaId, TransportResult,
 };
 
 #[cfg(test)]

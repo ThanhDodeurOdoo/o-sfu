@@ -120,7 +120,6 @@ otel-tracing = [
     "dep:opentelemetry_sdk",
     "dep:tracing-opentelemetry",
 ]
-internal-benchmarks = []
 testing-transport = []
 
 [dependencies]
@@ -155,11 +154,4 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
-criterion = "0.7"
 tower = { version = "0.5", features = ["util"] }
-
-[[bench]]
-harness = false
-name = "rtc_udp_demux"
-path = "tests/benchmarks/rtc_udp_demux.rs"
-required-features = ["internal-benchmarks"]

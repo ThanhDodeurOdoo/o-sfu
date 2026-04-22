@@ -63,59 +63,9 @@ flowchart TD
   CB --> WS
   CB --> WRTC
 ```
+## Running the server and contributing
 
-## Running the server
-
-(will write a dedicated md doc later)
-
-Same general idea than odoo/sfu
-
-The `otel-tracing` cargo feature is enabled by default. Disable it with
-`--no-default-features` when you want a logging-only build that does not compile
-the OpenTelemetry exporter stack.
-
-Note: even during testing public IP shouldn't be a localhost loopback, it should an actual eternally visible IP
-
-```bash
-AUTH_KEY="$(openssl rand -base64 32)" \
-PUBLIC_IP=192.168.1.99 \
-BIND_ADDRESS=127.0.0.1:8070 \
-RTC_MIN_PORT=40000 \
-RTC_MAX_PORT=40031 \
-cargo run --release -p o-sfu
-```
-
-the command above do: the HTTP and WebSocket listener on `BIND_ADDRESS` and uses the
-configured UDP range for RTC traffic. 
-
-use `PROXY=false` for direct-exposed development. 
-uet `PROXY=true` only when `o-sfu` sits behind a trusted reverse
-proxy that overwrites `x-forwarded-*` headers before forwarding requests.
-
-For reverse-proxy deployments, keep two networking rules in mind:
-
-- expose the TCP listener at `BIND_ADDRESS` for HTTP and WebSocket traffic
-- expose the full UDP range from `RTC_MIN_PORT` through `RTC_MAX_PORT`
-- do not put media UDP traffic through NGINX;
-- `PUBLIC_IP` is the externally visible IP, it will be used by RTC to connect
-
-example with doker container:
-
-```bash
-docker build --tag o-sfu:local .
-
-docker run --rm \
-  -e AUTH_KEY="$(openssl rand -base64 32)" \
-  -e PUBLIC_IP=203.0.113.10 \
-  -e PROXY=true \
-  -e RTC_MIN_PORT=40000 \
-  -e RTC_MAX_PORT=40031 \
-  -p 8070:8070 \
-  -p 40000-40031:40000-40031/udp \
-  o-sfu:local
-```
-
-
+See [CONTRIBUTING.md](../.github/CONTRIBUTING.md)
 
 ## Env variables (based on odoo/sfu)
 
@@ -176,7 +126,7 @@ allow the SFUs to share shards between them.
 
 There is some already groundwork done for observability with `runtime/metrics`,
 
-https://github.com/ThanhDodeurOdoo/o-sfu-telemetry now host the optional Prometheus, Grafana, Alertmanager, and collector examples.
+https://github.com/ThanhDodeurOdoo/o-sfu-telemetry contains the optional Prometheus, Grafana, Alertmanager, and collector examples.
 - Metrics, logs, traces, and diagnostics must live at runtime boundaries, not in `router/`.
 - `router/` may expose events or state needed by outer layres, but it must not know about Prometheus, OTLP, log shipping, or collector protocols.
 - Call sites must speak in domain terms such as "join accepted", "offer applied", or "relay overload dropped", not in backend-specific terms such as "increment counter X".
@@ -185,6 +135,9 @@ https://github.com/ThanhDodeurOdoo/o-sfu-telemetry now host the optional Prometh
   - `/metrics` is the authoritative low-cardinality time-series surface.
   - `/v1/stats` remains a compatibility snapshot surface.
 
+## Benchmnarks
+
+https://github.com/ThanhDodeurOdoo/o-sfu-benchmarks
 
 ## crypto
 

@@ -9,9 +9,6 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-#[cfg(feature = "internal-benchmarks")]
-use std::net::SocketAddr;
-
 use tokio::sync::oneshot;
 
 use crate::runtime::metrics::RuntimeMetrics;
@@ -37,31 +34,6 @@ pub(super) fn respond_close_session(
     let close_outcome =
         worker_close_session(state, bitrate_state, snapshot_state, session_key, metrics);
     let _ = response.send(Ok(close_outcome));
-}
-
-#[cfg(feature = "internal-benchmarks")]
-pub(super) fn respond_remember_remote_addr(
-    state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    source_addr: SocketAddr,
-    session_key: &TransportSessionKey,
-    response: oneshot::Sender<Result<(), TransportAdapterError>>,
-) {
-    let result = if state.sessions.contains_key(session_key) {
-        if state
-            .remote_addr_demux
-            .remember_remote_addr(source_addr, session_key)
-            && let Ok(mut snapshot) = snapshot_state.lock()
-        {
-            snapshot
-                .remote_addr_demux
-                .remember_remote_addr(source_addr, session_key);
-        }
-        Ok(())
-    } else {
-        Err(TransportAdapterError::TransportUnavailable)
-    };
-    let _ = response.send(result);
 }
 
 fn worker_close_session(

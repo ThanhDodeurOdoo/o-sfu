@@ -31,7 +31,7 @@ pub(super) struct MediaRouteEntry {
 pub(super) type MediaRouteKey = TransportMediaId;
 
 #[derive(Debug, Default)]
-pub(crate) struct RemoteAddrDemux {
+pub struct RemoteAddrDemux {
     remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
     remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
     local_ice_ufrag_index: HashMap<String, TransportSessionKey>,
@@ -41,14 +41,16 @@ pub(crate) struct RemoteAddrDemux {
 }
 
 impl RemoteAddrDemux {
-    pub(super) fn session_key_for_remote_addr(
+    #[must_use]
+    pub fn session_key_for_remote_addr(
         &self,
         source_addr: SocketAddr,
     ) -> Option<&TransportSessionKey> {
         self.remote_addr_index.get(&source_addr)
     }
 
-    pub(super) fn remember_remote_addr(
+    #[must_use]
+    pub fn remember_remote_addr(
         &mut self,
         source_addr: SocketAddr,
         session_key: &TransportSessionKey,
@@ -110,7 +112,8 @@ impl RemoteAddrDemux {
         true
     }
 
-    pub(crate) fn candidate_sessions_for_source_addr(
+    #[must_use]
+    pub fn candidate_sessions_for_source_addr(
         &self,
         source_addr: SocketAddr,
     ) -> Option<&[TransportSessionKey]> {
@@ -119,7 +122,7 @@ impl RemoteAddrDemux {
             .map(Vec::as_slice)
     }
 
-    pub(crate) fn replace_session_remote_candidate_addrs<I>(
+    pub fn replace_session_remote_candidate_addrs<I>(
         &mut self,
         session_key: &TransportSessionKey,
         candidate_addrs: I,
@@ -191,10 +194,7 @@ impl RemoteAddrDemux {
         }
     }
 
-    #[cfg(feature = "internal-benchmarks")]
-    pub(super) fn session_entries(
-        &self,
-    ) -> impl Iterator<Item = (&TransportSessionKey, &[SocketAddr])> {
+    pub fn session_entries(&self) -> impl Iterator<Item = (&TransportSessionKey, &[SocketAddr])> {
         self.remote_addrs_by_session
             .iter()
             .map(|(session_key, addrs)| (session_key, addrs.as_slice()))

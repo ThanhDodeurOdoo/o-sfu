@@ -55,46 +55,6 @@ pub(crate) fn handle_worker_command(
     command: RtcWorkerCommand,
 ) {
     match command {
-        #[cfg(feature = "internal-benchmarks")]
-        RtcWorkerCommand::RememberRemoteAddr {
-            source_addr,
-            session_key,
-            response,
-        } => session::respond_remember_remote_addr(
-            state,
-            context.snapshot_state,
-            source_addr,
-            &session_key,
-            response,
-        ),
-        command => {
-            handle_core_worker_command(state, context, command);
-        }
-    }
-}
-
-#[cfg(test)]
-/// Dispatch one test-only debug command against the same shard-local worker
-/// state used by production commands.
-pub(crate) fn handle_debug_worker_command(
-    state: &mut RtcBootstrapState,
-    context: &WorkerCommandContext<'_>,
-    command: DebugRtcWorkerCommand,
-) {
-    debug::handle_debug_command(
-        state,
-        context.bitrate_state,
-        context.snapshot_state,
-        command,
-    );
-}
-
-fn handle_core_worker_command(
-    state: &mut RtcBootstrapState,
-    context: &WorkerCommandContext<'_>,
-    command: RtcWorkerCommand,
-) {
-    match command {
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
         | RtcWorkerCommand::NextActiveSpeakerDeadline { .. }
@@ -145,9 +105,23 @@ fn handle_core_worker_command(
                 command,
             );
         }
-        #[cfg(feature = "internal-benchmarks")]
-        RtcWorkerCommand::RememberRemoteAddr { .. } => {}
     }
+}
+
+#[cfg(test)]
+/// Dispatch one test-only debug command against the same shard-local worker
+/// state used by production commands.
+pub(crate) fn handle_debug_worker_command(
+    state: &mut RtcBootstrapState,
+    context: &WorkerCommandContext<'_>,
+    command: DebugRtcWorkerCommand,
+) {
+    debug::handle_debug_command(
+        state,
+        context.bitrate_state,
+        context.snapshot_state,
+        command,
+    );
 }
 
 fn handle_negotiation_command(

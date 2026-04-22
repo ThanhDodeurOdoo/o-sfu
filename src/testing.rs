@@ -29,3 +29,8 @@ pub mod concurrency {
         ActiveChannelRegistry, RelayTargetRegistry, SourcePolicyDirtyState, WorkerHandleSlot,
     };
 }
+
+pub mod transport {
+    pub use crate::runtime::{RemoteAddrDemux, TransportSessionKey, test_transport_session_key};
+    pub use o_sfu_protocol::shared::SessionId;
+}

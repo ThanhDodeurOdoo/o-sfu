@@ -26,9 +26,6 @@ use tracing::info;
 use crate::config::Config;
 
 pub(crate) mod auth;
-#[cfg(feature = "internal-benchmarks")]
-#[doc(hidden)]
-pub mod benchmark_support;
 pub(crate) mod channel;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
@@ -55,7 +52,9 @@ use http_server::serve_http;
 pub(crate) use ids::{ChannelRuntimeId, ConnectionId};
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
+pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
 use telemetry::init_tracing;
+pub use transport_adapter::TransportSessionKey;
 use transport_adapter::{
     MediaPort, ObservabilityPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
     SessionBitrateLimits, SourcePolicyPort,

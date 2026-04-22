@@ -7,7 +7,6 @@
 - `tests/miri/`: dedicated Miri-friendly pure verification targets.
 - `tests/loom/`: dedicated Loom model checks for narrow coordination contracts.
 - `tests/src/support/`: shared integration harness helpers.
-- `tests/benchmarks/`: root-package benchmark sources
 - `tests/fuzz/`: cargo-fuzz package
 - `tests/proofs/`: `o-sfu-proofs` workspace crate for Kani proofs.
 
@@ -23,7 +22,7 @@ cargo test --workspace --release
 npm --prefix client run verify
 ```
 
-## CI-oriented Rust tests
+## CI tests
 
 The default CI test workflow use `cargo nextest` for the pure library
 crates and keeps the root `o-sfu` crate, the `o-sfu-tests` integration crate
@@ -44,7 +43,7 @@ cargo test -p o-sfu-tests
 cargo test --workspace --doc
 ```
 
-## Dependency policy
+## Dependency check
 
 Install once:
 
@@ -83,13 +82,6 @@ cargo test -p o-sfu-tests --features loom-tests \
   --test loom_relay_registry_coordination \
   --test loom_media_tap_coordination \
   --test loom_rtc_worker_startup
-```
-
-
-## Benchmarks
-
-```bash
-cargo bench --bench rtc_udp_demux --features internal-benchmarks --no-run
 ```
 
 ## Fuzzing

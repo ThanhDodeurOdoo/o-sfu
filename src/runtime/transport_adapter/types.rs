@@ -12,7 +12,7 @@ use crate::runtime::{ChannelRuntimeId, ConnectionId};
 /// to be uniquely identified by the owning channel runtime, media worker,
 /// signaling connection, and session id.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct TransportSessionKey {
+pub struct TransportSessionKey {
     channel_runtime: ChannelRuntimeId,
     media_worker: usize,
     connection: ConnectionId,

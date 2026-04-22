@@ -1,10 +1,11 @@
+#[cfg(test)]
 pub(crate) use super::commands::debug::DebugRouteEntry;
 
 use crate::runtime::{ChannelRuntimeId, ConnectionId, transport_adapter::TransportSessionKey};
 use o_sfu_protocol::shared::SessionId;
 
 #[must_use]
-pub(crate) fn test_transport_session_key(
+pub fn test_transport_session_key(
     channel_runtime_id: u64,
     media_worker_id: usize,
     connection_id: u64,

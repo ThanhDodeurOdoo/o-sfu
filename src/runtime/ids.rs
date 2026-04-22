@@ -11,7 +11,6 @@ impl ConnectionId {
         connection_id
     }
 
-    #[cfg(any(test, feature = "internal-benchmarks"))]
     #[must_use]
     pub(crate) const fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -40,7 +39,6 @@ impl ChannelRuntimeId {
         channel_runtime_id
     }
 
-    #[cfg(any(test, feature = "internal-benchmarks"))]
     #[must_use]
     pub(crate) const fn from_raw(raw: u64) -> Self {
         Self(raw)

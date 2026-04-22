@@ -167,7 +167,7 @@ fn respond_debug_remember_remote_addr(
         .remember_remote_addr(source_addr, session_key)
         && let Ok(mut snapshot) = snapshot_state.lock()
     {
-        snapshot
+        let _ = snapshot
             .remote_addr_demux
             .remember_remote_addr(source_addr, session_key);
     }
