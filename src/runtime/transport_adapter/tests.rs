@@ -23,7 +23,7 @@ use crate::{
         transport_adapter::test_support::FakeWebRtcAdapter,
         transport_adapter::{
             ActiveSpeakerSource, MediaPort, NegotiationPort, ObservabilityPort,
-            RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer,
+            RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SessionPort,
             SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
             TransportMediaId, TransportSessionKey,
         },

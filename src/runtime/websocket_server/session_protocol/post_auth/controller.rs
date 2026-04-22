@@ -12,7 +12,7 @@ use crate::runtime::{
     channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
     metrics::RuntimeMetrics,
     rtc_adapter::TransportSessionHealth,
-    transport_adapter::RuntimeTransportAdapter,
+    transport_adapter::{ObservabilityPort, RuntimeTransportAdapter},
     websocket_server::{
         ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, WsWriter, decode_client_batch,
     },

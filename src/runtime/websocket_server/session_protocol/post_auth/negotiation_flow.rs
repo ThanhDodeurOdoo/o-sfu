@@ -438,7 +438,8 @@ mod tests {
             recording::MediaTap,
             rtc_adapter::test_support::test_transport_session_key,
             transport_adapter::{
-                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+                NegotiationPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+                SessionBitrateLimits,
             },
         },
     };

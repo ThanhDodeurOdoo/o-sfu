@@ -11,8 +11,8 @@ use crate::runtime::recording::MediaTap;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use crate::runtime::transport_adapter::test_support::FakeWebRtcEvent;
 use crate::runtime::transport_adapter::{
-    RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SourcePacketGate,
-    TransportMediaId, TransportSessionKey,
+    MediaPort, NegotiationPort, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
+    SessionOffer, SessionPort, SourcePacketGate, TransportMediaId, TransportSessionKey,
 };
 use o_sfu_router::MediaKind;
 use str0m::{Candidate, Rtc, change::SdpOffer};
