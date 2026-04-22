@@ -10,10 +10,8 @@
 - [The Rust Programming Language by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
 - [Living with Rust Long-Term by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
 
+[Glossary](./GLOSSARY.md)
 
-## Glossary
-
-- 
 
 ## Style guidelines
 
