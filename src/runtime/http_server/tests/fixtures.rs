@@ -28,8 +28,11 @@ pub(super) use crate::{
             ChannelRuntimePolicy, rtp_capabilities,
         },
         diagnostics::{
-            DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
-            DiagnosticsSessionLookupConflict, DiagnosticsStore, DiagnosticsSummaryResponse,
+            DiagnosticsStore,
+            types::{
+                DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
+                DiagnosticsSessionLookupConflict, DiagnosticsSummaryResponse,
+            },
         },
         http_server::contract::{
             CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DIAGNOSTICS_CHANNELS_PATH,

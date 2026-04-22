@@ -1,3 +1,31 @@
+//! a "port" is a trait to expose e transport concern:
+//!
+//! SDP negotiation, session teardown, media wiring, observability, or
+//! source-policy updates
+//!
+//! exemple:
+//! ```rust,ignore
+//! async fn establish_session(
+//!     negotiation: &impl NegotiationPort,
+//!     session_key: &TransportSessionKey,
+//!     answer_sdp: &str,
+//!     offered_capabilities: &MediaCapabilities,
+//! ) -> Result<MediaCapabilities, TransportAdapterError> {
+//!     let _offer = negotiation
+//!         .create_initial_session_offer(session_key)
+//!         .await?;
+//!     negotiation.apply_session_answer(session_key, answer_sdp).await?;
+//!     negotiation.negotiated_client_rtp_capabilities(
+//!         answer_sdp,
+//!         offered_capabilities,
+//!     )
+//! }
+//! ```
+//!
+//! The caller above knows it is performing negotiation, but it does not know
+//! whether the backend is backed by str0m, a fake adapter, or a future
+//! transport implementation
+
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -10,6 +38,7 @@ use crate::runtime::transport_adapter::types::{
 };
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 
+/// Handles the SDP negotiation lifecycle for a transport session
 pub(crate) trait NegotiationPort {
     async fn create_initial_session_offer(
         &self,
@@ -41,6 +70,7 @@ pub(crate) trait SessionPort {
     ) -> Result<(), TransportAdapterError>;
 }
 
+/// Handles transport media state for established transport session
 pub(crate) trait MediaPort {
     async fn remove_media(
         &self,
@@ -100,6 +130,7 @@ pub(crate) trait MediaPort {
     ) -> Result<(), TransportAdapterError>;
 }
 
+/// Exposes read-only transport snapshots for diagnostics and runtime decisions
 pub(crate) trait ObservabilityPort {
     fn transport_bitrate_snapshot(
         &self,
