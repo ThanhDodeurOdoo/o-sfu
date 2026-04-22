@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for target in protocol_decode protocol_sequence http_disconnect_auth; do
+          for target in protocol_decode protocol_sequence http_disconnect_auth sdp_answer; do
             cargo +nightly-2026-04-01 fuzz run "$target" -- -max_total_time=300
           done
 

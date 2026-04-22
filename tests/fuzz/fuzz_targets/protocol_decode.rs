@@ -3,7 +3,8 @@
 //! Fuzz target for the signaling layer's primary input paths.
 //!
 //! This target ensures that untrusted data from the WebSocket connection
-//! does not cause panics or resource leaks during decoding or authentication.
+//! does not cause panics or resource leaks during batch decoding, handshake
+//! auth-batch parsing, or JWT verification.
 
 use std::str;
 
@@ -11,6 +12,7 @@ use libfuzzer_sys::fuzz_target;
 use o_sfu::{
     testing::auth::{WebSocketConnectClaims, verify},
     testing::client_batch::decode_client_batch,
+    testing::websocket::decode_auth_payload,
 };
 
 const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
@@ -20,6 +22,7 @@ fuzz_target!(|data: &[u8]| {
         // Tests the robustness of the signaling protocol parser against malformed JSON or
         // unexpected message structures. This is a critical entry point for all client messages.
         let _ = decode_client_batch(payload);
+        let _ = decode_auth_payload(payload);
 
         // Tests the JWT verification pipeline, including Base64 decoding of segments,
         // header/claims parsing, and timestamp validation.

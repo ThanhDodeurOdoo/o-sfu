@@ -52,6 +52,8 @@ use http_server::serve_http;
 pub(crate) use ids::{ChannelRuntimeId, ConnectionId};
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
+pub(crate) use request_origin::resolve_remote_address;
+pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
 pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
 use telemetry::init_tracing;
 pub use transport_adapter::TransportSessionKey;

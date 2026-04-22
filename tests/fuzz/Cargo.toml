@@ -35,3 +35,10 @@ path = "fuzz_targets/protocol_sequence.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sdp_answer"
+path = "fuzz_targets/sdp_answer.rs"
+test = false
+doc = false
+bench = false

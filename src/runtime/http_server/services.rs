@@ -100,7 +100,7 @@ pub(super) fn authorization_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.split_once(' ').map(|(_, token)| token))
 }
 
-pub(super) fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
+pub(crate) fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
     let scheme = trusted_forwarded_header(headers, config, "x-forwarded-proto").unwrap_or("http");
     let host = trusted_forwarded_header(headers, config, "x-forwarded-host")
         .map(str::to_owned)

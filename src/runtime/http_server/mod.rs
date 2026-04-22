@@ -19,3 +19,4 @@ mod services;
 mod tests;
 
 pub(crate) use controller::{app, serve_http};
+pub(crate) use services::request_base_url;

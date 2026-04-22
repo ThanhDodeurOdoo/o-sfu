@@ -197,8 +197,7 @@ async fn authenticate_handshake_session(
 
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
     let payload = auth_payload_text(message)?;
-    let batch = decode_auth_batch(&payload)?;
-    extract_auth_envelope(batch)
+    decode_auth_payload_text(&payload)
 }
 
 fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
@@ -225,6 +224,11 @@ fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketClos
         return Err(WebSocketCloseCode::ProtocolError);
     }
     Ok(batch)
+}
+
+pub(crate) fn decode_auth_payload_text(payload: &str) -> Result<AuthPayload, WebSocketCloseCode> {
+    let batch = decode_auth_batch(payload)?;
+    extract_auth_envelope(batch)
 }
 
 fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebSocketCloseCode> {

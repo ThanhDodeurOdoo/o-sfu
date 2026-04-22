@@ -106,6 +106,7 @@ cd tests/fuzz
 cargo +nightly fuzz run protocol_decode
 cargo +nightly fuzz run http_disconnect_auth
 cargo +nightly fuzz run protocol_sequence
+cargo +nightly fuzz run sdp_answer
 ```
 
 ## Proofs
