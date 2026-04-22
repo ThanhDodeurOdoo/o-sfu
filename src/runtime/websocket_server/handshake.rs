@@ -296,7 +296,7 @@ async fn resolve_explicit_channel(
     channel_uuid: &str,
 ) -> Result<Arc<Channel>, WebSocketCloseCode> {
     state
-        .channels
+        .channel_manager
         .get_by_uuid(channel_uuid)
         .await
         .ok_or_else(|| {
@@ -313,7 +313,11 @@ async fn resolve_global_claims_channel(
     claims: &WebSocketConnectClaims,
     _remote_address: &str,
 ) -> Result<Arc<Channel>, WebSocketCloseCode> {
-    let Some(channel) = state.channels.get_by_uuid(&claims.sfu_channel_uuid).await else {
+    let Some(channel) = state
+        .channel_manager
+        .get_by_uuid(&claims.sfu_channel_uuid)
+        .await
+    else {
         debug!(
             channel_uuid = claims.sfu_channel_uuid,
             "verified websocket token referenced a missing channel"
@@ -412,7 +416,7 @@ async fn join_session(
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
     let session_id = claims.session_id.clone();
     let join_result = state
-        .channels
+        .channel_manager
         .join_session(
             channel.uuid(),
             JoinSessionRequest {
@@ -536,7 +540,7 @@ async fn cleanup_failed_session(
     connection_id: ConnectionId,
 ) {
     let _ = state
-        .channels
+        .channel_manager
         .close_session(
             channel.uuid(),
             session_id,

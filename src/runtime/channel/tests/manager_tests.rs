@@ -121,11 +121,11 @@ fn assert_featured_snapshot_update(
 async fn channel_manager_is_idempotent_by_issuer() {
     let manager = ChannelManager::for_test();
     let config = ChannelConfig::default();
-    let first = manager.create_or_get("issuer-a", None, &config, None).await;
+    let first = manager.serve_channel("issuer-a", None, &config, None).await;
     let second = manager
-        .create_or_get("issuer-a", Some("ignored"), &config, None)
+        .serve_channel("issuer-a", Some("ignored"), &config, None)
         .await;
-    let third = manager.create_or_get("issuer-b", None, &config, None).await;
+    let third = manager.serve_channel("issuer-b", None, &config, None).await;
     assert_eq!(first.uuid(), second.uuid());
     assert_ne!(first.uuid(), third.uuid());
 }
@@ -134,13 +134,13 @@ async fn channel_manager_is_idempotent_by_issuer() {
 async fn channel_manager_assigns_media_workers_explicitly() {
     let manager = ChannelManager::for_test_with_media_workers(2);
     let first = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let second = manager
-        .create_or_get("issuer-b", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-b", None, &ChannelConfig::default(), None)
         .await;
     let third = manager
-        .create_or_get("issuer-c", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-c", None, &ChannelConfig::default(), None)
         .await;
 
     assert_eq!(first.test_api().inspect().media_worker_id(), 0);
@@ -152,7 +152,7 @@ async fn channel_manager_assigns_media_workers_explicitly() {
 async fn channel_manager_lookup_by_uuid() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let fetched = manager.get_by_uuid(channel.uuid()).await;
     assert!(fetched.is_some());
@@ -191,7 +191,7 @@ async fn manager_leave_session_removes_empty_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let first_channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let channel_uuid = first_channel.uuid().to_owned();
     let (tx, _rx) = test_sender();
@@ -223,7 +223,7 @@ async fn manager_leave_session_removes_empty_channel() {
 
     assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
     let replacement = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     assert_ne!(replacement.uuid(), channel_uuid);
 }
@@ -233,7 +233,7 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let first_channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let channel_uuid = first_channel.uuid().to_owned();
     let (tx, _rx) = test_sender();
@@ -257,7 +257,7 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
 
     assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
     let replacement = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     assert_ne!(replacement.uuid(), channel_uuid);
 }
@@ -280,7 +280,7 @@ async fn manager_metrics_track_live_channels_and_sessions_without_replacement_dr
     );
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let channel_uuid = channel.uuid().to_owned();
     assert_eq!(metrics.snapshot().active_channels, 1);
@@ -344,7 +344,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     );
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let channel_uuid = channel.uuid().to_owned();
 
@@ -416,7 +416,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         .as_fake_adapter()
         .expect("test expects the fake transport adapter");
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
 
     let mut receivers = Vec::new();

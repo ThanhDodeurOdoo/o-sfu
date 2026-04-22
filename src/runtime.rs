@@ -70,7 +70,7 @@ use transport_adapter::{
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
-    channels: Arc<ChannelManager>,
+    channel_manager: Arc<ChannelManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
@@ -79,7 +79,7 @@ pub struct Runtime {
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: Config,
-    channels: Arc<ChannelManager>,
+    channel_manager: Arc<ChannelManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
@@ -110,7 +110,7 @@ impl Runtime {
         );
         Self {
             config,
-            channels: Arc::new(ChannelManager::new(
+            channel_manager: Arc::new(ChannelManager::new(
                 ChannelManagerConfig::new(rtc_media_worker_count, channel_runtime_policy),
                 recording_media_tap,
                 Arc::clone(&diagnostics),
@@ -124,14 +124,14 @@ impl Runtime {
 
     async fn run_until_stopped(self) -> Result<()> {
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
-            Arc::clone(&self.channels),
+            Arc::clone(&self.channel_manager),
             self.transport_adapter.clone(),
             subscribe_source_policy_updates(&self.transport_adapter),
             self.transport_adapter.clone(),
         );
         let result = serve_http(RuntimeState {
             config: self.config,
-            channels: self.channels,
+            channel_manager: self.channel_manager,
             diagnostics: self.diagnostics,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,

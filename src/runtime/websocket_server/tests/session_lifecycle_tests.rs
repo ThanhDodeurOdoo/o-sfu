@@ -109,7 +109,7 @@ async fn websocket_closes_when_pong_times_out() {
     assert_eq!(metrics.ws_session_loop_exits_ping_timeout, 1);
     assert!(
         !server
-            .channels
+            .channel_manager
             .test_api()
             .has_session(channel.uuid(), &session_id)
             .await
@@ -352,7 +352,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
     };
 
     server
-        .channels
+        .channel_manager
         .disconnect_sessions(
             channel.uuid(),
             &[SessionId::Integer(1)],

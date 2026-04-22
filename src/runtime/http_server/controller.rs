@@ -26,7 +26,7 @@ use crate::{
         },
         http_server::services::{
             CreateChannelContext, CreateChannelError, DisconnectError, authorization_token,
-            disconnect_sessions, get_or_create_channel,
+            disconnect_sessions, verify_and_get_channel,
         },
         metrics::HttpRoute,
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
@@ -99,7 +99,7 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     async {
         axum::Json(
             state
-                .channels
+                .channel_manager
                 .stats_snapshots(&state.transport_adapter)
                 .await
                 .into_iter()
@@ -146,7 +146,7 @@ async fn channel(
     Query(query): Query<CreateChannelQuery>,
 ) -> Response {
     async {
-        match get_or_create_channel(
+        match verify_and_get_channel(
             &state,
             CreateChannelContext {
                 headers: &headers,
@@ -227,7 +227,7 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
         }
         axum::Json(
             diagnostics::summary_response(
-                &state.channels,
+                &state.channel_manager,
                 &state.transport_adapter,
                 &state.diagnostics,
             )
@@ -247,7 +247,7 @@ async fn diagnostics_channels(State(state): State<RuntimeState>, headers: Header
         }
         axum::Json(
             diagnostics::channels_response(
-                &state.channels,
+                &state.channel_manager,
                 &state.transport_adapter,
                 &state.diagnostics,
             )
@@ -270,7 +270,7 @@ async fn diagnostics_channel_detail(
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
         let Some(payload) = diagnostics::channel_detail_response(
-            &state.channels,
+            &state.channel_manager,
             &state.transport_adapter,
             &state.diagnostics,
             &channel_uuid,
@@ -296,7 +296,7 @@ async fn diagnostics_session_detail(
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
         match diagnostics::session_detail_response(
-            &state.channels,
+            &state.channel_manager,
             &state.transport_adapter,
             &state.diagnostics,
             &session_id,

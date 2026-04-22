@@ -119,8 +119,8 @@ async fn diagnostics_routes_require_the_configured_bearer_token() {
 async fn diagnostics_routes_return_live_channel_and_session_details() {
     let state = test_state();
     let channel = state
-        .channels
-        .create_or_get(
+        .channel_manager
+        .serve_channel(
             "issuer-a",
             None,
             &ChannelConfig::default(),
@@ -284,8 +284,8 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
 async fn diagnostics_session_lookup_reports_ambiguous_matches() {
     let state = test_state();
     let first_channel = state
-        .channels
-        .create_or_get(
+        .channel_manager
+        .serve_channel(
             "issuer-a",
             None,
             &ChannelConfig::default(),
@@ -293,8 +293,8 @@ async fn diagnostics_session_lookup_reports_ambiguous_matches() {
         )
         .await;
     let second_channel = state
-        .channels
-        .create_or_get(
+        .channel_manager
+        .serve_channel(
             "issuer-b",
             None,
             &ChannelConfig::default(),

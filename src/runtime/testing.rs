@@ -42,7 +42,7 @@ pub use super::rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot};
 #[derive(Debug)]
 pub struct TestServer {
     addr: SocketAddr,
-    channels: Arc<ChannelManager>,
+    channel_manager: Arc<ChannelManager>,
     handle: JoinHandle<()>,
 }
 
@@ -61,7 +61,12 @@ impl TestServer {
 
     pub async fn wait_for_channel_absence(&self, channel_uuid: &str) -> bool {
         wait_for_test_predicate(|| async {
-            (self.channels.get_by_uuid(channel_uuid).await.is_none()).then_some(())
+            (self
+                .channel_manager
+                .get_by_uuid(channel_uuid)
+                .await
+                .is_none())
+            .then_some(())
         })
         .await
     }
@@ -108,7 +113,7 @@ impl TestServer {
         stream_type: StreamType,
     ) -> bool {
         wait_for_test_predicate(|| async {
-            let channel = self.channels.get_by_uuid(channel_uuid).await?;
+            let channel = self.channel_manager.get_by_uuid(channel_uuid).await?;
             matches!(
                 channel
                     .consumer_route_state(consumer_session_id, producer_session_id, stream_type)
@@ -129,7 +134,7 @@ impl TestServer {
         expected_active: bool,
     ) -> bool {
         wait_for_test_predicate(|| async {
-            let channel = self.channels.get_by_uuid(channel_uuid).await?;
+            let channel = self.channel_manager.get_by_uuid(channel_uuid).await?;
             let expected_state = if expected_active {
                 ConsumerRouteState::Active
             } else {
@@ -162,7 +167,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let recording_media_tap = Arc::new(MediaTap::default());
-    let channels = Arc::new(ChannelManager::new(
+    let channel_manager = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
             config.rtc_media_worker_count,
             ChannelRuntimePolicy::new(
@@ -183,7 +188,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     );
     let state = RuntimeState {
         config,
-        channels: Arc::clone(&channels),
+        channel_manager: Arc::clone(&channel_manager),
         diagnostics,
         metrics,
         transport_adapter,
@@ -201,7 +206,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     });
     Ok(TestServer {
         addr,
-        channels,
+        channel_manager,
         handle,
     })
 }

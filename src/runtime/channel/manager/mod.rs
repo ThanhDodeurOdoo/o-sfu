@@ -115,10 +115,10 @@ impl ChannelManager {
         }
     }
 
-    /// Create a channel for the given issuer, or return the existing one.
+    /// Serve the channel for the given issuer, creating it on first request.
     /// Channel creation remains idempotent by issuer so repeated requests keep
     /// the existing runtime placement and metadata entry.
-    pub async fn create_or_get(
+    pub async fn serve_channel(
         &self,
         issuer: &str,
         key: Option<&str>,

@@ -198,7 +198,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (adapter, fake) = fake_adapter();
     for raw_session_id in [1_i64, 2, 3] {
@@ -365,7 +365,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
 async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (adapter, fake) = fake_adapter();
     for raw_session_id in [1_i64, 2, 3] {
@@ -448,7 +448,7 @@ async fn setup_ready_sessions_with_fake(
 ) {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (adapter, fake) = fake_adapter();
     for &raw_session_id in session_ids {
@@ -2030,7 +2030,7 @@ struct RealRtcRefreshScenario {
 async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (publisher_tx, publisher_rx) = test_sender();
     let (subscriber_tx, subscriber_rx) = test_sender();

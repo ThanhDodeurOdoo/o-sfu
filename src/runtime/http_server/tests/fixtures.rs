@@ -73,7 +73,7 @@ pub(super) fn test_state() -> RuntimeState {
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     RuntimeState {
-        channels: Arc::new(ChannelManager::new(
+        channel_manager: Arc::new(ChannelManager::new(
             ChannelManagerConfig::new(
                 1,
                 ChannelRuntimePolicy::new(

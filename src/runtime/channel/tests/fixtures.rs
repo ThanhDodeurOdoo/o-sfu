@@ -323,7 +323,7 @@ async fn setup_ready_session_scenario(
 ) -> ReadySessionScenario {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (first_tx, first_rx) = test_sender();
     let (second_tx, second_rx) = test_sender();

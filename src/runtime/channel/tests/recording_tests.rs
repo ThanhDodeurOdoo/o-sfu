@@ -60,7 +60,7 @@ async fn build_recording_channel_with(
         Arc::clone(&metrics),
     );
     let channel = manager
-        .create_or_get(
+        .serve_channel(
             "issuer-recording",
             None,
             &ChannelConfig {

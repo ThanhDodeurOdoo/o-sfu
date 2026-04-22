@@ -55,7 +55,7 @@ pub(super) type CreateChannelQuery = ChannelConfig;
 pub(super) struct TestServer {
     pub(super) addr: SocketAddr,
     pub(super) handle: JoinHandle<()>,
-    pub(super) channels: Arc<ChannelManager>,
+    pub(super) channel_manager: Arc<ChannelManager>,
     pub(super) state: RuntimeState,
 }
 
@@ -146,7 +146,7 @@ async fn spawn_test_server_impl(
     config.feature_flags = feature_flags;
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
-    let channels = Arc::new(ChannelManager::new(
+    let channel_manager = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
             1,
             ChannelRuntimePolicy::new(
@@ -161,7 +161,7 @@ async fn spawn_test_server_impl(
     ));
     let state = RuntimeState {
         config,
-        channels: Arc::clone(&channels),
+        channel_manager: Arc::clone(&channel_manager),
         diagnostics,
         metrics,
         transport_adapter,
@@ -179,7 +179,7 @@ async fn spawn_test_server_impl(
     Some(TestServer {
         addr,
         handle,
-        channels,
+        channel_manager,
         state,
     })
 }
@@ -342,8 +342,8 @@ pub(super) async fn create_channel(
     config: ChannelConfig,
 ) -> Arc<Channel> {
     server
-        .channels
-        .create_or_get(issuer, key, &config, None)
+        .channel_manager
+        .serve_channel(issuer, key, &config, None)
         .await
 }
 

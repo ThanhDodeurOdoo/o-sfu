@@ -74,8 +74,8 @@ async fn stats_returns_live_channel_data() {
     let state = test_state();
     let query = CreateChannelQuery::default();
     let channel = state
-        .channels
-        .create_or_get(
+        .channel_manager
+        .serve_channel(
             "issuer-a",
             None,
             &ChannelConfig {

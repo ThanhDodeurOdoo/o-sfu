@@ -132,7 +132,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             "closing websocket session"
         );
         let _ = state
-            .channels
+            .channel_manager
             .close_session(
                 session.channel.uuid(),
                 &session.session_id,

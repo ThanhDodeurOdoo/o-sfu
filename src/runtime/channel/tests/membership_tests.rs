@@ -4,7 +4,7 @@ use super::fixtures::*;
 async fn join_session_enforces_capacity() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, _rx1) = test_sender();
     let result = channel
@@ -37,7 +37,7 @@ async fn join_session_enforces_capacity() {
 async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     let manager = ChannelManager::for_test_with_admission_policy(ChannelAdmissionPolicy::new(1));
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let first_connection = channel
@@ -109,7 +109,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
 async fn leave_session_sends_departure_to_remaining_peers() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
@@ -159,7 +159,7 @@ async fn leave_session_sends_departure_to_remaining_peers() {
 async fn join_session_notifies_existing_peers_with_session_joined() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
@@ -201,7 +201,7 @@ async fn join_session_notifies_existing_peers_with_session_joined() {
 async fn replacing_a_session_notifies_remaining_peers() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut alice_rx) = test_sender();
     let (tx2, mut bob_old_rx) = test_sender();
@@ -255,7 +255,7 @@ async fn replacing_a_session_notifies_remaining_peers() {
 async fn replacing_a_session_runtime_emits_departure_then_join_for_existing_peers() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let (tx1, mut alice_rx) = test_sender();
@@ -563,7 +563,7 @@ async fn join_session_runtime_replacement_removes_surviving_consumer_media() {
 async fn stale_negotiation_callbacks_do_not_ready_a_replaced_session() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (transport_adapter, _fake) = fake_adapter();
     let (first_connection, second_connection) = join_same_session_twice(&channel).await;
@@ -719,7 +719,7 @@ struct StaleRefreshScenario {
 async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (transport_adapter, fake) = fake_adapter();
     let (publisher_tx, mut publisher_rx) = test_sender();
@@ -801,7 +801,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
 async fn broadcast_reaches_all_except_sender() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -855,7 +855,7 @@ async fn broadcast_reaches_all_except_sender() {
 async fn update_session_info_broadcasts_to_all() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -911,7 +911,7 @@ async fn update_session_info_broadcasts_to_all() {
 async fn update_session_info_with_refresh_sends_full_snapshot() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
@@ -971,7 +971,7 @@ async fn update_session_info_with_refresh_sends_full_snapshot() {
 async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -1038,7 +1038,7 @@ async fn disconnect_sessions_kicks_targets_and_notifies_remaining() {
 async fn disconnect_sessions_target_only_the_active_replaced_session() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -1088,7 +1088,7 @@ async fn disconnect_sessions_target_only_the_active_replaced_session() {
 async fn channel_maps_string_session_ids_into_router_sessions() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let (tx, _rx) = test_sender();
     let joined = channel
@@ -1122,7 +1122,7 @@ async fn channel_maps_string_session_ids_into_router_sessions() {
 async fn channel_keeps_router_session_permissions_in_sync() {
     let manager = ChannelManager::for_test();
     let channel = manager
-        .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     let permissions = SessionPermissions {
         transcription: Some(true),

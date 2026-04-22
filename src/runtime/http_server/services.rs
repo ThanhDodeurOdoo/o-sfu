@@ -33,7 +33,7 @@ pub(super) enum CreateChannelError {
     BadRequest,
 }
 
-pub(super) async fn get_or_create_channel(
+pub(super) async fn verify_and_get_channel(
     state: &RuntimeState,
     context: CreateChannelContext<'_>,
 ) -> Result<CreatedChannel, CreateChannelError> {
@@ -52,8 +52,8 @@ pub(super) async fn get_or_create_channel(
     let remote_address =
         resolve_remote_address(context.headers, &state.config, context.connect_address);
     let channel = state
-        .channels
-        .create_or_get(
+        .channel_manager
+        .serve_channel(
             issuer,
             claims.key.as_deref(),
             &ChannelConfig {
@@ -86,7 +86,7 @@ pub(super) async fn disconnect_sessions(
     };
     for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
         state
-            .channels
+            .channel_manager
             .disconnect_sessions(channel_uuid, session_ids, &state.transport_adapter)
             .await;
     }
