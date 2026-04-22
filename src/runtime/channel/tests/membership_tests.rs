@@ -663,6 +663,16 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_session() {
             .any(|message| matches!(message, SessionOutbound::Request(_))),
         "the current connection should receive the consumer bootstrap once it becomes ready"
     );
+    wait_for_fake_event(&scenario.fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+            }
+        )
+    })
+    .await;
 
     assert!(
         !scenario
@@ -700,6 +710,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_session() {
 struct StaleRefreshScenario {
     channel: Arc<super::super::Channel>,
     transport_adapter: RuntimeTransportAdapter,
+    fake: Arc<FakeWebRtcAdapter>,
     first_subscriber_connection: ConnectionId,
     second_subscriber_connection: ConnectionId,
     second_subscriber_rx: mpsc::UnboundedReceiver<SessionOutbound>,
@@ -710,7 +721,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     let channel = manager
         .create_or_get("issuer-a", None, &ChannelConfig::default(), None)
         .await;
-    let (transport_adapter, _fake) = fake_adapter();
+    let (transport_adapter, fake) = fake_adapter();
     let (publisher_tx, mut publisher_rx) = test_sender();
     let (first_subscriber_tx, _first_subscriber_rx) = test_sender();
     let publisher_connection = channel
@@ -779,6 +790,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     StaleRefreshScenario {
         channel,
         transport_adapter,
+        fake,
         first_subscriber_connection,
         second_subscriber_connection,
         second_subscriber_rx,

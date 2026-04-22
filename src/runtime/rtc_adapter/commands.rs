@@ -262,4 +262,11 @@ pub(super) enum RtcWorkerCommand {
         active: bool,
         response: RtcWorkerResponse<()>,
     },
+    RequestConsumerKeyframe {
+        consumer_session_key: TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        response: RtcWorkerResponse<()>,
+    },
 }

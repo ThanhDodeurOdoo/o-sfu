@@ -8,7 +8,7 @@ pub(in crate::runtime::rtc_adapter) mod test_support;
 
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, BinaryHeap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     mem::take,
     net::SocketAddr,
     sync::Arc,
@@ -27,6 +27,7 @@ use crate::runtime::transport_adapter::{
 use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
+use super::local_send_rewrite::{LocalSendRewriteKey, LocalSendRewriteState};
 use super::media_registry::{
     ConsumerMidLookupKey, ProducerMidLookupKey, ProducerSsrcLookupKey, RegisteredMediaHandle,
     RemoteSourceRegistration,
@@ -56,6 +57,7 @@ pub(super) struct RtcSessionState {
     pub(super) max_bitrate_out_bps: Option<u64>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
+    pub(super) local_send_rewrites: HashMap<LocalSendRewriteKey, LocalSendRewriteState>,
 }
 
 #[derive(Default)]

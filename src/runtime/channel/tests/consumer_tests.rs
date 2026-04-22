@@ -109,6 +109,78 @@ async fn consumption_change_updates_transport_route_activity() {
 }
 
 #[tokio::test]
+async fn consumption_change_resume_requests_video_keyframe_refresh() {
+    let (channel, adapter, fake, mut rx1, mut rx2) = setup_two_ready_sessions_with_fake().await;
+
+    channel
+        .test_api()
+        .media()
+        .publish_track(
+            &SessionId::Integer(1),
+            StreamType::Camera,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &adapter,
+        )
+        .await;
+    drain_outbound(&mut rx1);
+    drain_outbound(&mut rx2);
+
+    channel
+        .test_api()
+        .media()
+        .update_subscription(
+            &SessionId::Integer(2),
+            &SessionId::Integer(1),
+            &DownloadStates {
+                camera: Some(false),
+                audio: None,
+                screen: None,
+            },
+            &adapter,
+        )
+        .await;
+
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerActivityUpdated {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+                active: false,
+            }
+        )
+    })
+    .await;
+
+    channel
+        .test_api()
+        .media()
+        .update_subscription(
+            &SessionId::Integer(2),
+            &SessionId::Integer(1),
+            &DownloadStates {
+                camera: Some(true),
+                audio: None,
+                screen: None,
+            },
+            &adapter,
+        )
+        .await;
+
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+            }
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn consumption_change_ignores_nonexistent_consumer() {
     let (channel, adapter, mut rx1, mut rx2) = setup_two_ready_sessions().await;
 

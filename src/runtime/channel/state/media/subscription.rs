@@ -29,6 +29,14 @@ pub(crate) enum ConsumerRouteState {
     Active,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::channel) struct ConsumerKeyframeRefreshTarget {
+    consumer_media: TransportMediaId,
+    producer_session_id: SessionId,
+    producer_connection_id: ConnectionId,
+    source_media: TransportMediaId,
+}
+
 #[derive(Debug, Default)]
 pub(in crate::runtime::channel) struct PlannedSubscriptionChange {
     route_updates: Vec<ConsumerRouteUpdate>,
@@ -466,6 +474,52 @@ impl ChannelState {
         })
     }
 
+    pub(in crate::runtime::channel) fn active_video_consumer_keyframe_refresh_targets(
+        &self,
+        consumer_session_id: &SessionId,
+        consumer_connection_id: ConnectionId,
+    ) -> Option<Vec<ConsumerKeyframeRefreshTarget>> {
+        let session = self.sessions.get(consumer_session_id)?;
+        if session.connection_id != consumer_connection_id {
+            return None;
+        }
+        Some(
+            self.consumer_index
+                .iter()
+                .filter_map(|(key, consumer_state)| {
+                    if key.consumer_session_id != *consumer_session_id
+                        || consumer_state.consumer_connection_id != consumer_connection_id
+                        || !matches!(key.stream_type, StreamType::Camera | StreamType::Screen)
+                    {
+                        return None;
+                    }
+                    let producer_id = self.producer_ids_by_owner_stream.get(
+                        &super::super::shared::ProducerKey::new(
+                            &key.producer_session_id,
+                            key.stream_type,
+                        ),
+                    )?;
+                    let producer = self.producers.get(producer_id)?;
+                    if !producer.active
+                        || !self.desired_download_active(
+                            consumer_session_id,
+                            &key.producer_session_id,
+                            key.stream_type,
+                        )
+                    {
+                        return None;
+                    }
+                    Some(ConsumerKeyframeRefreshTarget {
+                        consumer_media: consumer_state.consumer_media,
+                        producer_session_id: key.producer_session_id.clone(),
+                        producer_connection_id: consumer_state.source_connection_id,
+                        source_media: consumer_state.source_media,
+                    })
+                })
+                .collect(),
+        )
+    }
+
     pub(in crate::runtime::channel) fn consumer_bootstrap_exists(
         &self,
         consumer_key: &ConsumerKey,
@@ -648,6 +702,24 @@ impl RemoteTrackBootstrap {
 
     pub(crate) fn into_channel_event_request(self) -> ChannelEventRequest {
         ChannelEventRequest::BootstrapRemoteTrack(self)
+    }
+}
+
+impl ConsumerKeyframeRefreshTarget {
+    pub(in crate::runtime::channel) const fn consumer_media(&self) -> TransportMediaId {
+        self.consumer_media
+    }
+
+    pub(in crate::runtime::channel) fn producer_session_id(&self) -> &SessionId {
+        &self.producer_session_id
+    }
+
+    pub(in crate::runtime::channel) const fn producer_connection_id(&self) -> ConnectionId {
+        self.producer_connection_id
+    }
+
+    pub(in crate::runtime::channel) const fn source_media(&self) -> TransportMediaId {
+        self.source_media
     }
 }
 

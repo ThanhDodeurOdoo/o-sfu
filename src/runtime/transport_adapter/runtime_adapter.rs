@@ -280,6 +280,36 @@ impl MediaPort for RuntimeTransportAdapter {
         result
     }
 
+    async fn request_consumer_keyframe(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        let result = dispatch_transport_backend!(self, |backend| {
+            backend
+                .request_consumer_keyframe(
+                    consumer_session_key,
+                    consumer_transport_media_id,
+                    source_session_key,
+                    source_transport_media_id,
+                )
+                .await
+        });
+        if let Err(error) = &result {
+            warn!(
+                ?consumer_session_key,
+                ?consumer_transport_media_id,
+                ?source_session_key,
+                ?source_transport_media_id,
+                ?error,
+                "transport adapter failed to request a consumer keyframe refresh"
+            );
+        }
+        result
+    }
+
     async fn transport_media_mid(
         &self,
         session_key: &TransportSessionKey,

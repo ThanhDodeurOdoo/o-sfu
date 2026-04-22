@@ -184,6 +184,12 @@ impl SubscriptionEffectPlan {
         }
     }
 
+    /// Apply thee subscription decision to the transport adapter.
+    ///
+    /// A resumed video route needs more than an `active=true` flip: after a
+    /// long pause the receiver may need a fresh decodable frame before it can
+    /// render again. so succesful camera/screen resumes trigger an
+    /// immediate keyframe request on the underlying consumer route.
     pub(super) async fn execute(self, channel: &Channel, media_port: &impl MediaPort) {
         if let Some(media_count_delta) = self.media_count_delta {
             media_count_delta.record(channel);
@@ -215,6 +221,33 @@ impl SubscriptionEffectPlan {
                     stream_type = ?transport_op.stream_type,
                     active = transport_op.active,
                     "transport adapter failed to update consumer route activity"
+                );
+            } else if transport_op.active
+                && matches!(
+                    transport_op.stream_type,
+                    StreamType::Camera | StreamType::Screen
+                )
+                && media_port
+                    .request_consumer_keyframe(
+                        &channel.transport_session_key(
+                            &transport_op.consumer_session_id,
+                            transport_op.consumer_connection_id,
+                        ),
+                        transport_op.consumer_media,
+                        &channel.transport_session_key(
+                            &transport_op.producer_session_id,
+                            transport_op.producer_connection_id,
+                        ),
+                        transport_op.source_media,
+                    )
+                    .await
+                    .is_err()
+            {
+                warn!(
+                    session_id = ?transport_op.consumer_session_id,
+                    target_session_id = ?transport_op.producer_session_id,
+                    stream_type = ?transport_op.stream_type,
+                    "transport adapter failed to request a consumer keyframe refresh"
                 );
             }
             channel.diagnostics.record(transport_op.diagnostics);
@@ -281,6 +314,12 @@ impl ConsumerBootstrapOp {
         .await;
     }
 
+    /// Declare the transport-side consumer media before committing the channel
+    /// bootstrap.
+    ///
+    /// Keepign this outside the state commit makes transport failure handling
+    /// explicit: the channel can release the pending bootstrap instead of
+    /// committing room state that points at missing transport media
     async fn declare_consumer_transport_media(
         target: &PendingConsumerBootstrapTarget,
         prepared: &PreparedConsumerBootstrap,
@@ -328,6 +367,12 @@ impl ConsumerBootstrapOp {
         Some((consumer_transport_media_id, consumer_mid))
     }
 
+    /// Finalize a prepared consumer bootstrap once the transport media exists.
+    ///
+    /// This step intentionally not request a keyframe.
+    /// Fresh subscribers need that refresh only after the receiver has applied the
+    /// relevant SDP answer, which is handled by the later session-negotiation
+    /// callbacks
     async fn finish(
         channel: &Channel,
         media_port: &impl MediaPort,

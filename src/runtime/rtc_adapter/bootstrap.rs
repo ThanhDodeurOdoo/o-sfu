@@ -5,7 +5,7 @@
 //! candidates, and create the worker-owned session state.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
     sync::Arc,
     time::Instant,
@@ -95,6 +95,7 @@ pub(super) fn ensure_session_rtc_state(
             max_bitrate_out_bps: Some(max_bitrate_out_bps),
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
+            local_send_rewrites: HashMap::new(),
         },
     );
     Ok(true)

@@ -1,21 +1,23 @@
 use std::{net::SocketAddr, time::Instant};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
+use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::{
     AddSendMediaRequest, RemoteKeyframeRequest, request_keyframe_for_source,
-    respond_add_send_media, respond_remove_media, respond_request_remote_keyframe,
-    respond_set_remote_source_packet_gate, respond_set_source_packet_gate,
+    respond_add_send_media, respond_remove_media, respond_request_consumer_keyframe,
+    respond_request_remote_keyframe, respond_set_remote_source_packet_gate,
+    respond_set_source_packet_gate,
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::rtc_adapter::{
     bootstrap,
-    commands::RemoteSourceControl,
+    commands::{RemoteSourceControl, RtcWorkerCommand},
+    demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     route_control::PacketLayerGate,
@@ -33,6 +35,16 @@ fn prepare_source_session(
     source_mid: Mid,
     ssrc: u32,
 ) -> TransportMediaId {
+    prepare_source_session_with_rid(state, source_session, source_mid, ssrc, None)
+}
+
+fn prepare_source_session_with_rid(
+    state: &mut RtcBootstrapState,
+    source_session: &TransportSessionKey,
+    source_mid: Mid,
+    ssrc: u32,
+    rid: Option<Rid>,
+) -> TransportMediaId {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
     assert!(
         bootstrap::ensure_session_rtc_state(
@@ -49,7 +61,7 @@ fn prepare_source_session(
     };
     let mut direct_api = source_session_state.rtc.direct_api();
     direct_api.declare_media(source_mid, MediaKind::Video);
-    direct_api.expect_stream_rx(Ssrc::from(ssrc), None, source_mid, None);
+    direct_api.expect_stream_rx(Ssrc::from(ssrc), None, source_mid, rid);
     state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: source_session.clone(),
         mid: source_mid,
@@ -136,6 +148,238 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     assert_eq!(snapshot.rtc_route_control_forwarded, 1);
     assert_eq!(snapshot.rtc_route_control_absorbed, 1);
     assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 0);
+}
+
+#[test]
+fn consumer_keyframe_request_marks_local_video_source_dirty() {
+    let source_session = test_transport_session_key(115, 0, 116, SessionId::Integer(117));
+    let consumer_session = test_transport_session_key(115, 0, 118, SessionId::Integer(119));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id =
+        prepare_source_session(&mut state, &source_session, source_mid, 88_001);
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+            }],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_request_consumer_keyframe(
+        &mut state,
+        &metrics,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+}
+
+#[test]
+fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
+    let source_session = test_transport_session_key(215, 0, 216, SessionId::Integer(217));
+    let consumer_session = test_transport_session_key(215, 0, 218, SessionId::Integer(219));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_101,
+        Some(selected_rid),
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                active: true,
+                packet_gate: PacketLayerGate::Rid(selected_rid),
+            }],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_request_consumer_keyframe(
+        &mut state,
+        &metrics,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+}
+
+#[test]
+fn consumer_keyframe_request_forwards_remote_video_refresh() {
+    let source_session = test_transport_session_key(125, 0, 126, SessionId::Integer(127));
+    let consumer_session = test_transport_session_key(125, 1, 128, SessionId::Integer(129));
+    let consumer_mid = Mid::from("cam-down");
+    let source_transport_media_id = TransportMediaId::new(131);
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let (control_tx, mut control_rx) = mpsc::channel(1);
+
+    assert!(
+        state
+            .register_remote_source(
+                source_transport_media_id,
+                &source_session,
+                RemoteSourceControl::new(control_tx, RelayTargetId::new(11)),
+            )
+            .is_ok()
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+            }],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_request_consumer_keyframe(
+        &mut state,
+        &metrics,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(matches!(
+        control_rx.try_recv().ok(),
+        Some(RtcWorkerCommand::RequestRemoteKeyframe {
+            source_session_key,
+            source_transport_media_id: forwarded_transport_media_id,
+            target_id,
+            rid: None,
+            kind: KeyframeRequestKind::Pli,
+        }) if source_session_key == source_session
+            && forwarded_transport_media_id == source_transport_media_id
+            && target_id == RelayTargetId::new(11)
+    ));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+}
+
+#[test]
+fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
+    let source_session = test_transport_session_key(225, 0, 226, SessionId::Integer(227));
+    let consumer_session = test_transport_session_key(225, 1, 228, SessionId::Integer(229));
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let source_transport_media_id = TransportMediaId::new(231);
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let (control_tx, mut control_rx) = mpsc::channel(1);
+
+    assert!(
+        state
+            .register_remote_source(
+                source_transport_media_id,
+                &source_session,
+                RemoteSourceControl::new(control_tx, RelayTargetId::new(12)),
+            )
+            .is_ok()
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                active: true,
+                packet_gate: PacketLayerGate::Rid(selected_rid),
+            }],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_request_consumer_keyframe(
+        &mut state,
+        &metrics,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(matches!(
+        control_rx.try_recv().ok(),
+        Some(RtcWorkerCommand::RequestRemoteKeyframe {
+            source_session_key,
+            source_transport_media_id: forwarded_transport_media_id,
+            target_id,
+            rid: Some(rid),
+            kind: KeyframeRequestKind::Pli,
+        }) if source_session_key == source_session
+            && forwarded_transport_media_id == source_transport_media_id
+            && target_id == RelayTargetId::new(12)
+            && rid == selected_rid
+    ));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
 }
 
 #[test]

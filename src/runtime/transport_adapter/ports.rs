@@ -116,6 +116,14 @@ pub(crate) trait MediaPort {
         active: bool,
     ) -> Result<(), TransportAdapterError>;
 
+    async fn request_consumer_keyframe(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError>;
+
     async fn transport_media_mid(
         &self,
         session_key: &TransportSessionKey,

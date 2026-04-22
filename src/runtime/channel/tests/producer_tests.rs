@@ -1744,6 +1744,29 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
             .any(|message| matches!(message, SessionOutbound::Request(_))),
         "subscriber should receive a consumer bootstrap after capabilities make it ready"
     );
+    assert!(
+        fake.snapshot_events().iter().all(|event| {
+            !matches!(
+                event,
+                FakeWebRtcEvent::ConsumerKeyframeRequested {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                }
+            )
+        }),
+        "fresh bootstraps must not request a keyframe before the refresh answer lands"
+    );
+    assert!(refresh_session_consumers(&channel, &SessionId::Integer(2), &transport_adapter).await);
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+            }
+        )
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -1797,6 +1820,29 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
             .any(|message| matches!(message, SessionOutbound::Request(_))),
         "subscriber should receive a consumer bootstrap after download connect makes it ready"
     );
+    assert!(
+        fake.snapshot_events().iter().all(|event| {
+            !matches!(
+                event,
+                FakeWebRtcEvent::ConsumerKeyframeRequested {
+                    consumer_session_id: SessionId::Integer(2),
+                    source_session_id: SessionId::Integer(1),
+                }
+            )
+        }),
+        "fresh bootstraps must not request a keyframe before the refresh answer lands"
+    );
+    assert!(refresh_session_consumers(&channel, &SessionId::Integer(2), &transport_adapter).await);
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_session_id: SessionId::Integer(2),
+                source_session_id: SessionId::Integer(1),
+            }
+        )
+    })
+    .await;
 }
 
 #[tokio::test]

@@ -51,6 +51,10 @@ pub(crate) enum FakeWebRtcEvent {
         source_session_id: SessionId,
         active: bool,
     },
+    ConsumerKeyframeRequested {
+        consumer_session_id: SessionId,
+        source_session_id: SessionId,
+    },
     SourcePacketGateUpdated {
         session_id: SessionId,
         transport_media_id: TransportMediaId,
@@ -442,6 +446,24 @@ impl FakeWebRtcAdapter {
             consumer_session_id: consumer_session_key.session_id().clone(),
             source_session_id: source_session_key.session_id().clone(),
             active,
+        });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn request_consumer_keyframe(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        _consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        _source_transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(FakeWebRtcEvent::ConsumerKeyframeRequested {
+            consumer_session_id: consumer_session_key.session_id().clone(),
+            source_session_id: source_session_key.session_id().clone(),
         });
         Ok(())
     }

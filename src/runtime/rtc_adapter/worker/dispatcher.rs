@@ -96,7 +96,8 @@ pub(crate) fn handle_worker_command(
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
-        | RtcWorkerCommand::SetConsumerActive { .. } => {
+        | RtcWorkerCommand::SetConsumerActive { .. }
+        | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_media_command(
                 state,
                 context.max_bitrate_in_bps,
@@ -252,7 +253,8 @@ fn handle_media_command(
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
-        | RtcWorkerCommand::SetConsumerActive { .. } => {
+        | RtcWorkerCommand::SetConsumerActive { .. }
+        | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_media_route_control_command(state, metrics, relay_registry, command);
         }
         _ => {}
@@ -349,6 +351,34 @@ fn handle_media_route_control_command(
             active,
             response,
         ),
+        RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
+            handle_consumer_keyframe_request(state, metrics, command);
+        }
         _ => {}
+    }
+}
+
+fn handle_consumer_keyframe_request(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    command: RtcWorkerCommand,
+) {
+    if let RtcWorkerCommand::RequestConsumerKeyframe {
+        consumer_session_key,
+        consumer_transport_media_id,
+        source_session_key,
+        source_transport_media_id,
+        response,
+    } = command
+    {
+        media::respond_request_consumer_keyframe(
+            state,
+            metrics,
+            &consumer_session_key,
+            consumer_transport_media_id,
+            &source_session_key,
+            source_transport_media_id,
+            response,
+        );
     }
 }

@@ -25,6 +25,7 @@ use crate::runtime::transport_adapter::{
 
 use super::super::super::{
     commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
+    local_send_rewrite::forget_transport_media_rewrites,
     media_registry::RegisteredMediaHandle,
     state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
 };
@@ -120,6 +121,12 @@ fn worker_remove_media(
             source_transport_media_id,
             ..
         } => {
+            if let Some(session_state) = state.sessions.get_mut(&session_key) {
+                forget_transport_media_rewrites(
+                    &mut session_state.local_send_rewrites,
+                    transport_media_id,
+                );
+            }
             let relay_cleanup = remove_consumer_route(
                 state,
                 &session_key,

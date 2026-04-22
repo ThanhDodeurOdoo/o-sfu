@@ -2,15 +2,18 @@ use std::time::Instant;
 
 use str0m::{
     RtcError,
-    media::Mid,
+    media::{Mid, Rid},
     rtp::{RtpHeader, RtpPacket, SeqNo, StreamTx},
 };
 
+use super::local_send_rewrite::next_rewritten_seq_no;
 use super::shared_payload::SharedPayload;
 use super::state::RtcSessionState;
+use crate::runtime::transport_adapter::TransportMediaId;
 
 #[derive(Debug, Clone)]
 pub(super) struct LocalPacketDestination {
+    dest_transport_media_id: TransportMediaId,
     dest_mid: Mid,
 }
 
@@ -22,7 +25,6 @@ pub(super) struct LocalForwardedRtp<'a> {
 enum LocalForwardedRtpData<'a> {
     Str0m(&'a RtpPacket),
     Relay {
-        seq_no: SeqNo,
         header: &'a RtpHeader,
         timestamp: Instant,
     },
@@ -37,25 +39,13 @@ impl<'a> LocalForwardedRtp<'a> {
     }
 
     pub(super) fn from_relay(
-        seq_no: SeqNo,
         header: &'a RtpHeader,
         timestamp: Instant,
         payload: &'a mut SharedPayload,
     ) -> Self {
         Self {
-            data: LocalForwardedRtpData::Relay {
-                seq_no,
-                header,
-                timestamp,
-            },
+            data: LocalForwardedRtpData::Relay { header, timestamp },
             payload,
-        }
-    }
-
-    fn seq_no(&self) -> SeqNo {
-        match self.data {
-            LocalForwardedRtpData::Str0m(packet) => packet.seq_no,
-            LocalForwardedRtpData::Relay { seq_no, .. } => seq_no,
         }
     }
 
@@ -75,8 +65,11 @@ impl<'a> LocalForwardedRtp<'a> {
 }
 
 impl LocalPacketDestination {
-    pub(super) fn new(dest_mid: Mid) -> Self {
-        Self { dest_mid }
+    pub(super) fn new(dest_transport_media_id: TransportMediaId, dest_mid: Mid) -> Self {
+        Self {
+            dest_transport_media_id,
+            dest_mid,
+        }
     }
 
     pub(super) fn send(
@@ -89,6 +82,12 @@ impl LocalPacketDestination {
         self.send_rtp(session_state, &mut rtp, is_last_destination)
     }
 
+    /// Write one routed RTP packet into the destination session's local
+    /// `StreamTx`.
+    ///
+    /// Payload bytes, timestamps, and header extensions stay source-derived,
+    /// but the sequence number comes from destination-local rewrite state so a
+    /// fresh subscriber does not inherit the publisher's SRTP rollover counter.
     fn send_rtp(
         &self,
         session_state: &mut RtcSessionState,
@@ -99,24 +98,55 @@ impl LocalPacketDestination {
             .rtc
             .media(self.dest_mid)
             .is_some_and(|media| !media.kind().is_audio());
-        let rid = rtp
-            .header()
-            .ext_vals
-            .rid
-            .or(rtp.header().ext_vals.rid_repair);
+        let rid = packet_rid(rtp.header());
         let payload_len = rtp.payload.len();
+        let local_send_rewrites = &mut session_state.local_send_rewrites;
+        let rtc = &mut session_state.rtc;
         let write_result = {
-            let mut direct_api = session_state.rtc.direct_api();
+            let mut direct_api = rtc.direct_api();
             if let Some(rid) = rid {
                 if let Some(stream_tx) = direct_api.stream_tx_by_mid(self.dest_mid, Some(rid)) {
-                    write_rtp(stream_tx, rtp, nackable, is_last_destination, self.dest_mid)
+                    let seq_no = next_rewritten_seq_no(
+                        local_send_rewrites,
+                        self.dest_transport_media_id,
+                        Some(rid),
+                    );
+                    write_rtp(
+                        stream_tx,
+                        seq_no,
+                        rtp,
+                        nackable,
+                        is_last_destination,
+                        self.dest_mid,
+                    )
                 } else if let Some(stream_tx) = direct_api.stream_tx_by_mid(self.dest_mid, None) {
-                    write_rtp(stream_tx, rtp, nackable, is_last_destination, self.dest_mid)
+                    let seq_no = next_rewritten_seq_no(
+                        local_send_rewrites,
+                        self.dest_transport_media_id,
+                        None,
+                    );
+                    write_rtp(
+                        stream_tx,
+                        seq_no,
+                        rtp,
+                        nackable,
+                        is_last_destination,
+                        self.dest_mid,
+                    )
                 } else {
                     return Ok(None);
                 }
             } else if let Some(stream_tx) = direct_api.stream_tx_by_mid(self.dest_mid, None) {
-                write_rtp(stream_tx, rtp, nackable, is_last_destination, self.dest_mid)
+                let seq_no =
+                    next_rewritten_seq_no(local_send_rewrites, self.dest_transport_media_id, None);
+                write_rtp(
+                    stream_tx,
+                    seq_no,
+                    rtp,
+                    nackable,
+                    is_last_destination,
+                    self.dest_mid,
+                )
             } else {
                 return Ok(None);
             }
@@ -126,8 +156,13 @@ impl LocalPacketDestination {
     }
 }
 
+/// Push one packet into str0m with a receiver-safe local sequence number.
+///
+/// Str0m owns the actual send queue, but the adapter decides the per-consumer
+/// sequence space immediately before the packet crosse that boundary
 fn write_rtp(
     stream_tx: &mut StreamTx,
+    seq_no: SeqNo,
     rtp: &mut LocalForwardedRtp<'_>,
     nackable: bool,
     is_last_destination: bool,
@@ -137,7 +172,7 @@ fn write_rtp(
     stream_tx
         .write_rtp_with_csrc(
             rtp.header().payload_type,
-            rtp.seq_no(),
+            seq_no,
             rtp.header().timestamp,
             rtp.timestamp(),
             rtp.header().marker,
@@ -148,6 +183,10 @@ fn write_rtp(
             rtp.header().csrc,
         )
         .map_err(|error| RtcError::Packet(dest_mid, payload_type, error))
+}
+
+fn packet_rid(header: &RtpHeader) -> Option<Rid> {
+    header.ext_vals.rid.or(header.ext_vals.rid_repair)
 }
 
 #[cfg(test)]

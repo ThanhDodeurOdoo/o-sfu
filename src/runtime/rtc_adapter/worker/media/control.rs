@@ -32,10 +32,14 @@
 //! The `respond_*` functions at the top are command-adapter entry points
 //! for the worker dispatcher
 
+use std::time::Instant;
+
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{Mid, Rid};
+use str0m::media::{KeyframeRequestKind, Mid, Rid};
 use tokio::sync::oneshot;
 
+use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
+use crate::runtime::rtc_adapter::route_control::KeyframeRequestDecision;
 use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
@@ -48,7 +52,7 @@ use super::super::super::{
     route_control::{PacketLayerGate, aggregate_packet_gates},
     state::RtcBootstrapState,
 };
-use super::types::RouteSourceKind;
+use super::{keyframe::request_keyframe_for_source, types::RouteSourceKind};
 
 enum RouteSourceAccess {
     Existing,
@@ -104,6 +108,25 @@ pub(crate) fn respond_set_consumer_active(
     ));
 }
 
+pub(crate) fn respond_request_consumer_keyframe(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_request_consumer_keyframe(
+        state,
+        metrics,
+        consumer_session_key,
+        consumer_transport_media_id,
+        source_session_key,
+        source_transport_media_id,
+    ));
+}
+
 pub(crate) fn respond_set_remote_source_route_active(
     state: &RtcBootstrapState,
     relay_registry: &RelayRegistry,
@@ -133,6 +156,13 @@ pub(crate) fn respond_set_remote_source_packet_gate(
         .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
 }
 
+/// Reduce negotiated consumer RTP parameters into the route-level packet gate
+/// used by worker forwarding
+///
+/// A single selected RID means: this route should forward only that simulcast
+/// layer.
+/// Mixed or RID-less encodings means: stay open so non-simulcast streams and
+/// broader compatibility cases keep the previous behavior
 pub(super) fn consumer_packet_gate(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> PacketLayerGate {
@@ -168,6 +198,11 @@ pub(super) fn ensure_route_source_registered(
     )
 }
 
+/// Register one consumer route in the worker-local forwarding index.
+///
+/// This binds the consumer transport media to its source route, installs the
+/// packet gate that later drives RID selection, and update any remote-source
+/// relay activity that depends on this route existing.
 pub(super) fn register_consumer_route(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,
@@ -241,6 +276,11 @@ pub(super) fn remove_consumer_route(
     relay_cleanup
 }
 
+/// Recompute the effective packet gate for one source after consumer-route
+/// changes.
+///
+/// Join resume, pause and removal all converge here so local forwarding and
+/// remote relay control immediately see the same effective route selection.
 pub(crate) fn refresh_source_packet_gate(
     state: &mut RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
@@ -354,6 +394,110 @@ fn worker_set_consumer_active(
     refresh_source_packet_gate(state, source_transport_media_id);
     update_remote_route_active(state, source_transport_media_id, active);
     Ok(())
+}
+
+/// Request a refresh frame for an already-declared consumer route.
+///
+/// The worker revalidates consumer/source ownership, skips paused routes, maps
+/// RID-gated destinations back into the keyframe target, and then either marks
+/// the local source dirty or forwards a remote keyframe request with the normal
+/// coalescing rules.
+fn worker_request_consumer_keyframe(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> Result<(), TransportAdapterError> {
+    let route_source = ensure_route_source(
+        state,
+        consumer_session_key,
+        source_session_key,
+        source_transport_media_id,
+        RouteSourceAccess::Existing,
+    )?;
+    match state
+        .mid_registry
+        .get(&consumer_transport_media_id.as_u64())
+    {
+        Some(RegisteredMediaHandle::Consumer {
+            session_key,
+            source_transport_media_id: consumer_source_transport_media_id,
+            ..
+        }) if session_key == consumer_session_key
+            && *consumer_source_transport_media_id == source_transport_media_id => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    let (destination_active, destination_rid) = state
+        .media_route_index
+        .get(&source_transport_media_id)
+        .and_then(|route_entry| {
+            route_entry.destinations.iter().find(|destination| {
+                destination.dest_session == *consumer_session_key
+                    && destination.dest_transport_media_id == consumer_transport_media_id
+            })
+        })
+        .map(|destination| (destination.active, keyframe_request_rid(destination)))
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    if !destination_active {
+        return Ok(());
+    }
+    let now = Instant::now();
+    match route_source {
+        RouteSourceKind::Local => {
+            request_keyframe_for_source(
+                state,
+                metrics,
+                source_session_key,
+                source_transport_media_id,
+                destination_rid,
+                KeyframeRequestKind::Pli,
+                now,
+            );
+        }
+        RouteSourceKind::Remote => {
+            let Some((source_session_key, source_control)) = state
+                .remote_source_registration(source_transport_media_id)
+                .map(|registration| {
+                    (
+                        registration.source_session_key().clone(),
+                        registration.source_control().clone(),
+                    )
+                })
+            else {
+                return Err(TransportAdapterError::TransportUnavailable);
+            };
+            match state
+                .route_control
+                .decide_keyframe_request(source_transport_media_id, now)
+            {
+                KeyframeRequestDecision::Forward => {
+                    source_control.request_keyframe(
+                        source_session_key,
+                        source_transport_media_id,
+                        destination_rid,
+                        KeyframeRequestKind::Pli,
+                    );
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+                }
+                KeyframeRequestDecision::Absorb => {
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
+    match &destination.packet_gate {
+        PacketLayerGate::Rid(rid) => Some(*rid),
+        PacketLayerGate::Open | PacketLayerGate::Block => None,
+    }
 }
 
 fn ensure_route_source(

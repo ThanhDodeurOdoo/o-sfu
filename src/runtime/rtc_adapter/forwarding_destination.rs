@@ -69,7 +69,10 @@ impl PacketForward {
             packet_idx,
             destination: ForwardingDestination::LocalRtc(LocalRtcPacketDestination::new(
                 route_destination.dest_session.clone(),
-                LocalPacketDestination::new(route_destination.dest_mid),
+                LocalPacketDestination::new(
+                    route_destination.dest_transport_media_id,
+                    route_destination.dest_mid,
+                ),
             )),
         }
     }

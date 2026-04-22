@@ -336,6 +336,24 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    pub(crate) async fn request_consumer_keyframe(
+        self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        self.adapter
+            .request_worker(|response| RtcWorkerCommand::RequestConsumerKeyframe {
+                consumer_session_key: consumer_session_key.clone(),
+                consumer_transport_media_id,
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                response,
+            })
+            .await
+    }
+
     pub(crate) async fn transport_media_mid(
         self,
         transport_media_id: TransportMediaId,

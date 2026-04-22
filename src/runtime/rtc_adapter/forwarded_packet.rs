@@ -2,7 +2,7 @@ use std::{mem::take, time::Instant};
 
 use str0m::{
     media::{ExtensionValues, Rid},
-    rtp::{RtpHeader, RtpPacket, SeqNo},
+    rtp::{RtpHeader, RtpPacket},
 };
 
 #[cfg(test)]
@@ -40,7 +40,6 @@ struct ForwardedRtpData {
 
 #[derive(Debug)]
 pub(super) struct ForwardedRelayRtpData {
-    pub(super) seq_no: SeqNo,
     pub(super) header: RtpHeader,
 }
 
@@ -99,13 +98,11 @@ impl ForwardedPacket {
         let data = match &self.data {
             ForwardedPacketData::Str0mRtp(rtp_data) => {
                 ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-                    seq_no: rtp_data.rtp_packet.seq_no,
                     header: rtp_data.rtp_packet.header.clone(),
                 })
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-                    seq_no: rtp_data.seq_no,
                     header: rtp_data.header.clone(),
                 })
             }
@@ -172,9 +169,8 @@ impl ForwardedPacket {
                 LocalForwardedRtp::new(&rtp_data.rtp_packet, payload)
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
-                let seq_no = rtp_data.seq_no;
                 let header = &rtp_data.header;
-                LocalForwardedRtp::from_relay(seq_no, header, self.received_at, payload)
+                LocalForwardedRtp::from_relay(header, self.received_at, payload)
             }
         }
     }
@@ -249,7 +245,6 @@ fn sample_forwarded_packet_with_extensions(
         received_at,
         payload: SharedPayload::from_vec(payload.to_vec()),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-            seq_no: SeqNo::from(1),
             header: RtpHeader {
                 version: 2,
                 has_padding: false,
@@ -286,7 +281,6 @@ fn sample_forwarded_packet_without_mid(
         received_at,
         payload: SharedPayload::from_vec(payload.to_vec()),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-            seq_no: SeqNo::from(1),
             header: RtpHeader {
                 version: 2,
                 has_padding: false,

@@ -29,6 +29,7 @@ mod forwarded_packet;
 mod forwarding_destination;
 mod forwarding_planner;
 mod local_forwarding;
+mod local_send_rewrite;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;

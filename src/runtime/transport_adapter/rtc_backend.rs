@@ -198,6 +198,25 @@ impl MediaPort for RtcTransportAdapterShardSet {
             .await
     }
 
+    async fn request_consumer_keyframe(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Result<(), TransportAdapterError> {
+        ensure_same_channel_runtime(consumer_session_key, source_session_key)?;
+        self.shard_for_session(consumer_session_key)
+            .media()
+            .request_consumer_keyframe(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+            )
+            .await
+    }
+
     async fn transport_media_mid(
         &self,
         session_key: &TransportSessionKey,

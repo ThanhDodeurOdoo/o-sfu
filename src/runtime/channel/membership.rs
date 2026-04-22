@@ -483,8 +483,13 @@ impl Channel {
             return false;
         }
         if update.became_consumer_ready {
-            return self
+            if !self
                 .bootstrap_missing_consumers_for_connection(session_id, connection_id, media_port)
+                .await
+            {
+                return false;
+            }
+            self.request_active_video_consumer_keyframes(session_id, connection_id, media_port)
                 .await;
         }
         true
@@ -496,8 +501,52 @@ impl Channel {
         connection_id: ConnectionId,
         media_port: &impl MediaPort,
     ) -> bool {
+        if !self
+            .request_active_video_consumer_keyframes(session_id, connection_id, media_port)
+            .await
+        {
+            return false;
+        }
         self.bootstrap_missing_consumers_for_connection(session_id, connection_id, media_port)
             .await
+    }
+
+    async fn request_active_video_consumer_keyframes(
+        &self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+        media_port: &impl MediaPort,
+    ) -> bool {
+        let Some(keyframe_refresh_targets) = ({
+            let state = self.state.read().await;
+            state.active_video_consumer_keyframe_refresh_targets(session_id, connection_id)
+        }) else {
+            return false;
+        };
+        for target in keyframe_refresh_targets {
+            if media_port
+                .request_consumer_keyframe(
+                    &self.transport_session_key(session_id, connection_id),
+                    target.consumer_media(),
+                    &self.transport_session_key(
+                        target.producer_session_id(),
+                        target.producer_connection_id(),
+                    ),
+                    target.source_media(),
+                )
+                .await
+                .is_err()
+            {
+                warn!(
+                    ?session_id,
+                    connection_id = ?connection_id,
+                    producer_session_id = ?target.producer_session_id(),
+                    source_transport_media_id = ?target.source_media(),
+                    "transport adapter failed to request a refreshed consumer keyframe"
+                );
+            }
+        }
+        true
     }
 
     pub(super) async fn session_count(&self) -> usize {
