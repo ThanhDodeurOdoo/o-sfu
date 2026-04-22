@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
@@ -322,7 +323,14 @@ enum DiagnosticsAccess {
 fn ensure_diagnostics_access(headers: &HeaderMap, config: &Config) -> DiagnosticsAccess {
     if let Some(expected_token) = config.diagnostics.auth_token.as_deref() {
         return match authorization_token(headers) {
-            Some(actual_token) if actual_token == expected_token => DiagnosticsAccess::Allowed,
+            Some(actual_token)
+                if actual_token
+                    .as_bytes()
+                    .ct_eq(expected_token.as_bytes())
+                    .into() =>
+            {
+                DiagnosticsAccess::Allowed
+            }
             _ => DiagnosticsAccess::Unauthorized,
         };
     }
