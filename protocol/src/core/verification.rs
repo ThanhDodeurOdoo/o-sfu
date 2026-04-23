@@ -4,8 +4,6 @@
 //! exposes the connection-lifecycle state machine because its transition model
 //! is shared with production code.
 
-use crate::shared::{AvailableFeatures, RecordingState};
-
 use super::{
     ConnectionState, INITIAL_RECOVERY_DELAY_MS, RECOVERY_TIMER_ID,
     connection_lifecycle::{
@@ -17,7 +15,7 @@ use super::{
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VerificationLifecycleEffects {
-    connect_url: Option<String>,
+    connect_requested: bool,
     recovery_timer_ms: Option<u32>,
     close_websocket_code: Option<u16>,
     state_change: Option<(ConnectionState, Option<LifecycleCloseCause>)>,
@@ -28,7 +26,7 @@ pub struct VerificationLifecycleEffects {
 impl VerificationLifecycleEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.connect_url.is_none()
+        !self.connect_requested
             && self.recovery_timer_ms.is_none()
             && self.close_websocket_code.is_none()
             && self.state_change.is_none()
@@ -37,8 +35,8 @@ impl VerificationLifecycleEffects {
     }
 
     #[must_use]
-    pub fn has_connect(&self, url: &str) -> bool {
-        self.connect_url.as_deref() == Some(url)
+    pub fn has_connect(&self) -> bool {
+        self.connect_requested
     }
 
     #[must_use]
@@ -84,13 +82,8 @@ impl VerificationConnectionLifecycle {
         }
     }
 
-    pub fn connect(
-        &mut self,
-        url: String,
-        jwt: String,
-        channel: Option<String>,
-    ) -> VerificationLifecycleEffects {
-        let plan = connect_model(&mut self.model, url, jwt, channel);
+    pub fn connect(&mut self) -> VerificationLifecycleEffects {
+        let plan = connect_model(&mut self.model);
         self.apply_plan(&plan)
     }
 
@@ -106,18 +99,6 @@ impl VerificationConnectionLifecycle {
         ) {
             return VerificationLifecycleEffects::default();
         }
-        self.model.features = AvailableFeatures {
-            rtc: true,
-            transcription: false,
-            audio_recording: true,
-            video_recording: false,
-        };
-        self.model.recording_state = RecordingState {
-            recording: Some(false),
-            audio: Some(false),
-            transcription: Some(false),
-            video: Some(false),
-        };
         self.model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
         self.model.state = ConnectionState::Authenticated;
         VerificationLifecycleEffects {
@@ -159,7 +140,7 @@ impl VerificationConnectionLifecycle {
 
     #[must_use]
     pub fn has_connect_context(&self) -> bool {
-        self.model.connect_context.is_some()
+        self.model.has_connect_context
     }
 
     #[must_use]
@@ -182,6 +163,9 @@ impl VerificationConnectionLifecycle {
         let mut effects = VerificationLifecycleEffects::default();
         summarize_effects(&mut effects, &plan.effects_before_cleanup);
         summarize_effects(&mut effects, &plan.effects_after_cleanup);
+        if plan.connect_after_cleanup {
+            effects.connect_requested = true;
+        }
         effects
     }
 }
@@ -189,35 +173,28 @@ impl VerificationConnectionLifecycle {
 fn summarize_effects(summary: &mut VerificationLifecycleEffects, effects: &LifecycleEffects) {
     match effects {
         LifecycleEffects::None => {}
-        LifecycleEffects::One(first) => summarize_effect(summary, first),
-        LifecycleEffects::Two(first, second) => {
-            summarize_effect(summary, first);
-            summarize_effect(summary, second);
-        }
+        LifecycleEffects::One(first) => summarize_effect(summary, *first),
         LifecycleEffects::Three(first, second, third) => {
-            summarize_effect(summary, first);
-            summarize_effect(summary, second);
-            summarize_effect(summary, third);
+            summarize_effect(summary, *first);
+            summarize_effect(summary, *second);
+            summarize_effect(summary, *third);
         }
     }
 }
 
-fn summarize_effect(summary: &mut VerificationLifecycleEffects, effect: &LifecycleEffect) {
+fn summarize_effect(summary: &mut VerificationLifecycleEffects, effect: LifecycleEffect) {
     match effect {
         LifecycleEffect::EmitStateChange { state, cause } => {
-            summary.state_change = Some((*state, *cause));
+            summary.state_change = Some((state, cause));
         }
         LifecycleEffect::ClosePeerConnection => {
             summary.close_peer_connection = true;
         }
         LifecycleEffect::CloseWebSocket { code } => {
-            summary.close_websocket_code = Some(*code);
-        }
-        LifecycleEffect::Connect { url } => {
-            summary.connect_url = Some(url.clone());
+            summary.close_websocket_code = Some(code);
         }
         LifecycleEffect::ScheduleRecoveryTimer { ms } => {
-            summary.recovery_timer_ms = Some(*ms);
+            summary.recovery_timer_ms = Some(ms);
         }
         LifecycleEffect::CancelRecoveryTimer => {
             summary.cancel_recovery_timer = true;

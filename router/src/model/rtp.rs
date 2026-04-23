@@ -390,6 +390,20 @@ impl MediaCodecCapability {
     pub fn rtcp_feedback(&self) -> impl Iterator<Item = &RtcpFeedback> {
         self.rtcp_feedback.iter()
     }
+
+    #[must_use]
+    pub fn rtx_associated_payload_type_id(&self) -> Option<PayloadType> {
+        self.settings.iter().find_map(|setting| match setting {
+            CodecSetting::RtxAssociation(payload_type) => Some(*payload_type),
+            _ => None,
+        })
+    }
+
+    #[must_use]
+    pub fn rtx_associated_payload_type(&self) -> Option<u8> {
+        self.rtx_associated_payload_type_id()
+            .map(PayloadType::value)
+    }
 }
 
 /// Full capability set for one RTP endpoint.
@@ -521,6 +535,20 @@ impl MediaFormat {
 
     pub fn rtcp_feedback(&self) -> impl Iterator<Item = &RtcpFeedback> {
         self.rtcp_feedback.iter()
+    }
+
+    #[must_use]
+    pub fn rtx_associated_payload_type_id(&self) -> Option<PayloadType> {
+        self.settings.iter().find_map(|setting| match setting {
+            CodecSetting::RtxAssociation(payload_type) => Some(*payload_type),
+            _ => None,
+        })
+    }
+
+    #[must_use]
+    pub fn rtx_associated_payload_type(&self) -> Option<u8> {
+        self.rtx_associated_payload_type_id()
+            .map(PayloadType::value)
     }
 }
 

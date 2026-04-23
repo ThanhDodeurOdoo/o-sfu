@@ -243,14 +243,14 @@ pub mod h264 {
         /// Parse the RFC 6184 `profile-level-id` hex token.
         #[must_use]
         pub fn parse(value: &str) -> Option<Self> {
-            if value.len() != 6 {
-                return None;
-            }
-            let raw = u32::from_str_radix(value, 16).ok()?;
-            let bytes = raw.to_be_bytes();
-            let profile_idc = bytes[1];
-            let profile_iop = bytes[2];
-            let level = normalized_level_idc(profile_idc, profile_iop, bytes[3])?;
+            Self::parse_ascii_bytes(value.as_bytes())
+        }
+
+        /// Parse the six-byte ASCII hex form of a `profile-level-id` token.
+        #[must_use]
+        pub fn parse_ascii_bytes(value: &[u8]) -> Option<Self> {
+            let [profile_idc, profile_iop, level_idc] = parse_profile_level_id_bytes(value)?;
+            let level = normalized_level_idc(profile_idc, profile_iop, level_idc)?;
             let profile = profile_from_bytes(profile_idc, profile_iop)?;
             Some(Self { profile, level })
         }
@@ -406,6 +406,38 @@ pub mod h264 {
                     .then_some(*profile)
             },
         )
+    }
+
+    fn parse_profile_level_id_bytes(value: &[u8]) -> Option<[u8; 3]> {
+        let [
+            first_high,
+            first_low,
+            second_high,
+            second_low,
+            third_high,
+            third_low,
+        ] = value
+        else {
+            return None;
+        };
+        Some([
+            decode_hex_byte(*first_high, *first_low)?,
+            decode_hex_byte(*second_high, *second_low)?,
+            decode_hex_byte(*third_high, *third_low)?,
+        ])
+    }
+
+    fn decode_hex_byte(high: u8, low: u8) -> Option<u8> {
+        Some((decode_hex_nibble(high)? << 4) | decode_hex_nibble(low)?)
+    }
+
+    fn decode_hex_nibble(value: u8) -> Option<u8> {
+        match value {
+            b'0'..=b'9' => Some(value - b'0'),
+            b'a'..=b'f' => Some(value - b'a' + 10),
+            b'A'..=b'F' => Some(value - b'A' + 10),
+            _ => None,
+        }
     }
 }
 

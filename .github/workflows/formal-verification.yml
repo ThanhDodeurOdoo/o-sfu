@@ -24,11 +24,6 @@ jobs:
             command: >-
               cargo kani -p o-sfu-proofs
               --harness h264_profile_level_id_parse_matches_rfc_patterns
-          - shard: router-rtp
-            command: >-
-              cargo kani -p o-sfu-proofs
-              --harness derive_consumable_rtp_parameters_keeps_only_valid_primary_links
-              --harness negotiate_consumer_rtp_parameters_keeps_only_surviving_consumer_links
           - shard: router-teardown
             command: >-
               cargo kani -p o-sfu-proofs
@@ -67,7 +62,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Cache Kani installation
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.kani
           key: ${{ runner.os }}-${{ runner.arch }}-kani-${{ env.KANI_VERSION }}

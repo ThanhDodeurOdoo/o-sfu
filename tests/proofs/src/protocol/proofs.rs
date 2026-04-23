@@ -24,15 +24,8 @@ fn protocol_core_terminal_close_codes_never_schedule_recovery() {
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(!core.has_connect_context());
 
-    let reconnect_commands = core.connect(
-        String::from("wss://next.example/socket"),
-        String::from("fresh-jwt"),
-        None,
-    );
-    assert!(has_connect_effect(
-        &reconnect_commands,
-        "wss://next.example/socket"
-    ));
+    let reconnect_commands = core.connect();
+    assert!(has_connect_effect(&reconnect_commands));
 
     std::mem::forget(commands);
     std::mem::forget(reconnect_commands);
@@ -69,10 +62,7 @@ fn protocol_core_recovery_timer_reconnects_only_from_recovering() {
 
     let commands = core.on_timer(RECOVERY_TIMER_ID);
     let expect_reconnect = stage == 4;
-    assert_eq!(
-        has_connect_effect(&commands, "wss://proof.example/socket"),
-        expect_reconnect
-    );
+    assert_eq!(has_connect_effect(&commands), expect_reconnect);
     if expect_reconnect {
         assert_eq!(core.state(), ConnectionState::Connecting);
     }
@@ -124,15 +114,8 @@ fn protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect() {
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(core.on_ws_close(NON_TERMINAL_CLOSE_CODE).is_empty());
 
-    let reconnect_commands = core.connect(
-        String::from("wss://fresh.example/socket"),
-        String::from("fresh-jwt"),
-        Some(String::from("fresh-room")),
-    );
-    assert!(has_connect_effect(
-        &reconnect_commands,
-        "wss://fresh.example/socket"
-    ));
+    let reconnect_commands = core.connect();
+    assert!(has_connect_effect(&reconnect_commands));
 
     std::mem::forget(disconnect_commands);
     std::mem::forget(reconnect_commands);
@@ -141,11 +124,7 @@ fn protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect() {
 
 fn lifecycle_at_stage(stage: u8) -> VerificationConnectionLifecycle {
     let mut core = VerificationConnectionLifecycle::new();
-    let _ = core.connect(
-        String::from("wss://proof.example/socket"),
-        String::from("jwt-proof"),
-        Some(String::from("room")),
-    );
+    let _ = core.connect();
     if stage >= 1 {
         let _ = core.on_welcome();
     }
@@ -160,11 +139,7 @@ fn lifecycle_at_lifecycle_state(stage: u8) -> VerificationConnectionLifecycle {
     match stage {
         0 => {}
         1 => {
-            let _ = core.connect(
-                String::from("wss://proof.example/socket"),
-                String::from("jwt-proof"),
-                Some(String::from("room")),
-            );
+            let _ = core.connect();
         }
         2 => {
             core = lifecycle_at_stage(1);
@@ -200,8 +175,8 @@ fn scheduled_delay(effects: &VerificationLifecycleEffects, timer_id: u32) -> Opt
     effects.recovery_timer_delay(timer_id)
 }
 
-fn has_connect_effect(effects: &VerificationLifecycleEffects, url: &str) -> bool {
-    effects.has_connect(url)
+fn has_connect_effect(effects: &VerificationLifecycleEffects) -> bool {
+    effects.has_connect()
 }
 
 fn has_close_peer_connection(effects: &VerificationLifecycleEffects) -> bool {

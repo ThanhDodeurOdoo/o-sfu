@@ -12,8 +12,6 @@
 //! - Keep protocol-shaped negotiation details at the edge or in dedicated
 //!   adapters, instead of leaking SDP mecanics into the router model.
 
-use std::collections::BTreeSet;
-
 use o_sfu_rfc::rtp as rfc_rtp;
 
 use super::{
@@ -271,40 +269,34 @@ pub fn negotiate_consumer_rtp_parameters(
         return Err(RtpNegotiationError::NoCompatibleConsumerCodec);
     }
 
-    let negotiated_media_payload_types = negotiated_formats
-        .iter()
-        .map(MediaFormat::payload_type_id)
-        .collect::<BTreeSet<_>>();
-    negotiated_formats.extend(consumable_parameters.formats().filter_map(|format| {
+    for format in consumable_parameters.formats() {
         if !format.codec().is_rtx() {
-            return None;
+            continue;
         }
-        let capability_format = find_matching_consumer_rtx_capability(
+        let Some(capability_format) = find_matching_consumer_rtx_capability(
             format,
-            &negotiated_media_payload_types,
+            &negotiated_formats,
             consumer_capabilities,
-        )?;
+        ) else {
+            continue;
+        };
         let feedback =
             intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
         let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
-        Some(clone_format_with_overrides(
+        negotiated_formats.push(clone_format_with_overrides(
             format,
             format.payload_type_id(),
             None,
             &feedback,
-        ))
-    }));
+        ));
+    }
 
-    let negotiated_payload_types = negotiated_formats
-        .iter()
-        .map(MediaFormat::payload_type_id)
-        .collect::<BTreeSet<_>>();
     let bindings = consumable_parameters
         .bindings()
         .filter(|binding| {
-            binding
-                .payload_type_id()
-                .is_none_or(|payload_type| negotiated_payload_types.contains(&payload_type))
+            binding.payload_type_id().is_none_or(|payload_type| {
+                formats_contain_payload_type(&negotiated_formats, payload_type)
+            })
         })
         .map(clone_binding)
         .collect::<Vec<_>>();
@@ -391,12 +383,12 @@ fn find_matching_rtx_capability<'a>(
 /// stream with no valid primary target
 fn find_matching_consumer_rtx_capability<'a>(
     format: &MediaFormat,
-    negotiated_media_payload_types: &BTreeSet<PayloadType>,
+    negotiated_formats: &[MediaFormat],
     capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
     let associated_payload_type = parse_rtx_associated_payload(format).ok()?;
     // RFC 4588 section 8.1 ties each RTX format to one negotiated primary payload type.
-    if !negotiated_media_payload_types.contains(&associated_payload_type) {
+    if !formats_contain_primary_payload_type(negotiated_formats, associated_payload_type) {
         return None;
     }
     capabilities.codecs().find(|capability_format| {
@@ -704,17 +696,32 @@ fn negotiate_header_extensions(
     consumable_parameters: &MediaStream,
     consumer_capabilities: &MediaCapabilities,
 ) -> Vec<HeaderExtension> {
-    let supported_uris = consumer_capabilities
-        .header_extensions()
-        .map(|extension| extension.uri_kind().clone())
-        .collect::<BTreeSet<_>>();
     consumable_parameters
         .header_extensions()
         // RFC 8285 extmaps are negotiated by common support. This helper intentionally keeps the
         // router model at URI-intersection scope and leaves direction/id validation to the SDP edge.
-        .filter(|extension| supported_uris.contains(extension.uri_kind()))
+        .filter(|extension| {
+            consumer_capabilities
+                .header_extensions()
+                .any(|supported| supported.uri_kind() == extension.uri_kind())
+        })
         .map(clone_header_extension)
         .collect()
+}
+
+fn formats_contain_payload_type(formats: &[MediaFormat], payload_type: PayloadType) -> bool {
+    formats
+        .iter()
+        .any(|format| format.payload_type_id() == payload_type)
+}
+
+fn formats_contain_primary_payload_type(
+    formats: &[MediaFormat],
+    payload_type: PayloadType,
+) -> bool {
+    formats
+        .iter()
+        .any(|format| !format.codec().is_rtx() && format.payload_type_id() == payload_type)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

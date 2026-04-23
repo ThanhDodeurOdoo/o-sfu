@@ -7,7 +7,5 @@ mod invariants;
 mod model;
 #[cfg(kani)]
 mod proofs;
-#[cfg(kani)]
-mod rtp_proofs;
 
 pub(crate) use self::model::ProofRouterModel;

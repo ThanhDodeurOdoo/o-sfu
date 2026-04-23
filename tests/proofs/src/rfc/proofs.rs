@@ -10,9 +10,7 @@ const CONSTRAINT_SET3_FLAG: u8 = 0x10;
 fn h264_profile_level_id_parse_matches_rfc_patterns() {
     let raw = kani::any::<u32>() & 0x00FF_FFFF;
     let token = hex_profile_level_id(raw);
-    let parsed = core::str::from_utf8(&token)
-        .ok()
-        .and_then(ProfileLevelId::parse);
+    let parsed = ProfileLevelId::parse_ascii_bytes(&token);
     let bytes = raw.to_be_bytes();
     let expected = spec_profile_from_bytes(bytes[1], bytes[2])
         .zip(spec_normalized_level_idc(bytes[1], bytes[2], bytes[3]));
