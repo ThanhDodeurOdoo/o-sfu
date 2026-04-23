@@ -7,12 +7,59 @@
 use crate::shared::{AvailableFeatures, RecordingState};
 
 use super::{
-    Command, Commands, ConnectionState, INITIAL_RECOVERY_DELAY_MS, RECOVERY_TIMER_ID,
+    ConnectionState, INITIAL_RECOVERY_DELAY_MS, RECOVERY_TIMER_ID,
     connection_lifecycle::{
-        LifecycleModel, LifecyclePlan, RuntimeCleanupMode, connect_model, disconnect_model,
-        handle_recovery_timer_model, on_transport_ready_model, on_ws_close_model,
+        LifecycleCloseCause, LifecycleEffect, LifecycleEffects, LifecycleModel, LifecyclePlan,
+        RuntimeCleanupMode, connect_model, disconnect_model, handle_recovery_timer_model,
+        on_transport_ready_model, on_ws_close_model,
     },
 };
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VerificationLifecycleEffects {
+    connect_url: Option<String>,
+    recovery_timer_ms: Option<u32>,
+    close_websocket_code: Option<u16>,
+    state_change: Option<(ConnectionState, Option<LifecycleCloseCause>)>,
+    close_peer_connection: bool,
+    cancel_recovery_timer: bool,
+}
+
+impl VerificationLifecycleEffects {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.connect_url.is_none()
+            && self.recovery_timer_ms.is_none()
+            && self.close_websocket_code.is_none()
+            && self.state_change.is_none()
+            && !self.close_peer_connection
+            && !self.cancel_recovery_timer
+    }
+
+    #[must_use]
+    pub fn has_connect(&self, url: &str) -> bool {
+        self.connect_url.as_deref() == Some(url)
+    }
+
+    #[must_use]
+    pub fn recovery_timer_count(&self, timer_id: u32) -> usize {
+        usize::from(timer_id == RECOVERY_TIMER_ID && self.recovery_timer_ms.is_some())
+    }
+
+    #[must_use]
+    pub fn recovery_timer_delay(&self, timer_id: u32) -> Option<u32> {
+        if timer_id == RECOVERY_TIMER_ID {
+            self.recovery_timer_ms
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn has_close_peer_connection(&self) -> bool {
+        self.close_peer_connection
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationConnectionLifecycle {
@@ -37,22 +84,27 @@ impl VerificationConnectionLifecycle {
         }
     }
 
-    pub fn connect(&mut self, url: String, jwt: String, channel: Option<String>) -> Commands {
+    pub fn connect(
+        &mut self,
+        url: String,
+        jwt: String,
+        channel: Option<String>,
+    ) -> VerificationLifecycleEffects {
         let plan = connect_model(&mut self.model, url, jwt, channel);
-        self.apply_plan(plan)
+        self.apply_plan(&plan)
     }
 
-    pub fn on_transport_ready(&mut self) -> Commands {
+    pub fn on_transport_ready(&mut self) -> VerificationLifecycleEffects {
         let plan = on_transport_ready_model(&mut self.model);
-        self.apply_plan(plan)
+        self.apply_plan(&plan)
     }
 
-    pub fn on_welcome(&mut self) -> Commands {
+    pub fn on_welcome(&mut self) -> VerificationLifecycleEffects {
         if !matches!(
             self.model.state,
             ConnectionState::Connecting | ConnectionState::Recovering
         ) {
-            return Vec::new();
+            return VerificationLifecycleEffects::default();
         }
         self.model.features = AvailableFeatures {
             rtc: true,
@@ -68,28 +120,28 @@ impl VerificationConnectionLifecycle {
         };
         self.model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
         self.model.state = ConnectionState::Authenticated;
-        vec![Command::EmitStateChange {
-            state: self.model.state,
-            cause: None,
-        }]
+        VerificationLifecycleEffects {
+            state_change: Some((self.model.state, None)),
+            ..VerificationLifecycleEffects::default()
+        }
     }
 
-    pub fn disconnect(&mut self) -> Commands {
+    pub fn disconnect(&mut self) -> VerificationLifecycleEffects {
         let plan = disconnect_model(&mut self.model);
-        self.apply_plan(plan)
+        self.apply_plan(&plan)
     }
 
-    pub fn on_ws_close(&mut self, close_code: u16) -> Commands {
+    pub fn on_ws_close(&mut self, close_code: u16) -> VerificationLifecycleEffects {
         let plan = on_ws_close_model(&mut self.model, close_code);
-        self.apply_plan(plan)
+        self.apply_plan(&plan)
     }
 
-    pub fn on_timer(&mut self, timer_id: u32) -> Commands {
+    pub fn on_timer(&mut self, timer_id: u32) -> VerificationLifecycleEffects {
         if timer_id != RECOVERY_TIMER_ID {
-            return Vec::new();
+            return VerificationLifecycleEffects::default();
         }
         let plan = handle_recovery_timer_model(&mut self.model);
-        self.apply_plan(plan)
+        self.apply_plan(&plan)
     }
 
     pub fn mark_sticky_state_present(&mut self) {
@@ -120,15 +172,55 @@ impl VerificationConnectionLifecycle {
         self.runtime_state_present
     }
 
-    fn apply_plan(&mut self, plan: LifecyclePlan) -> Commands {
+    fn apply_plan(&mut self, plan: &LifecyclePlan) -> VerificationLifecycleEffects {
         if plan.clear_sticky_state {
             self.sticky_state_present = false;
         }
         if !matches!(plan.runtime_cleanup_mode, RuntimeCleanupMode::None) {
             self.runtime_state_present = false;
         }
-        let mut commands = plan.commands_before_cleanup;
-        commands.extend(plan.commands_after_cleanup);
-        commands
+        let mut effects = VerificationLifecycleEffects::default();
+        summarize_effects(&mut effects, &plan.effects_before_cleanup);
+        summarize_effects(&mut effects, &plan.effects_after_cleanup);
+        effects
+    }
+}
+
+fn summarize_effects(summary: &mut VerificationLifecycleEffects, effects: &LifecycleEffects) {
+    match effects {
+        LifecycleEffects::None => {}
+        LifecycleEffects::One(first) => summarize_effect(summary, first),
+        LifecycleEffects::Two(first, second) => {
+            summarize_effect(summary, first);
+            summarize_effect(summary, second);
+        }
+        LifecycleEffects::Three(first, second, third) => {
+            summarize_effect(summary, first);
+            summarize_effect(summary, second);
+            summarize_effect(summary, third);
+        }
+    }
+}
+
+fn summarize_effect(summary: &mut VerificationLifecycleEffects, effect: &LifecycleEffect) {
+    match effect {
+        LifecycleEffect::EmitStateChange { state, cause } => {
+            summary.state_change = Some((*state, *cause));
+        }
+        LifecycleEffect::ClosePeerConnection => {
+            summary.close_peer_connection = true;
+        }
+        LifecycleEffect::CloseWebSocket { code } => {
+            summary.close_websocket_code = Some(*code);
+        }
+        LifecycleEffect::Connect { url } => {
+            summary.connect_url = Some(url.clone());
+        }
+        LifecycleEffect::ScheduleRecoveryTimer { ms } => {
+            summary.recovery_timer_ms = Some(*ms);
+        }
+        LifecycleEffect::CancelRecoveryTimer => {
+            summary.cancel_recovery_timer = true;
+        }
     }
 }

@@ -597,14 +597,5 @@ fn next_recovery_delay(current_delay_ms: u32) -> u32 {
         .min(MAX_RECOVERY_DELAY_MS)
 }
 
-fn close_cause(code: u16) -> Option<&'static str> {
-    match WebSocketCloseCode::from_u16(code) {
-        Some(WebSocketCloseCode::AuthFailed) => Some("auth_failed"),
-        Some(WebSocketCloseCode::Kicked) => Some("kicked"),
-        Some(WebSocketCloseCode::ChannelFull) => Some("full"),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests;

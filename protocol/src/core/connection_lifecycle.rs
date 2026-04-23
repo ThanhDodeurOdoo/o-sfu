@@ -58,7 +58,7 @@ use crate::{
 
 use super::{
     Command, Commands, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
-    close_cause, empty_features, next_recovery_delay,
+    empty_features, next_recovery_delay,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +106,99 @@ pub(super) enum RuntimeCleanupMode {
     WithCommands,
 }
 
+/// Small typeed effect surface for the connection lifecycle state machine.
+///
+/// The lifecycle logic only needs a narrow slice of the full protocol command
+/// space: state changes, websocket connect or close, peer-connection close and
+/// recovery timer control. Keeping that surface separate lets production code
+/// translate it into real [`Command`] values while proofs stay on the shared
+/// lifecycle logic instead of paying for unrelated protocol command variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LifecycleEffect {
+    EmitStateChange {
+        state: BundleConnectionState,
+        cause: Option<LifecycleCloseCause>,
+    },
+    ClosePeerConnection,
+    CloseWebSocket {
+        code: u16,
+    },
+    Connect {
+        url: String,
+    },
+    ScheduleRecoveryTimer {
+        ms: u32,
+    },
+    CancelRecoveryTimer,
+}
+
+/// Small bounded list of lifecycle effects emitted by one transition.
+///
+/// Most lifecycle transitions in this module emit nothing, one effect, or a
+/// short ordered pair like "state change, then connect". A `Vec` would work,
+/// but it would make the shape looser than the domain really is and it would
+/// pull allocation and generic collection machinery into the proof path for no
+/// gain.
+///
+/// This enum keeps the contract explicit:
+///
+/// - effects stay ordered.
+/// - transitions can emit at most three effects
+/// - there is no invalid partially-filled state like "slot three is set but
+///   slot one is not"
+///
+/// That makes normal code easier to read and it keeps the virification-facing
+/// lifecycle surface small without inventing a fake model.
+///
+/// Example:
+///
+/// ```rs
+/// LifecycleEffects::two(
+///     LifecycleEffect::EmitStateChange { state: Connecting, cause: None },
+///     LifecycleEffect::Connect { url: "wss://example.test/ws".to_owned() },
+/// )
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LifecycleEffects {
+    None,
+    One(LifecycleEffect),
+    Two(LifecycleEffect, LifecycleEffect),
+    Three(LifecycleEffect, LifecycleEffect, LifecycleEffect),
+}
+
+impl LifecycleEffects {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::None
+    }
+
+    #[must_use]
+    pub const fn one(first: LifecycleEffect) -> Self {
+        Self::One(first)
+    }
+
+    #[must_use]
+    pub const fn two(first: LifecycleEffect, second: LifecycleEffect) -> Self {
+        Self::Two(first, second)
+    }
+
+    #[must_use]
+    pub const fn three(
+        first: LifecycleEffect,
+        second: LifecycleEffect,
+        third: LifecycleEffect,
+    ) -> Self {
+        Self::Three(first, second, third)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleCloseCause {
+    AuthFailed,
+    Kicked,
+    ChannelFull,
+}
+
 /// Pure result of one lifecycle transition.
 ///
 /// The transition helpers do not mutate the live core directly. They return a
@@ -115,12 +208,12 @@ pub(super) enum RuntimeCleanupMode {
 ///
 /// Keeping that plan explicit matters because command ordering is part of the
 /// contract. A refactor that clears runtime state too early or schedules a
-/// recovery timer too late can change observable behavior even if the final
+/// recovery timer too latecan change observable behavior even if the final
 /// state enum still looks correct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LifecyclePlan {
-    pub(super) commands_before_cleanup: Commands,
-    pub(super) commands_after_cleanup: Commands,
+    pub(super) effects_before_cleanup: LifecycleEffects,
+    pub(super) effects_after_cleanup: LifecycleEffects,
     pub(super) clear_sticky_state: bool,
     pub(super) runtime_cleanup_mode: RuntimeCleanupMode,
 }
@@ -129,8 +222,8 @@ impl LifecyclePlan {
     #[must_use]
     fn none() -> Self {
         Self {
-            commands_before_cleanup: Vec::new(),
-            commands_after_cleanup: Vec::new(),
+            effects_before_cleanup: LifecycleEffects::new(),
+            effects_after_cleanup: LifecycleEffects::new(),
             clear_sticky_state: false,
             runtime_cleanup_mode: RuntimeCleanupMode::None,
         }
@@ -159,14 +252,14 @@ pub(super) fn connect_model(
     model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
     model.state = BundleConnectionState::Connecting;
     LifecyclePlan {
-        commands_before_cleanup: Vec::new(),
-        commands_after_cleanup: vec![
-            Command::EmitStateChange {
+        effects_before_cleanup: LifecycleEffects::new(),
+        effects_after_cleanup: LifecycleEffects::two(
+            LifecycleEffect::EmitStateChange {
                 state: model.state,
                 cause: None,
             },
-            Command::Connect { url },
-        ],
+            LifecycleEffect::Connect { url },
+        ),
         clear_sticky_state: true,
         runtime_cleanup_mode: RuntimeCleanupMode::Silent,
     }
@@ -178,11 +271,11 @@ pub(super) fn on_transport_ready_model(model: &mut LifecycleModel) -> LifecycleP
     }
     model.state = BundleConnectionState::Connected;
     LifecyclePlan {
-        commands_before_cleanup: Vec::new(),
-        commands_after_cleanup: vec![Command::EmitStateChange {
+        effects_before_cleanup: LifecycleEffects::new(),
+        effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
             state: model.state,
             cause: None,
-        }],
+        }),
         clear_sticky_state: false,
         runtime_cleanup_mode: RuntimeCleanupMode::None,
     }
@@ -201,19 +294,17 @@ pub(super) fn disconnect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     model.recording_state = RecordingState::default();
     model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
     LifecyclePlan {
-        commands_before_cleanup: vec![Command::CancelTimer {
-            id: RECOVERY_TIMER_ID,
-        }],
-        commands_after_cleanup: vec![
-            Command::CloseWebSocket {
+        effects_before_cleanup: LifecycleEffects::one(LifecycleEffect::CancelRecoveryTimer),
+        effects_after_cleanup: LifecycleEffects::three(
+            LifecycleEffect::CloseWebSocket {
                 code: u16::from(WebSocketCloseCode::Clean),
             },
-            Command::ClosePeerConnection,
-            Command::EmitStateChange {
+            LifecycleEffect::ClosePeerConnection,
+            LifecycleEffect::EmitStateChange {
                 state: model.state,
                 cause: None,
             },
-        ],
+        ),
         clear_sticky_state: true,
         runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
     }
@@ -237,17 +328,15 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
         model.connect_context = None;
         model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
         return LifecyclePlan {
-            commands_before_cleanup: Vec::new(),
-            commands_after_cleanup: vec![
-                Command::CancelTimer {
-                    id: RECOVERY_TIMER_ID,
-                },
-                Command::ClosePeerConnection,
-                Command::EmitStateChange {
+            effects_before_cleanup: LifecycleEffects::new(),
+            effects_after_cleanup: LifecycleEffects::three(
+                LifecycleEffect::CancelRecoveryTimer,
+                LifecycleEffect::ClosePeerConnection,
+                LifecycleEffect::EmitStateChange {
                     state: model.state,
-                    cause: close_cause(close_code).map(str::to_owned),
+                    cause: terminal_close_cause(close_code),
                 },
-            ],
+            ),
             clear_sticky_state: false,
             runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
         };
@@ -256,11 +345,11 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
     let Some(connect_context) = model.connect_context.as_ref() else {
         model.state = BundleConnectionState::Disconnected;
         return LifecyclePlan {
-            commands_before_cleanup: Vec::new(),
-            commands_after_cleanup: vec![Command::EmitStateChange {
+            effects_before_cleanup: LifecycleEffects::new(),
+            effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
                 state: model.state,
                 cause: None,
-            }],
+            }),
             clear_sticky_state: false,
             runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
         };
@@ -271,18 +360,15 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
     model.recovery_delay_ms = next_recovery_delay(delay_ms);
     model.state = BundleConnectionState::Recovering;
     LifecyclePlan {
-        commands_before_cleanup: Vec::new(),
-        commands_after_cleanup: vec![
-            Command::ClosePeerConnection,
-            Command::EmitStateChange {
+        effects_before_cleanup: LifecycleEffects::new(),
+        effects_after_cleanup: LifecycleEffects::three(
+            LifecycleEffect::ClosePeerConnection,
+            LifecycleEffect::EmitStateChange {
                 state: model.state,
                 cause: None,
             },
-            Command::ScheduleTimer {
-                id: RECOVERY_TIMER_ID,
-                ms: delay_ms,
-            },
-        ],
+            LifecycleEffect::ScheduleRecoveryTimer { ms: delay_ms },
+        ),
         clear_sticky_state: false,
         runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
     }
@@ -297,16 +383,16 @@ pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> Lifecyc
     };
     model.state = BundleConnectionState::Connecting;
     LifecyclePlan {
-        commands_before_cleanup: Vec::new(),
-        commands_after_cleanup: vec![
-            Command::EmitStateChange {
+        effects_before_cleanup: LifecycleEffects::new(),
+        effects_after_cleanup: LifecycleEffects::two(
+            LifecycleEffect::EmitStateChange {
                 state: model.state,
                 cause: None,
             },
-            Command::Connect {
+            LifecycleEffect::Connect {
                 url: connect_context.url.clone(),
             },
-        ],
+        ),
         clear_sticky_state: false,
         runtime_cleanup_mode: RuntimeCleanupMode::None,
     }
@@ -329,7 +415,7 @@ fn apply_model(core: &mut ProtocolCore, model: LifecycleModel, plan: LifecyclePl
     core.connect_context = model.connect_context;
     core.recovery_delay_ms = model.recovery_delay_ms;
 
-    let mut commands = plan.commands_before_cleanup;
+    let mut commands = lifecycle_effects_to_commands(plan.effects_before_cleanup);
     match plan.runtime_cleanup_mode {
         RuntimeCleanupMode::None => {}
         RuntimeCleanupMode::Silent => core.clear_runtime_state(),
@@ -340,8 +426,60 @@ fn apply_model(core: &mut ProtocolCore, model: LifecycleModel, plan: LifecyclePl
     if plan.clear_sticky_state {
         core.clear_sticky_state();
     }
-    commands.extend(plan.commands_after_cleanup);
+    commands.extend(lifecycle_effects_to_commands(plan.effects_after_cleanup));
     commands
+}
+
+fn lifecycle_effects_to_commands(effects: LifecycleEffects) -> Commands {
+    match effects {
+        LifecycleEffects::None => Vec::new(),
+        LifecycleEffects::One(first) => vec![lifecycle_effect_to_command(first)],
+        LifecycleEffects::Two(first, second) => vec![
+            lifecycle_effect_to_command(first),
+            lifecycle_effect_to_command(second),
+        ],
+        LifecycleEffects::Three(first, second, third) => vec![
+            lifecycle_effect_to_command(first),
+            lifecycle_effect_to_command(second),
+            lifecycle_effect_to_command(third),
+        ],
+    }
+}
+
+fn lifecycle_effect_to_command(effect: LifecycleEffect) -> Command {
+    match effect {
+        LifecycleEffect::EmitStateChange { state, cause } => Command::EmitStateChange {
+            state,
+            cause: cause.map(lifecycle_close_cause_label).map(str::to_owned),
+        },
+        LifecycleEffect::ClosePeerConnection => Command::ClosePeerConnection,
+        LifecycleEffect::CloseWebSocket { code } => Command::CloseWebSocket { code },
+        LifecycleEffect::Connect { url } => Command::Connect { url },
+        LifecycleEffect::ScheduleRecoveryTimer { ms } => Command::ScheduleTimer {
+            id: RECOVERY_TIMER_ID,
+            ms,
+        },
+        LifecycleEffect::CancelRecoveryTimer => Command::CancelTimer {
+            id: RECOVERY_TIMER_ID,
+        },
+    }
+}
+
+fn terminal_close_cause(close_code: u16) -> Option<LifecycleCloseCause> {
+    match WebSocketCloseCode::from_u16(close_code) {
+        Some(WebSocketCloseCode::AuthFailed) => Some(LifecycleCloseCause::AuthFailed),
+        Some(WebSocketCloseCode::Kicked) => Some(LifecycleCloseCause::Kicked),
+        Some(WebSocketCloseCode::ChannelFull) => Some(LifecycleCloseCause::ChannelFull),
+        _ => None,
+    }
+}
+
+fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
+    match cause {
+        LifecycleCloseCause::AuthFailed => "auth_failed",
+        LifecycleCloseCause::Kicked => "kicked",
+        LifecycleCloseCause::ChannelFull => "full",
+    }
 }
 
 /// Starts a fresh connection attempt from a disconnected or closed state.

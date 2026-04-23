@@ -1,6 +1,7 @@
 use o_sfu_protocol::{
     core::{
-        Command, ConnectionState, RECOVERY_TIMER_ID, verification::VerificationConnectionLifecycle,
+        ConnectionState, RECOVERY_TIMER_ID,
+        verification::{VerificationConnectionLifecycle, VerificationLifecycleEffects},
     },
     signaling::WebSocketCloseCode,
 };
@@ -28,7 +29,7 @@ fn protocol_core_terminal_close_codes_never_schedule_recovery() {
         String::from("fresh-jwt"),
         None,
     );
-    assert!(has_connect_command(
+    assert!(has_connect_effect(
         &reconnect_commands,
         "wss://next.example/socket"
     ));
@@ -69,7 +70,7 @@ fn protocol_core_recovery_timer_reconnects_only_from_recovering() {
     let commands = core.on_timer(RECOVERY_TIMER_ID);
     let expect_reconnect = stage == 4;
     assert_eq!(
-        has_connect_command(&commands, "wss://proof.example/socket"),
+        has_connect_effect(&commands, "wss://proof.example/socket"),
         expect_reconnect
     );
     if expect_reconnect {
@@ -128,7 +129,7 @@ fn protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect() {
         String::from("fresh-jwt"),
         Some(String::from("fresh-room")),
     );
-    assert!(has_connect_command(
+    assert!(has_connect_effect(
         &reconnect_commands,
         "wss://fresh.example/socket"
     ));
@@ -191,29 +192,18 @@ fn terminal_close_code(selector: u8) -> u16 {
     }
 }
 
-fn scheduled_timer_count(commands: &[Command], timer_id: u32) -> usize {
-    commands
-        .iter()
-        .filter(|command| matches!(command, Command::ScheduleTimer { id, .. } if *id == timer_id))
-        .count()
+fn scheduled_timer_count(effects: &VerificationLifecycleEffects, timer_id: u32) -> usize {
+    effects.recovery_timer_count(timer_id)
 }
 
-fn scheduled_delay(commands: &[Command], timer_id: u32) -> Option<u32> {
-    commands.iter().find_map(|command| match command {
-        Command::ScheduleTimer { id, ms } if *id == timer_id => Some(*ms),
-        _ => None,
-    })
+fn scheduled_delay(effects: &VerificationLifecycleEffects, timer_id: u32) -> Option<u32> {
+    effects.recovery_timer_delay(timer_id)
 }
 
-fn has_connect_command(commands: &[Command], url: &str) -> bool {
-    commands.iter().any(|command| match command {
-        Command::Connect { url: actual } => actual == url,
-        _ => false,
-    })
+fn has_connect_effect(effects: &VerificationLifecycleEffects, url: &str) -> bool {
+    effects.has_connect(url)
 }
 
-fn has_close_peer_connection(commands: &[Command]) -> bool {
-    commands
-        .iter()
-        .any(|command| matches!(command, Command::ClosePeerConnection))
+fn has_close_peer_connection(effects: &VerificationLifecycleEffects) -> bool {
+    effects.has_close_peer_connection()
 }
