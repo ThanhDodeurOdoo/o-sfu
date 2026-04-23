@@ -380,10 +380,11 @@ impl ChannelState {
             ConsumerCapability::Compatible,
         ) {
             Ok(id) => id,
-            Err(_error) => {
+            Err(error) => {
                 warn!(
                     consumer_session_id = ?target.consumer_session_id,
                     producer_id = %pending.producer.producer_id,
+                    ?error,
                     "router rejected consumer creation"
                 );
                 return None;

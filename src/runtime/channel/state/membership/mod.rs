@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_protocol::shared::{SessionId, SessionInfo};
-use o_sfu_router::RouterError;
 use tracing::{debug, error, warn};
 
 use crate::runtime::ConnectionId;
@@ -10,7 +9,7 @@ use super::super::{
     ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
     outbound::{MessageFanout, OutboundSender},
     session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
-    topology::ChannelTopology,
+    topology::{ChannelTopology, ChannelTopologyError},
 };
 use super::layout::SessionLayout;
 use super::presence::SessionPresence;
@@ -86,27 +85,24 @@ impl ChannelState {
         is_new: bool,
     ) -> Result<(), ChannelJoinError> {
         let mut topology = self.topology.clone();
-        if topology
-            .apply_client_join(
-                session_id,
-                connection_id.as_u64(),
-                permissions.router_permissions(),
-            )
-            .is_err()
-        {
+        if let Err(error) = topology.apply_client_join(
+            session_id,
+            connection_id.as_u64(),
+            permissions.router_permissions(),
+        ) {
             error!(
                 ?session_id,
+                ?error,
                 "failed to mirror session join into channel router"
             );
             return Err(ChannelJoinError::RouterState);
         }
         if !is_new
-            && self
-                .reset_existing_session_routing(&mut topology, session_id)
-                .is_err()
+            && let Err(error) = self.reset_existing_session_routing(&mut topology, session_id)
         {
             error!(
                 ?session_id,
+                ?error,
                 "failed to reset replaced session routing in channel router"
             );
             return Err(ChannelJoinError::RouterState);
@@ -229,7 +225,7 @@ impl ChannelState {
         &self,
         topology: &mut ChannelTopology,
         session_id: &SessionId,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         let routed_consumers = self
             .consumer_index
             .iter()
@@ -266,9 +262,10 @@ impl ChannelState {
         }
         let transport_removals =
             self.collect_session_transport_removals(&BTreeSet::from([session_id.clone()]));
-        if self.topology.apply_client_leave(session_id).is_err() {
+        if let Err(error) = self.topology.apply_client_leave(session_id) {
             error!(
                 ?session_id,
+                ?error,
                 "failed to remove departed session from channel router"
             );
             return None;
@@ -369,9 +366,10 @@ impl ChannelState {
             if !self.sessions.contains_key(session_id) {
                 continue;
             }
-            if self.topology.apply_client_leave(session_id).is_err() {
+            if let Err(error) = self.topology.apply_client_leave(session_id) {
                 error!(
                     ?session_id,
+                    ?error,
                     "failed to mirror bulk disconnect into channel router"
                 );
                 continue;

@@ -47,4 +47,34 @@ impl ChannelTopology {
             .get(&router_id)?
             .session_permissions(session_id)
     }
+
+    pub(in crate::runtime::channel) fn remove_router_for_test(&mut self, router_id: RouterId) {
+        self.routers.remove(&router_id);
+    }
+
+    pub(in crate::runtime::channel) fn remove_session_mapping_for_test(
+        &mut self,
+        session_id: &SessionId,
+    ) {
+        let Some(router_id) = self.session_home_router.get(session_id).copied() else {
+            return;
+        };
+        let Some(router) = self.routers.get_mut(&router_id) else {
+            return;
+        };
+        router.remove_session_mapping_for_test(session_id);
+    }
+
+    pub(in crate::runtime::channel) fn remove_transport_mapping_for_test(
+        &mut self,
+        session_id: &SessionId,
+    ) {
+        let Some(router_id) = self.session_home_router.get(session_id).copied() else {
+            return;
+        };
+        let Some(router) = self.routers.get_mut(&router_id) else {
+            return;
+        };
+        router.remove_transport_mapping_for_test(session_id);
+    }
 }

@@ -13,4 +13,5 @@ mod manager_tests;
 mod membership_tests;
 mod producer_tests;
 mod recording_tests;
+mod router_state_tests;
 mod topology_tests;

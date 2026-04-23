@@ -6,18 +6,34 @@ use std::{
 use o_sfu_router::SessionPermissions as RouterSessionPermissions;
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
-    MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterError, RouterId,
-    SessionId as RouterSessionId, StreamType as RouterStreamType,
+    MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
+    StreamType as RouterStreamType,
 };
 
-use super::router_state::ChannelRouterState;
+use super::router_state::{ChannelRouterState, ChannelRouterStateError};
 use crate::runtime::recording::RecordingService;
 use o_sfu_protocol::shared::SessionId;
 
 #[cfg(test)]
 mod test_support;
 
-const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::channel) enum ChannelTopologyError {
+    MissingRouter {
+        router_id: RouterId,
+    },
+    MissingRouterForSession {
+        session_id: SessionId,
+        router_id: RouterId,
+    },
+    RouterState(ChannelRouterStateError),
+}
+
+impl From<ChannelRouterStateError> for ChannelTopologyError {
+    fn from(error: ChannelRouterStateError) -> Self {
+        Self::RouterState(error)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RoutedProducerId {
@@ -137,13 +153,13 @@ impl ChannelTopology {
         session_id: &SessionId,
         router_session_seed: u64,
         permissions: RouterSessionPermissions,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         let router_id = self
             .session_home_router
             .get(session_id)
             .copied()
             .unwrap_or(self.primary_router);
-        let router = self.router_mut(router_id)?;
+        let router = self.router_mut_for_session(session_id, router_id)?;
         router.ensure_session(session_id, router_session_seed, permissions)?;
         self.session_home_router
             .insert(session_id.clone(), router_id);
@@ -153,10 +169,11 @@ impl ChannelTopology {
     pub(super) fn ensure_session_transports(
         &mut self,
         session_id: &SessionId,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         let router_id = self.router_id_for_session(session_id);
-        self.router_mut(router_id)?
-            .ensure_session_transports(session_id)
+        self.router_mut_for_session(session_id, router_id)?
+            .ensure_session_transports(session_id)?;
+        Ok(())
     }
 
     pub(super) fn apply_client_join(
@@ -164,13 +181,16 @@ impl ChannelTopology {
         session_id: &SessionId,
         router_session_seed: u64,
         permissions: RouterSessionPermissions,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         self.ensure_session(session_id, router_session_seed, permissions)?;
         self.ensure_session_transports(session_id)?;
         Ok(())
     }
 
-    pub(super) fn apply_client_leave(&mut self, session_id: &SessionId) -> Result<(), RouterError> {
+    pub(super) fn apply_client_leave(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ChannelTopologyError> {
         self.remove_session(session_id)
     }
 
@@ -179,11 +199,11 @@ impl ChannelTopology {
         session_id: &SessionId,
         media_kind: RouterMediaKind,
         stream_type: RouterStreamType,
-    ) -> Result<RoutedProducerId, RouterError> {
+    ) -> Result<RoutedProducerId, ChannelTopologyError> {
         let router_id = self.router_id_for_session(session_id);
-        let producer_id =
-            self.router_mut(router_id)?
-                .add_producer(session_id, media_kind, stream_type)?;
+        let producer_id = self
+            .router_mut_for_session(session_id, router_id)?
+            .add_producer(session_id, media_kind, stream_type)?;
         Ok(RoutedProducerId::new(router_id, producer_id))
     }
 
@@ -194,7 +214,7 @@ impl ChannelTopology {
         media_kind: RouterMediaKind,
         stream_type: RouterStreamType,
         capability: ConsumerCapability,
-    ) -> Result<RoutedConsumerId, RouterError> {
+    ) -> Result<RoutedConsumerId, ChannelTopologyError> {
         let consumer_id = self.router_mut(producer_id.router_id())?.add_consumer(
             consumer_session_id,
             producer_id.producer_id(),
@@ -209,39 +229,47 @@ impl ChannelTopology {
         &mut self,
         producer_id: RoutedProducerId,
         paused: bool,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         self.router_mut(producer_id.router_id())?
-            .set_producer_paused(producer_id.producer_id(), paused)
+            .set_producer_paused(producer_id.producer_id(), paused)?;
+        Ok(())
     }
 
     pub(super) fn set_consumer_paused(
         &mut self,
         consumer_id: RoutedConsumerId,
         paused: bool,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         self.router_mut(consumer_id.router_id())?
-            .set_consumer_paused(consumer_id.consumer_id(), paused)
+            .set_consumer_paused(consumer_id.consumer_id(), paused)?;
+        Ok(())
     }
 
     pub(super) fn remove_consumer(
         &mut self,
         consumer_id: RoutedConsumerId,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         self.router_mut(consumer_id.router_id())?
-            .remove_consumer(consumer_id.consumer_id())
+            .remove_consumer(consumer_id.consumer_id())?;
+        Ok(())
     }
 
     pub(super) fn remove_producer(
         &mut self,
         producer_id: RoutedProducerId,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelTopologyError> {
         self.router_mut(producer_id.router_id())?
-            .remove_producer(producer_id.producer_id())
+            .remove_producer(producer_id.producer_id())?;
+        Ok(())
     }
 
-    pub(super) fn remove_session(&mut self, session_id: &SessionId) -> Result<(), RouterError> {
+    pub(super) fn remove_session(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ChannelTopologyError> {
         let router_id = self.router_id_for_session(session_id);
-        self.router_mut(router_id)?.remove_session(session_id)?;
+        self.router_mut_for_session(session_id, router_id)?
+            .remove_session(session_id)?;
         self.session_home_router.remove(session_id);
         Ok(())
     }
@@ -253,10 +281,26 @@ impl ChannelTopology {
             .unwrap_or(self.primary_router)
     }
 
-    fn router_mut(&mut self, router_id: RouterId) -> Result<&mut ChannelRouterState, RouterError> {
+    fn router_mut(
+        &mut self,
+        router_id: RouterId,
+    ) -> Result<&mut ChannelRouterState, ChannelTopologyError> {
         self.routers
             .get_mut(&router_id)
-            .ok_or(RouterError::MissingSession(MISSING_ROUTER_SESSION_FALLBACK))
+            .ok_or(ChannelTopologyError::MissingRouter { router_id })
+    }
+
+    fn router_mut_for_session(
+        &mut self,
+        session_id: &SessionId,
+        router_id: RouterId,
+    ) -> Result<&mut ChannelRouterState, ChannelTopologyError> {
+        self.routers.get_mut(&router_id).ok_or_else(|| {
+            ChannelTopologyError::MissingRouterForSession {
+                session_id: session_id.clone(),
+                router_id,
+            }
+        })
     }
 }
 

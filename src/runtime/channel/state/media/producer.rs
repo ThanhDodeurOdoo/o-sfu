@@ -142,9 +142,10 @@ impl ChannelState {
             to_router_stream_type(pending.stream_type),
         ) {
             Ok(producer_id) => producer_id,
-            Err(_error) => {
+            Err(error) => {
                 error!(
                     session_id = ?pending.owner_session_id,
+                    ?error,
                     "failed to mirror publish request into channel router producer state"
                 );
                 return None;

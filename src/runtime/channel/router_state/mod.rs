@@ -16,7 +16,17 @@ use o_sfu_protocol::shared::SessionId;
 #[cfg(test)]
 mod test_support;
 
-const MISSING_ROUTER_SESSION_FALLBACK: RouterSessionId = RouterSessionId(0);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::channel) enum ChannelRouterStateError {
+    MissingSessionMapping { session_id: SessionId },
+    Router(RouterError),
+}
+
+impl From<RouterError> for ChannelRouterStateError {
+    fn from(error: RouterError) -> Self {
+        Self::Router(error)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct ChannelRouterState {
@@ -76,7 +86,7 @@ impl ChannelRouterState {
         session_id: &SessionId,
         router_session_seed: u64,
         permissions: RouterSessionPermissions,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelRouterStateError> {
         if self
             .router_session_ids_by_session_id
             .contains_key(session_id)
@@ -85,7 +95,8 @@ impl ChannelRouterState {
         }
         let router_session_id = RouterSessionId(router_session_seed);
         self.router
-            .join_session(RouterSession::new(router_session_id, permissions))?;
+            .join_session(RouterSession::new(router_session_id, permissions))
+            .map_err(ChannelRouterStateError::from)?;
         self.router_session_ids_by_session_id
             .insert(session_id.clone(), router_session_id);
         Ok(())
@@ -98,37 +109,41 @@ impl ChannelRouterState {
     pub(super) fn ensure_session_transports(
         &mut self,
         session_id: &SessionId,
-    ) -> Result<(), RouterError> {
-        if self.transport_ids_by_session_id.contains_key(session_id) {
-            return Ok(());
+    ) -> Result<(), ChannelRouterStateError> {
+        self.ensure_session_transport_ids(session_id).map(|_| ())
+    }
+
+    fn ensure_session_transport_ids(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<SessionTransportIds, ChannelRouterStateError> {
+        if let Some(transport_ids) = self.transport_ids_by_session_id.get(session_id).copied() {
+            return Ok(transport_ids);
         }
-        let Some(router_session_id) = self
-            .router_session_ids_by_session_id
-            .get(session_id)
-            .copied()
-        else {
-            return Err(RouterError::MissingSession(MISSING_ROUTER_SESSION_FALLBACK));
-        };
+        let router_session_id = self.router_session_id(session_id)?;
         let upload_transport_id = self.allocate_transport_id();
         let download_transport_id = self.allocate_transport_id();
-        self.router.open_transport(RouterTransport::new(
-            upload_transport_id,
-            router_session_id,
-            RouterTransportDirection::Receive,
-        ))?;
-        self.router.open_transport(RouterTransport::new(
-            download_transport_id,
-            router_session_id,
-            RouterTransportDirection::Send,
-        ))?;
-        self.transport_ids_by_session_id.insert(
-            session_id.clone(),
-            SessionTransportIds {
-                upload: upload_transport_id,
-                download: download_transport_id,
-            },
-        );
-        Ok(())
+        self.router
+            .open_transport(RouterTransport::new(
+                upload_transport_id,
+                router_session_id,
+                RouterTransportDirection::Receive,
+            ))
+            .map_err(ChannelRouterStateError::from)?;
+        self.router
+            .open_transport(RouterTransport::new(
+                download_transport_id,
+                router_session_id,
+                RouterTransportDirection::Send,
+            ))
+            .map_err(ChannelRouterStateError::from)?;
+        let transport_ids = SessionTransportIds {
+            upload: upload_transport_id,
+            download: download_transport_id,
+        };
+        self.transport_ids_by_session_id
+            .insert(session_id.clone(), transport_ids);
+        Ok(transport_ids)
     }
 
     /// # Errors
@@ -140,23 +155,17 @@ impl ChannelRouterState {
         session_id: &SessionId,
         media_kind: RouterMediaKind,
         stream_type: RouterStreamType,
-    ) -> Result<RouterProducerId, RouterError> {
-        self.ensure_session_transports(session_id)?;
-        let Some(transport_ids) = self.transport_ids_by_session_id.get(session_id).copied() else {
-            let router_session_id = self
-                .router_session_ids_by_session_id
-                .get(session_id)
-                .copied()
-                .unwrap_or(MISSING_ROUTER_SESSION_FALLBACK);
-            return Err(RouterError::MissingSession(router_session_id));
-        };
+    ) -> Result<RouterProducerId, ChannelRouterStateError> {
+        let transport_ids = self.ensure_session_transport_ids(session_id)?;
         let producer_id = self.allocate_producer_id();
-        self.router.add_producer(RouterProducer::new(
-            producer_id,
-            transport_ids.upload,
-            media_kind,
-            stream_type,
-        ))?;
+        self.router
+            .add_producer(RouterProducer::new(
+                producer_id,
+                transport_ids.upload,
+                media_kind,
+                stream_type,
+            ))
+            .map_err(ChannelRouterStateError::from)?;
         Ok(producer_id)
     }
 
@@ -171,31 +180,21 @@ impl ChannelRouterState {
         media_kind: RouterMediaKind,
         stream_type: RouterStreamType,
         capability: ConsumerCapability,
-    ) -> Result<RouterConsumerId, RouterError> {
-        self.ensure_session_transports(consumer_session_id)?;
-        let Some(transport_ids) = self
-            .transport_ids_by_session_id
-            .get(consumer_session_id)
-            .copied()
-        else {
-            let router_session_id = self
-                .router_session_ids_by_session_id
-                .get(consumer_session_id)
-                .copied()
-                .unwrap_or(MISSING_ROUTER_SESSION_FALLBACK);
-            return Err(RouterError::MissingSession(router_session_id));
-        };
+    ) -> Result<RouterConsumerId, ChannelRouterStateError> {
+        let transport_ids = self.ensure_session_transport_ids(consumer_session_id)?;
         let consumer_id = self.allocate_consumer_id();
-        self.router.add_consumer(
-            RouterConsumer::new(
-                consumer_id,
-                producer_id,
-                transport_ids.download,
-                media_kind,
-                stream_type,
-            ),
-            capability,
-        )?;
+        self.router
+            .add_consumer(
+                RouterConsumer::new(
+                    consumer_id,
+                    producer_id,
+                    transport_ids.download,
+                    media_kind,
+                    stream_type,
+                ),
+                capability,
+            )
+            .map_err(ChannelRouterStateError::from)?;
         Ok(consumer_id)
     }
 
@@ -207,7 +206,7 @@ impl ChannelRouterState {
         &mut self,
         session_id: &SessionId,
         permissions: RouterSessionPermissions,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), ChannelRouterStateError> {
         let Some(router_session_id) = self
             .router_session_ids_by_session_id
             .get(session_id)
@@ -217,6 +216,7 @@ impl ChannelRouterState {
         };
         self.router
             .update_session_permissions(router_session_id, permissions)
+            .map_err(ChannelRouterStateError::from)
     }
 
     /// Update the pause state of a producer in the pure router.
@@ -231,8 +231,10 @@ impl ChannelRouterState {
         &mut self,
         producer_id: RouterProducerId,
         paused: bool,
-    ) -> Result<(), RouterError> {
-        self.router.set_producer_paused(producer_id, paused)
+    ) -> Result<(), ChannelRouterStateError> {
+        self.router
+            .set_producer_paused(producer_id, paused)
+            .map_err(ChannelRouterStateError::from)
     }
 
     /// Update the local pause state of a consumer in the pure router.
@@ -247,8 +249,10 @@ impl ChannelRouterState {
         &mut self,
         consumer_id: RouterConsumerId,
         paused: bool,
-    ) -> Result<(), RouterError> {
-        self.router.set_consumer_paused(consumer_id, paused)
+    ) -> Result<(), ChannelRouterStateError> {
+        self.router
+            .set_consumer_paused(consumer_id, paused)
+            .map_err(ChannelRouterStateError::from)
     }
 
     /// Remove a consumer from the pure router.
@@ -259,8 +263,10 @@ impl ChannelRouterState {
     pub(super) fn remove_consumer(
         &mut self,
         consumer_id: RouterConsumerId,
-    ) -> Result<(), RouterError> {
-        self.router.remove_consumer(consumer_id)
+    ) -> Result<(), ChannelRouterStateError> {
+        self.router
+            .remove_consumer(consumer_id)
+            .map_err(ChannelRouterStateError::from)
     }
 
     /// Remove a producer from the pure router.
@@ -273,8 +279,10 @@ impl ChannelRouterState {
     pub(super) fn remove_producer(
         &mut self,
         producer_id: RouterProducerId,
-    ) -> Result<(), RouterError> {
-        self.router.remove_producer(producer_id)
+    ) -> Result<(), ChannelRouterStateError> {
+        self.router
+            .remove_producer(producer_id)
+            .map_err(ChannelRouterStateError::from)
     }
 
     /// Remove the pure-router session for the signaling-layer session if one exists.
@@ -283,7 +291,10 @@ impl ChannelRouterState {
     ///
     /// Returns the underlying [`RouterError`] if the runtime/session map and router
     /// state ever diverge.
-    pub(super) fn remove_session(&mut self, session_id: &SessionId) -> Result<(), RouterError> {
+    pub(super) fn remove_session(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ChannelRouterStateError> {
         let Some(router_session_id) = self
             .router_session_ids_by_session_id
             .get(session_id)
@@ -291,10 +302,24 @@ impl ChannelRouterState {
         else {
             return Ok(());
         };
-        self.router.remove_session(router_session_id)?;
+        self.router
+            .remove_session(router_session_id)
+            .map_err(ChannelRouterStateError::from)?;
         self.router_session_ids_by_session_id.remove(session_id);
         self.transport_ids_by_session_id.remove(session_id);
         Ok(())
+    }
+
+    fn router_session_id(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<RouterSessionId, ChannelRouterStateError> {
+        self.router_session_ids_by_session_id
+            .get(session_id)
+            .copied()
+            .ok_or_else(|| ChannelRouterStateError::MissingSessionMapping {
+                session_id: session_id.clone(),
+            })
     }
 
     fn allocate_transport_id(&mut self) -> RouterTransportId {
