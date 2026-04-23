@@ -2256,6 +2256,171 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
 }
 
 #[tokio::test]
+async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_are_missing() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
+    );
+    let transport_media_id =
+        staged_publish_transport_media_id(&channel, &session_id, connection_id, StreamType::Camera)
+            .await
+            .expect("staged publish should expose its transport media id");
+    fake.clear_negotiated_producer_parameters(transport_media_id);
+
+    commit_staged_publishes(&channel, &session_id, connection_id, &adapter).await;
+
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        0
+    );
+    assert!(
+        !channel
+            .is_stream_published(&session_id, StreamType::Camera)
+            .await
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    assert!(
+        fake.snapshot_events().iter().any(|event| matches!(
+            event,
+            FakeWebRtcEvent::MediaRemoved {
+                session_id: owner,
+                transport_media_id: removed_media_id,
+            } if *owner == session_id && *removed_media_id == transport_media_id
+        )),
+        "commit should clean up the staged transport media when negotiated parameters are unavailable"
+    );
+}
+
+#[tokio::test]
+async fn staged_negotiated_publish_commit_cleans_up_when_session_state_rejects_it() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
+    );
+    assert!(
+        channel
+            .test_api()
+            .lifecycle()
+            .leave_session_without_transport_cleanup(&session_id, connection_id, &adapter)
+            .await
+    );
+    let _ = drain_outbound(&mut publisher_rx);
+    let _ = drain_outbound(&mut subscriber_rx);
+
+    commit_staged_publishes(&channel, &session_id, connection_id, &adapter).await;
+
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        0
+    );
+    assert_eq!(channel.test_api().inspect().producer_count().await, 0);
+    assert!(!channel.test_api().inspect().has_session(&session_id).await);
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    assert!(
+        fake.snapshot_events().iter().any(|event| matches!(
+            event,
+            FakeWebRtcEvent::MediaRemoved { session_id: owner, .. }
+                if *owner == session_id
+        )),
+        "commit rejection should clean up the staged transport media"
+    );
+}
+
+#[tokio::test]
+async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
+    );
+    assert!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Screen,
+            &adapter,
+        )
+        .await
+    );
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        2
+    );
+
+    rollback_staged_publishes_for_connection(&channel, &session_id, connection_id, &adapter).await;
+
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        0
+    );
+    assert_eq!(channel.test_api().inspect().producer_count().await, 0);
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    assert_eq!(
+        fake.snapshot_events()
+            .iter()
+            .filter(|event| matches!(
+                event,
+                FakeWebRtcEvent::MediaRemoved { session_id: owner, .. }
+                    if *owner == session_id
+            ))
+            .count(),
+        2,
+        "connection cleanup should remove every staged publish transport media"
+    );
+}
+
+#[tokio::test]
 async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one_cleanup() {
     let (channel, adapter, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_sessions_with_fake().await;

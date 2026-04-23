@@ -21,7 +21,7 @@ use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::DiagnosticsEventData;
 use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, MediaPort, ObservabilityPort, SourcePacketGate, TransportMediaId,
+    ActiveSpeakerSource, MediaPort, SourcePacketGate, TransportMediaId,
 };
 use o_sfu_protocol::shared::{SessionId, StreamType};
 
@@ -436,99 +436,6 @@ impl ConsumerBootstrapOp {
         let _ = sender.send(super::SessionOutbound::Request(Box::new(
             bootstrap.into_channel_event_request(),
         )));
-    }
-}
-
-#[derive(Debug)]
-pub(super) enum StagedPublishCommitEffectPlan {
-    Commit {
-        producer_id: String,
-        media_count_delta: MediaCountDelta,
-        consumer_targets: Vec<PendingConsumerBootstrapTarget>,
-        diagnostics: DiagnosticsEventData,
-    },
-    Reject {
-        session_id: SessionId,
-        connection_id: ConnectionId,
-        transport_media_id: TransportMediaId,
-    },
-}
-
-impl StagedPublishCommitEffectPlan {
-    pub(super) fn committed(
-        producer_id: String,
-        media_count_delta: (ChannelMediaCounts, ChannelMediaCounts),
-        consumer_targets: Vec<PendingConsumerBootstrapTarget>,
-        diagnostics: DiagnosticsEventData,
-    ) -> Self {
-        Self::Commit {
-            producer_id,
-            media_count_delta: MediaCountDelta::new(media_count_delta.0, media_count_delta.1),
-            consumer_targets,
-            diagnostics,
-        }
-    }
-
-    pub(super) fn rejected(
-        session_id: SessionId,
-        connection_id: ConnectionId,
-        transport_media_id: TransportMediaId,
-    ) -> Self {
-        Self::Reject {
-            session_id,
-            connection_id,
-            transport_media_id,
-        }
-    }
-
-    pub(super) async fn execute(
-        self,
-        channel: &Channel,
-        observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
-    ) -> Option<String> {
-        match self {
-            Self::Commit {
-                producer_id,
-                media_count_delta,
-                consumer_targets,
-                diagnostics,
-            } => {
-                media_count_delta.record(channel);
-                // Publish commit must update room-owned source selection before
-                // the newly publishe track fans out to consumers, otherwise a
-                // multi-party camera publish can bootstrap consumers against a
-                // stale gate decision
-                channel
-                    .sync_source_packet_selection_policy(Some(observability_port), media_port)
-                    .await;
-                channel
-                    .bootstrap_consumer_targets(
-                        media_port,
-                        ConsumerBootstrapOrigin::Publish,
-                        consumer_targets,
-                    )
-                    .await;
-                channel.diagnostics.record(diagnostics);
-                Some(producer_id)
-            }
-            Self::Reject {
-                session_id,
-                connection_id,
-                transport_media_id,
-            } => {
-                channel
-                    .cleanup_transport_media(
-                        &session_id,
-                        connection_id,
-                        transport_media_id,
-                        media_port,
-                        "transport adapter failed to remove published transport media after channel commit failed",
-                    )
-                    .await;
-                None
-            }
-        }
     }
 }
 

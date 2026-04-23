@@ -15,9 +15,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::runtime::channel) use self::producer::{
-    PreparedPublishedTrack, ValidatedPublishDescriptor,
-};
+pub(in crate::runtime::channel) use self::producer::ValidatedPublishDescriptor;
 pub(crate) use self::subscription::ConsumerRouteState;
 pub(crate) use self::subscription::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::subscription::{

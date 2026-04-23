@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::runtime::ConnectionId;
 use crate::runtime::transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId};
 
-use super::super::super::{Channel, media_transaction::StagedPublishTransaction};
+use super::super::super::{Channel, media_transaction::PendingPublishTransaction};
 
 #[derive(Debug, Clone)]
 pub(crate) struct NegotiatedPublish {
@@ -39,9 +39,13 @@ impl ChannelTestMedia<'_> {
                 publish.media_kind,
             )?
         };
-        StagedPublishTransaction::new(validated_descriptor, publish.transport_media_id)
-            .into_commit_snapshot(publish.consumable_rtp_parameters)
-            .commit(self.channel, transport_adapter, transport_adapter)
+        PendingPublishTransaction::new(validated_descriptor, publish.transport_media_id)
+            .commit_with_parameters(
+                self.channel,
+                transport_adapter,
+                transport_adapter,
+                publish.consumable_rtp_parameters,
+            )
             .await
     }
 
@@ -99,9 +103,13 @@ impl ChannelTestMedia<'_> {
                 return None;
             }
         };
-        StagedPublishTransaction::new(validated_descriptor, transport_media_id)
-            .into_commit_snapshot(consumable_rtp_parameters)
-            .commit(self.channel, transport_adapter, transport_adapter)
+        PendingPublishTransaction::new(validated_descriptor, transport_media_id)
+            .commit_with_parameters(
+                self.channel,
+                transport_adapter,
+                transport_adapter,
+                consumable_rtp_parameters,
+            )
             .await
     }
 

@@ -1,7 +1,4 @@
-//! `channel` is the main business-flow layer of the SFU. It receives authenticated
-//! session intent from signaling, owns the mutable room model, cordinates lifecycle
-//! transitions, and bridge room policy into the router and transport layers without
-//! exposing those lower-level details back to the socket code.
+//! `channel` is the main business-flow layer of the SFU.
 //!
 //! ```text
 //! ChannelManager
@@ -20,10 +17,6 @@
 //!    |- outbound            -> shared server-to-client fanout helpers
 //!    `- source_packet_policy-> room-owned packet gate intent for transport execution
 //! ```
-//!
-//! Supporting modules such as `events`, `factory`, `media_transaction`, and
-//! `rtp_capabilities` exist to keep these ownership edges small rather than to define
-//! separate business roots of their own.
 
 mod controller;
 mod definition;

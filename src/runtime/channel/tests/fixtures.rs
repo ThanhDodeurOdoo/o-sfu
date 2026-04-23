@@ -24,7 +24,9 @@ use crate::runtime::test_rtp_samples::{
 pub(super) use crate::runtime::transport_adapter::test_support::{
     FakeWebRtcAdapter, FakeWebRtcEvent,
 };
-pub(super) use crate::runtime::transport_adapter::{ActiveSpeakerSource, RuntimeTransportAdapter};
+pub(super) use crate::runtime::transport_adapter::{
+    ActiveSpeakerSource, RuntimeTransportAdapter, TransportMediaId,
+};
 pub(super) use o_sfu_protocol::shared::{
     DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
 };
@@ -271,6 +273,17 @@ pub(super) async fn commit_staged_publishes(
         .await;
 }
 
+pub(super) async fn rollback_staged_publishes_for_connection(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    transport_adapter: &RuntimeTransportAdapter,
+) {
+    channel
+        .rollback_staged_publishes_for_connection(session_id, connection_id, transport_adapter)
+        .await;
+}
+
 pub(super) async fn staged_publish_count(
     channel: &super::super::Channel,
     session_id: &SessionId,
@@ -278,6 +291,17 @@ pub(super) async fn staged_publish_count(
 ) -> usize {
     channel
         .staged_publish_count_for_connection(session_id, connection_id)
+        .await
+}
+
+pub(super) async fn staged_publish_transport_media_id(
+    channel: &super::super::Channel,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    stream_type: StreamType,
+) -> Option<TransportMediaId> {
+    channel
+        .staged_publish_transport_media_id(session_id, connection_id, stream_type)
         .await
 }
 

@@ -163,6 +163,21 @@ impl FakeWebRtcAdapter {
     }
 
     #[cfg(test)]
+    pub(crate) fn clear_negotiated_producer_parameters(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) {
+        match self.negotiated_producer_parameters.lock() {
+            Ok(mut parameters) => {
+                parameters.remove(&transport_media_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&transport_media_id);
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_active_speaker_source_snapshot(&self, sources: Vec<ActiveSpeakerSource>) {
         let dirty_channel_instance_ids = match self.media_owners.lock() {
             Ok(media_owners) => sources

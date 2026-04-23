@@ -31,7 +31,7 @@ pub(crate) use self::media::RemoteTrackBootstrap;
 pub(in crate::runtime::channel) use self::media::{
     ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
     PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-    PreparedConsumerBootstrap, PreparedPublishedTrack, ValidatedPublishDescriptor,
+    PreparedConsumerBootstrap, ValidatedPublishDescriptor,
 };
 pub(in crate::runtime::channel) use self::membership::LifecycleEffects;
 pub(in crate::runtime::channel) use self::membership::{

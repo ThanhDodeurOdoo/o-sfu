@@ -1,3 +1,15 @@
+//! Channel-owned transaction helpers for staged publish and transport cleanup
+//!
+//! The staged publish path has three phases:
+//! - validate the current session and reserve transport media
+//! - keep that reserved media in `PendingPublishTransactions` while the
+//!   offer/answer round-trip is still in flight
+//! - commit or clean it up once the answer made the final producer parameters
+//!   available
+//!
+//! The important boundary is that transport work happens outside the channel
+//! lock, but the full staged publish lifecycle still has one owner.
+
 use std::collections::BTreeMap;
 
 use tracing::warn;
@@ -5,27 +17,30 @@ use tracing::warn;
 use crate::runtime::ConnectionId;
 use crate::runtime::diagnostics::DiagnosticsEventData;
 use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::{
-    MediaPort, ObservabilityPort, TransportAdapterError, TransportMediaId,
-};
+use crate::runtime::transport_adapter::{MediaPort, ObservabilityPort, TransportMediaId};
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::{
     Channel, ChannelMediaCounts,
-    effects::StagedPublishCommitEffectPlan,
     state::{
-        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, PreparedPublishedTrack,
-        TransportMediaRemoval, ValidatedPublishDescriptor,
+        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, TransportMediaRemoval,
+        ValidatedPublishDescriptor,
     },
 };
 
 #[cfg(test)]
 mod test_support;
 
+/// Connection-local registry for staged publishes that are waiting on the
+/// negotiation answer
+///
+/// The key invariant is that one `(session, connection, stream_type)` can own
+/// at most one staged publish. That prevent racing publish intents from leaking
+/// multiple reserved transport-media handles for the same stream.
 #[derive(Debug, Default)]
 pub(super) struct PendingPublishTransactions {
-    staged: BTreeMap<PendingPublishKey, StagedPublishTransaction>,
+    staged: BTreeMap<PendingPublishKey, PendingPublishTransaction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -36,24 +51,28 @@ struct PendingPublishKey {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct StagedPublishTransaction {
+/// Staged publish that already owns reserved transport media but is not live in
+/// channel state yet
+///
+/// This type is the authoritative staged publish lifecycle owner. Callers stage
+/// it before renegotiation, then either commit it after the answer lands or
+/// clean it up when the publish is cancelled or the connection dies.
+pub(super) struct PendingPublishTransaction {
     descriptor: ValidatedPublishDescriptor,
     transport_media_id: TransportMediaId,
 }
 
 #[derive(Debug)]
-pub(super) struct PublishCommitSnapshot {
-    session_id: SessionId,
-    connection_id: ConnectionId,
-    prepared_track: PreparedPublishedTrack,
-    transport_media_id: TransportMediaId,
-}
-
-#[derive(Debug)]
-pub(super) enum StagedPublishCommitOutcome {
-    Committed(String),
-    LoadParametersFailed(TransportAdapterError),
-    PublishRejected,
+/// Post-commit work for a publish that already became live in channel state.
+///
+/// This exists so the lock-protected state mutation stays small while the
+/// follow-up effects still run in the right order after unlock
+struct CommittedPublish {
+    producer_id: String,
+    media_counts_before: ChannelMediaCounts,
+    media_counts_after: ChannelMediaCounts,
+    consumer_targets: Vec<PendingConsumerBootstrapTarget>,
+    diagnostics: DiagnosticsEventData,
 }
 
 impl PendingPublishTransactions {
@@ -70,8 +89,20 @@ impl PendingPublishTransactions {
         ))
     }
 
-    pub(super) fn insert(&mut self, staged_publish: StagedPublishTransaction) {
-        self.staged.insert(staged_publish.key(), staged_publish);
+    /// Attempt to register a new staged publish.
+    ///
+    /// Duplicate rejection is what keeps racing publish intents from leaving
+    /// multiple staged transport-media handles behind for one stream.
+    pub(super) fn stage(
+        &mut self,
+        transaction: PendingPublishTransaction,
+    ) -> Result<(), PendingPublishTransaction> {
+        let key = transaction.key();
+        if self.staged.contains_key(&key) {
+            return Err(transaction);
+        }
+        self.staged.insert(key, transaction);
+        Ok(())
     }
 
     pub(super) fn take(
@@ -79,7 +110,7 @@ impl PendingPublishTransactions {
         session_id: &SessionId,
         connection_id: ConnectionId,
         stream_type: StreamType,
-    ) -> Option<StagedPublishTransaction> {
+    ) -> Option<PendingPublishTransaction> {
         self.staged.remove(&PendingPublishKey::new(
             session_id,
             connection_id,
@@ -91,7 +122,7 @@ impl PendingPublishTransactions {
         &mut self,
         session_id: &SessionId,
         connection_id: ConnectionId,
-    ) -> Vec<StagedPublishTransaction> {
+    ) -> Vec<PendingPublishTransaction> {
         let matching_keys = self
             .staged
             .keys()
@@ -119,7 +150,7 @@ impl PendingPublishKey {
     }
 }
 
-impl StagedPublishTransaction {
+impl PendingPublishTransaction {
     pub(super) fn new(
         descriptor: ValidatedPublishDescriptor,
         transport_media_id: TransportMediaId,
@@ -142,68 +173,170 @@ impl StagedPublishTransaction {
         self.transport_media_id
     }
 
-    pub(super) fn into_commit_snapshot(
-        self,
-        consumable_rtp_parameters: RouterRtpParameters,
-    ) -> PublishCommitSnapshot {
-        PublishCommitSnapshot {
-            session_id: self.descriptor.owner_session_id().clone(),
-            connection_id: self.descriptor.owner_connection_id(),
-            prepared_track: self
-                .descriptor
-                .into_prepared_track(consumable_rtp_parameters),
-            transport_media_id: self.transport_media_id,
-        }
-    }
-}
-
-impl PublishCommitSnapshot {
+    /// Finish a staged publish through the real transport-facing commit path.
+    ///
+    /// The websocket layer calls this only after the answer landed. If the
+    /// transport layer cannot surface the final negotiated producer
+    /// parameters, the transaction cleans up its reserved media here because
+    /// there is nothing useful left to commit.
     pub(super) async fn commit(
         self,
         channel: &Channel,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) -> Option<String> {
-        let effect_plan = {
+        let session_key = channel.transport_session_key(
+            self.descriptor.owner_session_id(),
+            self.descriptor.owner_connection_id(),
+        );
+        let negotiated_parameters = match media_port
+            .negotiated_producer_parameters(&session_key, self.transport_media_id)
+            .await
+        {
+            Ok(rtp_parameters) => rtp_parameters,
+            Err(error) => {
+                self.cleanup(
+                    channel,
+                    media_port,
+                    "transport adapter failed to remove staged publish media after negotiated parameter lookup failed",
+                )
+                .await;
+                warn!(
+                    session_id = ?self.descriptor.owner_session_id(),
+                    connection_id = ?self.descriptor.owner_connection_id(),
+                    stream_type = ?self.descriptor.stream_type(),
+                    transport_media_id = ?self.transport_media_id,
+                    ?error,
+                    "failed to load negotiated publish parameters during channel commit"
+                );
+                return None;
+            }
+        };
+        self.commit_with_parameters(
+            channel,
+            observability_port,
+            media_port,
+            negotiated_parameters,
+        )
+        .await
+    }
+
+    pub(super) async fn commit_with_parameters(
+        self,
+        channel: &Channel,
+        observability_port: &impl ObservabilityPort,
+        media_port: &impl MediaPort,
+        consumable_rtp_parameters: RouterRtpParameters,
+    ) -> Option<String> {
+        let owner_session_id = self.descriptor.owner_session_id().clone();
+        let owner_connection_id = self.descriptor.owner_connection_id();
+        let stream_type = self.descriptor.stream_type();
+        let transport_media_id = self.transport_media_id;
+        let committed_publish = {
             let mut state = channel.state.write().await;
             let media_counts_before = ChannelMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
             };
-            let consumer_targets =
-                state.commit_published_track(self.prepared_track, self.transport_media_id);
+            // The descriptor is consumed only at the final state commit. If the
+            // session was replaced or lost publish readiness while transport
+            // work was happening, `commit_published_track` rejects it and we
+            // compensate by removing the reserved transport media below
+            let prepared_track = self
+                .descriptor
+                .into_prepared_track(consumable_rtp_parameters);
+            let consumer_targets = state.commit_published_track(prepared_track, transport_media_id);
             let media_counts_after = ChannelMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
             };
             drop(state);
-            match consumer_targets {
-                Some((producer_id, consumer_targets)) => {
-                    let producer_wire_id: String = producer_id.into_wire_id();
-                    StagedPublishCommitEffectPlan::committed(
-                        producer_wire_id,
-                        (media_counts_before, media_counts_after),
-                        consumer_targets,
-                        DiagnosticsEventData::for_session(
-                            channel.uuid(),
-                            &self.session_id,
-                            telemetry_event::PUBLISH_COMMITTED,
-                        )
-                        .with_connection_id(self.connection_id.as_u64())
-                        .with_media_worker_id(channel.media_worker_id())
-                        .with_transport_media_id(self.transport_media_id.as_u64()),
-                    )
-                }
-                None => StagedPublishCommitEffectPlan::rejected(
-                    self.session_id.clone(),
-                    self.connection_id,
-                    self.transport_media_id,
-                ),
-            }
+            consumer_targets.map(|(producer_id, consumer_targets)| CommittedPublish {
+                producer_id: producer_id.into_wire_id(),
+                media_counts_before,
+                media_counts_after,
+                consumer_targets,
+                diagnostics: DiagnosticsEventData::for_session(
+                    channel.uuid(),
+                    &owner_session_id,
+                    telemetry_event::PUBLISH_COMMITTED,
+                )
+                .with_connection_id(owner_connection_id.as_u64())
+                .with_media_worker_id(channel.media_worker_id())
+                .with_transport_media_id(transport_media_id.as_u64()),
+            })
         };
-        effect_plan
-            .execute(channel, observability_port, media_port)
-            .await
+        let Some(committed_publish) = committed_publish else {
+            channel
+                .cleanup_transport_media(
+                    &owner_session_id,
+                    owner_connection_id,
+                    transport_media_id,
+                    media_port,
+                    "transport adapter failed to remove published transport media after channel commit failed",
+                )
+                .await;
+            warn!(
+                session_id = ?owner_session_id,
+                connection_id = ?owner_connection_id,
+                stream_type = ?stream_type,
+                transport_media_id = ?transport_media_id,
+                "channel rejected staged negotiated publish during commit"
+            );
+            return None;
+        };
+        let producer_id = committed_publish.producer_id.clone();
+        committed_publish
+            .finish(channel, observability_port, media_port)
+            .await;
+        Some(producer_id)
+    }
+
+    /// Remove the reserved transport media when the staged publish cannot
+    /// complete.
+    ///
+    /// Kepping cleanup on the transaction makes all failure paths use the same
+    /// owner session and transport-media handle.
+    async fn cleanup(&self, channel: &Channel, media_port: &impl MediaPort, failure_message: &str) {
+        channel
+            .cleanup_transport_media(
+                self.descriptor.owner_session_id(),
+                self.descriptor.owner_connection_id(),
+                self.transport_media_id,
+                media_port,
+                failure_message,
+            )
+            .await;
+    }
+}
+
+impl CommittedPublish {
+    /// Run the post-commit effects after the producer is already live in
+    /// channel state.
+    ///
+    /// Ordering matters:
+    /// - metrics must observe the state delta that just happende
+    /// - room-owned source policy must see the new producer before consumers
+    ///   bootstrap against it
+    /// - bootstrap and diagnostics happen last
+    async fn finish(
+        self,
+        channel: &Channel,
+        observability_port: &impl ObservabilityPort,
+        media_port: &impl MediaPort,
+    ) {
+        channel.record_media_count_delta(self.media_counts_before, self.media_counts_after);
+        channel
+            .sync_source_packet_selection_policy(Some(observability_port), media_port)
+            .await;
+        channel
+            .bootstrap_consumer_targets(
+                media_port,
+                ConsumerBootstrapOrigin::Publish,
+                self.consumer_targets,
+            )
+            .await;
+        channel.diagnostics.record(self.diagnostics);
     }
 }
 
@@ -252,6 +385,8 @@ impl Channel {
         let Some(validated_descriptor) = validated_descriptor else {
             return false;
         };
+        // Cheap duplicate rejection goes first so we avoid reserving transport
+        // media when the same stream is already staged.
         if self.pending_publish_transactions.lock().await.contains(
             session_id,
             connection_id,
@@ -275,17 +410,18 @@ impl Channel {
                 return false;
             }
         };
+        // The transport await above laeves a race window where another publish
+        // intent can win first. We re-check under the registry lock and clean
+        // up immediately so no orphan staged media survives outside the
+        // transaction table
         let duplicate_stage = {
             let mut pending_publish_transactions = self.pending_publish_transactions.lock().await;
-            if pending_publish_transactions.contains(session_id, connection_id, stream_type) {
-                true
-            } else {
-                pending_publish_transactions.insert(StagedPublishTransaction::new(
+            pending_publish_transactions
+                .stage(PendingPublishTransaction::new(
                     validated_descriptor,
                     transport_media_id,
-                ));
-                false
-            }
+                ))
+                .is_err()
         };
         if duplicate_stage {
             self.cleanup_transport_media(
@@ -308,6 +444,8 @@ impl Channel {
         stream_type: StreamType,
         media_port: &impl MediaPort,
     ) -> bool {
+        // Explicit unpublish before commit only needs transport cleanup because
+        // the producer never became live in channel state.
         let staged_publish = self.pending_publish_transactions.lock().await.take(
             session_id,
             connection_id,
@@ -333,6 +471,9 @@ impl Channel {
         connection_id: ConnectionId,
         media_port: &impl MediaPort,
     ) {
+        // Connection teardown drains every staged publish for that connection in
+        // one place so websocket drop, replacement and bulk cleanup cannot
+        // leave reserved producer media behind.
         let staged_publishes = self
             .pending_publish_transactions
             .lock()
@@ -357,61 +498,17 @@ impl Channel {
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) {
+        // Drain first so a later renegotiation cannot re-commit the same staged
+        // publish if more messages arrive while we are finishing this batch.
         let staged_publishes = self
             .pending_publish_transactions
             .lock()
             .await
             .take_for_connection(session_id, connection_id);
-        let session_key = self.transport_session_key(session_id, connection_id);
         for staged_publish in staged_publishes {
-            let stream_type = staged_publish.descriptor.stream_type();
-            let transport_media_id = staged_publish.transport_media_id();
-            let commit_outcome = match media_port
-                .negotiated_producer_parameters(&session_key, transport_media_id)
-                .await
-            {
-                Ok(rtp_parameters) => staged_publish
-                    .into_commit_snapshot(rtp_parameters)
-                    .commit(self, observability_port, media_port)
-                    .await
-                    .map_or(
-                        StagedPublishCommitOutcome::PublishRejected,
-                        StagedPublishCommitOutcome::Committed,
-                    ),
-                Err(error) => {
-                    self.cleanup_transport_media(
-                        session_id,
-                        connection_id,
-                        transport_media_id,
-                        media_port,
-                        "transport adapter failed to remove staged publish media after negotiated parameter lookup failed",
-                    )
-                    .await;
-                    StagedPublishCommitOutcome::LoadParametersFailed(error)
-                }
-            };
-            match commit_outcome {
-                StagedPublishCommitOutcome::Committed(_producer_id) => {}
-                StagedPublishCommitOutcome::LoadParametersFailed(error) => {
-                    warn!(
-                        ?session_id,
-                        connection_id = ?connection_id,
-                        ?stream_type,
-                        ?transport_media_id,
-                        ?error,
-                        "failed to load negotiated publish parameters during channel commit"
-                    );
-                }
-                StagedPublishCommitOutcome::PublishRejected => {
-                    warn!(
-                        ?session_id,
-                        connection_id = ?connection_id,
-                        ?stream_type,
-                        ?transport_media_id,
-                        "channel rejected staged negotiated publish during commit"
-                    );
-                }
-            }
+            let _producer_id = staged_publish
+                .commit(self, observability_port, media_port)
+                .await;
         }
     }
 
