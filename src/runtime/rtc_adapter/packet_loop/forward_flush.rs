@@ -9,7 +9,7 @@ use super::super::{
     state::{RtcBitrateState, RtcBootstrapState},
 };
 use super::buffers::PacketLoopBuffers;
-use crate::runtime::metrics::{RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics};
+use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::SourcePolicySignal;
 
 pub(super) fn record_incoming_stats(
@@ -95,12 +95,7 @@ pub(super) fn flush_forward_routes(
             continue;
         };
         let destination = forward.destination();
-        let destination_kind = match destination {
-            ForwardingDestination::LocalRtc(_) => RtpForwardDestinationKind::LocalRtc,
-            ForwardingDestination::Recording(_) => RtpForwardDestinationKind::Recording,
-            ForwardingDestination::IntraNodeRelay(_) => RtpForwardDestinationKind::IntraNodeRelay,
-            ForwardingDestination::InterNodeRelay(_) => RtpForwardDestinationKind::InterNodeRelay,
-        };
+        let destination_kind = destination.metrics_kind();
         let payload_len = packet.payload_len();
         let relay_packet = match destination {
             ForwardingDestination::IntraNodeRelay(_) | ForwardingDestination::InterNodeRelay(_) => {
@@ -117,7 +112,7 @@ pub(super) fn flush_forward_routes(
                         .get_or_insert_with(|| packet.share_for_relay(source_transport_media_id)),
                 )
             }
-            ForwardingDestination::LocalRtc(_) | ForwardingDestination::Recording(_) => None,
+            ForwardingDestination::LocalRtc(_) | ForwardingDestination::PacketSink(_) => None,
         };
         let packet = relay_packet.unwrap_or(packet);
         match destination.send(state, packet, is_last_destination) {
@@ -130,22 +125,18 @@ pub(super) fn flush_forward_routes(
             Ok(ForwardSendOutcome::SideEffect)
                 if matches!(
                     destination,
-                    ForwardingDestination::Recording(_)
+                    ForwardingDestination::PacketSink(_)
                         | ForwardingDestination::IntraNodeRelay(_)
                         | ForwardingDestination::InterNodeRelay(_)
                 ) =>
             {
                 metrics.record_rtp_forwarded(destination_kind, payload_len);
             }
-            Ok(ForwardSendOutcome::OverloadedRelay) => match destination {
-                ForwardingDestination::IntraNodeRelay(_) => {
-                    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::IntraNodeRelay);
+            Ok(ForwardSendOutcome::OverloadedRelay) => {
+                if let Some(destination_kind) = destination.relay_drop_kind() {
+                    metrics.record_rtp_relay_overload_drop(destination_kind);
                 }
-                ForwardingDestination::InterNodeRelay(_) => {
-                    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::InterNodeRelay);
-                }
-                ForwardingDestination::LocalRtc(_) | ForwardingDestination::Recording(_) => {}
-            },
+            }
             Ok(
                 ForwardSendOutcome::SideEffect
                 | ForwardSendOutcome::LocalRtc {

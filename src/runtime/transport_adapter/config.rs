@@ -3,7 +3,7 @@ use std::{net::IpAddr, sync::Arc};
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::recording::MediaTap;
+use crate::runtime::packet_sink_registry::ChannelPacketSinkRegistry;
 
 /// transport bitrate limit per session
 ///
@@ -45,7 +45,7 @@ pub(crate) struct RtcTransportAdapterConfig {
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
     diagnostics: Arc<DiagnosticsStore>,
-    media_tap: Arc<MediaTap>,
+    packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
     metrics: Arc<RuntimeMetrics>,
 }
 
@@ -57,7 +57,7 @@ impl RtcTransportAdapterConfig {
         rtc_port_range: RtcPortRange,
         codec_flags: MediaCodecFlags,
         diagnostics: Arc<DiagnosticsStore>,
-        media_tap: Arc<MediaTap>,
+        packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
@@ -66,7 +66,7 @@ impl RtcTransportAdapterConfig {
             rtc_port_range,
             codec_flags,
             diagnostics,
-            media_tap,
+            packet_sink_registry,
             metrics,
         }
     }
@@ -79,7 +79,7 @@ impl RtcTransportAdapterConfig {
             rtc_port_range,
             codec_flags: self.codec_flags,
             diagnostics: Arc::clone(&self.diagnostics),
-            media_tap: Arc::clone(&self.media_tap),
+            packet_sink_registry: Arc::clone(&self.packet_sink_registry),
             metrics: Arc::clone(&self.metrics),
         }
     }
@@ -109,8 +109,8 @@ impl RtcTransportAdapterConfig {
     }
 
     #[must_use]
-    pub(crate) fn media_tap(&self) -> Arc<MediaTap> {
-        Arc::clone(&self.media_tap)
+    pub(crate) fn packet_sink_registry(&self) -> Arc<ChannelPacketSinkRegistry> {
+        Arc::clone(&self.packet_sink_registry)
     }
 
     #[must_use]
@@ -143,7 +143,7 @@ impl RtcTransportAdapterShardSetConfig {
         worker_count: usize,
         codec_flags: MediaCodecFlags,
         diagnostics: Arc<DiagnosticsStore>,
-        media_tap: Arc<MediaTap>,
+        packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
@@ -154,7 +154,7 @@ impl RtcTransportAdapterShardSetConfig {
                 rtc_port_range,
                 codec_flags,
                 diagnostics,
-                media_tap,
+                packet_sink_registry,
                 metrics,
             ),
         }

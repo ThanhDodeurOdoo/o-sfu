@@ -47,6 +47,7 @@ pub(crate) use api::RtcTransportAdapter;
 pub use api::WorkerHandleSlot;
 pub(crate) use commands::RelayCleanup;
 pub use demux::RemoteAddrDemux;
+#[cfg(test)]
 pub(crate) use forwarded_packet::ForwardedPacket;
 #[cfg(test)]
 pub(crate) use forwarded_packet::sample_forwarded_packet;

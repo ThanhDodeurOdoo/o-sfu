@@ -15,7 +15,8 @@ use super::{
     keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests},
 };
 use crate::config::MediaCodecFlags;
-use crate::runtime::metrics::RuntimeMetrics;
+use crate::runtime::metrics::{RtpForwardDestinationKind, RuntimeMetrics};
+use crate::runtime::packet_sink_registry::RegisteredPacketSink;
 use crate::runtime::recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink};
 use crate::runtime::rtc_adapter::{
     bootstrap,
@@ -352,10 +353,13 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
 
     buffers.pending_packets.push(packet);
     buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_recording_sink(
+        super::super::forwarding_destination::PacketForward::from_packet_sink(
             0,
             source_transport_media_id,
-            into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+            RegisteredPacketSink::new(
+                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                RtpForwardDestinationKind::Recording,
+            ),
         ),
     );
     buffers.forwards.push(

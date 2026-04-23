@@ -1,5 +1,5 @@
 use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
-use crate::runtime::recording::MediaTap;
+use crate::runtime::packet_sink_registry::ChannelPacketSinkRegistry;
 
 use super::{
     forwarded_packet::ForwardedPacket,
@@ -12,7 +12,7 @@ use super::{
 // TODO: needs documentation:
 pub(super) fn populate_forward_routes(
     state: &RtcBootstrapState,
-    media_tap: &MediaTap,
+    packet_sink_registry: &ChannelPacketSinkRegistry,
     relay_registry: &RelayRegistry,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
@@ -24,10 +24,10 @@ pub(super) fn populate_forward_routes(
             continue;
         };
         if packet.visits_origin_sinks()
-            && let Some(sink) =
-                media_tap.sink_for_channel(packet.source_session_key().channel_instance_id())
+            && let Some(sink) = packet_sink_registry
+                .sink_for_channel(packet.source_session_key().channel_instance_id())
         {
-            forwards.push(PacketForward::from_recording_sink(
+            forwards.push(PacketForward::from_packet_sink(
                 packet_idx,
                 source_transport_media_id,
                 sink,
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(forwards.len(), 2);
         assert!(matches!(
             forwards.first().map(PacketForward::destination),
-            Some(ForwardingDestination::Recording(_))
+            Some(ForwardingDestination::PacketSink(_))
         ));
         assert!(matches!(
             forwards.get(1).map(PacketForward::destination),
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(forwards.len(), 4);
         assert!(matches!(
             forwards.first().map(PacketForward::destination),
-            Some(ForwardingDestination::Recording(_))
+            Some(ForwardingDestination::PacketSink(_))
         ));
         assert!(matches!(
             forwards.get(1).map(PacketForward::destination),
@@ -687,11 +687,11 @@ mod tests {
         assert_eq!(forwards.len(), 3);
         assert!(matches!(
             forwards.first().map(PacketForward::destination),
-            Some(ForwardingDestination::Recording(_))
+            Some(ForwardingDestination::PacketSink(_))
         ));
         assert!(matches!(
             forwards.get(1).map(PacketForward::destination),
-            Some(ForwardingDestination::Recording(_))
+            Some(ForwardingDestination::PacketSink(_))
         ));
         assert!(matches!(
             forwards.get(2).map(PacketForward::destination),

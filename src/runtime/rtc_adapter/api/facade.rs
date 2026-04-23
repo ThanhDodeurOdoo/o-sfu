@@ -34,7 +34,7 @@ use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::{
     diagnostics::DiagnosticsStore,
     metrics::RuntimeMetrics,
-    recording::MediaTap,
+    packet_sink_registry::ChannelPacketSinkRegistry,
     transport_adapter::{
         RtcTransportAdapterConfig, SessionOffer, SourcePacketGate, SourcePolicySignal,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportMediaId,
@@ -78,7 +78,7 @@ pub(crate) struct RtcTransportAdapter {
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
-    pub(super) media_tap: Arc<MediaTap>,
+    pub(super) packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
     pub(super) relay_registry: Arc<RelayRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
@@ -120,7 +120,7 @@ impl RtcTransportAdapter {
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
             diagnostics: config.diagnostics(),
-            media_tap: config.media_tap(),
+            packet_sink_registry: config.packet_sink_registry(),
             relay_registry: Arc::new(RelayRegistry::default()),
             source_policy_signal,
             metrics: config.metrics(),

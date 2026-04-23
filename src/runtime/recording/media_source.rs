@@ -1,17 +1,10 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use crate::runtime::ChannelInstanceId;
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
-pub(crate) trait MediaPacketSink: Send + Sync {
-    fn record_packet(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        received_at: Instant,
-        payload: &[u8],
-    );
-}
+use crate::runtime::metrics::RtpForwardDestinationKind;
+use crate::runtime::packet_sink_registry::{
+    ChannelPacketSinkRegistry, PacketSink as MediaPacketSink,
+};
 
 pub(crate) trait MediaSource: Send + Sync {
     fn activate_channel(
@@ -22,11 +15,22 @@ pub(crate) trait MediaSource: Send + Sync {
     fn deactivate_channel(&self, channel_instance_id: ChannelInstanceId);
 }
 
-pub(crate) fn into_packet_sink<T>(sink: Arc<T>) -> Arc<dyn MediaPacketSink>
-where
-    T: MediaPacketSink + 'static,
-{
-    sink
+impl MediaSource for ChannelPacketSinkRegistry {
+    fn activate_channel(
+        &self,
+        channel_instance_id: ChannelInstanceId,
+        sink: Arc<dyn MediaPacketSink>,
+    ) {
+        self.register_channel(
+            channel_instance_id,
+            sink,
+            RtpForwardDestinationKind::Recording,
+        );
+    }
+
+    fn deactivate_channel(&self, channel_instance_id: ChannelInstanceId) {
+        self.unregister_channel(channel_instance_id);
+    }
 }
 
 pub(crate) fn into_media_source<T>(source: Arc<T>) -> Arc<dyn MediaSource>

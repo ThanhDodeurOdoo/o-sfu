@@ -12,7 +12,7 @@ use super::{
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
-    recording::MediaTap,
+    packet_sink_registry::ChannelPacketSinkRegistry,
 };
 use crate::config::Config;
 use o_sfu_protocol::shared::{SessionId, StreamType};
@@ -35,7 +35,7 @@ impl SourcePolicyDirtyState {
     }
 }
 
-pub use super::recording::ActiveChannelRegistry;
+pub use super::packet_sink_registry::ActiveChannelRegistry;
 pub use super::rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot};
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
@@ -166,7 +166,7 @@ impl Drop for TestServer {
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
-    let recording_media_tap = Arc::new(MediaTap::default());
+    let recording_media_tap = Arc::new(ChannelPacketSinkRegistry::default());
     let channel_manager = Arc::new(ChannelManager::new(
         ChannelManagerConfig::new(
             config.rtc_media_worker_count,

@@ -1,9 +1,10 @@
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use str0m::RtcError;
 
 use crate::runtime::{
-    recording::MediaPacketSink,
+    metrics::{RtpForwardDestinationKind, RtpRelayDropKind},
+    packet_sink_registry::RegisteredPacketSink,
     transport_adapter::{TransportMediaId, TransportSessionKey},
 };
 
@@ -24,7 +25,7 @@ pub(super) struct PacketForward {
 #[derive(Debug, Clone)]
 pub(super) enum ForwardingDestination {
     LocalRtc(LocalRtcPacketDestination),
-    Recording(RecordingPacketDestination),
+    PacketSink(PacketSinkDestination),
     IntraNodeRelay(IntraNodeRelayPacketDestination),
     InterNodeRelay(InterNodeRelayPacketDestination),
 }
@@ -43,9 +44,9 @@ pub(super) struct LocalRtcPacketDestination {
 }
 
 #[derive(Clone)]
-pub(super) struct RecordingPacketDestination {
+pub(super) struct PacketSinkDestination {
     transport_media_id: TransportMediaId,
-    sink: Arc<dyn MediaPacketSink>,
+    sink: RegisteredPacketSink,
 }
 
 #[derive(Clone)]
@@ -77,14 +78,14 @@ impl PacketForward {
         }
     }
 
-    pub(super) fn from_recording_sink(
+    pub(super) fn from_packet_sink(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
-        sink: Arc<dyn MediaPacketSink>,
+        sink: RegisteredPacketSink,
     ) -> Self {
         Self {
             packet_idx,
-            destination: ForwardingDestination::Recording(RecordingPacketDestination {
+            destination: ForwardingDestination::PacketSink(PacketSinkDestination {
                 transport_media_id,
                 sink,
             }),
@@ -133,7 +134,24 @@ impl ForwardingDestination {
     pub(super) fn session_key(&self) -> Option<&TransportSessionKey> {
         match self {
             Self::LocalRtc(destination) => Some(destination.session_key()),
-            Self::Recording(_) | Self::IntraNodeRelay(_) | Self::InterNodeRelay(_) => None,
+            Self::PacketSink(_) | Self::IntraNodeRelay(_) | Self::InterNodeRelay(_) => None,
+        }
+    }
+
+    pub(super) const fn metrics_kind(&self) -> RtpForwardDestinationKind {
+        match self {
+            Self::LocalRtc(_) => RtpForwardDestinationKind::LocalRtc,
+            Self::PacketSink(destination) => destination.metrics_kind(),
+            Self::IntraNodeRelay(_) => RtpForwardDestinationKind::IntraNodeRelay,
+            Self::InterNodeRelay(_) => RtpForwardDestinationKind::InterNodeRelay,
+        }
+    }
+
+    pub(super) const fn relay_drop_kind(&self) -> Option<RtpRelayDropKind> {
+        match self {
+            Self::IntraNodeRelay(_) => Some(RtpRelayDropKind::IntraNodeRelay),
+            Self::InterNodeRelay(_) => Some(RtpRelayDropKind::InterNodeRelay),
+            Self::LocalRtc(_) | Self::PacketSink(_) => None,
         }
     }
 
@@ -145,7 +163,7 @@ impl ForwardingDestination {
     ) -> Result<ForwardSendOutcome, RtcError> {
         match self {
             Self::LocalRtc(destination) => destination.send(state, packet, is_last_destination),
-            Self::Recording(destination) => Ok(destination.send(packet)),
+            Self::PacketSink(destination) => Ok(destination.send(packet)),
             Self::IntraNodeRelay(destination) => Ok(destination.send(packet)),
             Self::InterNodeRelay(destination) => Ok(destination.send(packet)),
         }
@@ -185,7 +203,11 @@ impl LocalRtcPacketDestination {
     }
 }
 
-impl RecordingPacketDestination {
+impl PacketSinkDestination {
+    const fn metrics_kind(&self) -> RtpForwardDestinationKind {
+        self.sink.forward_destination_kind()
+    }
+
     fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
         self.sink.record_packet(
             packet.source_session_key(),
@@ -219,11 +241,15 @@ impl InterNodeRelayPacketDestination {
     }
 }
 
-impl fmt::Debug for RecordingPacketDestination {
+impl fmt::Debug for PacketSinkDestination {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RecordingPacketDestination")
+            .debug_struct("PacketSinkDestination")
             .field("transport_media_id", &self.transport_media_id)
+            .field(
+                "forward_destination_kind",
+                &self.sink.forward_destination_kind(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -248,15 +274,14 @@ impl fmt::Debug for InterNodeRelayPacketDestination {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
     use str0m::media::Mid;
 
     use super::*;
+    use crate::runtime::recording::MediaPacketSink;
     use crate::runtime::rtc_adapter::{
         relay_registry::InterNodeRelaySender, route_control::PacketLayerGate,
         sample_forwarded_packet, test_support::test_transport_session_key,
@@ -310,14 +335,17 @@ mod tests {
     }
 
     #[test]
-    fn packet_forward_wraps_recording_sinks_in_the_named_contract() {
-        let sink = Arc::new(CountingSink::new());
-        let forward = PacketForward::from_recording_sink(5, TransportMediaId::new(8), sink);
+    fn packet_forward_wraps_packet_sinks_in_the_named_contract() {
+        let sink = RegisteredPacketSink::new(
+            Arc::new(CountingSink::new()),
+            RtpForwardDestinationKind::Recording,
+        );
+        let forward = PacketForward::from_packet_sink(5, TransportMediaId::new(8), sink);
 
         assert_eq!(forward.packet_idx(), 5);
         assert!(matches!(
             forward.destination(),
-            ForwardingDestination::Recording(destination)
+            ForwardingDestination::PacketSink(destination)
                 if destination.transport_media_id == TransportMediaId::new(8)
         ));
     }

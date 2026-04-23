@@ -8,10 +8,11 @@
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
 //! |  `- session_protocol  -> authenticated signaling flow for one connected session
 //! |- channel              -> room allocation, membership, negotiation, and recording policy
+//! |- packet_sink_registry -> channel-scoped side-effect sinks shared by transport and recording
 //! |- telemetry            -> runtime-owned tracing config and event-name conventions
 //! |- transport_adapter    -> runtime-facing transport service boundary
 //! |  `- rtc_adapter       -> WebRTC worker and packet execution engine
-//! |- recording            -> shared media tap used by channel policy and transport execution
+//! |- recording            -> recording lifecycle and router observer inventory
 //! `- metrics              -> process-global metrics state and Prometheus export snapshot
 //! ```
 
@@ -32,6 +33,7 @@ pub(crate) mod http_server;
 mod ids;
 mod metrics;
 mod metrics_export;
+mod packet_sink_registry;
 mod recording;
 mod request_origin;
 mod rtc_adapter;
@@ -51,6 +53,7 @@ use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
 pub(crate) use ids::{ChannelInstanceId, ConnectionId};
 use metrics::RuntimeMetrics;
+use packet_sink_registry::ChannelPacketSinkRegistry;
 use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
 pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
@@ -90,7 +93,7 @@ impl Runtime {
     pub fn new(config: Config) -> Self {
         let diagnostics = Arc::new(DiagnosticsStore::default());
         let metrics = Arc::new(RuntimeMetrics::default());
-        let recording_media_tap = Arc::new(MediaTap::default());
+        let recording_media_tap = Arc::new(ChannelPacketSinkRegistry::default());
         let transport_adapter = build_transport_adapter(
             &config,
             Arc::clone(&diagnostics),

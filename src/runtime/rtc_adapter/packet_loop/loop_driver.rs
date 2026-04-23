@@ -30,8 +30,8 @@ use super::{
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::{
-    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
-    transport_adapter::SourcePolicySignal,
+    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+    packet_sink_registry::ChannelPacketSinkRegistry, transport_adapter::SourcePolicySignal,
 };
 
 pub(crate) struct PacketLoopConfig {
@@ -41,7 +41,7 @@ pub(crate) struct PacketLoopConfig {
     pub(crate) rtc_port_range: RtcPortRange,
     pub(crate) codec_flags: MediaCodecFlags,
     pub(crate) diagnostics: Arc<DiagnosticsStore>,
-    pub(crate) media_tap: Arc<MediaTap>,
+    pub(crate) packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
     pub(crate) relay_registry: Arc<RelayRegistry>,
     pub(crate) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
@@ -340,7 +340,7 @@ fn snapshot_and_pump(
     );
     populate_forward_routes(
         state,
-        &config.media_tap,
+        &config.packet_sink_registry,
         &config.relay_registry,
         &config.metrics,
         &mut buffers.pending_packets,
