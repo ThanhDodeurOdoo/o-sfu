@@ -131,6 +131,33 @@ async fn channel_manager_is_idempotent_by_issuer() {
 }
 
 #[tokio::test]
+async fn channel_manager_concurrent_create_attempts_publish_one_live_channel() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = Arc::new(ChannelManager::new(
+        super::super::ChannelManagerConfig::new(
+            1,
+            super::super::ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(2),
+                RuntimeFeatureFlags::default(),
+                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::new(DiagnosticsStore::default()),
+        Arc::clone(&metrics),
+    ));
+    let config = ChannelConfig::default();
+
+    let (first, second) = tokio::join!(
+        manager.serve_channel("issuer-a", None, &config, None),
+        manager.serve_channel("issuer-a", None, &config, None),
+    );
+
+    assert_eq!(first.uuid(), second.uuid());
+    assert_eq!(metrics.snapshot().active_channels, 1);
+}
+
+#[tokio::test]
 async fn channel_manager_assigns_media_workers_explicitly() {
     let manager = ChannelManager::for_test_with_media_workers(2);
     let first = manager
@@ -260,6 +287,67 @@ async fn manager_disconnect_sessions_removes_empty_channel() {
         .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
         .await;
     assert_ne!(replacement.uuid(), channel_uuid);
+}
+
+#[tokio::test]
+async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = Arc::new(ChannelManager::new(
+        super::super::ChannelManagerConfig::new(
+            1,
+            super::super::ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(1),
+                RuntimeFeatureFlags::default(),
+                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::new(DiagnosticsStore::default()),
+        Arc::clone(&metrics),
+    ));
+    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let channel = manager
+        .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
+        .await;
+    let channel_uuid = channel.uuid().to_owned();
+    let (tx, _rx) = test_sender();
+    let joined = manager
+        .join_session_for_test(
+            &channel_uuid,
+            JoinSessionRequest {
+                session_id: SessionId::Integer(1),
+                label: None,
+                permissions: SessionPermissions::default(),
+                sender: tx,
+            },
+            &transport_adapter,
+        )
+        .await;
+    assert!(joined.is_ok());
+    assert_eq!(metrics.snapshot().active_channels, 1);
+    assert_eq!(metrics.snapshot().active_sessions, 1);
+
+    let first_session_ids = [SessionId::Integer(1)];
+    let second_session_ids = [SessionId::Integer(1)];
+    let manager_ref = Arc::clone(&manager);
+    let transport_ref = transport_adapter.clone();
+    let first_cleanup = async {
+        manager_ref
+            .disconnect_sessions_for_test(&channel_uuid, &first_session_ids, &transport_ref)
+            .await;
+    };
+    let second_cleanup = async {
+        manager
+            .disconnect_sessions_for_test(&channel_uuid, &second_session_ids, &transport_adapter)
+            .await;
+    };
+
+    tokio::join!(first_cleanup, second_cleanup);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_channels, 0);
+    assert_eq!(snapshot.active_sessions, 0);
+    assert!(manager.get_by_uuid(&channel_uuid).await.is_none());
 }
 
 #[tokio::test]

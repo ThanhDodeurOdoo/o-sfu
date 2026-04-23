@@ -4,7 +4,6 @@
 
   - `tests/tests/`: integration tests
   - `tests/miri/`: UB tests
-  - `tests/loom/`: concurrency tests
   - `tests/fuzz/`: fuzzing
   - `tests/proofs/`: formal verification
 
@@ -80,18 +79,6 @@ sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu
 rustup target add --toolchain nightly s390x-unknown-linux-gnu
 MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p o-sfu-tests --target s390x-unknown-linux-gnu --test miri_auth_codec
 cargo +nightly miri test -p o-sfu-tests --target s390x-unknown-linux-gnu --test miri_rtp_negotiation
-```
-
-## Concurrency tests
-
-Run the Loom transport coordination models:
-
-```bash
-cargo test -p o-sfu-tests --features loom-tests \
-  --test loom_source_policy_coordination \
-  --test loom_relay_registry_coordination \
-  --test loom_media_tap_coordination \
-  --test loom_rtc_worker_startup
 ```
 
 ## Fuzzing

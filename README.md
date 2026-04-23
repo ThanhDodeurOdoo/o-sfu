@@ -3,7 +3,6 @@
 [![Client Browser](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml)
 [![Fuzzing](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml)
 [![Formal Verification](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml)
-[![Concurrency Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/concurrency-tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/concurrency-tests.yml)
 [![UB Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/ub-tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/ub-tests.yml)
 [![Cargo Deny](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml)
 [![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql)
@@ -15,7 +14,7 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 - better recording integration (no port publishing to ffmpeg)
 - better scaling architecture (local and multi server sharding)
 - more observability (prometheus, open telemetry,...)
-- stronger guarantees (rust + formal proofs + fuzzing + concurrency tests + UB tests + puppetter full stack tests)
+- stronger guarantees (rust + formal proofs + fuzzing + UB tests + puppetter full stack tests)
 
 MISSING FEATURES [Odoo SFU](https://github.com/odoo/sfu):
 - Recording

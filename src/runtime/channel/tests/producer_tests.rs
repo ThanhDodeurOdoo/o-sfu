@@ -1,7 +1,7 @@
 use super::api::NegotiatedPublish;
 use super::fixtures::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::channel::Channel;
@@ -2242,6 +2242,69 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
                 if *owner == session_id
         )),
         "successful commit should not compensate the staged producer media"
+    );
+}
+
+#[tokio::test]
+async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one_cleanup() {
+    let (channel, adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    fake.set_publish_media_delay(Some(Duration::from_millis(200)));
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    let (first_stage, second_stage) = tokio::join!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        ),
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        ),
+    );
+
+    assert_ne!(first_stage, second_stage);
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        1
+    );
+
+    let events = fake.snapshot_events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                FakeWebRtcEvent::PublishMediaRequested { session_id: owner, .. }
+                    if *owner == session_id
+            ))
+            .count(),
+        2,
+        "both racing stage attempts should declare transport media before the post-await duplicate re-check"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                FakeWebRtcEvent::MediaRemoved { session_id: owner, .. }
+                    if *owner == session_id
+            ))
+            .count(),
+        1,
+        "the duplicate staged transport media should be compensated exactly once"
     );
 }
 
