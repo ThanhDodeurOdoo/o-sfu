@@ -10,7 +10,9 @@ const CONSTRAINT_SET3_FLAG: u8 = 0x10;
 fn h264_profile_level_id_parse_matches_rfc_patterns() {
     let raw = kani::any::<u32>() & 0x00FF_FFFF;
     let token = hex_profile_level_id(raw);
-    let parsed = ProfileLevelId::parse(&token);
+    let parsed = core::str::from_utf8(&token)
+        .ok()
+        .and_then(ProfileLevelId::parse);
     let bytes = raw.to_be_bytes();
     let expected = spec_profile_from_bytes(bytes[1], bytes[2])
         .zip(spec_normalized_level_idc(bytes[1], bytes[2], bytes[3]));
@@ -22,25 +24,22 @@ fn h264_profile_level_id_parse_matches_rfc_patterns() {
     }
 }
 
-fn hex_profile_level_id(raw: u32) -> String {
-    let mut token = String::with_capacity(6);
-    let mut shift = 20_u32;
-    loop {
-        let nibble = ((raw >> shift) & 0x0F) as u8;
-        token.push(hex_char(nibble));
-        if shift == 0 {
-            break;
-        }
-        shift -= 4;
-    }
-    token
+fn hex_profile_level_id(raw: u32) -> [u8; 6] {
+    [
+        hex_byte(((raw >> 20) & 0x0F) as u8),
+        hex_byte(((raw >> 16) & 0x0F) as u8),
+        hex_byte(((raw >> 12) & 0x0F) as u8),
+        hex_byte(((raw >> 8) & 0x0F) as u8),
+        hex_byte(((raw >> 4) & 0x0F) as u8),
+        hex_byte((raw & 0x0F) as u8),
+    ]
 }
 
-fn hex_char(nibble: u8) -> char {
+fn hex_byte(nibble: u8) -> u8 {
     match nibble {
-        0..=9 => char::from(b'0' + nibble),
-        10..=15 => char::from(b'a' + (nibble - 10)),
-        _ => '0',
+        0..=9 => b'0' + nibble,
+        10..=15 => b'a' + (nibble - 10),
+        _ => b'0',
     }
 }
 

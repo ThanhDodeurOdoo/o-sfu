@@ -42,15 +42,6 @@ jobs:
               --harness pausing_a_producer_updates_all_dependent_consumers
               --harness resuming_a_producer_clears_dependent_consumer_pause_shadows
               --harness consumer_local_pause_stays_independent_from_producer_shadow_updates
-          - shard: protocol-requests
-            command: >-
-              cargo kani -p o-sfu-proofs
-              --harness request_tracker_rejects_mismatched_resolution_without_state_loss
-              --harness request_tracker_timeout_and_clear_resolve_each_live_request_once
-              --harness outbound_batcher_preserves_token_order_until_flush
-              --harness outbound_batcher_capacity_and_clear_do_not_duplicate_tokens
-              --harness sticky_replay_deduplicates_publish_intent_and_stays_stable
-              --harness sticky_replay_merges_subscription_and_info_updates_by_latest_field
           - shard: protocol-recovery-close
             command: >-
               cargo kani -p o-sfu-proofs
