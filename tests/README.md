@@ -1,14 +1,12 @@
-# Verification
+# Tests
 
 ## Layout
 
-- `tests/`: `o-sfu-tests` workspace crate for integration tests and shared harness code.
-- `tests/tests/`: black-box integration targets.
-- `tests/miri/`: dedicated Miri-friendly pure verification targets.
-- `tests/loom/`: dedicated Loom model checks for narrow coordination contracts.
-- `tests/src/support/`: shared integration harness helpers.
-- `tests/fuzz/`: cargo-fuzz package
-- `tests/proofs/`: `o-sfu-proofs` workspace crate for Kani proofs.
+  - `tests/tests/`: integration tests
+  - `tests/miri/`: UB tests
+  - `tests/loom/`: concurrency tests
+  - `tests/fuzz/`: fuzzing
+  - `tests/proofs/`: formal verification
 
 ## Default
 
@@ -70,6 +68,18 @@ Run the targeted Miri suite:
 
 ```bash
 cargo +nightly miri test -p o-sfu-tests --test miri_router_protocol
+MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p o-sfu-tests --test miri_auth_codec
+cargo +nightly miri test -p o-sfu-tests --test miri_protocol_core
+cargo +nightly miri test -p o-sfu-tests --test miri_rtp_negotiation
+```
+
+optional the big-endian subset (this one is one a cron):
+
+```bash
+sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu
+rustup target add --toolchain nightly s390x-unknown-linux-gnu
+MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p o-sfu-tests --target s390x-unknown-linux-gnu --test miri_auth_codec
+cargo +nightly miri test -p o-sfu-tests --target s390x-unknown-linux-gnu --test miri_rtp_negotiation
 ```
 
 ## Concurrency tests

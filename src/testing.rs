@@ -1,14 +1,15 @@
-//! This module is doc-hidden to avoid tests looking like a stable API
-
 pub mod auth {
     pub use crate::runtime::auth::{
-        HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
-        verify,
+        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
+        WebSocketConnectClaims, sign, verify,
     };
 }
 
 pub mod client_batch {
-    pub use crate::runtime::websocket_server::io::decode_client_batch;
+    pub use crate::runtime::websocket_server::io::{
+        ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,
+        MAX_CLIENT_FRAME_BYTES, decode_client_batch,
+    };
 }
 
 pub mod http {

@@ -5,6 +5,8 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  miri:
+  miri_host:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -37,5 +39,51 @@ jobs:
       - name: Bootstrap Miri
         run: cargo +nightly-2026-04-01 miri setup
 
-      - name: Run targeted UB-oriented tests
-        run: cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_router_protocol
+      - name: Run host-target UB-oriented tests
+        run: |
+          cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_router_protocol
+          MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_auth_codec
+          cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_protocol_core
+          cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_rtp_negotiation
+
+  # Keep the cross-target big-endian replay off pull requests because it needs
+  # extra toolchain setup
+  miri_big_endian:
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust nightly with Miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-01
+          components: miri
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-miri
+
+      - name: Bootstrap Miri
+        run: cargo +nightly-2026-04-01 miri setup
+
+      - name: Install big-endian Miri target
+        run: rustup target add --toolchain nightly-2026-04-01 s390x-unknown-linux-gnu
+
+      - name: Install s390x cross compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu
+
+      - name: Run focused big-endian UB-oriented tests
+        run: |
+          MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly-2026-04-01 miri test \
+            -p o-sfu-tests \
+            --target s390x-unknown-linux-gnu \
+            --test miri_auth_codec
+          cargo +nightly-2026-04-01 miri test \
+            -p o-sfu-tests \
+            --target s390x-unknown-linux-gnu \
+            --test miri_rtp_negotiation

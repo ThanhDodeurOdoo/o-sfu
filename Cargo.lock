@@ -1174,10 +1174,12 @@ dependencies = [
 name = "o-sfu-tests"
 version = "0.3.0"
 dependencies = [
+ "base64",
  "futures-util",
  "loom",
  "o-sfu",
  "o-sfu-protocol",
+ "o-sfu-rfc",
  "o-sfu-router",
  "o-sfu-telemetry",
  "reqwest 0.13.2",

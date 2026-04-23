@@ -13,10 +13,12 @@ loom-tests = ["dep:loom"]
 otel-tracing = ["o-sfu/otel-tracing"]
 
 [dependencies]
+base64.workspace = true
 futures-util.workspace = true
 loom = { version = "0.7.2", optional = true }
 o-sfu = { path = "..", default-features = false }
 o-sfu-protocol = { path = "../protocol" }
+o-sfu-rfc = { path = "../rfc" }
 o-sfu-router = { path = "../router" }
 o-sfu-telemetry = { path = "../telemetry" }
 reqwest = { version = "0.13", default-features = false, features = [
@@ -36,6 +38,18 @@ workspace = true
 [[test]]
 name = "miri_router_protocol"
 path = "miri/router_protocol.rs"
+
+[[test]]
+name = "miri_auth_codec"
+path = "miri/auth_codec.rs"
+
+[[test]]
+name = "miri_protocol_core"
+path = "miri/protocol_core.rs"
+
+[[test]]
+name = "miri_rtp_negotiation"
+path = "miri/rtp_negotiation.rs"
 
 [[test]]
 name = "loom_source_policy_coordination"

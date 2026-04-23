@@ -1,6 +1,6 @@
 pub mod config;
 mod runtime;
-#[doc(hidden)]
+#[doc(hidden)] // so we dont expose testing apis
 pub mod testing;
 pub use self::runtime::run;
 pub(crate) mod time;
