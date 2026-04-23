@@ -16,10 +16,15 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 - more observability (prometheus, open telemetry,...)
 - stronger guarantees (rust + formal proofs + fuzzing + UB tests + puppetter full stack tests)
 
-MISSING FEATURES [Odoo SFU](https://github.com/odoo/sfu):
+## Missing Features
+
+compared to [Odoo SFU](https://github.com/odoo/sfu):
+- Simulcast
 - Recording
-- Local sharding
-- Multi-server sharding
+
+additional features:
+- router sharding (local and multi server)
+
 
 Comments may be a bit lacking (although I added some for the most important parts in recent commits) because I don't want to write big comments when the code is still changing a lot (the code could get outdated and I forget to change the comments).
 
@@ -62,6 +67,9 @@ flowchart TD
   CB --> WS
   CB --> WRTC
 ```
+
+Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.
+
 ## Running the server and contributing
 
 See [CONTRIBUTING.md](../.github/CONTRIBUTING.md)
