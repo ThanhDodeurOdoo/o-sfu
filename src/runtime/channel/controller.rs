@@ -31,7 +31,7 @@ use crate::runtime::diagnostics::{
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::transport_adapter::{ObservabilityPort, TransportSessionKey};
-use crate::runtime::{ChannelRuntimeId, ConnectionId};
+use crate::runtime::{ChannelInstanceId, ConnectionId};
 
 use super::{
     definition::ChannelDefinition,
@@ -88,7 +88,7 @@ impl ChannelAdmissionPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChannelRuntimeContext {
-    pub(crate) runtime: ChannelRuntimeId,
+    pub(crate) instance: ChannelInstanceId,
     pub(crate) media_worker: usize,
     pub(crate) router: RouterId,
 }
@@ -190,7 +190,7 @@ impl Channel {
             ChannelDefinition::new(runtime_context, &runtime_policy, issuer, key, config);
         let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
         let recording_service = Arc::new(RecordingService::new(
-            definition.runtime_id(),
+            definition.instance_id(),
             recording_media_source,
             Arc::clone(&metrics),
         ));
@@ -339,8 +339,8 @@ impl Channel {
     }
 
     #[must_use]
-    pub(crate) fn runtime_id(&self) -> ChannelRuntimeId {
-        self.definition.runtime_id()
+    pub(crate) fn instance_id(&self) -> ChannelInstanceId {
+        self.definition.instance_id()
     }
 
     #[must_use]
@@ -408,7 +408,7 @@ impl fmt::Debug for Channel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Channel")
-            .field("runtime_id", &self.definition.runtime_id())
+            .field("instance_id", &self.definition.instance_id())
             .field("media_worker_id", &self.definition.media_worker_id())
             .field("uuid", &self.definition.uuid())
             .field("issuer", &self.definition.issuer())

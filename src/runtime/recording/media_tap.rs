@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::runtime::{
-    ChannelRuntimeId, rtc_adapter::ForwardedPacket, transport_adapter::TransportMediaId,
+    ChannelInstanceId, rtc_adapter::ForwardedPacket, transport_adapter::TransportMediaId,
 };
 
 use super::{MediaPacketSink, MediaSource};
@@ -34,20 +34,20 @@ where
     K: Eq + Hash,
     V: Clone,
 {
-    pub fn insert(&mut self, channel_runtime_id: K, sink: V) {
-        self.channels.insert(channel_runtime_id, sink);
+    pub fn insert(&mut self, channel_instance_id: K, sink: V) {
+        self.channels.insert(channel_instance_id, sink);
     }
 
-    pub fn remove(&mut self, channel_runtime_id: &K) -> bool {
-        self.channels.remove(channel_runtime_id).is_some()
+    pub fn remove(&mut self, channel_instance_id: &K) -> bool {
+        self.channels.remove(channel_instance_id).is_some()
     }
 
-    pub fn get(&self, channel_runtime_id: &K) -> Option<V> {
-        self.channels.get(channel_runtime_id).cloned()
+    pub fn get(&self, channel_instance_id: &K) -> Option<V> {
+        self.channels.get(channel_instance_id).cloned()
     }
 
-    pub fn contains_key(&self, channel_runtime_id: &K) -> bool {
-        self.channels.contains_key(channel_runtime_id)
+    pub fn contains_key(&self, channel_instance_id: &K) -> bool {
+        self.channels.contains_key(channel_instance_id)
     }
 
     #[must_use]
@@ -63,7 +63,7 @@ where
 
 pub(crate) struct MediaTap {
     any_active: AtomicBool,
-    active_channels: RwLock<ActiveChannelRegistry<ChannelRuntimeId, Arc<dyn MediaPacketSink>>>,
+    active_channels: RwLock<ActiveChannelRegistry<ChannelInstanceId, Arc<dyn MediaPacketSink>>>,
 }
 
 impl Default for MediaTap {
@@ -78,7 +78,7 @@ impl Default for MediaTap {
 impl MediaTap {
     pub(crate) fn sink_for_channel(
         &self,
-        channel_runtime_id: ChannelRuntimeId,
+        channel_instance_id: ChannelInstanceId,
     ) -> Option<Arc<dyn MediaPacketSink>> {
         if !self.any_active.load(Ordering::Acquire) {
             return None;
@@ -86,7 +86,7 @@ impl MediaTap {
         self.active_channels
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&channel_runtime_id)
+            .get(&channel_instance_id)
     }
 
     pub(crate) fn write_packet(
@@ -94,7 +94,7 @@ impl MediaTap {
         packet: &ForwardedPacket,
         transport_media_id: TransportMediaId,
     ) {
-        let Some(sink) = self.sink_for_channel(packet.source_session_key().channel_runtime_id())
+        let Some(sink) = self.sink_for_channel(packet.source_session_key().channel_instance_id())
         else {
             return;
         };
@@ -106,11 +106,11 @@ impl MediaTap {
         );
     }
 
-    pub(super) fn has_active_channel(&self, channel_runtime_id: ChannelRuntimeId) -> bool {
+    pub(super) fn has_active_channel(&self, channel_instance_id: ChannelInstanceId) -> bool {
         self.active_channels
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains_key(&channel_runtime_id)
+            .contains_key(&channel_instance_id)
     }
 
     fn active_channel_count(&self) -> usize {
@@ -124,22 +124,22 @@ impl MediaTap {
 impl MediaSource for MediaTap {
     fn activate_channel(
         &self,
-        channel_runtime_id: ChannelRuntimeId,
+        channel_instance_id: ChannelInstanceId,
         sink: Arc<dyn MediaPacketSink>,
     ) {
         self.active_channels
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(channel_runtime_id, sink);
+            .insert(channel_instance_id, sink);
         self.any_active.store(true, Ordering::Release);
     }
 
-    fn deactivate_channel(&self, channel_runtime_id: ChannelRuntimeId) {
+    fn deactivate_channel(&self, channel_instance_id: ChannelInstanceId) {
         let mut active_channels = self
             .active_channels
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        active_channels.remove(&channel_runtime_id);
+        active_channels.remove(&channel_instance_id);
         self.any_active
             .store(!active_channels.is_empty(), Ordering::Release);
     }

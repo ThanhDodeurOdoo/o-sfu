@@ -263,11 +263,11 @@ mod tests {
     use crate::runtime::transport_adapter::TransportSessionKey;
     use o_sfu_protocol::shared::SessionId;
 
-    fn session_key(channel_runtime_id: u64, session_numeric_id: i64) -> TransportSessionKey {
+    fn session_key(channel_instance_id: u64, session_numeric_id: i64) -> TransportSessionKey {
         test_transport_session_key(
             0,
             0,
-            channel_runtime_id,
+            channel_instance_id,
             SessionId::Integer(session_numeric_id),
         )
     }

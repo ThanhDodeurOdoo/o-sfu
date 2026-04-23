@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::Instant;
 
 use crate::runtime::{
-    ChannelRuntimeId,
+    ChannelInstanceId,
     recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
     rtc_adapter::{sample_forwarded_packet, test_support::test_transport_session_key},
     transport_adapter::{TransportMediaId, TransportSessionKey},
@@ -88,7 +88,7 @@ fn media_tap_routes_packets_only_for_active_channels() {
     );
 
     tap.activate_channel(
-        ChannelRuntimeId::from_raw(10),
+        ChannelInstanceId::from_raw(10),
         into_packet_sink(Arc::<CountingSink>::clone(&counting_sink)),
     );
     tap.write_packet(&active_packet, TransportMediaId::new(3));
@@ -103,20 +103,20 @@ fn media_tap_exposes_the_active_channel_sink_for_forwarding_destinations() {
     let sink = Arc::new(CountingSink::new());
 
     assert!(
-        tap.sink_for_channel(ChannelRuntimeId::from_raw(10))
+        tap.sink_for_channel(ChannelInstanceId::from_raw(10))
             .is_none()
     );
     tap.activate_channel(
-        ChannelRuntimeId::from_raw(10),
+        ChannelInstanceId::from_raw(10),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
     );
 
     assert!(
-        tap.sink_for_channel(ChannelRuntimeId::from_raw(10))
+        tap.sink_for_channel(ChannelInstanceId::from_raw(10))
             .is_some()
     );
     assert!(
-        tap.sink_for_channel(ChannelRuntimeId::from_raw(11))
+        tap.sink_for_channel(ChannelInstanceId::from_raw(11))
             .is_none()
     );
 }
@@ -138,11 +138,11 @@ fn media_tap_keeps_multiple_channels_active_at_once() {
     );
 
     tap.activate_channel(
-        ChannelRuntimeId::from_raw(10),
+        ChannelInstanceId::from_raw(10),
         into_packet_sink(Arc::<CountingSink>::clone(&first_sink)),
     );
     tap.activate_channel(
-        ChannelRuntimeId::from_raw(11),
+        ChannelInstanceId::from_raw(11),
         into_packet_sink(Arc::<CountingSink>::clone(&second_sink)),
     );
     tap.write_packet(&first_packet, TransportMediaId::new(3));
@@ -163,7 +163,7 @@ fn media_tap_records_forwarded_payload_bytes_through_the_shared_boundary() {
     );
 
     tap.activate_channel(
-        ChannelRuntimeId::from_raw(12),
+        ChannelInstanceId::from_raw(12),
         into_packet_sink(Arc::<PayloadCapturingSink>::clone(&sink)),
     );
     tap.write_packet(&packet, TransportMediaId::new(5));

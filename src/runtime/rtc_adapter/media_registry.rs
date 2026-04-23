@@ -10,7 +10,7 @@ use std::time::Instant;
 use str0m::media::Mid;
 use str0m::rtp::Ssrc;
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
@@ -266,15 +266,15 @@ impl RtcBootstrapState {
         self.route_control.active_speaker_sources(now)
     }
 
-    pub(super) fn expired_active_speaker_channel_runtime_ids(
+    pub(super) fn expired_active_speaker_channel_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId> {
+    ) -> BTreeSet<ChannelInstanceId> {
         self.route_control
             .expired_active_speaker_source_ids(now)
             .into_iter()
             .filter_map(|source_transport_media_id| {
-                self.source_channel_runtime_id(source_transport_media_id)
+                self.source_channel_instance_id(source_transport_media_id)
             })
             .collect()
     }
@@ -318,15 +318,15 @@ impl RtcBootstrapState {
             .copied()
     }
 
-    fn source_channel_runtime_id(
+    fn source_channel_instance_id(
         &self,
         source_transport_media_id: TransportMediaId,
-    ) -> Option<ChannelRuntimeId> {
+    ) -> Option<ChannelInstanceId> {
         self.media_handle(source_transport_media_id)
-            .map(|handle| handle.session_key().channel_runtime_id())
+            .map(|handle| handle.session_key().channel_instance_id())
             .or_else(|| {
                 self.remote_source_registration(source_transport_media_id)
-                    .map(|registration| registration.source_session_key().channel_runtime_id())
+                    .map(|registration| registration.source_session_key().channel_instance_id())
             })
     }
 
@@ -584,8 +584,8 @@ mod tests {
         );
 
         assert_eq!(
-            state.expired_active_speaker_channel_runtime_ids(start + Duration::from_millis(251)),
-            BTreeSet::from([first_session.channel_runtime_id()])
+            state.expired_active_speaker_channel_instance_ids(start + Duration::from_millis(251)),
+            BTreeSet::from([first_session.channel_instance_id()])
         );
     }
 }

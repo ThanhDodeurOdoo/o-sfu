@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::recording::{
     MediaPacketSink, MediaTap,
     test_support::{into_media_source, is_channel_active},
@@ -27,9 +27,9 @@ fn media_source_trait_object_can_activate_and_deactivate_channels() {
     let media_source = into_media_source(Arc::<MediaTap>::clone(&tap));
     let sink: Arc<dyn MediaPacketSink> = Arc::new(NoopSink);
 
-    media_source.activate_channel(ChannelRuntimeId::from_raw(7), sink);
-    assert!(is_channel_active(&tap, ChannelRuntimeId::from_raw(7)));
+    media_source.activate_channel(ChannelInstanceId::from_raw(7), sink);
+    assert!(is_channel_active(&tap, ChannelInstanceId::from_raw(7)));
 
-    media_source.deactivate_channel(ChannelRuntimeId::from_raw(7));
-    assert!(!is_channel_active(&tap, ChannelRuntimeId::from_raw(7)));
+    media_source.deactivate_channel(ChannelInstanceId::from_raw(7));
+    assert!(!is_channel_active(&tap, ChannelInstanceId::from_raw(7)));
 }

@@ -11,7 +11,7 @@ use super::types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
@@ -373,13 +373,13 @@ impl ObservabilityPort for RuntimeTransportAdapter {
         })
     }
 
-    async fn expired_active_speaker_channel_runtime_ids(
+    async fn expired_active_speaker_channel_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId> {
+    ) -> BTreeSet<ChannelInstanceId> {
         dispatch_transport_backend!(self, |backend| {
             backend
-                .expired_active_speaker_channel_runtime_ids(now)
+                .expired_active_speaker_channel_instance_ids(now)
                 .await
         })
     }

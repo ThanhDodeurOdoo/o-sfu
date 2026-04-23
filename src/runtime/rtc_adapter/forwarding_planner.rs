@@ -25,7 +25,7 @@ pub(super) fn populate_forward_routes(
         };
         if packet.visits_origin_sinks()
             && let Some(sink) =
-                media_tap.sink_for_channel(packet.source_session_key().channel_runtime_id())
+                media_tap.sink_for_channel(packet.source_session_key().channel_instance_id())
         {
             forwards.push(PacketForward::from_recording_sink(
                 packet_idx,
@@ -128,7 +128,7 @@ mod tests {
         test_support::test_transport_session_key,
     };
     use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-    use crate::runtime::{ChannelRuntimeId, ConnectionId};
+    use crate::runtime::{ChannelInstanceId, ConnectionId};
     use o_sfu_protocol::shared::SessionId;
 
     struct CountingSink {
@@ -158,13 +158,13 @@ mod tests {
     #[test]
     fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
         let producer_session = TransportSessionKey::new(
-            ChannelRuntimeId::from_raw(12),
+            ChannelInstanceId::from_raw(12),
             0,
             ConnectionId::from_raw(13),
             SessionId::Integer(14),
         );
         let consumer_session = TransportSessionKey::new(
-            ChannelRuntimeId::from_raw(12),
+            ChannelInstanceId::from_raw(12),
             0,
             ConnectionId::from_raw(13),
             SessionId::Integer(15),
@@ -257,7 +257,7 @@ mod tests {
             },
         );
         media_tap.activate_channel(
-            producer_session.channel_runtime_id(),
+            producer_session.channel_instance_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&sink)),
         );
         let pending_packets = vec![sample_forwarded_packet(
@@ -324,7 +324,7 @@ mod tests {
             },
         );
         media_tap.activate_channel(
-            producer_session.channel_runtime_id(),
+            producer_session.channel_instance_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
         relay_registry.activate_source_target(
@@ -414,7 +414,7 @@ mod tests {
             },
         );
         media_tap.activate_channel(
-            producer_session.channel_runtime_id(),
+            producer_session.channel_instance_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
         relay_registry.activate_source_target(
@@ -650,7 +650,7 @@ mod tests {
             PacketLayerGate::Rid("hi".into()),
         );
         media_tap.activate_channel(
-            gated_producer_session.channel_runtime_id(),
+            gated_producer_session.channel_instance_id(),
             into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
         );
         relay_registry.activate_source_target(

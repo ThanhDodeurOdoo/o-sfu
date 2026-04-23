@@ -10,7 +10,7 @@ use std::{
 
 use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId, TransportId};
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
@@ -120,7 +120,7 @@ struct RecordingServiceState {
 
 // TODO: needs documentation:
 pub(crate) struct RecordingService {
-    channel_runtime_id: ChannelRuntimeId,
+    channel_instance_id: ChannelInstanceId,
     media_source: Arc<dyn MediaSource>,
     lifecycle: Arc<AtomicU8>,
     sessions: Arc<Mutex<RecordingServiceState>>,
@@ -131,7 +131,7 @@ pub(crate) struct RecordingService {
 
 impl RecordingService {
     pub(crate) fn new(
-        channel_runtime_id: ChannelRuntimeId,
+        channel_instance_id: ChannelInstanceId,
         media_source: Arc<dyn MediaSource>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
@@ -142,7 +142,7 @@ impl RecordingService {
         let captured_packet_count = Arc::new(AtomicU64::new(0));
         let captured_streams = Arc::new(RwLock::new(BTreeSet::new()));
         Self {
-            channel_runtime_id,
+            channel_instance_id,
             media_source,
             lifecycle: Arc::clone(&lifecycle),
             sessions: Arc::clone(&sessions),
@@ -168,7 +168,7 @@ impl RecordingService {
             &self.packet_collector,
         ));
         self.media_source
-            .activate_channel(self.channel_runtime_id, sink);
+            .activate_channel(self.channel_instance_id, sink);
         self.lifecycle.store(
             RecordingLifecycleState::Recording.as_u8(),
             Ordering::Release,
@@ -184,7 +184,7 @@ impl RecordingService {
             RecordingAction::Stop,
         )?;
         self.media_source
-            .deactivate_channel(self.channel_runtime_id);
+            .deactivate_channel(self.channel_instance_id);
         self.lifecycle.store(
             RecordingLifecycleState::Finalizing.as_u8(),
             Ordering::Release,
@@ -313,7 +313,7 @@ impl fmt::Debug for RecordingRouterObserver {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RecordingRouterObserver")
-            .field("channel_runtime_id", &self.service.channel_runtime_id)
+            .field("channel_instance_id", &self.service.channel_instance_id)
             .finish()
     }
 }
@@ -322,7 +322,7 @@ impl fmt::Debug for RecordingService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RecordingService")
-            .field("channel_runtime_id", &self.channel_runtime_id)
+            .field("channel_instance_id", &self.channel_instance_id)
             .field("snapshot", &self.snapshot())
             .finish_non_exhaustive()
     }

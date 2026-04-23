@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use std::collections::BTreeSet;
 use std::time::Instant;
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
 };
@@ -177,9 +177,9 @@ pub(super) enum RtcWorkerCommand {
     NextActiveSpeakerDeadline {
         response: RtcWorkerResponse<Option<Instant>>,
     },
-    ExpiredActiveSpeakerChannelRuntimeIds {
+    ExpiredActiveSpeakerChannelInstanceIds {
         now: Instant,
-        response: RtcWorkerResponse<BTreeSet<ChannelRuntimeId>>,
+        response: RtcWorkerResponse<BTreeSet<ChannelInstanceId>>,
     },
     ApplySessionAnswer {
         session_key: TransportSessionKey,

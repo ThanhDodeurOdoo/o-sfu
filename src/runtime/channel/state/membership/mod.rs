@@ -444,7 +444,7 @@ mod tests {
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
     use crate::runtime::transport_adapter::TransportMediaId;
-    use crate::runtime::{ChannelRuntimeId, ConnectionId};
+    use crate::runtime::{ChannelInstanceId, ConnectionId};
     use o_sfu_protocol::shared::{SessionPermissions, StreamType};
     use o_sfu_router::MediaKind;
 
@@ -455,7 +455,7 @@ mod tests {
             ChannelAdmissionPolicy::new(4),
             router_rtp_capabilities(MediaCodecFlags::default()),
             Arc::new(RecordingService::new(
-                ChannelRuntimeId::from_raw(0),
+                ChannelInstanceId::from_raw(0),
                 media_source,
                 Arc::new(RuntimeMetrics::default()),
             )),

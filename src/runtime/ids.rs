@@ -29,14 +29,14 @@ impl Display for ConnectionId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ChannelRuntimeId(u64);
+pub(crate) struct ChannelInstanceId(u64);
 
-impl ChannelRuntimeId {
+impl ChannelInstanceId {
     #[must_use]
-    pub(crate) fn allocate(next_channel_runtime_id: &mut u64) -> Self {
-        let channel_runtime_id = Self(*next_channel_runtime_id);
-        *next_channel_runtime_id = next_channel_runtime_id.saturating_add(1);
-        channel_runtime_id
+    pub(crate) fn allocate(next_channel_instance_id: &mut u64) -> Self {
+        let channel_instance_id = Self(*next_channel_instance_id);
+        *next_channel_instance_id = next_channel_instance_id.saturating_add(1);
+        channel_instance_id
     }
 
     #[must_use]
@@ -50,7 +50,7 @@ impl ChannelRuntimeId {
     }
 }
 
-impl Display for ChannelRuntimeId {
+impl Display for ChannelInstanceId {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }

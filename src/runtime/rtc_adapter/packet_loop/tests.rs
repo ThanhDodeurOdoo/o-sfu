@@ -312,7 +312,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     let metrics = RuntimeMetrics::default();
 
     media_tap.activate_channel(
-        producer_session.channel_runtime_id(),
+        producer_session.channel_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
     );
     buffers.pending_packets.push(sample_forwarded_packet(

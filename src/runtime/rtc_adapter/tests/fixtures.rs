@@ -38,21 +38,21 @@ pub(super) use crate::{
 pub(super) use o_sfu_protocol::shared::SessionId;
 
 pub(super) fn transport_key(
-    channel_runtime_id: u64,
+    channel_instance_id: u64,
     connection_id: u64,
     session_id: SessionId,
 ) -> TransportSessionKey {
-    transport_key_on_worker(channel_runtime_id, 0, connection_id, session_id)
+    transport_key_on_worker(channel_instance_id, 0, connection_id, session_id)
 }
 
 pub(super) fn transport_key_on_worker(
-    channel_runtime_id: u64,
+    channel_instance_id: u64,
     media_worker_id: usize,
     connection_id: u64,
     session_id: SessionId,
 ) -> TransportSessionKey {
     test_transport_session_key(
-        channel_runtime_id,
+        channel_instance_id,
         media_worker_id,
         connection_id,
         session_id,

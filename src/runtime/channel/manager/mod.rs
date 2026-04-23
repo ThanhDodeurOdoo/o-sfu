@@ -1,3 +1,10 @@
+//! Process-global channel lookup and per-channel lifecycle serialization.
+//!
+//! This module owns the boundary between "find or create the right room" and
+//! "run one room-level mutation at a time". It keeps the directory keyed by
+//! issuer, UUID, and instance id, and it re-checks pointer identity after
+//! taking each room's lifecycle lock so stale directory handles become no-ops.
+
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
@@ -15,12 +22,15 @@ use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
 use crate::runtime::telemetry::schema::event as telemetry_event;
 use crate::runtime::transport_adapter::{MediaPort, ObservabilityPort, RuntimeTransportAdapter};
-use crate::runtime::{ChannelRuntimeId, ConnectionId};
+use crate::runtime::{ChannelInstanceId, ConnectionId};
 use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 
 #[cfg(test)]
 mod test_support;
 
+/// Runtime-wide params
+///
+/// stay fixed for the manager lifetime
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelManagerConfig {
     pub(crate) media_worker_count: usize,
@@ -37,6 +47,10 @@ impl ChannelManagerConfig {
     }
 }
 
+/// Observability view for one live channel
+///
+/// This merge immutable directory metadata with the current per-channel
+/// session stats gathered from the observability port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeChannelStatsSnapshot {
     pub(crate) create_date: String,
@@ -46,6 +60,11 @@ pub(crate) struct RuntimeChannelStatsSnapshot {
     pub(crate) web_rtc_enabled: bool,
 }
 
+/// Prevalidated join input handed from signaling into the runtime channel layer.
+///
+/// Bundling these fields keeps the join entrypoint stable as session admission
+/// data grows and makes it explicit that the outbound sender belongs to the
+/// requested session lifecycle
 pub(crate) struct JoinSessionRequest {
     pub(crate) session_id: SessionId,
     pub(crate) label: Option<String>,
@@ -53,6 +72,10 @@ pub(crate) struct JoinSessionRequest {
     pub(crate) sender: mpsc::UnboundedSender<SessionOutbound>,
 }
 
+/// Read-only directory snapshot for runtime-facing listing and inspection
+///
+/// The snapshot keeps an `Arc<Channel>` so callers can inspect live room state
+/// after listing metadata without accesing back into the directory.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeChannelDirectorySnapshot {
     channel: Arc<Channel>,
@@ -77,13 +100,13 @@ impl RuntimeChannelDirectorySnapshot {
     }
 }
 
-/// global owner of live channels keyed by issuer and UUID.
+/// Process-global owner of live channels keyed by issuer and UUID.
 ///
-/// `ChannelManager` keeps channel creation idempotent by issuer and centralizes per-room
-/// lifecycle serialization so concurrent HTTP and WebSocket tasks cannot overlap join,
-/// leave, disconnect, and empty-room cleanup on the same channel. Runtime entrypoints
-/// should go through this type instead of cordinating room lookup and teardown
-/// themselve
+/// `ChannelManager` keeps channel creation idepotent by issuer and centralises
+/// room-level lifecycle serialization so concurrent HTTP and WebSocket tasks
+/// cannot overlap join, leave, disconnect and empty-room cleanup on the same
+/// channel. Runtime entrypoints should go through this type instead of
+/// coordonating directory lookup and teardown themselves
 #[derive(Debug)]
 pub struct ChannelManager {
     directory: RwLock<ChannelDirectory>,
@@ -115,9 +138,11 @@ impl ChannelManager {
         }
     }
 
-    /// Serve the channel for the given issuer, creating it on first request.
-    /// Channel creation remains idempotent by issuer so repeated requests keep
-    /// the existing runtime placement and metadata entry.
+    /// Returns the live channel for `issuer`, creating it on first request.
+    ///
+    /// Creation is idempotent by issuer, so repeated calls keep the existing
+    /// runtime placement and directory metadata for the room lifetime. Later
+    /// calls do not replace the original channel definition.
     pub async fn serve_channel(
         &self,
         issuer: &str,
@@ -142,7 +167,7 @@ impl ChannelManager {
         drop(directory);
         self.metrics.add_active_channels(1);
         self.diagnostics
-            .register_channel_runtime(channel.runtime_id(), channel.uuid());
+            .register_channel_instance(channel.instance_id(), channel.uuid());
         self.diagnostics.record(
             DiagnosticsEventData::for_channel(channel.uuid(), telemetry_event::CHANNEL_CREATED)
                 .with_media_worker_id(channel.media_worker_id())
@@ -152,11 +177,17 @@ impl ChannelManager {
         channel
     }
 
+    /// Returns the current live channel for a UUID without taking its lifecycle
+    /// lock.
     pub async fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Channel>> {
         let directory = self.directory.read().await;
         directory.get_by_uuid(uuid)
     }
 
+    /// Collects live observability snapshots for every channel in the directory.
+    ///
+    /// This first snapshots the directory, then queries each channel, so the
+    /// result is best-effort, not like one atomic process-wide instant.
     pub async fn stats_snapshots(
         &self,
         observability_port: &impl ObservabilityPort,
@@ -193,17 +224,22 @@ impl ChannelManager {
         })
     }
 
+    /// Re-applies source packet selection policy for the targeted channel instances.
+    ///
+    /// Missing or already-removed instance ids are skipped. Active-speaker data
+    /// is fetched once per call so every targeted channel reacts to the same
+    /// observability snapshot.
     pub(crate) async fn sync_source_packet_selection_policies_for_runtime_ids(
         &self,
-        channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
+        channel_instance_ids: &BTreeSet<ChannelInstanceId>,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) {
-        if channel_runtime_ids.is_empty() {
+        if channel_instance_ids.is_empty() {
             return;
         }
         let channels = self
-            .directory_entries_for_runtime_ids(channel_runtime_ids)
+            .directory_entries_for_instance_ids(channel_instance_ids)
             .await;
         if channels.is_empty() {
             return;
@@ -219,6 +255,11 @@ impl ChannelManager {
         }
     }
 
+    /// Joins a session through the current live channel entry for `channel_uuid`.
+    ///
+    /// The join runs under the room lifecycle lock so it cannot overlap another
+    /// room-level mutation. On success this returns the locked channel and its
+    /// new runtime connection id.
     pub async fn join_session(
         &self,
         channel_uuid: &str,
@@ -262,6 +303,9 @@ impl ChannelManager {
         Ok((channel, connection_id))
     }
 
+    /// Closes one runtime connection if the channel is still current.
+    ///
+    /// Returns `true` only when an active session was removed.
     pub async fn close_session(
         &self,
         channel_uuid: &str,
@@ -298,6 +342,10 @@ impl ChannelManager {
         did_remove_active_session
     }
 
+    /// Disconnects a batch of sessions under one lifecycle lock acquisition.
+    ///
+    /// This is the bulk teardown path for room-level disconnects. The directory
+    /// entry is removed afterward if the batch leaves the room empty.
     pub async fn disconnect_sessions(
         &self,
         channel_uuid: &str,
@@ -327,6 +375,12 @@ impl ChannelManager {
         .await;
     }
 
+    /// Runs `action` under the current entry's lifecycle lock.
+    ///
+    /// The helper snapshots the directory entry before locking, then checks
+    /// again after the lock is acquired that the same `Arc<Channel>` is still
+    /// the current directory entry. That turns stale handles into `None`
+    /// instead of mutating a room that has already been removed or replaced.
     pub(super) async fn with_current_channel<T, F, Fut>(
         &self,
         channel_uuid: &str,
@@ -375,14 +429,14 @@ impl ChannelManager {
         directory.entries()
     }
 
-    async fn directory_entries_for_runtime_ids(
+    async fn directory_entries_for_instance_ids(
         &self,
-        channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
+        channel_instance_ids: &BTreeSet<ChannelInstanceId>,
     ) -> Vec<Arc<Channel>> {
         let directory = self.directory.read().await;
-        channel_runtime_ids
+        channel_instance_ids
             .iter()
-            .filter_map(|channel_runtime_id| directory.entry_by_runtime_id(*channel_runtime_id))
+            .filter_map(|channel_instance_id| directory.entry_by_instance_id(*channel_instance_id))
             .map(|entry| entry.channel())
             .collect()
     }

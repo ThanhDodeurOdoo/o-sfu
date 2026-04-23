@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use o_sfu_router::RouterId;
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::diagnostics::DiagnosticsStore;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::MediaTap;
@@ -29,7 +29,7 @@ impl ChannelCreationIntent {
 
 #[derive(Debug)]
 struct ChannelRuntimeAllocator {
-    next_channel_runtime_id: u64,
+    next_channel_instance_id: u64,
     next_router_id: u64,
 }
 
@@ -59,7 +59,7 @@ impl ChannelFactory {
             recording_media_tap,
             metrics,
             allocator: Mutex::new(ChannelRuntimeAllocator {
-                next_channel_runtime_id: 0,
+                next_channel_instance_id: 0,
                 next_router_id: 0,
             }),
         }
@@ -81,27 +81,30 @@ impl ChannelFactory {
     }
 
     fn allocate_runtime_context(&self) -> ChannelRuntimeContext {
-        let (channel_runtime_id, router_id) = {
+        let (channel_instance_id, router_id) = {
             let mut allocator = self
                 .allocator
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            let channel_runtime_id =
-                ChannelRuntimeId::allocate(&mut allocator.next_channel_runtime_id);
+            let channel_instance_id =
+                ChannelInstanceId::allocate(&mut allocator.next_channel_instance_id);
             let router_id = RouterId(allocator.next_router_id);
             allocator.next_router_id = allocator.next_router_id.saturating_add(1);
             drop(allocator);
-            (channel_runtime_id, router_id)
+            (channel_instance_id, router_id)
         };
         ChannelRuntimeContext {
-            runtime: channel_runtime_id,
-            media_worker: self.media_worker_id_for_channel_runtime(channel_runtime_id),
+            instance: channel_instance_id,
+            media_worker: self.media_worker_id_for_channel_instance(channel_instance_id),
             router: router_id,
         }
     }
 
-    fn media_worker_id_for_channel_runtime(&self, channel_runtime_id: ChannelRuntimeId) -> usize {
+    fn media_worker_id_for_channel_instance(
+        &self,
+        channel_instance_id: ChannelInstanceId,
+    ) -> usize {
         let media_worker_count_u64 = u64::try_from(self.media_worker_count).unwrap_or(1);
-        usize::try_from(channel_runtime_id.as_u64() % media_worker_count_u64).unwrap_or(0)
+        usize::try_from(channel_instance_id.as_u64() % media_worker_count_u64).unwrap_or(0)
     }
 }

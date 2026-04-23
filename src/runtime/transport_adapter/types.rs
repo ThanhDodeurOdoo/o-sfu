@@ -3,17 +3,17 @@ use std::{sync::Arc, time::Instant};
 use o_sfu_protocol::shared::SessionId;
 use thiserror::Error;
 
-use crate::runtime::{ChannelRuntimeId, ConnectionId};
+use crate::runtime::{ChannelInstanceId, ConnectionId};
 
 /// Channel-scoped transport-adapter session identity.
 ///
 /// A `SessionId` alone is not unique across the server: the same id can appear
 /// in different channels simultaneously. This composite key allows one session
-/// to be uniquely identified by the owning channel runtime, media worker,
+/// to be uniquely identified by the owning channel instance, media worker,
 /// signaling connection, and session id.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransportSessionKey {
-    channel_runtime: ChannelRuntimeId,
+    channel_instance: ChannelInstanceId,
     media_worker: usize,
     connection: ConnectionId,
     session: Arc<SessionId>,
@@ -22,13 +22,13 @@ pub struct TransportSessionKey {
 impl TransportSessionKey {
     #[must_use]
     pub(crate) fn new(
-        channel_runtime_id: ChannelRuntimeId,
+        channel_instance_id: ChannelInstanceId,
         media_worker_id: usize,
         connection_id: ConnectionId,
         session_id: SessionId,
     ) -> Self {
         Self {
-            channel_runtime: channel_runtime_id,
+            channel_instance: channel_instance_id,
             media_worker: media_worker_id,
             connection: connection_id,
             session: Arc::new(session_id),
@@ -36,8 +36,8 @@ impl TransportSessionKey {
     }
 
     #[must_use]
-    pub(crate) const fn channel_runtime_id(&self) -> ChannelRuntimeId {
-        self.channel_runtime
+    pub(crate) const fn channel_instance_id(&self) -> ChannelInstanceId {
+        self.channel_instance
     }
 
     #[must_use]

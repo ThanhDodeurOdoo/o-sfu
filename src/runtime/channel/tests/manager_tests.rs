@@ -461,7 +461,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
 
     manager
         .sync_source_packet_selection_policies_for_runtime_ids(
-            &BTreeSet::from([channel.runtime_id()]),
+            &BTreeSet::from([channel.instance_id()]),
             &transport_adapter,
             &transport_adapter,
         )

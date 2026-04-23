@@ -15,7 +15,7 @@ use super::RuntimeTransportAdapter;
 use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
-        ChannelRuntimeId, ConnectionId,
+        ChannelInstanceId, ConnectionId,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -33,13 +33,13 @@ use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
 fn test_session_key(
-    channel_runtime_id: u64,
+    channel_instance_id: u64,
     media_worker_id: usize,
     connection_id: u64,
     session_id: SessionId,
 ) -> TransportSessionKey {
     TransportSessionKey::new(
-        ChannelRuntimeId::from_raw(channel_runtime_id),
+        ChannelInstanceId::from_raw(channel_instance_id),
         media_worker_id,
         ConnectionId::from_raw(connection_id),
         session_id,
@@ -292,7 +292,7 @@ async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
     let updated_runtime_ids = updated_runtime_ids.into_iter().collect::<BTreeSet<_>>();
     assert_eq!(
         updated_runtime_ids,
-        BTreeSet::from([session_key.channel_runtime_id()])
+        BTreeSet::from([session_key.channel_instance_id()])
     );
 
     let active_speakers = observe_active_speakers(&adapter).await;
@@ -417,14 +417,14 @@ async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updat
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
     let subscription = adapter.source_policy_subscription();
-    let dirty_channel_runtime_id = ChannelRuntimeId::from_raw(27);
+    let dirty_channel_instance_id = ChannelInstanceId::from_raw(27);
 
-    fake.mark_source_policy_dirty(dirty_channel_runtime_id);
+    fake.mark_source_policy_dirty(dirty_channel_instance_id);
 
     let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
     assert_eq!(
         updates.ok(),
-        Some(BTreeSet::from([dirty_channel_runtime_id]))
+        Some(BTreeSet::from([dirty_channel_instance_id]))
     );
 }
 

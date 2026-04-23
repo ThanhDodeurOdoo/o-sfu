@@ -6,7 +6,7 @@ use o_sfu_router::{
 
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::runtime::{
-    ChannelRuntimeId,
+    ChannelInstanceId,
     metrics::RuntimeMetrics,
     recording::{
         MediaSource, MediaTap, RecordingService,
@@ -24,7 +24,7 @@ fn recording_service_counts_packets_without_recounting_streams() {
     let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
     let metrics = Arc::new(RuntimeMetrics::default());
     let service = RecordingService::new(
-        ChannelRuntimeId::from_raw(30),
+        ChannelInstanceId::from_raw(30),
         media_source,
         Arc::clone(&metrics),
     );
@@ -58,7 +58,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
     let media_tap = Arc::new(MediaTap::default());
     let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
     let service = RecordingService::new(
-        ChannelRuntimeId::from_raw(17),
+        ChannelInstanceId::from_raw(17),
         media_source,
         Arc::new(RuntimeMetrics::default()),
     );
@@ -71,7 +71,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
     );
     assert!(is_channel_active(
         &media_tap,
-        ChannelRuntimeId::from_raw(17)
+        ChannelInstanceId::from_raw(17)
     ));
 
     let invalid_start = service.start();
@@ -85,7 +85,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
     assert!(!is_channel_active(
         &media_tap,
-        ChannelRuntimeId::from_raw(17)
+        ChannelInstanceId::from_raw(17)
     ));
 }
 
@@ -93,7 +93,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
 fn recording_service_tracks_router_observer_inventory() {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
     let service = RecordingService::new(
-        ChannelRuntimeId::from_raw(22),
+        ChannelInstanceId::from_raw(22),
         media_source,
         Arc::new(RuntimeMetrics::default()),
     );

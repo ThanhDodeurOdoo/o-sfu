@@ -18,7 +18,7 @@ use tokio::time::sleep;
 
 use super::source_policy::SourcePolicySignal;
 #[cfg(test)]
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 
@@ -164,13 +164,13 @@ impl FakeWebRtcAdapter {
 
     #[cfg(test)]
     pub(crate) fn set_active_speaker_source_snapshot(&self, sources: Vec<ActiveSpeakerSource>) {
-        let dirty_channel_runtime_ids = match self.media_owners.lock() {
+        let dirty_channel_instance_ids = match self.media_owners.lock() {
             Ok(media_owners) => sources
                 .iter()
                 .filter_map(|source| {
                     media_owners
                         .get(&source.transport_media_id())
-                        .map(TransportSessionKey::channel_runtime_id)
+                        .map(TransportSessionKey::channel_instance_id)
                 })
                 .collect::<Vec<_>>(),
             Err(poisoned) => poisoned
@@ -180,7 +180,7 @@ impl FakeWebRtcAdapter {
                     sources
                         .iter()
                         .any(|source| source.transport_media_id() == *transport_media_id)
-                        .then_some(session_key.channel_runtime_id())
+                        .then_some(session_key.channel_instance_id())
                 })
                 .collect::<Vec<_>>(),
         };
@@ -192,14 +192,14 @@ impl FakeWebRtcAdapter {
                 *poisoned.into_inner() = sources;
             }
         }
-        for channel_runtime_id in dirty_channel_runtime_ids {
-            self.source_policy_signal.mark_dirty(channel_runtime_id);
+        for channel_instance_id in dirty_channel_instance_ids {
+            self.source_policy_signal.mark_dirty(channel_instance_id);
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn mark_source_policy_dirty(&self, channel_runtime_id: ChannelRuntimeId) {
-        self.source_policy_signal.mark_dirty(channel_runtime_id);
+    pub(crate) fn mark_source_policy_dirty(&self, channel_instance_id: ChannelInstanceId) {
+        self.source_policy_signal.mark_dirty(channel_instance_id);
     }
 }
 

@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 
 use super::types::DiagnosticsEvent;
 use o_sfu_protocol::shared::SessionId;
@@ -30,7 +30,7 @@ struct SessionScopeKey {
 
 #[derive(Debug, Default)]
 struct DiagnosticsStoreState {
-    channel_uuid_by_runtime_id: BTreeMap<ChannelRuntimeId, String>,
+    channel_uuid_by_instance_id: BTreeMap<ChannelInstanceId, String>,
     global_recent_events: VecDeque<DiagnosticsEvent>,
     channel_recent_events: BTreeMap<String, VecDeque<DiagnosticsEvent>>,
     session_recent_events: BTreeMap<SessionScopeKey, VecDeque<DiagnosticsEvent>>,
@@ -106,15 +106,15 @@ impl DiagnosticsEventData {
 }
 
 impl DiagnosticsStore {
-    pub(crate) fn register_channel_runtime(
+    pub(crate) fn register_channel_instance(
         &self,
-        channel_runtime_id: ChannelRuntimeId,
+        channel_instance_id: ChannelInstanceId,
         channel_uuid: &str,
     ) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
-            .channel_uuid_by_runtime_id
-            .insert(channel_runtime_id, channel_uuid.to_owned());
+            .channel_uuid_by_instance_id
+            .insert(channel_instance_id, channel_uuid.to_owned());
     }
 
     pub(crate) fn record(&self, data: DiagnosticsEventData) {
@@ -160,7 +160,7 @@ impl DiagnosticsStore {
     pub(crate) fn forget_channel(&self, channel_uuid: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
-            .channel_uuid_by_runtime_id
+            .channel_uuid_by_instance_id
             .retain(|_, known_channel_uuid| known_channel_uuid != channel_uuid);
         state.channel_recent_events.remove(channel_uuid);
         state
@@ -206,7 +206,7 @@ impl DiagnosticsStore {
 
     pub(crate) fn record_transport_session_event(
         &self,
-        channel_runtime_id: ChannelRuntimeId,
+        channel_instance_id: ChannelInstanceId,
         session_id: &SessionId,
         event: &'static str,
         media_worker_id: usize,
@@ -215,8 +215,8 @@ impl DiagnosticsStore {
         let channel_uuid = {
             let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state
-                .channel_uuid_by_runtime_id
-                .get(&channel_runtime_id)
+                .channel_uuid_by_instance_id
+                .get(&channel_instance_id)
                 .cloned()
         };
         let Some(channel_uuid) = channel_uuid else {
@@ -256,7 +256,7 @@ mod tests {
     use serde_json::{Map, Value};
 
     use super::{DiagnosticsEventData, DiagnosticsStore, GLOBAL_RECENT_EVENT_LIMIT};
-    use crate::runtime::ChannelRuntimeId;
+    use crate::runtime::ChannelInstanceId;
     use o_sfu_protocol::shared::SessionId;
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         fields.insert(String::from("state"), Value::from("connected"));
 
         store.record_transport_session_event(
-            ChannelRuntimeId::from_raw(12),
+            ChannelInstanceId::from_raw(12),
             &session_id,
             "transport.health_changed",
             2,
@@ -328,11 +328,11 @@ mod tests {
         );
         assert!(store.global_recent_events().is_empty());
 
-        store.register_channel_runtime(ChannelRuntimeId::from_raw(12), "channel-a");
+        store.register_channel_instance(ChannelInstanceId::from_raw(12), "channel-a");
         let mut fields = Map::new();
         fields.insert(String::from("state"), Value::from("connected"));
         store.record_transport_session_event(
-            ChannelRuntimeId::from_raw(12),
+            ChannelInstanceId::from_raw(12),
             &session_id,
             "transport.health_changed",
             2,

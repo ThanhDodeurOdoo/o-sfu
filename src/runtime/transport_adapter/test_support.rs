@@ -16,7 +16,7 @@ use super::types::{
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{SessionOffer, SourcePacketGate, TransportAdapterError};
 #[cfg(any(test, feature = "testing-transport"))]
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 #[cfg(test)]
@@ -203,10 +203,10 @@ impl ObservabilityPort for FakeWebRtcAdapter {
         None
     }
 
-    async fn expired_active_speaker_channel_runtime_ids(
+    async fn expired_active_speaker_channel_instance_ids(
         &self,
         _now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId> {
+    ) -> BTreeSet<ChannelInstanceId> {
         BTreeSet::new()
     }
 

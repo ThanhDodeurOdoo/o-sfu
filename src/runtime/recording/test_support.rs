@@ -4,14 +4,14 @@ pub(crate) use super::ortp_format::{OrtpCodec, OrtpFrameHeader};
 pub(crate) use super::service::RecordingLifecycleState;
 pub(crate) use super::stream_writer::StreamWriter;
 use super::{MediaTap, service::RecordingTransitionError};
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 
 #[must_use]
 pub(crate) fn is_channel_active(
     media_tap: &MediaTap,
-    channel_runtime_id: ChannelRuntimeId,
+    channel_instance_id: ChannelInstanceId,
 ) -> bool {
-    media_tap.has_active_channel(channel_runtime_id)
+    media_tap.has_active_channel(channel_instance_id)
 }
 
 #[must_use]

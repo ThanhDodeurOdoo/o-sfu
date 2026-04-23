@@ -29,7 +29,7 @@ use crate::runtime::test_rtp_samples::{
     sample_client_rtp_capabilities, sample_video_rtp_parameters,
 };
 use crate::runtime::transport_adapter::TransportMediaId;
-use crate::runtime::{ChannelRuntimeId, ConnectionId};
+use crate::runtime::{ChannelInstanceId, ConnectionId};
 use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
 
 fn test_state() -> ChannelState {
@@ -39,7 +39,7 @@ fn test_state() -> ChannelState {
         ChannelAdmissionPolicy::new(4),
         router_rtp_capabilities(MediaCodecFlags::default()),
         Arc::new(RecordingService::new(
-            ChannelRuntimeId::from_raw(0),
+            ChannelInstanceId::from_raw(0),
             media_source,
             Arc::new(RuntimeMetrics::default()),
         )),

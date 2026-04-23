@@ -68,7 +68,7 @@ pub(super) fn observe_rtc_event(
     fields.insert(String::from("from"), maybe_health_json_value(previous));
     fields.insert(String::from("to"), health_json_value(health));
     diagnostics.record_transport_session_event(
-        session_key.channel_runtime_id(),
+        session_key.channel_instance_id(),
         session_key.session_id(),
         schema::event::TRANSPORT_HEALTH_CHANGED,
         session_key.media_worker_id(),

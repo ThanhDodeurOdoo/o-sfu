@@ -7,7 +7,7 @@ use super::types::{
     ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
@@ -122,7 +122,7 @@ impl MediaPort for RtcTransportAdapterShardSet {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        ensure_same_channel_runtime(consumer_session_key, source_session_key)?;
+        ensure_same_channel_instance(consumer_session_key, source_session_key)?;
         let relay_route = self.relay_registration_shards(consumer_session_key, source_session_key);
         let remote_source_control = relay_route
             .as_ref()
@@ -185,7 +185,7 @@ impl MediaPort for RtcTransportAdapterShardSet {
         source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        ensure_same_channel_runtime(consumer_session_key, source_session_key)?;
+        ensure_same_channel_instance(consumer_session_key, source_session_key)?;
         self.shard_for_session(consumer_session_key)
             .media()
             .set_consumer_active(
@@ -205,7 +205,7 @@ impl MediaPort for RtcTransportAdapterShardSet {
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        ensure_same_channel_runtime(consumer_session_key, source_session_key)?;
+        ensure_same_channel_instance(consumer_session_key, source_session_key)?;
         self.shard_for_session(consumer_session_key)
             .media()
             .request_consumer_keyframe(
@@ -259,11 +259,11 @@ impl ObservabilityPort for RtcTransportAdapterShardSet {
         Self::next_active_speaker_deadline(self).await
     }
 
-    async fn expired_active_speaker_channel_runtime_ids(
+    async fn expired_active_speaker_channel_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId> {
-        Self::expired_active_speaker_channel_runtime_ids(self, now).await
+    ) -> BTreeSet<ChannelInstanceId> {
+        Self::expired_active_speaker_channel_instance_ids(self, now).await
     }
 
     fn session_transport_health(
@@ -282,11 +282,11 @@ impl SourcePolicyPort for RtcTransportAdapterShardSet {
     }
 }
 
-fn ensure_same_channel_runtime(
+fn ensure_same_channel_instance(
     consumer_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
 ) -> Result<(), TransportAdapterError> {
-    if consumer_session_key.channel_runtime_id() == source_session_key.channel_runtime_id() {
+    if consumer_session_key.channel_instance_id() == source_session_key.channel_instance_id() {
         return Ok(());
     }
     Err(TransportAdapterError::InvalidInput)

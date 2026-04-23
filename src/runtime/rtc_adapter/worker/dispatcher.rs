@@ -13,7 +13,7 @@ use std::{
 };
 
 use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportAdapterError};
 use tokio::sync::oneshot;
@@ -58,7 +58,7 @@ pub(crate) fn handle_worker_command(
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
         | RtcWorkerCommand::NextActiveSpeakerDeadline { .. }
-        | RtcWorkerCommand::ExpiredActiveSpeakerChannelRuntimeIds { .. }
+        | RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
             handle_negotiation_command(state, context, command);
@@ -153,8 +153,8 @@ fn handle_negotiation_command(
         RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
             respond_next_active_speaker_deadline(state, response);
         }
-        RtcWorkerCommand::ExpiredActiveSpeakerChannelRuntimeIds { now, response } => {
-            respond_expired_active_speaker_channel_runtime_ids(state, now, response);
+        RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { now, response } => {
+            respond_expired_active_speaker_channel_instance_ids(state, now, response);
         }
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
@@ -193,13 +193,13 @@ fn respond_next_active_speaker_deadline(
     let _ = response.send(Ok(deadline));
 }
 
-fn respond_expired_active_speaker_channel_runtime_ids(
+fn respond_expired_active_speaker_channel_instance_ids(
     state: &RtcBootstrapState,
     now: Instant,
-    response: oneshot::Sender<Result<BTreeSet<ChannelRuntimeId>, TransportAdapterError>>,
+    response: oneshot::Sender<Result<BTreeSet<ChannelInstanceId>, TransportAdapterError>>,
 ) {
-    let channel_runtime_ids = state.expired_active_speaker_channel_runtime_ids(now);
-    let _ = response.send(Ok(channel_runtime_ids));
+    let channel_instance_ids = state.expired_active_speaker_channel_instance_ids(now);
+    let _ = response.send(Ok(channel_instance_ids));
 }
 
 fn handle_media_command(

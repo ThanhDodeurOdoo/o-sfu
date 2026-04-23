@@ -26,7 +26,7 @@ use std::{
     time::Instant,
 };
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
 };
@@ -216,12 +216,12 @@ impl RtcTransportAdapter {
         self.observability().next_active_speaker_deadline().await
     }
 
-    pub(crate) async fn expired_active_speaker_channel_runtime_ids(
+    pub(crate) async fn expired_active_speaker_channel_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId> {
+    ) -> BTreeSet<ChannelInstanceId> {
         self.observability()
-            .expired_active_speaker_channel_runtime_ids(now)
+            .expired_active_speaker_channel_instance_ids(now)
             .await
     }
 }
@@ -274,16 +274,16 @@ impl RtcTransportObservabilityFacade<'_> {
             .flatten()
     }
 
-    pub(crate) async fn expired_active_speaker_channel_runtime_ids(
+    pub(crate) async fn expired_active_speaker_channel_instance_ids(
         self,
         now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId> {
+    ) -> BTreeSet<ChannelInstanceId> {
         let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
             return BTreeSet::new();
         };
         self.adapter
             .send_worker_command(&worker_handle, |response| {
-                RtcWorkerCommand::ExpiredActiveSpeakerChannelRuntimeIds { now, response }
+                RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { now, response }
             })
             .await
             .unwrap_or_default()

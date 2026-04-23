@@ -29,7 +29,7 @@
 use std::collections::BTreeSet;
 use std::time::Instant;
 
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use crate::runtime::transport_adapter::types::{
@@ -149,10 +149,10 @@ pub(crate) trait ObservabilityPort {
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant>;
 
-    async fn expired_active_speaker_channel_runtime_ids(
+    async fn expired_active_speaker_channel_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelRuntimeId>;
+    ) -> BTreeSet<ChannelInstanceId>;
 
     fn session_transport_health(
         &self,

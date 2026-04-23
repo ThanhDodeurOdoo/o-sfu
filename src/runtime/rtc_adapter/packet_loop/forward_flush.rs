@@ -31,7 +31,7 @@ pub(super) fn record_incoming_stats(
                 packet.received_at(),
             );
             if voice_activity.is_some() || audio_level.is_some() {
-                source_policy_signal.mark_dirty(packet.source_session_key().channel_runtime_id());
+                source_policy_signal.mark_dirty(packet.source_session_key().channel_instance_id());
             }
             let first_ingress = bitrate_state.lock().is_ok_and(|mut snapshot| {
                 snapshot.record_incoming_media(

@@ -49,7 +49,7 @@ use channel::ChannelManagerConfig;
 use channel::ChannelRuntimePolicy;
 use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
-pub(crate) use ids::{ChannelRuntimeId, ConnectionId};
+pub(crate) use ids::{ChannelInstanceId, ConnectionId};
 use metrics::RuntimeMetrics;
 use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
@@ -158,12 +158,12 @@ fn spawn_source_packet_policy_update_task(
     tokio::spawn(async move {
         loop {
             let next_deadline = next_active_speaker_deadline(&observability_port).await;
-            let mut dirty_channel_runtime_ids = match next_deadline {
+            let mut dirty_channel_instance_ids = match next_deadline {
                 Some(next_deadline) => {
                     tokio::select! {
-                        dirty_channel_runtime_ids = updates.wait_for_update() => dirty_channel_runtime_ids,
+                        dirty_channel_instance_ids = updates.wait_for_update() => dirty_channel_instance_ids,
                         () = time::sleep_until(Instant::from_std(next_deadline)) => {
-                            expired_active_speaker_channel_runtime_ids(
+                            expired_active_speaker_channel_instance_ids(
                                 &observability_port,
                                 StdInstant::now(),
                             )
@@ -173,13 +173,13 @@ fn spawn_source_packet_policy_update_task(
                 }
                 None => updates.wait_for_update().await,
             };
-            dirty_channel_runtime_ids.extend(updates.take_pending_updates());
-            if dirty_channel_runtime_ids.is_empty() {
+            dirty_channel_instance_ids.extend(updates.take_pending_updates());
+            if dirty_channel_instance_ids.is_empty() {
                 continue;
             }
             sync_source_packet_selection_policies(
                 &channels,
-                &dirty_channel_runtime_ids,
+                &dirty_channel_instance_ids,
                 &observability_port,
                 &media_port,
             )
@@ -200,24 +200,24 @@ async fn next_active_speaker_deadline(
     observability_port.next_active_speaker_deadline().await
 }
 
-async fn expired_active_speaker_channel_runtime_ids(
+async fn expired_active_speaker_channel_instance_ids(
     observability_port: &impl ObservabilityPort,
     now: StdInstant,
-) -> BTreeSet<ChannelRuntimeId> {
+) -> BTreeSet<ChannelInstanceId> {
     observability_port
-        .expired_active_speaker_channel_runtime_ids(now)
+        .expired_active_speaker_channel_instance_ids(now)
         .await
 }
 
 async fn sync_source_packet_selection_policies(
     channels: &ChannelManager,
-    channel_runtime_ids: &BTreeSet<ChannelRuntimeId>,
+    channel_instance_ids: &BTreeSet<ChannelInstanceId>,
     observability_port: &impl ObservabilityPort,
     media_port: &impl MediaPort,
 ) {
     channels
         .sync_source_packet_selection_policies_for_runtime_ids(
-            channel_runtime_ids,
+            channel_instance_ids,
             observability_port,
             media_port,
         )

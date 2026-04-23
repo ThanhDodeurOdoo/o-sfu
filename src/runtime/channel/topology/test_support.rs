@@ -4,7 +4,7 @@ use o_sfu_router::{RouterId, SessionPermissions as RouterSessionPermissions};
 
 use super::{ChannelRouterObserverFactory, ChannelTopology};
 use crate::config::MediaCodecFlags;
-use crate::runtime::ChannelRuntimeId;
+use crate::runtime::ChannelInstanceId;
 use crate::runtime::channel::rtp_capabilities::router_rtp_capabilities;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
@@ -17,7 +17,7 @@ impl ChannelTopology {
             primary_router_id,
             router_rtp_capabilities(MediaCodecFlags::default()),
             &ChannelRouterObserverFactory::new(Arc::new(RecordingService::new(
-                ChannelRuntimeId::from_raw(0),
+                ChannelInstanceId::from_raw(0),
                 media_source,
                 Arc::new(RuntimeMetrics::default()),
             ))),

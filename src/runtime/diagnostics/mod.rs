@@ -5,7 +5,7 @@
 //! serialization, and query assembly in one place.
 //!
 //! sub parts:
-//! - `store` keeps the bounded recent-event history and the runtime-id to
+//! - `store` keeps the bounded recent-event history and the instance-id to
 //!   channel-uuid mapping used by transport-side event observation.
 //! - `types` defines the serialzied views returned to operators and the small
 //!   transport-health conversion helpers shared by diagnostics emitters.
