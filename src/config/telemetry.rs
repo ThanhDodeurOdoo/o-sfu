@@ -103,10 +103,9 @@ pub(super) fn load_telemetry_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        TelemetryConfig, TelemetryLogFormat, TelemetryResource, TraceExportConfig,
-        load_telemetry_config,
-    };
+    #[cfg(feature = "otel-tracing")]
+    use super::{TelemetryConfig, TelemetryLogFormat, TraceExportConfig};
+    use super::{TelemetryResource, load_telemetry_config};
 
     #[test]
     fn telemetry_resource_resolves_process_fallback_instance_id() {
