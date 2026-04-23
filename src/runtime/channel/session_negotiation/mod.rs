@@ -1,8 +1,30 @@
+//! Session negotiation readiness
+//!
+//! This module keeps the channel-facing publish and consume readiness contract
+//! small and explicit while the actual client RTP capabillities stay stored next
+//! to the session in channel state. The negotiation state machine only answers
+//! two questions for its callers:
+//!
+//! - can this session publish?
+//! - can this session consume ?
+//!
+//! It also reports the one transition where a session becomes consumer-ready so
+//! the caller can bootstrap missing consumers exactly once when readiness
+//! crosses that boundary.
+
 #[cfg(test)]
 mod test_support;
 
-#[cfg(test)]
-pub(crate) use test_support::SessionTransportReady;
+/// Identifies which transport side just became usable for one session.
+///
+/// The channel tests use this to drive the same production readiness state
+/// machine as the live runtime. Keeping the transition input typed
+/// because publish and consume readiness unlock different work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTransportReady {
+    Publish,
+    Consume,
+}
 
 /// Returned after each state transition to tell the caller what changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -14,29 +36,105 @@ pub(crate) struct SessionNegotiationUpdate {
     pub(crate) became_consumer_ready: bool,
 }
 
+/// Explicit readiness states for one live channel session.
+///
+/// The channel runtime cares about legal readiness transition.
+/// This enum keeps the intermediate states visible so later renegotiation work
+/// has one authoritative model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum SessionNegotiationState {
+    #[default]
+    AwaitingCapabilities,
+    CapabilitiesReady,
+    PublishTransportReadyAwaitingCapabilities,
+    ConsumeTransportReadyAwaitingCapabilities,
+    BothTransportsReadyAwaitingCapabilities,
+    PublishReady,
+    ConsumeReady,
+    Ready,
+}
+
+impl SessionNegotiationState {
+    const fn can_publish(self) -> bool {
+        matches!(
+            self,
+            Self::PublishTransportReadyAwaitingCapabilities
+                | Self::BothTransportsReadyAwaitingCapabilities
+                | Self::PublishReady
+                | Self::Ready
+        )
+    }
+
+    const fn can_consume(self) -> bool {
+        matches!(self, Self::ConsumeReady | Self::Ready)
+    }
+
+    const fn with_capabilities_received(self) -> Self {
+        match self {
+            Self::AwaitingCapabilities => Self::CapabilitiesReady,
+            Self::PublishTransportReadyAwaitingCapabilities => Self::PublishReady,
+            Self::ConsumeTransportReadyAwaitingCapabilities => Self::ConsumeReady,
+            Self::BothTransportsReadyAwaitingCapabilities => Self::Ready,
+            state => state,
+        }
+    }
+
+    const fn with_transport_ready(self, readiness: SessionTransportReady) -> Self {
+        match (self, readiness) {
+            (Self::AwaitingCapabilities, SessionTransportReady::Publish) => {
+                Self::PublishTransportReadyAwaitingCapabilities
+            }
+            (Self::AwaitingCapabilities, SessionTransportReady::Consume) => {
+                Self::ConsumeTransportReadyAwaitingCapabilities
+            }
+            (Self::CapabilitiesReady, SessionTransportReady::Publish) => Self::PublishReady,
+            (Self::CapabilitiesReady, SessionTransportReady::Consume) => Self::ConsumeReady,
+            (Self::PublishTransportReadyAwaitingCapabilities, SessionTransportReady::Consume)
+            | (Self::ConsumeTransportReadyAwaitingCapabilities, SessionTransportReady::Publish) => {
+                Self::BothTransportsReadyAwaitingCapabilities
+            }
+            (Self::PublishReady, SessionTransportReady::Consume)
+            | (Self::ConsumeReady, SessionTransportReady::Publish) => Self::Ready,
+            (state, _) => state,
+        }
+    }
+}
+
+/// Channel-facing readiness state for one live session connection.
+///
+/// This stays intentionelly narrow: transport readiness and parsed client RTP
+/// capabilities are folded into publish or consume readiness, but the parsed
+/// capabillity payload itself lives outside this type in channel state. That
+/// split keeps lifecycle transitions here and avoid turning the readiness
+/// state machine into a bag of protocol-shaped data.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SessionNegotiation {
-    publish_transport_ready: bool,
-    consume_transport_ready: bool,
-    capabilities_received: bool,
+    state: SessionNegotiationState,
 }
 
 impl SessionNegotiation {
     #[must_use]
     pub(super) const fn can_publish(&self) -> bool {
-        self.publish_transport_ready
+        self.state.can_publish()
     }
 
     #[must_use]
     pub(super) const fn can_consume(&self) -> bool {
-        self.consume_transport_ready && self.capabilities_received
+        self.state.can_consume()
     }
 
+    /// Marks the session as fully negotiated for the current connection.
+    ///
+    /// This is the fast path used by the live websocket answer flow once the
+    /// runtime has already validated and stored the parsed client capabilities.
+    /// Callers still get the edge-triggered `became_consumer_ready` signal.
     pub(super) fn set_session_negotiated(&mut self) -> SessionNegotiationUpdate {
         let was_consumer_ready = self.can_consume();
-        self.publish_transport_ready = true;
-        self.consume_transport_ready = true;
-        self.capabilities_received = true;
+        self.state = self
+            .state
+            .with_transport_ready(SessionTransportReady::Publish)
+            .with_transport_ready(SessionTransportReady::Consume)
+            .with_capabilities_received();
         self.readiness_update(was_consumer_ready)
     }
 
@@ -45,5 +143,90 @@ impl SessionNegotiation {
             session_present: true,
             became_consumer_ready: !was_consumer_ready && self.can_consume(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SessionNegotiation, SessionNegotiationState,
+        SessionTransportReady::{Consume, Publish},
+    };
+
+    #[test]
+    fn session_negotiation_transitions_to_ready_when_capabilities_follow_connections() {
+        let mut negotiation = SessionNegotiation::default();
+
+        let publish_update = negotiation.set_transport_ready_for_test(Publish);
+        let consume_update = negotiation.set_transport_ready_for_test(Consume);
+        let capabilities_update = negotiation.set_client_rtp_capabilities_for_test();
+
+        assert!(publish_update.session_present);
+        assert!(!publish_update.became_consumer_ready);
+        assert!(consume_update.session_present);
+        assert!(!consume_update.became_consumer_ready);
+        assert!(capabilities_update.session_present);
+        assert!(capabilities_update.became_consumer_ready);
+        assert!(negotiation.can_publish());
+        assert!(negotiation.can_consume());
+        assert_eq!(negotiation.state, SessionNegotiationState::Ready);
+    }
+
+    #[test]
+    fn session_negotiation_transitions_to_download_ready_when_download_follows_capabilities() {
+        let mut negotiation = SessionNegotiation::default();
+
+        let capabilities_update = negotiation.set_client_rtp_capabilities_for_test();
+        let consume_update = negotiation.set_transport_ready_for_test(Consume);
+
+        assert!(capabilities_update.session_present);
+        assert!(!capabilities_update.became_consumer_ready);
+        assert!(consume_update.session_present);
+        assert!(consume_update.became_consumer_ready);
+        assert!(!negotiation.can_publish());
+        assert!(negotiation.can_consume());
+        assert_eq!(negotiation.state, SessionNegotiationState::ConsumeReady);
+    }
+
+    #[test]
+    fn session_negotiation_preserves_publish_readiness_before_capabilities_arrive() {
+        let mut negotiation = SessionNegotiation::default();
+
+        let publish_update = negotiation.set_transport_ready_for_test(Publish);
+
+        assert!(publish_update.session_present);
+        assert!(!publish_update.became_consumer_ready);
+        assert!(negotiation.can_publish());
+        assert!(!negotiation.can_consume());
+        assert_eq!(
+            negotiation.state,
+            SessionNegotiationState::PublishTransportReadyAwaitingCapabilities
+        );
+    }
+
+    #[test]
+    fn session_negotiation_set_session_negotiated_jumps_directly_to_ready() {
+        let mut negotiation = SessionNegotiation::default();
+
+        let update = negotiation.set_session_negotiated();
+
+        assert!(update.session_present);
+        assert!(update.became_consumer_ready);
+        assert!(negotiation.can_publish());
+        assert!(negotiation.can_consume());
+        assert_eq!(negotiation.state, SessionNegotiationState::Ready);
+    }
+
+    #[test]
+    fn session_negotiation_only_reports_consumer_readiness_once() {
+        let mut negotiation = SessionNegotiation::default();
+
+        let _ = negotiation.set_transport_ready_for_test(Consume);
+        let first_capabilities_update = negotiation.set_client_rtp_capabilities_for_test();
+        let second_capabilities_update = negotiation.set_client_rtp_capabilities_for_test();
+
+        assert!(first_capabilities_update.became_consumer_ready);
+        assert!(!second_capabilities_update.became_consumer_ready);
+        assert_eq!(negotiation.state, SessionNegotiationState::ConsumeReady);
     }
 }
