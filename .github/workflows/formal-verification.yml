@@ -13,8 +13,55 @@ env:
 
 jobs:
   kani:
+    name: Kani (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: rfc-h264
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness h264_profile_level_id_parse_matches_rfc_patterns
+          - shard: router-rtp
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness derive_consumable_rtp_parameters_keeps_only_valid_primary_links
+              --harness negotiate_consumer_rtp_parameters_keeps_only_surviving_consumer_links
+          - shard: router-teardown
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness session_teardown_clears_reverse_indices_and_dependents
+              --harness removing_a_producer_clears_dependents_but_keeps_live_transports
+              --harness removing_a_consumer_preserves_other_routes_and_indices
+          - shard: router-pause
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness new_consumers_inherit_their_producer_pause_shadow
+              --harness pausing_a_producer_updates_all_dependent_consumers
+              --harness resuming_a_producer_clears_dependent_consumer_pause_shadows
+              --harness consumer_local_pause_stays_independent_from_producer_shadow_updates
+          - shard: protocol-requests
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness request_tracker_rejects_mismatched_resolution_without_state_loss
+              --harness request_tracker_timeout_and_clear_resolve_each_live_request_once
+              --harness outbound_batcher_preserves_token_order_until_flush
+              --harness outbound_batcher_capacity_and_clear_do_not_duplicate_tokens
+              --harness sticky_replay_deduplicates_publish_intent_and_stays_stable
+              --harness sticky_replay_merges_subscription_and_info_updates_by_latest_field
+          - shard: protocol-recovery-close
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness protocol_core_terminal_close_codes_never_schedule_recovery
+              --harness protocol_core_non_terminal_close_with_context_recovers_once
+              --harness protocol_core_recovery_timer_reconnects_only_from_recovering
+          - shard: protocol-recovery-reset
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness protocol_core_welcome_resets_recovery_backoff
+              --harness protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect
 
     steps:
       - name: Checkout repository
@@ -70,4 +117,4 @@ jobs:
           cargo-kani setup --use-local-bundle "$RUNNER_TEMP/$bundle"
 
       - name: Run Kani proofs
-        run: cargo kani -p o-sfu-proofs
+        run: ${{ matrix.command }}
