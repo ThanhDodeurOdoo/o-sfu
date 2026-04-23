@@ -44,8 +44,9 @@ impl RfcReference {
 /// Stable diagnostic payload that callers can log or surface upstream.
 ///
 /// `kind` separates invalid from unsupported input, `summary` is the short
-/// operator-facing explanation, `rfc_reference` points to the rule that defined
-/// the expectation, and `replay_context` describes the minimum capture needed to
+/// operator-facing explanation,
+/// `rfc_reference` points to the rule that defined
+/// `replay_context` describes the minimum capture needed to
 /// reproduce the failure deterministically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseDiagnosticSpec {

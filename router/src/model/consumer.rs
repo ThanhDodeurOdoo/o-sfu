@@ -4,9 +4,7 @@ use super::{ConsumerId, MediaKind, ProducerId, StreamType, TransportId};
 ///
 /// `producer_id` binds the consumer to its source, `transport_id` selects the
 /// downstream transport, `media_kind` plus `stream_type` mirror the expected
-/// source identity, `paused` is the local pause selected by the owner, and
-/// `producer_paused` shadows the source-side pause state so outer layers can
-/// reason about both conditions independently.
+/// source identity, `paused` is the local pause selected by the owner
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Consumer {
     id: ConsumerId,

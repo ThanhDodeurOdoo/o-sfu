@@ -10,6 +10,9 @@ edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+verification-models = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

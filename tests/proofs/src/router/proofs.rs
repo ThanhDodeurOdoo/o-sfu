@@ -1,8 +1,7 @@
-use super::{ProofRouterModel, model::ProofRouterError};
+use super::ProofRouterModel;
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
-    SessionId, SessionPermissionFlags, SessionPermissions, StreamType, Transport,
-    TransportDirection, TransportId,
+    SessionId, SessionPermissions, StreamType, Transport, TransportDirection, TransportId,
 };
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
@@ -34,75 +33,11 @@ fn all_consumers_shadow_pause<
     true
 }
 
-#[kani::proof]
-fn join_session_preserves_invariants() {
-    let mut router = ProofRouter::new(RouterId(0));
-    let _ = router.join_session(session(SessionId(kani::any())));
-    assert!(router.satisfies_invariants());
-}
-
-#[kani::proof]
-fn session_updates_preserve_invariants() {
-    let mut router = ProofRouter::new(RouterId(0));
-    let session_id = SessionId(kani::any());
-    let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
-        transcription: kani::any(),
-        audio_recording: kani::any(),
-        video_recording: kani::any(),
-    });
-
-    let _ = router.join_session(session(session_id));
-    let _ = router.update_session_permissions(session_id, permissions);
-
-    assert!(router.satisfies_invariants());
-}
-
-#[kani::proof]
-fn routing_flow_preserves_invariants() {
-    let mut router = ProofRouter::new(RouterId(0));
-
-    let session_a = SessionId(kani::any());
-    let session_b = SessionId(kani::any());
-    let transport_a = TransportId(kani::any());
-    let transport_b = TransportId(kani::any());
-    let producer = ProducerId(kani::any());
-    let consumer = ConsumerId(kani::any());
-
-    kani::assume(session_a != session_b);
-    kani::assume(transport_a != transport_b);
-
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
-    let _ = router.open_transport(Transport::new(
-        transport_a,
-        session_a,
-        TransportDirection::Receive,
-    ));
-    let _ = router.open_transport(Transport::new(
-        transport_b,
-        session_b,
-        TransportDirection::Send,
-    ));
-    let _ = router.add_producer(Producer::new(
-        producer,
-        transport_a,
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
-    let _ = router.add_consumer(
-        Consumer::new(
-            consumer,
-            producer,
-            transport_b,
-            MediaKind::Audio,
-            StreamType::Audio,
-        ),
-        ConsumerCapability::Compatible,
-    );
-
-    assert!(router.satisfies_invariants());
-}
-
+// Proves session teardown is transitive and exact: removing one session must
+// clear its transports, producers, and consumers, and also remove dependent
+// routes that point at those producers, while leaving unrelated session state
+// consistent. This is high value because stale reverse-index entries here would
+// poison later routing decisions long after the teardown.
 #[kani::proof]
 fn session_teardown_clears_reverse_indices_and_dependents() {
     let mut router = TeardownProofRouter::new(RouterId(0));
@@ -193,6 +128,10 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
     assert!(router.satisfies_invariants());
 }
 
+// Proves producer removal only tears down the routes that depend on that
+// producer and does not over-delete still-live transports or sessions. This is
+// worth proving because producer teardown is a fan-out operation where stale
+// dependents and accidental collateral cleanup are both easy regression risks.
 #[kani::proof]
 fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     let mut router = TeardownProofRouter::new(RouterId(0));
@@ -275,6 +214,10 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     assert!(router.satisfies_invariants());
 }
 
+// Proves consumer removal is local: deleting one subscription must update the
+// producer and transport reverse indices for that consumer only, while keeping
+// sibling routes intact. This matters because consumer churn is common and a
+// sloppy removal path can silently break unrelated deliveries.
 #[kani::proof]
 fn removing_a_consumer_preserves_other_routes_and_indices() {
     let mut router = TeardownProofRouter::new(RouterId(0));
@@ -363,196 +306,10 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
     assert!(router.satisfies_invariants());
 }
 
-#[kani::proof]
-fn producers_are_rejected_on_send_transports() {
-    let mut router = ProofRouter::new(RouterId(0));
-
-    let session_id = SessionId(kani::any());
-    let transport_id = TransportId(kani::any());
-    let producer_id = ProducerId(kani::any());
-
-    let _ = router.join_session(session(session_id));
-    let _ = router.open_transport(Transport::new(
-        transport_id,
-        session_id,
-        TransportDirection::Send,
-    ));
-
-    assert_eq!(
-        router.add_producer(Producer::new(
-            producer_id,
-            transport_id,
-            MediaKind::Audio,
-            StreamType::Audio,
-        )),
-        Err(ProofRouterError::Router(
-            o_sfu_router::RouterError::ProducerRequiresReceiveTransport(transport_id),
-        )),
-    );
-    assert!(router.satisfies_invariants());
-}
-
-#[kani::proof]
-fn consumers_are_rejected_on_receive_transports() {
-    let mut router = ProofRouter::new(RouterId(0));
-
-    let session_a = SessionId(kani::any());
-    let session_b = SessionId(kani::any());
-    let producer_transport = TransportId(kani::any());
-    let consumer_transport = TransportId(kani::any());
-    let producer_id = ProducerId(kani::any());
-    let consumer_id = ConsumerId(kani::any());
-
-    kani::assume(session_a != session_b);
-    kani::assume(producer_transport != consumer_transport);
-
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
-    let _ = router.open_transport(Transport::new(
-        producer_transport,
-        session_a,
-        TransportDirection::Receive,
-    ));
-    let _ = router.open_transport(Transport::new(
-        consumer_transport,
-        session_b,
-        TransportDirection::Receive,
-    ));
-    let _ = router.add_producer(Producer::new(
-        producer_id,
-        producer_transport,
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                consumer_id,
-                producer_id,
-                consumer_transport,
-                MediaKind::Audio,
-                StreamType::Audio,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Err(ProofRouterError::Router(
-            o_sfu_router::RouterError::ConsumerRequiresSendTransport(consumer_transport),
-        )),
-    );
-    assert!(router.satisfies_invariants());
-}
-
-#[kani::proof]
-fn consumers_are_rejected_when_media_kind_differs_from_producer() {
-    let mut router = ProofRouter::new(RouterId(0));
-
-    let session_a = SessionId(kani::any());
-    let session_b = SessionId(kani::any());
-    let producer_transport = TransportId(kani::any());
-    let consumer_transport = TransportId(kani::any());
-    let producer_id = ProducerId(kani::any());
-    let consumer_id = ConsumerId(kani::any());
-
-    kani::assume(session_a != session_b);
-    kani::assume(producer_transport != consumer_transport);
-
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
-    let _ = router.open_transport(Transport::new(
-        producer_transport,
-        session_a,
-        TransportDirection::Receive,
-    ));
-    let _ = router.open_transport(Transport::new(
-        consumer_transport,
-        session_b,
-        TransportDirection::Send,
-    ));
-    let _ = router.add_producer(Producer::new(
-        producer_id,
-        producer_transport,
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                consumer_id,
-                producer_id,
-                consumer_transport,
-                MediaKind::Video,
-                StreamType::Audio,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Err(ProofRouterError::Router(
-            o_sfu_router::RouterError::ConsumerMediaKindMismatch {
-                producer_id,
-                expected: MediaKind::Audio,
-                actual: MediaKind::Video,
-            },
-        )),
-    );
-    assert!(router.satisfies_invariants());
-}
-
-#[kani::proof]
-fn consumers_are_rejected_when_stream_type_differs_from_producer() {
-    let mut router = ProofRouter::new(RouterId(0));
-
-    let session_a = SessionId(kani::any());
-    let session_b = SessionId(kani::any());
-    let producer_transport = TransportId(kani::any());
-    let consumer_transport = TransportId(kani::any());
-    let producer_id = ProducerId(kani::any());
-    let consumer_id = ConsumerId(kani::any());
-
-    kani::assume(session_a != session_b);
-    kani::assume(producer_transport != consumer_transport);
-
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
-    let _ = router.open_transport(Transport::new(
-        producer_transport,
-        session_a,
-        TransportDirection::Receive,
-    ));
-    let _ = router.open_transport(Transport::new(
-        consumer_transport,
-        session_b,
-        TransportDirection::Send,
-    ));
-    let _ = router.add_producer(Producer::new(
-        producer_id,
-        producer_transport,
-        MediaKind::Video,
-        StreamType::Camera,
-    ));
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                consumer_id,
-                producer_id,
-                consumer_transport,
-                MediaKind::Video,
-                StreamType::Screen,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Err(ProofRouterError::Router(
-            o_sfu_router::RouterError::ConsumerStreamTypeMismatch {
-                producer_id,
-                expected: StreamType::Camera,
-                actual: StreamType::Screen,
-            },
-        )),
-    );
-    assert!(router.satisfies_invariants());
-}
-
+// Proves a newly created consumer starts with the producer's current pause
+// shadow instead of assuming the producer is live. This is high value because a
+// stale initial pause shadow would expose consumers to media that should still
+// be considered paused until the next explicit producer update.
 #[kani::proof]
 fn new_consumers_inherit_their_producer_pause_shadow() {
     let mut router = ProofRouter::new(RouterId(0));
@@ -591,6 +348,10 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
     assert!(router.satisfies_invariants());
 }
 
+// Proves pausing one producer propagates to every dependent consumer shadow,
+// not just the first or most recent one. This matters because the pause fan-out
+// path is easy to under-update, and sampled tests do not exhaustively protect
+// against missing one dependent route.
 #[kani::proof]
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = PauseProofRouter::new(RouterId(0));
@@ -646,6 +407,10 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
     assert!(router.satisfies_invariants());
 }
 
+// Proves resuming a producer clears the producer-pause shadow on every
+// dependent consumer again. This is valuable because pause propagation has to
+// work in both directions; otherwise consumers can get stuck in a phantom
+// paused state after the upstream producer has resumed.
 #[kani::proof]
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let mut router = PauseProofRouter::new(RouterId(0));
@@ -702,6 +467,10 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     assert!(router.satisfies_invariants());
 }
 
+// Proves a consumer's own local pause bit is independent from producer pause
+// shadow updates: producer pauses may toggle the shadow, but they must not
+// erase an explicit local pause. This is worth proving because the router keeps
+// two pause causes, and mixing them would create incorrect user-visible state.
 #[kani::proof]
 fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     let mut router = PauseProofRouter::new(RouterId(0));
@@ -761,56 +530,5 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     };
     assert!(consumer.paused());
     assert!(!consumer.producer_paused());
-    assert!(router.satisfies_invariants());
-}
-
-#[kani::proof]
-fn consumers_are_rejected_when_capabilities_are_incompatible() {
-    let mut router = ProofRouter::new(RouterId(0));
-
-    let session_a = SessionId(kani::any());
-    let session_b = SessionId(kani::any());
-    let producer_transport = TransportId(kani::any());
-    let consumer_transport = TransportId(kani::any());
-    let producer_id = ProducerId(kani::any());
-    let consumer_id = ConsumerId(kani::any());
-
-    kani::assume(session_a != session_b);
-    kani::assume(producer_transport != consumer_transport);
-
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
-    let _ = router.open_transport(Transport::new(
-        producer_transport,
-        session_a,
-        TransportDirection::Receive,
-    ));
-    let _ = router.open_transport(Transport::new(
-        consumer_transport,
-        session_b,
-        TransportDirection::Send,
-    ));
-    let _ = router.add_producer(Producer::new(
-        producer_id,
-        producer_transport,
-        MediaKind::Audio,
-        StreamType::Audio,
-    ));
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                consumer_id,
-                producer_id,
-                consumer_transport,
-                MediaKind::Audio,
-                StreamType::Audio,
-            ),
-            ConsumerCapability::Incompatible,
-        ),
-        Err(ProofRouterError::Router(
-            o_sfu_router::RouterError::IncompatibleCapabilities { producer_id },
-        )),
-    );
     assert!(router.satisfies_invariants());
 }

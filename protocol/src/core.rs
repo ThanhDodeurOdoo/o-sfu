@@ -29,6 +29,8 @@ mod request_flow;
 mod request_tracker;
 mod server_events;
 mod sticky_replay;
+#[cfg(feature = "verification-models")]
+pub mod verification;
 
 use crate::{
     bundle_api::BundleConnectionState,

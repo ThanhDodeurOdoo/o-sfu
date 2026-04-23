@@ -1129,7 +1129,10 @@ dependencies = [
 name = "o-sfu-proofs"
 version = "0.3.0"
 dependencies = [
+ "o-sfu-protocol",
+ "o-sfu-rfc",
  "o-sfu-router",
+ "serde_json",
 ]
 
 [[package]]

@@ -96,6 +96,31 @@ impl StickyReplayState {
             Some(replay_batch)
         }
     }
+
+    #[cfg(feature = "verification-models")]
+    pub(super) fn active_publications_len(&self) -> usize {
+        self.active_publications.len()
+    }
+
+    #[cfg(feature = "verification-models")]
+    pub(super) fn desired_subscriptions_len(&self) -> usize {
+        self.desired_subscriptions.len()
+    }
+
+    #[cfg(feature = "verification-models")]
+    pub(super) fn subscription_state(&self, session_id: &SessionId) -> Option<DownloadStates> {
+        self.desired_subscriptions.get(session_id).cloned()
+    }
+
+    #[cfg(feature = "verification-models")]
+    pub(super) fn has_desired_info(&self) -> bool {
+        self.desired_info.is_some()
+    }
+
+    #[cfg(feature = "verification-models")]
+    pub(super) fn desired_info(&self) -> Option<SessionInfo> {
+        self.desired_info.clone()
+    }
 }
 
 fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {

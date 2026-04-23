@@ -127,5 +127,5 @@ cargo kani -p o-sfu-proofs
 Run one harness:
 
 ```bash
-cargo kani -p o-sfu-proofs --harness join_session_preserves_invariants
+cargo kani -p o-sfu-proofs --harness session_teardown_clears_reverse_indices_and_dependents
 ```

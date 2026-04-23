@@ -8,7 +8,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+o-sfu-protocol = { path = "../../protocol", features = ["verification-models"] }
+o-sfu-rfc = { path = "../../rfc" }
 o-sfu-router = { path = "../../router" }
+serde_json.workspace = true
 
 [lints]
 workspace = true
