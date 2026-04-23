@@ -16,7 +16,10 @@ use tokio::sync::mpsc;
 
 use super::super::{
     ids::ProducerRuntimeId,
-    shared::{ChannelState, ConsumerKey, ConsumerState, ProducerKey, PublishedProducer},
+    shared::{
+        ChannelState, ConsumerKey, ConsumerState, ProducerKey, ProducerTransportMediaIndexEntry,
+        PublishedProducer,
+    },
 };
 use crate::config::MediaCodecFlags;
 use crate::runtime::channel::{
@@ -146,6 +149,14 @@ fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
             source_packet_selection: None,
             active: true,
         },
+    );
+    state.producer_transport_media_index.insert(
+        transport_media_id,
+        ProducerTransportMediaIndexEntry::new(
+            session_id.clone(),
+            connection_id,
+            StreamType::Camera,
+        ),
     );
 
     let producer_target = state
@@ -285,6 +296,14 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             active: true,
         },
     );
+    state.producer_transport_media_index.insert(
+        TransportMediaId::new(10),
+        ProducerTransportMediaIndexEntry::new(
+            publisher_session_id.clone(),
+            publisher_connection_id,
+            StreamType::Camera,
+        ),
+    );
 
     let (route_updates, planned_bootstraps) = state
         .plan_subscription_change(
@@ -304,5 +323,136 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
     assert!(
         state.subscription_count() >= 1,
         "planning the bootstrap must reserve the pending consumer slot immediately"
+    );
+}
+
+#[test]
+fn commit_published_track_populates_transport_media_owner_index() {
+    let mut state = test_state();
+    let session_id = SessionId::Integer(1);
+
+    join_test_session(&mut state, &session_id);
+    let connection_id = state
+        .session_connection_id(&session_id)
+        .expect("publisher should have a connection id");
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                &session_id,
+                connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(
+                &session_id,
+                connection_id,
+                SessionTransportReady::Publish,
+            )
+            .session_present
+    );
+
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &sample_video_rtp_parameters(None, 42_000),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should derive consumable router parameters");
+    let prepared_track = state
+        .validate_publish_descriptor(
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            RouterMediaKind::Video,
+        )
+        .expect("publish descriptor should validate once the session is publish-ready")
+        .into_prepared_track(consumable_rtp_parameters);
+    let transport_media_id = TransportMediaId::new(99);
+
+    assert!(
+        state
+            .commit_published_track(prepared_track, transport_media_id)
+            .is_some()
+    );
+    assert_eq!(
+        state.producer_stream_type_for_transport_media_id(transport_media_id),
+        Some(StreamType::Camera)
+    );
+    assert_eq!(
+        state.inspect_producer_owner_session_id_for_transport_media_id(transport_media_id),
+        Some(session_id)
+    );
+    assert_eq!(
+        state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
+        Some(connection_id)
+    );
+}
+
+#[test]
+fn unpublish_track_clears_transport_media_owner_index() {
+    let mut state = test_state();
+    let session_id = SessionId::Integer(1);
+
+    join_test_session(&mut state, &session_id);
+    let connection_id = state
+        .session_connection_id(&session_id)
+        .expect("publisher should have a connection id");
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                &session_id,
+                connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(
+                &session_id,
+                connection_id,
+                SessionTransportReady::Publish,
+            )
+            .session_present
+    );
+
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &sample_video_rtp_parameters(None, 43_000),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should derive consumable router parameters");
+    let prepared_track = state
+        .validate_publish_descriptor(
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            RouterMediaKind::Video,
+        )
+        .expect("publish descriptor should validate once the session is publish-ready")
+        .into_prepared_track(consumable_rtp_parameters);
+    let transport_media_id = TransportMediaId::new(100);
+
+    assert!(
+        state
+            .commit_published_track(prepared_track, transport_media_id)
+            .is_some()
+    );
+    assert!(
+        state
+            .unpublish_track(&session_id, connection_id, StreamType::Camera)
+            .is_some()
+    );
+    assert_eq!(
+        state.producer_stream_type_for_transport_media_id(transport_media_id),
+        None
+    );
+    assert_eq!(
+        state.inspect_producer_owner_session_id_for_transport_media_id(transport_media_id),
+        None
+    );
+    assert_eq!(
+        state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
+        None
     );
 }

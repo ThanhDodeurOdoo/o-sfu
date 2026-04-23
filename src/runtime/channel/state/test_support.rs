@@ -70,4 +70,20 @@ impl ChannelState {
         }
         producer.transport_media_id
     }
+
+    pub(in crate::runtime::channel) fn inspect_producer_owner_session_id_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<SessionId> {
+        self.producer_transport_media_entry(transport_media_id)
+            .map(|entry| entry.owner_session_id().clone())
+    }
+
+    pub(in crate::runtime::channel) fn inspect_producer_owner_connection_id_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<ConnectionId> {
+        self.producer_transport_media_entry(transport_media_id)
+            .map(super::shared::ProducerTransportMediaIndexEntry::owner_connection_id)
+    }
 }

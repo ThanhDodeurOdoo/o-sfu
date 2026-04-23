@@ -149,14 +149,8 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             )
             .await
     );
-    assert!(
-        channel
-            .test_api()
-            .inspect()
-            .producer_stream_type_for_transport_media_id(transport_media_id)
-            .await
-            .is_none()
-    );
+    assert_transport_media_mapping_is_missing(&channel, transport_media_id).await;
+    assert_transport_media_owner_mapping_is_missing(&channel, transport_media_id).await;
 
     let publisher_messages = drain_outbound(&mut publisher_rx);
     let subscriber_messages = drain_outbound(&mut subscriber_rx);
@@ -559,6 +553,28 @@ async fn assert_transport_media_mapping_is_missing(
     );
 }
 
+async fn assert_transport_media_owner_mapping_is_missing(
+    channel: &Arc<Channel>,
+    transport_media_id: TransportMediaId,
+) {
+    assert!(
+        channel
+            .test_api()
+            .inspect()
+            .producer_owner_session_id_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+    assert!(
+        channel
+            .test_api()
+            .inspect()
+            .producer_owner_connection_id_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+}
+
 async fn assert_session_has_no_producer_route_target(
     channel: &Arc<Channel>,
     session_id: &SessionId,
@@ -949,16 +965,10 @@ async fn session_replacement_purges_stale_published_media_state() {
 
     assert_eq!(channel.test_api().inspect().producer_count().await, 0);
     assert_eq!(channel.test_api().inspect().consumer_count().await, 0);
-    assert!(
-        channel
-            .test_api()
-            .inspect()
-            .producer_stream_type_for_transport_media_id(
-                published_transport_media_id.expect("published track should have a transport id")
-            )
-            .await
-            .is_none()
-    );
+    let published_transport_media_id =
+        published_transport_media_id.expect("published track should have a transport id");
+    assert_transport_media_mapping_is_missing(&channel, published_transport_media_id).await;
+    assert_transport_media_owner_mapping_is_missing(&channel, published_transport_media_id).await;
     assert!(
         !channel
             .test_api()

@@ -160,11 +160,9 @@ impl ChannelState {
         transport_media_id: TransportMediaId,
         stream_type: StreamType,
     ) -> Option<SessionId> {
-        self.producers.values().find_map(|producer| {
-            (producer.transport_media_id == Some(transport_media_id)
-                && producer.stream_type == stream_type)
-                .then(|| producer.owner_session_id.clone())
-        })
+        self.producer_transport_media_entry(transport_media_id)
+            .filter(|entry| entry.stream_type() == stream_type)
+            .map(|entry| entry.owner_session_id().clone())
     }
 
     pub(in crate::runtime::channel) fn commit_source_packet_selection_updates(

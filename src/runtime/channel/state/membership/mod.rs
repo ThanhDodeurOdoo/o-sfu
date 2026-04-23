@@ -436,7 +436,10 @@ mod tests {
     use crate::runtime::channel::{
         ChannelAdmissionPolicy,
         rtp_capabilities::router_rtp_capabilities,
-        state::{ids::ProducerRuntimeId, shared::ConsumerKey, shared::ConsumerState},
+        state::{
+            ids::ProducerRuntimeId, shared::ConsumerKey, shared::ConsumerState,
+            shared::ProducerTransportMediaIndexEntry,
+        },
         topology::{RoutedConsumerId, RoutedProducerId},
     };
     use crate::runtime::metrics::RuntimeMetrics;
@@ -487,6 +490,16 @@ mod tests {
                 active: true,
             },
         );
+        if let Some(transport_media_id) = transport_media_id {
+            state.producer_transport_media_index.insert(
+                transport_media_id,
+                ProducerTransportMediaIndexEntry::new(
+                    session_id.clone(),
+                    connection_id,
+                    stream_type,
+                ),
+            );
+        }
         producer_id
     }
 
@@ -650,5 +663,74 @@ mod tests {
         assert!(outcome.transport_removals.is_empty());
         assert!(outcome.effects.close_requests.is_empty());
         assert!(outcome.effects.fanouts.is_empty());
+    }
+
+    #[test]
+    fn replacement_join_clears_transport_media_owner_index() {
+        let mut state = test_state();
+        let session_id = SessionId::Integer(1);
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let (replacement_sender, _replacement_receiver) = mpsc::unbounded_channel();
+        assert!(
+            state
+                .apply_join(
+                    &session_id,
+                    None,
+                    SessionPermissions::default(),
+                    sender,
+                    false,
+                )
+                .is_ok()
+        );
+        let connection_id = state
+            .session_connection_id(&session_id)
+            .expect("session should have a connection id");
+        let transport_media_id = TransportMediaId::new(30);
+        let routed_producer_id = state
+            .topology
+            .add_producer(
+                &session_id,
+                MediaKind::Video,
+                o_sfu_router::StreamType::Camera,
+            )
+            .expect("replacement test producer route should be added");
+        install_test_published_producer(
+            &mut state,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            routed_producer_id,
+            Some(transport_media_id),
+        );
+
+        assert_eq!(
+            state.inspect_producer_owner_session_id_for_transport_media_id(transport_media_id),
+            Some(session_id.clone())
+        );
+        assert_eq!(
+            state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
+            Some(connection_id)
+        );
+
+        assert!(
+            state
+                .apply_join(
+                    &session_id,
+                    Some(String::from("replacement")),
+                    SessionPermissions::default(),
+                    replacement_sender,
+                    false,
+                )
+                .is_ok()
+        );
+
+        assert_eq!(
+            state.inspect_producer_owner_session_id_for_transport_media_id(transport_media_id),
+            None
+        );
+        assert_eq!(
+            state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
+            None
+        );
     }
 }

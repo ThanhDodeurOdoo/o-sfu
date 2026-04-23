@@ -18,23 +18,14 @@ impl ChannelState {
     ) -> BTreeMap<SessionId, DiagnosticsIncomingBitrate> {
         let mut incoming_bitrate = BTreeMap::new();
         for (transport_media_id, bits) in per_media {
-            let Some(stream_type) =
-                self.producer_stream_type_for_transport_media_id(*transport_media_id)
-            else {
-                continue;
-            };
-            let Some(producer) = self
-                .producers
-                .values()
-                .find(|producer| producer.transport_media_id == Some(*transport_media_id))
-            else {
+            let Some(entry) = self.producer_transport_media_entry(*transport_media_id) else {
                 continue;
             };
             let session_bitrate: &mut DiagnosticsIncomingBitrate = incoming_bitrate
-                .entry(producer.owner_session_id.clone())
+                .entry(entry.owner_session_id().clone())
                 .or_default();
             session_bitrate.total = session_bitrate.total.saturating_add(*bits);
-            match stream_type {
+            match entry.stream_type() {
                 StreamType::Audio => {
                     session_bitrate.audio = session_bitrate.audio.saturating_add(*bits);
                 }

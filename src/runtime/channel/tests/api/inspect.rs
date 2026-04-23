@@ -115,6 +115,28 @@ impl ChannelTestInspect<'_> {
             .producer_stream_type_for_transport_media_id(transport_media_id)
     }
 
+    pub(crate) async fn producer_owner_session_id_for_transport_media_id(
+        self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<SessionId> {
+        self.channel
+            .state
+            .read()
+            .await
+            .inspect_producer_owner_session_id_for_transport_media_id(transport_media_id)
+    }
+
+    pub(crate) async fn producer_owner_connection_id_for_transport_media_id(
+        self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<ConnectionId> {
+        self.channel
+            .state
+            .read()
+            .await
+            .inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id)
+    }
+
     pub(crate) async fn session_info_snapshot(
         self,
         session_id: &SessionId,

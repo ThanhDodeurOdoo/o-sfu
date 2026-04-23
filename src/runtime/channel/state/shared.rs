@@ -47,8 +47,9 @@ pub(in crate::runtime::channel) struct ChannelState {
     pub(super) producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
     /// Producer lookup keyed by the publisher session and stream type.
     pub(super) producer_ids_by_owner_stream: BTreeMap<ProducerKey, ProducerRuntimeId>,
-    /// Control-plane lookup for bitrate snapshots keyed by transport-owned media ids.
-    pub(super) producer_stream_types_by_transport_media_id: BTreeMap<TransportMediaId, StreamType>,
+    /// Producer ownership and stream metadata keyed by transport-owned media ids.
+    pub(super) producer_transport_media_index:
+        BTreeMap<TransportMediaId, ProducerTransportMediaIndexEntry>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     pub(super) pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
     /// Shadow of session/producer/consumer state inside the pure router core.
@@ -116,6 +117,13 @@ pub(in crate::runtime::channel) struct PublishedProducer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::channel) struct ProducerTransportMediaIndexEntry {
+    owner_session_id: SessionId,
+    owner_connection_id: ConnectionId,
+    stream_type: StreamType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) enum SourcePacketSelection {
     Rid(String),
 }
@@ -165,7 +173,7 @@ impl ChannelState {
             },
             producers: BTreeMap::new(),
             producer_ids_by_owner_stream: BTreeMap::new(),
-            producer_stream_types_by_transport_media_id: BTreeMap::new(),
+            producer_transport_media_index: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             pending_consumer_bootstraps: BTreeSet::new(),
             topology: ChannelTopology::new_with_recording_observer_factory(
@@ -239,7 +247,7 @@ impl ChannelState {
                 continue;
             };
             if let Some(transport_media_id) = producer.transport_media_id {
-                self.producer_stream_types_by_transport_media_id
+                self.producer_transport_media_index
                     .remove(&transport_media_id);
             }
         }
@@ -331,6 +339,39 @@ impl TransportMediaRemoval {
 
     pub(in crate::runtime::channel) const fn transport_media(&self) -> TransportMediaId {
         self.transport_media
+    }
+}
+
+impl ProducerTransportMediaIndexEntry {
+    pub(super) fn new(
+        owner_session_id: SessionId,
+        owner_connection_id: ConnectionId,
+        stream_type: StreamType,
+    ) -> Self {
+        Self {
+            owner_session_id,
+            owner_connection_id,
+            stream_type,
+        }
+    }
+
+    pub(super) fn owner_session_id(&self) -> &SessionId {
+        &self.owner_session_id
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "kept for test-only inspection of the ownership index"
+        )
+    )]
+    pub(super) const fn owner_connection_id(&self) -> ConnectionId {
+        self.owner_connection_id
+    }
+
+    pub(super) const fn stream_type(&self) -> StreamType {
+        self.stream_type
     }
 }
 

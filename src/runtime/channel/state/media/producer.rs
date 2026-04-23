@@ -1,3 +1,10 @@
+//! Producer-side channel state transitions.
+//!
+//! the pure state work around publishing, unpublishing and producer activity changes
+//! after transport negotiation is done elsewhere.
+//! The main rule here is that channel state only commits a producer once the
+//! caller has a validated session and a real transport media id to attach.
+
 use o_sfu_router::{MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters};
 use std::collections::BTreeMap;
 use tracing::{error, warn};
@@ -13,7 +20,10 @@ use super::super::{
         topology::RoutedProducerId,
     },
     ids::ProducerRuntimeId,
-    shared::{ChannelState, ConsumerKey, ProducerKey, PublishedProducer, TransportMediaRemoval},
+    shared::{
+        ChannelState, ConsumerKey, ProducerKey, ProducerTransportMediaIndexEntry,
+        PublishedProducer, TransportMediaRemoval,
+    },
 };
 use super::{
     router_stream_type::to_router_stream_type,
@@ -25,6 +35,11 @@ use super::{
     reason = "postfix _id is intentional because the fields are all identity values"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Stable handle for a live published track.
+///
+/// Callers resolve this from current chanel state right before mutating a
+/// producer. useful so so stale replacement callbacks can be rejected
+/// without guessing which layer drifted.
 pub(in crate::runtime::channel) struct ProducerRouteTarget {
     producer_id: ProducerRuntimeId,
     owner_connection_id: ConnectionId,
@@ -33,6 +48,12 @@ pub(in crate::runtime::channel) struct ProducerRouteTarget {
 }
 
 #[derive(Debug, Clone)]
+/// Publish request that passed the current session-level checks.
+///
+/// This exists so transport work can happen after validation without carrying
+/// a mutable channel borrow.
+/// It only proves that the session was publish-ready at validation time.
+/// Commit must re-check the same ownership and readiness before state changes land.
 pub(in crate::runtime::channel) struct ValidatedPublishDescriptor {
     owner_session_id: SessionId,
     owner_connection_id: ConnectionId,
@@ -41,6 +62,12 @@ pub(in crate::runtime::channel) struct ValidatedPublishDescriptor {
 }
 
 #[derive(Debug, Clone)]
+/// Publish payload that is ready to be committed into channel state.
+///
+/// This is the last pure state input before a producer becomes live. The
+/// transport layer already allocated the media handle and the caller already
+/// derived consumable router parameters, so commit can stay a small
+/// all ornothing state transition.
 pub(in crate::runtime::channel) struct PreparedPublishedTrack {
     owner_session_id: SessionId,
     owner_connection_id: ConnectionId,
@@ -50,6 +77,11 @@ pub(in crate::runtime::channel) struct PreparedPublishedTrack {
 }
 
 #[derive(Debug)]
+/// Result of toggling a producer between active and paused.
+///
+/// The chanel commits router pause state first and only then stages the
+/// outward fanout. That keeps session info updates aligned with the lasting
+/// router state instead of reporting a local pause change that never stuck.
 pub(in crate::runtime::channel) struct ProducerActivityOutcome {
     pub(in crate::runtime::channel) transport_media_id: TransportMediaId,
     pub(in crate::runtime::channel) active: bool,
@@ -57,12 +89,23 @@ pub(in crate::runtime::channel) struct ProducerActivityOutcome {
 }
 
 #[derive(Debug)]
+/// Deferred side effects for explicit unpublish.
+///
+/// The state transition removes the producer and all dependent consumer
+/// bookkeeping first. Emmiting the track removal and optional session-info
+/// update stays outside the state lock.
 pub(in crate::runtime::channel) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
     session_info_snapshot: Option<BTreeMap<SessionId, SessionInfo>>,
 }
 
 impl ChannelState {
+    /// Validates that a session may start a negotiated publish right now.
+    ///
+    /// This is the pure state gate in front of the staged publish flow. The
+    /// caller may use the returned descriptor to drive transport work, but it
+    /// must still commit through `commit_published_track` because replacement,
+    /// disconnect or negotiation rollback can make the descriptor stale.
     pub(in crate::runtime::channel) fn validate_publish_descriptor(
         &self,
         session_id: &SessionId,
@@ -106,6 +149,13 @@ impl ChannelState {
         })
     }
 
+    /// Commits a negotiated publish after transport setup already succeeded.
+    ///
+    /// The commit re-checks ownership and publish readiness because the
+    /// transport step happen outside the lock and stale callbacks are normal
+    /// during replacement or disconnect. On success this install every
+    /// producer-facing index in one place, including the `TransportMediaId`
+    /// ownership index used by room policy and diagnostics.
     pub(in crate::runtime::channel) fn commit_published_track(
         &mut self,
         pending: PreparedPublishedTrack,
@@ -169,8 +219,14 @@ impl ChannelState {
             ProducerKey::new(&pending.owner_session_id, pending.stream_type),
             producer_id,
         );
-        self.producer_stream_types_by_transport_media_id
-            .insert(transport_media_id, pending.stream_type);
+        self.producer_transport_media_index.insert(
+            transport_media_id,
+            ProducerTransportMediaIndexEntry::new(
+                pending.owner_session_id.clone(),
+                pending.owner_connection_id,
+                pending.stream_type,
+            ),
+        );
         let consumer_targets = self.publish_consumer_targets(
             &pending.owner_session_id,
             pending.owner_connection_id,
@@ -182,6 +238,11 @@ impl ChannelState {
         Some((producer_id, consumer_targets))
     }
 
+    /// Plans bootstrap work for peers that should consume a newly published track
+    ///
+    /// This only computes the next transport-facing work. It does not mutate
+    /// consumer state yet, so callers can still stop out cleanly if the later
+    /// transport bootstrap fails.
     pub(in crate::runtime::channel) fn publish_consumer_targets(
         &self,
         producer_session_id: &SessionId,
@@ -226,9 +287,17 @@ impl ChannelState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<StreamType> {
-        self.producer_stream_types_by_transport_media_id
+        self.producer_transport_media_index
             .get(&transport_media_id)
-            .copied()
+            .map(ProducerTransportMediaIndexEntry::stream_type)
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) fn producer_transport_media_entry(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<&ProducerTransportMediaIndexEntry> {
+        self.producer_transport_media_index.get(&transport_media_id)
     }
 
     #[must_use]
@@ -263,6 +332,12 @@ impl ChannelState {
         self.producer_route_target(session_id, connection_id, stream_type)
     }
 
+    /// Lists the transport media that must be removed for an explicit unpublish.
+    ///
+    /// The producer media go first, then every dependent consumer media for
+    /// the same source stream. Callers use this before mutating state so
+    /// cleanup can still target the live transport ids that matched the
+    /// current produceur ownership.
     pub(in crate::runtime::channel) fn unpublish_transport_removals(
         &self,
         session_id: &SessionId,
@@ -290,6 +365,13 @@ impl ChannelState {
         Some(transport_removals)
     }
 
+    /// Removes one published stream and its dependent consumer bookkeeping.
+    ///
+    /// This is the explicit unpublish state transition. It removes the router
+    /// producer, drops the producer and pending-consumer indexes for that
+    /// stream and clears the `TransportMediaId` ownership entry in the same
+    /// step so later diagnostics or room policy updates cannot resolve stale
+    /// ownership
     pub(in crate::runtime::channel) fn unpublish_track(
         &mut self,
         session_id: &SessionId,
@@ -318,7 +400,7 @@ impl ChannelState {
         self.producer_ids_by_owner_stream
             .remove(&ProducerKey::new(session_id, stream_type));
         if let Some(transport_media_id) = removed_producer.transport_media_id {
-            self.producer_stream_types_by_transport_media_id
+            self.producer_transport_media_index
                 .remove(&transport_media_id);
         }
         let session_info_snapshot = match stream_type {
@@ -337,6 +419,12 @@ impl ChannelState {
         })
     }
 
+    /// Applies a publish-side active or paused transition for an existing producer.
+    ///
+    /// The `ProducerRouteTarget` comes from a fresh state lookup and is used as
+    /// a stale-callback guard. If any ownership field drifted since that lookup
+    /// the update becomes a no-op instead of mutating the wrong replacement
+    /// session.
     pub(in crate::runtime::channel) fn apply_producer_activity(
         &mut self,
         session_id: &SessionId,
@@ -392,6 +480,7 @@ impl ValidatedPublishDescriptor {
         &self.owner_session_id
     }
 
+    /// Freezes the validated publish inputs together with router-ready RTP data.
     pub(in crate::runtime::channel) fn into_prepared_track(
         self,
         consumable_rtp_parameters: RouterRtpParameters,
@@ -413,6 +502,11 @@ impl ProducerRouteTarget {
 }
 
 impl UnpublishTrackOutcome {
+    /// Emits the unpublish side effects after state cleanup already landed
+    ///
+    /// Recipients always get the track binding removal. Camera and screen
+    /// unpublish also fan out a session-info snapshot so clients can clear the
+    /// visible publication flag without rebuilding their own projection.
     pub(in crate::runtime::channel) fn emit(self, session_id: &SessionId, stream_type: StreamType) {
         let track_update = SessionOutbound::TrackBindingUpdate(TrackBindingUpdate {
             session_id: session_id.clone(),
