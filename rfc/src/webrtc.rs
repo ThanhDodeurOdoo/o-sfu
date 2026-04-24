@@ -3,11 +3,15 @@
 //! - ICE protocol: <https://www.rfc-editor.org/rfc/rfc8445>
 //! - ICE candidate grammar (legacy, still interoperable in SDP): <https://www.rfc-editor.org/rfc/rfc5245>
 //! - DTLS-SRTP protection profiles: <https://www.rfc-editor.org/rfc/rfc5764>
-//! - BUNDLE and MID signaling: <https://www.rfc-editor.org/rfc/rfc8843>
+//! - BUNDLE and MID signaling: <https://www.rfc-editor.org/rfc/rfc9143>
+//! - RTP payload restrictions and RID signaling: <https://www.rfc-editor.org/rfc/rfc8851>
 //! - RTP stream ID header extensions: <https://www.rfc-editor.org/rfc/rfc8852>
+//! - SDP simulcast signaling: <https://www.rfc-editor.org/rfc/rfc8853>
 //! - RTCP multiplexing: <https://www.rfc-editor.org/rfc/rfc5761>
 //! - SDP `setup` roles for connection-oriented media: <https://www.rfc-editor.org/rfc/rfc4145>
 //! - DTLS-SRTP offer/answer usage of `setup`: <https://www.rfc-editor.org/rfc/rfc5763>
+//! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
+//! - Layer Refresh Request feedback: <https://www.rfc-editor.org/rfc/rfc9627>
 
 use std::fmt;
 
@@ -195,6 +199,11 @@ pub mod rtcp_feedback {
         ///
         /// Reference: RFC 5104 section 4.3.1.
         pub const FIR: &str = "fir";
+
+        /// Layer Refresh Request parameter token.
+        ///
+        /// Reference: RFC 9627 section 6.
+        pub const LRR: &str = "lrr";
     }
 }
 
@@ -202,20 +211,87 @@ pub mod sdp {
     pub mod group_semantics {
         /// `a=group:BUNDLE ...`
         ///
-        /// Reference: RFC 8843.
+        /// Reference: RFC 9143.
         pub const BUNDLE: &str = "BUNDLE";
     }
 
     pub mod attribute {
+        /// `a=extmap:<id> <uri>`
+        ///
+        /// Reference: RFC 8285 section 5.
+        pub const EXTMAP: &str = "extmap";
+
+        /// `a=rtcp-fb:<pt> <feedback-type> [<feedback-parameter>]`
+        ///
+        /// Reference: RFC 4585 section 4.2.
+        pub const RTCP_FB: &str = "rtcp-fb";
+
         /// `a=rtcp-mux`
         ///
         /// Reference: RFC 5761.
         pub const RTCP_MUX: &str = "rtcp-mux";
 
+        /// `a=rid:<rid-id> <direction> ...`
+        ///
+        /// Reference: RFC 8851 section 4.
+        pub const RID: &str = "rid";
+
+        /// `a=simulcast:<send-or-recv-list> ...`
+        ///
+        /// Reference: RFC 8853 section 5.1.
+        pub const SIMULCAST: &str = "simulcast";
+
         /// `a=setup:<role>`
         ///
         /// References: RFC 4145, RFC 5763.
         pub const SETUP: &str = "setup";
+    }
+
+    /// `a=rid` directions and validation helpers.
+    pub mod rid {
+        pub const DIRECTION_SEND: &str = "send";
+        pub const DIRECTION_RECV: &str = "recv";
+
+        #[must_use]
+        pub fn is_id(value: &str) -> bool {
+            !value.is_empty() && value.as_bytes().iter().all(|byte| is_id_byte(*byte))
+        }
+
+        #[must_use]
+        pub const fn is_id_byte(value: u8) -> bool {
+            matches!(value, b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'-' | b'_')
+        }
+    }
+
+    /// `a=rid` restriction parameter names.
+    ///
+    /// Reference: RFC 8851 section 12.2.
+    pub mod rid_restriction {
+        pub const PAYLOAD_TYPES: &str = "pt";
+        pub const MAX_WIDTH: &str = "max-width";
+        pub const MAX_HEIGHT: &str = "max-height";
+        pub const MAX_FPS: &str = "max-fps";
+        pub const MAX_FRAME_SIZE: &str = "max-fs";
+        pub const MAX_BITRATE: &str = "max-br";
+        pub const MAX_PIXEL_RATE: &str = "max-pps";
+        pub const MAX_BITS_PER_PIXEL: &str = "max-bpp";
+        pub const DEPENDS_ON: &str = "depend";
+    }
+
+    /// `a=simulcast` list delimiters and prefixes.
+    ///
+    /// Reference: RFC 8853 section 5.1.
+    pub mod simulcast {
+        pub const DIRECTION_SEND: &str = super::rid::DIRECTION_SEND;
+        pub const DIRECTION_RECV: &str = super::rid::DIRECTION_RECV;
+        pub const STREAM_SEPARATOR: char = ';';
+        pub const ALTERNATIVE_SEPARATOR: char = ',';
+        pub const INITIAL_PAUSE_PREFIX: char = '~';
+
+        #[must_use]
+        pub fn strip_initial_pause_prefix(value: &str) -> Option<&str> {
+            value.strip_prefix(INITIAL_PAUSE_PREFIX)
+        }
     }
 
     pub mod transport_protocol {
@@ -262,6 +338,47 @@ pub mod sdp {
         ///
         /// Reference: RFC 8866 section 6.7.
         pub const SEND_RECV: &str = "sendrecv";
+    }
+}
+
+/// Direction tokens used by RFC 8851 RID and RFC 8853 simulcast attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RtpStreamDirection {
+    Send,
+    Recv,
+}
+
+impl RtpStreamDirection {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Send => sdp::rid::DIRECTION_SEND,
+            Self::Recv => sdp::rid::DIRECTION_RECV,
+        }
+    }
+
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            sdp::rid::DIRECTION_SEND => Some(Self::Send),
+            sdp::rid::DIRECTION_RECV => Some(Self::Recv),
+            _ => None,
+        }
+    }
+}
+
+impl AsRef<str> for RtpStreamDirection {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Send => sdp::rid::DIRECTION_SEND,
+            Self::Recv => sdp::rid::DIRECTION_RECV,
+        }
+    }
+}
+
+impl fmt::Display for RtpStreamDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -391,7 +508,7 @@ pub mod rtp_header_extension_uri {
 
     /// MID RTP header extension URI.
     ///
-    /// Reference: RFC 8843 section 15.2.
+    /// Reference: RFC 9143 section 16.4.
     pub const MID: &str = rtp_header_extension_sdes_urn!("mid");
 
     /// Audio level RTP header extension URI.
@@ -414,6 +531,11 @@ pub mod rtp_header_extension_uri {
     /// Reference: RFC 8852.
     pub const REPAIRED_RTP_STREAM_ID: &str =
         rtp_header_extension_sdes_urn!("repaired-rtp-stream-id");
+
+    /// Video Frame Marking RTP header extension URI.
+    ///
+    /// Reference: RFC 9626 section 3.4.
+    pub const FRAME_MARKING: &str = rtp_header_extension_urn!("framemarking");
 
     /// Absolute send time RTP header extension URI.
     ///
@@ -447,9 +569,13 @@ pub mod rtp_header_extension_uri {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RtpHeaderExtensionUri {
     Mid,
+    RtpStreamId,
+    RepairedRtpStreamId,
+    FrameMarking,
     AbsSendTime,
     TransportWideCcDraft01,
     SsrcAudioLevel,
+    CsrcAudioLevel,
     Other(String),
 }
 
@@ -458,9 +584,13 @@ impl RtpHeaderExtensionUri {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Mid => rtp_header_extension_uri::MID,
+            Self::RtpStreamId => rtp_header_extension_uri::RTP_STREAM_ID,
+            Self::RepairedRtpStreamId => rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID,
+            Self::FrameMarking => rtp_header_extension_uri::FRAME_MARKING,
             Self::AbsSendTime => rtp_header_extension_uri::ABS_SEND_TIME,
             Self::TransportWideCcDraft01 => rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
             Self::SsrcAudioLevel => rtp_header_extension_uri::SSRC_AUDIO_LEVEL,
+            Self::CsrcAudioLevel => rtp_header_extension_uri::CSRC_AUDIO_LEVEL,
             Self::Other(uri) => uri.as_str(),
         }
     }
@@ -470,9 +600,13 @@ impl From<&str> for RtpHeaderExtensionUri {
     fn from(value: &str) -> Self {
         match value {
             rtp_header_extension_uri::MID => Self::Mid,
+            rtp_header_extension_uri::RTP_STREAM_ID => Self::RtpStreamId,
+            rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID => Self::RepairedRtpStreamId,
+            rtp_header_extension_uri::FRAME_MARKING => Self::FrameMarking,
             rtp_header_extension_uri::ABS_SEND_TIME => Self::AbsSendTime,
             rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01 => Self::TransportWideCcDraft01,
             rtp_header_extension_uri::SSRC_AUDIO_LEVEL => Self::SsrcAudioLevel,
+            rtp_header_extension_uri::CSRC_AUDIO_LEVEL => Self::CsrcAudioLevel,
             _ => Self::Other(value.to_owned()),
         }
     }
@@ -498,5 +632,60 @@ impl fmt::Display for RtpHeaderExtensionUri {
 
 /// RTCP SDES item type defined for MID.
 ///
-/// Reference: RFC 8843 section 15.1.
+/// Reference: RFC 9143 section 16.3.
 pub const RTCP_SDES_ITEM_MID: u8 = 15;
+
+#[cfg(test)]
+mod tests {
+    use super::{RtpHeaderExtensionUri, RtpStreamDirection, rtp_header_extension_uri, sdp};
+
+    #[test]
+    fn rtp_stream_direction_uses_case_sensitive_rfc_tokens() {
+        assert_eq!(
+            RtpStreamDirection::parse(sdp::rid::DIRECTION_SEND),
+            Some(RtpStreamDirection::Send)
+        );
+        assert_eq!(
+            RtpStreamDirection::parse(sdp::rid::DIRECTION_RECV),
+            Some(RtpStreamDirection::Recv)
+        );
+        assert_eq!(RtpStreamDirection::Send.as_str(), "send");
+        assert_eq!(RtpStreamDirection::parse("SEND"), None);
+    }
+
+    #[test]
+    fn rid_id_validation_follows_rfc_8851_grammar() {
+        assert!(sdp::rid::is_id("low-1"));
+        assert!(sdp::rid::is_id("hi_2"));
+        assert!(!sdp::rid::is_id(""));
+        assert!(!sdp::rid::is_id("hi.2"));
+        assert!(!sdp::rid::is_id("hi:2"));
+    }
+
+    #[test]
+    fn simulcast_prefix_and_delimiters_follow_rfc_8853() {
+        assert_eq!(sdp::simulcast::STREAM_SEPARATOR, ';');
+        assert_eq!(sdp::simulcast::ALTERNATIVE_SEPARATOR, ',');
+        assert_eq!(
+            sdp::simulcast::strip_initial_pause_prefix("~hi"),
+            Some("hi")
+        );
+        assert_eq!(sdp::simulcast::strip_initial_pause_prefix("hi"), None);
+    }
+
+    #[test]
+    fn header_extension_uri_maps_simulcast_and_svc_values() {
+        assert_eq!(
+            RtpHeaderExtensionUri::from(rtp_header_extension_uri::RTP_STREAM_ID),
+            RtpHeaderExtensionUri::RtpStreamId
+        );
+        assert_eq!(
+            RtpHeaderExtensionUri::from(rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID),
+            RtpHeaderExtensionUri::RepairedRtpStreamId
+        );
+        assert_eq!(
+            RtpHeaderExtensionUri::from(rtp_header_extension_uri::FRAME_MARKING),
+            RtpHeaderExtensionUri::FrameMarking
+        );
+    }
+}

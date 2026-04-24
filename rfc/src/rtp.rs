@@ -1,7 +1,11 @@
-//! RFC references coverd
+//! RFC references covered:
 //! - RTP base protocol: <https://www.rfc-editor.org/rfc/rfc3550>
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
+//! - RTCP feedback profile: <https://www.rfc-editor.org/rfc/rfc4585>
+//! - RTP stream identifier SDES items: <https://www.rfc-editor.org/rfc/rfc8852>
+//! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
+//! - Layer Refresh Request feedback: <https://www.rfc-editor.org/rfc/rfc9627>
 
 use std::fmt;
 
@@ -455,6 +459,14 @@ pub const RTCP_PACKET_TYPE_RR: u8 = 201;
 pub const RTCP_PACKET_TYPE_SDES: u8 = 202;
 pub const RTCP_PACKET_TYPE_BYE: u8 = 203;
 pub const RTCP_PACKET_TYPE_APP: u8 = 204;
+/// RTCP transport-layer feedback packet type.
+///
+/// Reference: RFC 4585 section 6.1.
+pub const RTCP_PACKET_TYPE_RTPFB: u8 = 205;
+/// RTCP payload-specific feedback packet type.
+///
+/// Reference: RFC 4585 section 6.1.
+pub const RTCP_PACKET_TYPE_PSFB: u8 = 206;
 
 /// RTCP SDES item type codes from RFC 3550 section 12.2.
 pub const RTCP_SDES_ITEM_CNAME: u8 = 1;
@@ -465,6 +477,37 @@ pub const RTCP_SDES_ITEM_LOC: u8 = 5;
 pub const RTCP_SDES_ITEM_TOOL: u8 = 6;
 pub const RTCP_SDES_ITEM_NOTE: u8 = 7;
 pub const RTCP_SDES_ITEM_PRIV: u8 = 8;
+/// RTCP SDES item type for `RtpStreamId`.
+///
+/// Reference: RFC 8852 section 4.1.
+pub const RTCP_SDES_ITEM_RTP_STREAM_ID: u8 = 12;
+/// RTCP SDES item type for `RepairedRtpStreamId`.
+///
+/// Reference: RFC 8852 section 4.2.
+pub const RTCP_SDES_ITEM_REPAIRED_RTP_STREAM_ID: u8 = 13;
+
+/// RTCP feedback FMT values.
+pub mod rtcp_feedback_format {
+    /// Generic NACK FMT value for RTPFB packets.
+    ///
+    /// Reference: RFC 4585 section 6.2.1.
+    pub const RTPFB_GENERIC_NACK: u8 = 1;
+
+    /// Picture Loss Indication FMT value for PSFB packets.
+    ///
+    /// Reference: RFC 4585 section 6.3.1.
+    pub const PSFB_PLI: u8 = 1;
+
+    /// Full Intra Request FMT value for PSFB packets.
+    ///
+    /// Reference: RFC 5104 section 4.3.1.
+    pub const PSFB_FIR: u8 = 4;
+
+    /// Layer Refresh Request FMT value for PSFB packets.
+    ///
+    /// Reference: RFC 9627 section 8.
+    pub const PSFB_LRR: u8 = 10;
+}
 
 /// RTP header-extension profile IDs from RFC 8285.
 pub mod header_extension {
@@ -505,9 +548,61 @@ pub mod header_extension {
     }
 }
 
+/// Video Frame Marking RTP header-extension payload values.
+///
+/// Reference: RFC 9626 section 3.
+pub mod frame_marking {
+    /// Full long-form frame-marking payload length.
+    pub const LONG_DATA_LEN_WITH_TL0PICIDX: u8 = 3;
+
+    /// Long-form payload length when TL0PICIDX is omitted.
+    pub const LONG_DATA_LEN_WITHOUT_TL0PICIDX: u8 = 2;
+
+    /// Long-form payload length when both LID and TL0PICIDX are omitted.
+    pub const LONG_DATA_LEN_FLAGS_ONLY: u8 = 1;
+
+    /// Short-form non-scalable frame-marking payload length.
+    pub const SHORT_DATA_LEN: u8 = 1;
+
+    /// Start-of-frame flag in the first frame-marking octet.
+    pub const START_OF_FRAME_MASK: u8 = 0b1000_0000;
+
+    /// End-of-frame flag in the first frame-marking octet.
+    pub const END_OF_FRAME_MASK: u8 = 0b0100_0000;
+
+    /// Independent-frame flag in the first frame-marking octet.
+    pub const INDEPENDENT_FRAME_MASK: u8 = 0b0010_0000;
+
+    /// Discardable-frame flag in the first frame-marking octet.
+    pub const DISCARDABLE_FRAME_MASK: u8 = 0b0001_0000;
+
+    /// Base-layer-sync flag in the long-form first octet.
+    pub const BASE_LAYER_SYNC_MASK: u8 = 0b0000_1000;
+
+    /// Temporal-layer identifier bits in the long-form first octet.
+    pub const TEMPORAL_LAYER_ID_MASK: u8 = 0b0000_0111;
+
+    /// Maximum temporal-layer identifier representable by the 3-bit TID field.
+    pub const TEMPORAL_LAYER_ID_MAX: u8 = 7;
+
+    /// Base layer identifier used for TID and LID.
+    pub const BASE_LAYER_ID: u8 = 0;
+
+    #[must_use]
+    pub const fn temporal_layer_id(first_octet: u8) -> u8 {
+        first_octet & TEMPORAL_LAYER_ID_MASK
+    }
+
+    #[must_use]
+    pub const fn is_valid_temporal_layer_id(value: u8) -> bool {
+        value <= TEMPORAL_LAYER_ID_MAX
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::h264::{LevelIdc, Profile, ProfileLevelId};
+    use super::{frame_marking, header_extension, rtcp_feedback_format};
 
     #[test]
     fn h264_profile_level_id_parses_profile_and_level() {
@@ -523,5 +618,40 @@ mod tests {
     fn h264_level_ordering_keeps_level_1b_between_level_1_and_level_1_1() {
         assert!(LevelIdc::Level1 < LevelIdc::Level1B);
         assert!(LevelIdc::Level1B < LevelIdc::Level1_1);
+    }
+
+    #[test]
+    fn rtcp_feedback_values_include_layer_refresh_request() {
+        assert_eq!(super::RTCP_PACKET_TYPE_RTPFB, 205);
+        assert_eq!(super::RTCP_PACKET_TYPE_PSFB, 206);
+        assert_eq!(rtcp_feedback_format::RTPFB_GENERIC_NACK, 1);
+        assert_eq!(rtcp_feedback_format::PSFB_PLI, 1);
+        assert_eq!(rtcp_feedback_format::PSFB_FIR, 4);
+        assert_eq!(rtcp_feedback_format::PSFB_LRR, 10);
+    }
+
+    #[test]
+    fn stream_id_sdes_items_follow_rfc_8852_allocations() {
+        assert_eq!(super::RTCP_SDES_ITEM_RTP_STREAM_ID, 12);
+        assert_eq!(super::RTCP_SDES_ITEM_REPAIRED_RTP_STREAM_ID, 13);
+    }
+
+    #[test]
+    fn frame_marking_helpers_extract_temporal_layer_id() {
+        let flags = frame_marking::START_OF_FRAME_MASK
+            | frame_marking::BASE_LAYER_SYNC_MASK
+            | frame_marking::TEMPORAL_LAYER_ID_MAX;
+
+        assert_eq!(
+            frame_marking::temporal_layer_id(flags),
+            frame_marking::TEMPORAL_LAYER_ID_MAX
+        );
+        assert!(frame_marking::is_valid_temporal_layer_id(
+            frame_marking::TEMPORAL_LAYER_ID_MAX
+        ));
+        assert!(!frame_marking::is_valid_temporal_layer_id(8));
+        assert!(header_extension::is_one_byte_id(
+            header_extension::ONE_BYTE_ID_MIN
+        ));
     }
 }
