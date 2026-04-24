@@ -1,7 +1,5 @@
+use super::{super::route_control::PacketLayerGate, RtcBootstrapState};
 use crate::runtime::transport_adapter::TransportMediaId;
-
-use super::super::route_control::PacketLayerGate;
-use super::RtcBootstrapState;
 
 impl RtcBootstrapState {
     pub(in crate::runtime::rtc_adapter) fn set_source_packet_gate(

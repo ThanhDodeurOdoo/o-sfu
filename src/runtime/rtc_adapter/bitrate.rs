@@ -13,11 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::state::RtcBootstrapState;
 use crate::runtime::transport_adapter::{
     TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
-
-use super::state::RtcBootstrapState;
 
 const BITRATE_WINDOW_NANOS: u64 = 1_000_000_000;
 
@@ -205,10 +204,10 @@ impl RtcBootstrapState {
 mod tests {
     use std::sync::Mutex;
 
-    use super::*;
-
-    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
     use o_sfu_protocol::shared::SessionId;
+
+    use super::*;
+    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
 
     #[test]
     fn incoming_media_bitrate_reports_recent_bits() {

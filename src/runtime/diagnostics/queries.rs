@@ -10,14 +10,17 @@
 //! They gather channel snapshots, merge in transport health and bitrate
 //! data, and attach the relevant recent-event history from `DiagnosticsStore`.
 
-use crate::runtime::channel::{ChannelManager, RuntimeChannelDirectorySnapshot};
-use crate::runtime::transport_adapter::ObservabilityPort;
-
-use super::store::DiagnosticsStore;
-use super::types::{
-    DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
-    DiagnosticsSessionLookup, DiagnosticsSessionLookupConflict, DiagnosticsSessionView,
-    DiagnosticsSummaryResponse, DiagnosticsTransportCounts, DiagnosticsTransportHealth,
+use super::{
+    store::DiagnosticsStore,
+    types::{
+        DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
+        DiagnosticsSessionLookup, DiagnosticsSessionLookupConflict, DiagnosticsSessionView,
+        DiagnosticsSummaryResponse, DiagnosticsTransportCounts, DiagnosticsTransportHealth,
+    },
+};
+use crate::runtime::{
+    channel::{ChannelManager, RuntimeChannelDirectorySnapshot},
+    transport_adapter::ObservabilityPort,
 };
 
 #[derive(Debug, Clone)]

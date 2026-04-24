@@ -601,8 +601,11 @@ pub mod frame_marking {
 
 #[cfg(test)]
 mod tests {
-    use super::h264::{LevelIdc, Profile, ProfileLevelId};
-    use super::{frame_marking, header_extension, rtcp_feedback_format};
+    use super::{
+        frame_marking,
+        h264::{LevelIdc, Profile, ProfileLevelId},
+        header_extension, rtcp_feedback_format,
+    };
 
     #[test]
     fn h264_profile_level_id_parses_profile_and_level() {

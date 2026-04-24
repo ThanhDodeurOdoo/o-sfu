@@ -1,20 +1,19 @@
 #[cfg(test)]
 pub(crate) mod debug;
 
+use std::{collections::BTreeSet, time::Instant};
+
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
-use std::collections::BTreeSet;
-use std::time::Instant;
-
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
+use super::{relay_registry::RelayTargetId, route_control::PacketLayerGate};
+use crate::runtime::{
+    ChannelInstanceId,
+    transport_adapter::{
+        ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
+    },
 };
-
-use super::relay_registry::RelayTargetId;
-use super::route_control::PacketLayerGate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CloseSessionState {

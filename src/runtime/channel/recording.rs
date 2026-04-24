@@ -4,9 +4,9 @@ use o_sfu_protocol::{
 };
 
 use super::{Channel, ChannelSessionPermissions};
-use crate::runtime::ConnectionId;
-use crate::runtime::diagnostics::DiagnosticsEventData;
-use crate::runtime::telemetry::schema::event as telemetry_event;
+use crate::runtime::{
+    ConnectionId, diagnostics::DiagnosticsEventData, telemetry::schema::event as telemetry_event,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecordingPermissions {

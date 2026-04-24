@@ -9,9 +9,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::{net::UdpSocket, time::timeout};
-use tokio_util::bytes::Bytes;
-
 use o_sfu_protocol::signaling::SessionDescriptionPayload;
 use o_sfu_router::MediaKind;
 use str0m::{
@@ -22,6 +19,8 @@ use str0m::{
     net::{Protocol, Receive},
     rtp::{ExtensionValues, RtpPacket},
 };
+use tokio::{net::UdpSocket, time::timeout};
+use tokio_util::bytes::Bytes;
 
 use super::fake_media::{FakeClock, FakeMediaFrame, FakeMediaSource};
 

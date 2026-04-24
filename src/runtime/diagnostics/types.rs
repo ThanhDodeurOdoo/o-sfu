@@ -2,11 +2,11 @@
 //!
 //!structs and enums shape returned by the diagnostics tools
 
+use o_sfu_protocol::shared::{RecordingState, SessionId, SessionInfo, StreamType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::runtime::rtc_adapter::TransportSessionHealth;
-use o_sfu_protocol::shared::{RecordingState, SessionId, SessionInfo, StreamType};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

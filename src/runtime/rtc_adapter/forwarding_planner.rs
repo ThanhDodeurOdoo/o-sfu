@@ -1,12 +1,13 @@
-use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
-use crate::runtime::packet_sink_registry::ChannelPacketSinkRegistry;
-
 use super::{
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
     relay_registry::{RelayRegistry, RelayTargetTransport},
     route_control::PacketRouteDecision,
     state::RtcBootstrapState,
+};
+use crate::runtime::{
+    metrics::{RtcRouteControlOutcome, RuntimeMetrics},
+    packet_sink_registry::ChannelPacketSinkRegistry,
 };
 
 // TODO: needs documentation:
@@ -107,29 +108,35 @@ fn has_routed_forward(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Instant,
     };
-    use std::time::Instant;
 
+    use o_sfu_protocol::shared::SessionId;
     use str0m::media::Mid;
 
     use super::*;
-    use crate::runtime::metrics::RuntimeMetrics;
-    use crate::runtime::recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink};
-    use crate::runtime::rtc_adapter::{
-        demux::{MediaRouteDestination, MediaRouteEntry},
-        forwarding_destination::ForwardingDestination,
-        media_registry::RegisteredMediaHandle,
-        relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId},
-        route_control::PacketLayerGate,
-        sample_forwarded_packet, sample_forwarded_packet_with_rid,
-        test_support::test_transport_session_key,
+    use crate::runtime::{
+        ChannelInstanceId, ConnectionId,
+        metrics::RuntimeMetrics,
+        recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
+        rtc_adapter::{
+            demux::{MediaRouteDestination, MediaRouteEntry},
+            forwarding_destination::ForwardingDestination,
+            media_registry::RegisteredMediaHandle,
+            relay_registry::{
+                InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId,
+            },
+            route_control::PacketLayerGate,
+            sample_forwarded_packet, sample_forwarded_packet_with_rid,
+            test_support::test_transport_session_key,
+        },
+        transport_adapter::{TransportMediaId, TransportSessionKey},
     };
-    use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-    use crate::runtime::{ChannelInstanceId, ConnectionId};
-    use o_sfu_protocol::shared::SessionId;
 
     struct CountingSink {
         packets: AtomicUsize,

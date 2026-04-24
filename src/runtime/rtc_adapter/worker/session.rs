@@ -5,24 +5,27 @@
 //! hints, snapshot state, bitrate tracking, and lifetime metrics without
 //! leaving packet-loop-visible stuff behind
 
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use tokio::sync::oneshot;
 
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
+use super::{
+    super::{
+        bitrate::RtcBitrateState,
+        commands::{CloseSessionOutcome, CloseSessionState, RelayCleanup},
+        media_registry::RegisteredMediaHandle,
+        state::{RtcBootstrapState, RtcSnapshotState},
+    },
+    media::refresh_source_packet_gate,
 };
-
-use super::super::{
-    bitrate::RtcBitrateState,
-    commands::{CloseSessionOutcome, CloseSessionState, RelayCleanup},
-    media_registry::RegisteredMediaHandle,
-    state::{RtcBootstrapState, RtcSnapshotState},
+use crate::runtime::{
+    metrics::RuntimeMetrics,
+    transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
 };
-use super::media::refresh_source_packet_gate;
 
 pub(super) fn respond_close_session(
     state: &mut RtcBootstrapState,

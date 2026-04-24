@@ -1,21 +1,25 @@
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::{
-    NegotiationPort, SessionOffer, TransportAdapterError, TransportSessionKey,
-};
-use crate::runtime::websocket_server::WsWriter;
 use o_sfu_protocol::signaling::{
     RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };
 use tracing::{info, instrument, warn};
 
-use super::super::{
-    controller::SessionProtocolOutcome,
-    flow_state::{
-        PendingFlowAction, PendingFlowRequest, RenegotiationDisposition, ResolvedFlowState,
+use super::{
+    super::{
+        controller::SessionProtocolOutcome,
+        flow_state::{
+            PendingFlowAction, PendingFlowRequest, RenegotiationDisposition, ResolvedFlowState,
+        },
+        frame_codec::send_server_request,
     },
-    frame_codec::send_server_request,
+    controller::PostAuthSessionProtocol,
 };
-use super::controller::PostAuthSessionProtocol;
+use crate::runtime::{
+    telemetry::schema::event as telemetry_event,
+    transport_adapter::{
+        NegotiationPort, SessionOffer, TransportAdapterError, TransportSessionKey,
+    },
+    websocket_server::WsWriter,
+};
 
 impl PostAuthSessionProtocol {
     #[instrument(
@@ -427,6 +431,7 @@ mod tests {
         time::Instant,
     };
 
+    use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
     use str0m::{Candidate, Rtc, change::SdpOffer};
 
     use super::staged_renegotiation_request;
@@ -443,7 +448,6 @@ mod tests {
             },
         },
     };
-    use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 
     fn build_real_rtc_transport_adapter(port_min: u16) -> RuntimeTransportAdapter {
         RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(

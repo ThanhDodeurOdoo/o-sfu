@@ -1,9 +1,8 @@
-use crate::shared::RecordingStateUpdate;
-
 use super::{
     Envelope, PeerInfoPayload, PeerLeftPayload, RecordingActionResult, RequestId,
     ServerBroadcastPayload, SessionDescriptionPayload, TrackBinding, WelcomePayload,
 };
+use crate::shared::RecordingStateUpdate;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientResponse {

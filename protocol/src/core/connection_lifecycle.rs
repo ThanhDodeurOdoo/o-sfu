@@ -50,13 +50,12 @@
 //! transient socket loss keeps enough state around to reconnect and
 //! rebuild from saved state.
 
-use crate::{
-    bundle_api::BundleConnectionState, shared::RecordingState, signaling::WebSocketCloseCode,
-};
-
 use super::{
     Command, Commands, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
     empty_features, next_recovery_delay,
+};
+use crate::{
+    bundle_api::BundleConnectionState, shared::RecordingState, signaling::WebSocketCloseCode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

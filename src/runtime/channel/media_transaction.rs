@@ -27,14 +27,9 @@
 
 use std::collections::BTreeMap;
 
-use tracing::warn;
-
-use crate::runtime::ConnectionId;
-use crate::runtime::diagnostics::DiagnosticsEventData;
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::{MediaPort, ObservabilityPort, TransportMediaId};
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaStream as RouterRtpParameters;
+use tracing::warn;
 
 use super::{
     Channel, ChannelMediaCounts,
@@ -42,6 +37,12 @@ use super::{
         ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, TransportMediaRemoval,
         ValidatedPublishDescriptor,
     },
+};
+use crate::runtime::{
+    ConnectionId,
+    diagnostics::DiagnosticsEventData,
+    telemetry::schema::event as telemetry_event,
+    transport_adapter::{MediaPort, ObservabilityPort, TransportMediaId},
 };
 
 #[cfg(test)]
@@ -873,9 +874,10 @@ fn pending_publish_parameters() -> RouterRtpParameters {
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_protocol::shared::SessionId;
+
     use super::StagedMediaReservation;
     use crate::runtime::{ConnectionId, transport_adapter::TransportMediaId};
-    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     #[should_panic(expected = "staged media reservation dropped while still reserved")]

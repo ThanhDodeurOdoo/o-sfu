@@ -1,11 +1,12 @@
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
-use crate::runtime::ConnectionId;
-use crate::runtime::source_model::{PublishedSourceId, SourceEncodingId};
-use crate::runtime::transport_adapter::TransportMediaId;
-
 use super::shared::{ChannelState, SourceKey};
+use crate::runtime::{
+    ConnectionId,
+    source_model::{PublishedSourceId, SourceEncodingId},
+    transport_adapter::TransportMediaId,
+};
 
 impl ChannelState {
     pub(in crate::runtime::channel) fn session_permissions(

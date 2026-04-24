@@ -1,6 +1,6 @@
-use o_sfu_protocol::signaling::WebSocketCloseCode;
-
 use std::time::Duration;
+
+use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::counter::{HistogramBucketLabel, MetricLabel};
 

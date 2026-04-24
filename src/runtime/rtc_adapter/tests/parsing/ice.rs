@@ -1,9 +1,10 @@
 use std::net::IpAddr;
 
-use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 use o_sfu_rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
+
+use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 
 const ICE_REPLAY_CONTEXT_HINT: &str = "raw ICE candidate line";
 const EXPECTED_CANDIDATE_FORMAT: &str =
@@ -338,10 +339,10 @@ fn log_diagnostic(diagnostic: &IceParseDiagnostic) {
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_rfc::webrtc;
     use o_sfu_router::ParseDiagnosticKind;
 
     use super::parse_ice_candidate;
-    use o_sfu_rfc::webrtc;
 
     #[test]
     fn parse_ice_candidate_accepts_supported_udp_host_candidate() {

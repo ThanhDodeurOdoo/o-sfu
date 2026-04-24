@@ -11,8 +11,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use str0m::bwe::Bitrate;
 use str0m::{
+    bwe::Bitrate,
     change::{SdpAnswer, SdpApi},
     media::{Direction, MediaKind, Mid},
     rtp::Ssrc,
@@ -20,18 +20,20 @@ use str0m::{
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use super::{
+    super::{
+        bootstrap,
+        state::{RtcBootstrapState, RtcSnapshotState},
+    },
+    publication::refresh_negotiated_producer_parameters,
+};
 use crate::{
-    config::MediaCodecFlags,
-    config::RtcPortRange,
-    runtime::metrics::RuntimeMetrics,
-    runtime::transport_adapter::{SessionOffer, TransportAdapterError, TransportSessionKey},
+    config::{MediaCodecFlags, RtcPortRange},
+    runtime::{
+        metrics::RuntimeMetrics,
+        transport_adapter::{SessionOffer, TransportAdapterError, TransportSessionKey},
+    },
 };
-
-use super::super::{
-    bootstrap,
-    state::{RtcBootstrapState, RtcSnapshotState},
-};
-use super::publication::refresh_negotiated_producer_parameters;
 
 const INITIAL_NEGOTIATION_DIRECTION: Direction = Direction::RecvOnly;
 const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, MediaKind::Video];

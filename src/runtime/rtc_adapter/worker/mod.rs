@@ -21,8 +21,7 @@ mod negotiation;
 mod publication;
 mod session;
 
-pub(crate) use dispatcher::WorkerCommandContext;
 #[cfg(test)]
 pub(crate) use dispatcher::handle_debug_worker_command;
-pub(crate) use dispatcher::handle_worker_command;
+pub(crate) use dispatcher::{WorkerCommandContext, handle_worker_command};
 pub(crate) use media::request_keyframe_for_source;

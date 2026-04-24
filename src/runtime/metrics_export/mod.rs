@@ -32,16 +32,18 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use o_sfu_protocol::signaling::WebSocketCloseCode;
+
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
-    use crate::{
-        runtime::metrics::{
+    use crate::runtime::{
+        metrics::{
             HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
             RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
         },
-        runtime::rtc_adapter::TransportSessionHealth,
+        rtc_adapter::TransportSessionHealth,
     };
-    use o_sfu_protocol::signaling::WebSocketCloseCode;
-    use std::time::Duration;
 
     fn assert_http_and_websocket_metrics(rendered: &str) {
         assert!(rendered.contains("# TYPE osfu_http_noop_requests_total counter"));

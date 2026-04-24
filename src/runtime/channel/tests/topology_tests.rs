@@ -1,7 +1,9 @@
-use super::fixtures::*;
-use crate::runtime::channel::router_state::ChannelRouterStateError;
-use crate::runtime::channel::topology::ChannelTopologyError;
 use o_sfu_router::{ProducerId as RouterProducerId, RouterError};
+
+use super::fixtures::*;
+use crate::runtime::channel::{
+    router_state::ChannelRouterStateError, topology::ChannelTopologyError,
+};
 
 #[test]
 fn topology_assigns_the_primary_router_to_joined_sessions() {

@@ -1,7 +1,8 @@
-use super::fixtures::*;
-use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use o_sfu_protocol::signaling::{ServerMessage, ServerRequest, TrackBinding};
 use o_sfu_router::MediaKind;
+
+use super::fixtures::*;
+use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 
 #[tokio::test]
 async fn protocol_session_serializes_topology_renegotiations() {

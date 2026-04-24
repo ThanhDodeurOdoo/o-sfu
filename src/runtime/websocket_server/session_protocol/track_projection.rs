@@ -8,8 +8,10 @@ use o_sfu_protocol::{
     },
 };
 
-use crate::runtime::channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate};
-use crate::runtime::source_model::PublishedSourceDescriptor;
+use crate::runtime::{
+    channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate},
+    source_model::PublishedSourceDescriptor,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TranslatedServerMessage {

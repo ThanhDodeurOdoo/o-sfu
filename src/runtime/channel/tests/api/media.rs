@@ -4,10 +4,11 @@ use o_sfu_router::{
 };
 use tracing::warn;
 
-use crate::runtime::ConnectionId;
-use crate::runtime::transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId};
-
 use super::super::super::{Channel, media_transaction::PendingPublishTransaction};
+use crate::runtime::{
+    ConnectionId,
+    transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct NegotiatedPublish {

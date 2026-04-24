@@ -1,12 +1,7 @@
+use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 use o_sfu_router::MediaCapabilities;
 use tokio::sync::mpsc;
 use tracing::warn;
-
-use crate::runtime::ConnectionId;
-use crate::runtime::diagnostics::DiagnosticsEventData;
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::{MediaPort, RuntimeTransportAdapter, SessionPort};
-use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
 
 use super::{
     Channel, ChannelJoinError, ChannelSessionPermissions, SessionOutbound,
@@ -15,6 +10,12 @@ use super::{
         DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome, LifecycleEffects,
         TransportMediaRemoval,
     },
+};
+use crate::runtime::{
+    ConnectionId,
+    diagnostics::DiagnosticsEventData,
+    telemetry::schema::event as telemetry_event,
+    transport_adapter::{MediaPort, RuntimeTransportAdapter, SessionPort},
 };
 #[derive(Clone, Copy)]
 pub(in crate::runtime::channel) struct SessionCleanup<'a> {

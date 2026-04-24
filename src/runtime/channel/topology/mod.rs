@@ -3,16 +3,15 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use o_sfu_router::SessionPermissions as RouterSessionPermissions;
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
     MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
-    StreamType as RouterStreamType,
+    SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
 };
 
 use super::router_state::{ChannelRouterState, ChannelRouterStateError};
 use crate::runtime::recording::RecordingService;
-use o_sfu_protocol::shared::SessionId;
 
 #[cfg(test)]
 mod test_support;

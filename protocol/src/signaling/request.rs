@@ -1,9 +1,8 @@
-use crate::shared::SessionInfo;
-
 use super::{
     ClientBroadcastPayload, Envelope, RecordingOptions, RequestId, SessionDescriptionPayload,
     StreamIntentPayload, SubscribePayload,
 };
+use crate::shared::SessionInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMessage {

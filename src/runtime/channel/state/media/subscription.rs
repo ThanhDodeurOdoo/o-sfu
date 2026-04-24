@@ -1,22 +1,23 @@
+use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
     can_consume, negotiate_consumer_rtp_parameters,
 };
 use tracing::{error, warn};
 
-use crate::runtime::ConnectionId;
-use crate::runtime::source_model::{
-    ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+use super::{
+    super::{
+        super::{ChannelEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
+        ids::{ConsumerRuntimeId, ProducerRuntimeId},
+        shared::{ChannelState, ConsumerKey, ConsumerState, PublishedProducer, SourceKey},
+    },
+    router_stream_type::to_router_stream_type,
 };
-use crate::runtime::transport_adapter::TransportMediaId;
-use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
-
-use super::super::{
-    super::{ChannelEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
-    ids::{ConsumerRuntimeId, ProducerRuntimeId},
-    shared::{ChannelState, ConsumerKey, ConsumerState, PublishedProducer, SourceKey},
+use crate::runtime::{
+    ConnectionId,
+    source_model::{ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId},
+    transport_adapter::TransportMediaId,
 };
-use super::router_stream_type::to_router_stream_type;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct ConsumerRouteUpdate {

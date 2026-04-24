@@ -4,9 +4,6 @@ use std::{
 };
 
 use futures_util::SinkExt;
-use tokio::time::timeout;
-use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
-
 use o_sfu::{config::Config, testing::server::TestServer};
 use o_sfu_protocol::{
     shared::{SessionId, SessionInfo},
@@ -15,6 +12,8 @@ use o_sfu_protocol::{
         EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, WelcomePayload,
     },
 };
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use super::{
     fake_rtc_peer::FakeRtcPeer,

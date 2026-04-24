@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use o_sfu_protocol::shared::SessionId as SignalingSessionId;
 use o_sfu_router::{
     MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, StreamType, TransportId,
 };
 
-use crate::runtime::transport_adapter::TransportMediaId;
 use crate::runtime::{
     ChannelInstanceId,
     metrics::RuntimeMetrics,
@@ -15,8 +15,8 @@ use crate::runtime::{
         },
     },
     rtc_adapter::{sample_forwarded_packet, test_support::test_transport_session_key},
+    transport_adapter::TransportMediaId,
 };
-use o_sfu_protocol::shared::SessionId as SignalingSessionId;
 
 #[test]
 fn recording_service_counts_packets_without_recounting_streams() {

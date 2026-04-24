@@ -1,6 +1,5 @@
-use o_sfu_router::StreamType as RouterStreamType;
-
 use o_sfu_protocol::shared::StreamType;
+use o_sfu_router::StreamType as RouterStreamType;
 
 pub(super) const fn to_router_stream_type(stream_type: StreamType) -> RouterStreamType {
     match stream_type {

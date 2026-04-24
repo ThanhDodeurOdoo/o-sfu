@@ -1,10 +1,7 @@
-use o_sfu_protocol::shared::SessionId;
-use o_sfu_protocol::shared::StreamType;
-
-use crate::runtime::ConnectionId;
-use crate::runtime::transport_adapter::TransportMediaId;
+use o_sfu_protocol::shared::{SessionId, StreamType};
 
 use super::{Channel, PendingPublishTransactions};
+use crate::runtime::{ConnectionId, transport_adapter::TransportMediaId};
 
 impl PendingPublishTransactions {
     pub(in crate::runtime::channel) fn staged_count_for_connection(

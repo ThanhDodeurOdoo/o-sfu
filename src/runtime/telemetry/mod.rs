@@ -1,5 +1,4 @@
-use std::error::Error as StdError;
-use std::fmt;
+use std::{error::Error as StdError, fmt};
 
 use anyhow::{Result, anyhow};
 #[cfg(feature = "otel-tracing")]
@@ -19,23 +18,29 @@ use serde_json::{Map, Number, Value};
 use time::format_description::well_known::Rfc3339;
 #[cfg(feature = "otel-tracing")]
 use tracing::dispatcher;
-use tracing::field::{Field, Visit};
-use tracing::{Span, Subscriber, field};
+use tracing::{
+    Span, Subscriber, field,
+    field::{Field, Visit},
+};
 #[cfg(feature = "otel-tracing")]
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 #[cfg(feature = "otel-tracing")]
 use tracing_opentelemetry::OtelData;
 #[cfg(feature = "otel-tracing")]
 use tracing_opentelemetry::get_otel_context;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Registry;
-use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, JsonFields, Writer};
-use tracing_subscriber::fmt::{FmtContext, layer as fmt_layer};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
 #[cfg(feature = "otel-tracing")]
 use tracing_subscriber::registry::SpanRef;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{
+    EnvFilter, Registry,
+    fmt::{
+        FmtContext,
+        format::{FormatEvent, FormatFields, JsonFields, Writer},
+        layer as fmt_layer,
+    },
+    layer::SubscriberExt,
+    registry::LookupSpan,
+    util::SubscriberInitExt,
+};
 
 use crate::config::{TelemetryConfig, TelemetryLogFormat};
 
@@ -457,15 +462,15 @@ fn normalize_trace_export_endpoint(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
 
-    use tracing::Subscriber;
-    use tracing::subscriber;
+    use tracing::{Subscriber, subscriber};
     #[cfg(feature = "otel-tracing")]
     use tracing_opentelemetry::OpenTelemetryLayer;
-    use tracing_subscriber::fmt::MakeWriter;
-    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{fmt::MakeWriter, prelude::*};
 
     use super::*;
     use crate::config::{TelemetryLogFormat, TelemetryResource, TraceExportConfig};

@@ -1,21 +1,23 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
-use super::config::RtcTransportAdapterShardSetConfig;
-#[cfg(any(test, feature = "testing-transport"))]
-use super::fake::FakeWebRtcAdapter;
-use super::ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort};
-use super::shard_set::RtcTransportAdapterShardSet;
-use super::types::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
-};
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::rtc_adapter::TransportSessionHealth;
-use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 use tracing::warn;
+
+#[cfg(any(test, feature = "testing-transport"))]
+use super::fake::FakeWebRtcAdapter;
+use super::{
+    config::RtcTransportAdapterShardSetConfig,
+    ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
+    shard_set::RtcTransportAdapterShardSet,
+    types::{
+        ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
+        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    },
+};
+use crate::runtime::{
+    ChannelInstanceId, rtc_adapter::TransportSessionHealth,
+    transport_adapter::SourcePolicyUpdateSubscription,
+};
 
 macro_rules! dispatch_transport_backend {
     ($adapter:expr, |$backend:ident| $body:block) => {{

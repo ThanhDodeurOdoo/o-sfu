@@ -1,6 +1,5 @@
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
-
 use super::shared::{LabeledValue2, append_counter, append_gauge, append_labeled_counter_family_2};
+use crate::runtime::metrics::RuntimeMetricsSnapshot;
 
 pub(super) fn append_live_gauges(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_gauge(

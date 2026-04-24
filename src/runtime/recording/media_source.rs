@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::metrics::RtpForwardDestinationKind;
-use crate::runtime::packet_sink_registry::{
-    ChannelPacketSinkRegistry, PacketSink as MediaPacketSink,
+use crate::runtime::{
+    ChannelInstanceId,
+    metrics::RtpForwardDestinationKind,
+    packet_sink_registry::{ChannelPacketSinkRegistry, PacketSink as MediaPacketSink},
 };
 
 pub(crate) trait MediaSource: Send + Sync {

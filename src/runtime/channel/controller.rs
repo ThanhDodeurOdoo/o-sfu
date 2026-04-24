@@ -32,26 +32,14 @@
 //! what kind of work can it send back to a session?" this is the file that
 //! should answer that without requiring a deep read of the rest of `channel/`.
 
-use std::fmt;
-use std::sync::Arc;
-
-use o_sfu_router::RouterId;
-use tokio::sync::{Mutex, RwLock};
+use std::{fmt, sync::Arc};
 
 use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
     signaling::PeerSnapshot,
 };
-
-use crate::config::RuntimeFeatureFlags;
-use crate::runtime::diagnostics::{
-    DiagnosticsQualitySummary, DiagnosticsSessionTransport, DiagnosticsSessionView,
-    DiagnosticsStore,
-};
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
-use crate::runtime::transport_adapter::{ObservabilityPort, TransportSessionKey};
-use crate::runtime::{ChannelInstanceId, ConnectionId};
+use o_sfu_router::RouterId;
+use tokio::sync::{Mutex, RwLock};
 
 use super::{
     definition::ChannelDefinition,
@@ -59,6 +47,19 @@ use super::{
     lifecycle::SessionCloseReason,
     media_transaction::PendingPublishTransactions,
     state::{ChannelState, ConsumerRouteState, RemoteTrackBootstrap},
+};
+use crate::{
+    config::RuntimeFeatureFlags,
+    runtime::{
+        ChannelInstanceId, ConnectionId,
+        diagnostics::{
+            DiagnosticsQualitySummary, DiagnosticsSessionTransport, DiagnosticsSessionView,
+            DiagnosticsStore,
+        },
+        metrics::RuntimeMetrics,
+        recording::{MediaSource, MediaTap, RecordingService},
+        transport_adapter::{ObservabilityPort, TransportSessionKey},
+    },
 };
 
 /// Delta sent from channel state to one post-auth session's track projection.

@@ -48,11 +48,10 @@ pub(crate) use controller::{
 pub(crate) use events::ChannelEventMessage;
 pub(crate) use lifecycle::{ChannelSessionPermissions, SessionCloseReason};
 pub use manager::ChannelManager;
-pub(crate) use manager::ChannelManagerConfig;
-pub(crate) use manager::JoinSessionRequest;
-pub(crate) use manager::RuntimeChannelDirectorySnapshot;
-pub(crate) use manager::RuntimeChannelStatsSnapshot;
+pub(crate) use manager::{
+    ChannelManagerConfig, JoinSessionRequest, RuntimeChannelDirectorySnapshot,
+    RuntimeChannelStatsSnapshot,
+};
 #[cfg(test)]
 pub(in crate::runtime::channel) use membership::SessionCleanup;
-pub(crate) use state::ConsumerRouteState;
-pub(crate) use state::RemoteTrackBootstrap;
+pub(crate) use state::{ConsumerRouteState, RemoteTrackBootstrap};

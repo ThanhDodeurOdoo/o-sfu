@@ -1,12 +1,13 @@
-use std::sync::Arc;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::recording::{
-    MediaPacketSink, MediaTap,
-    test_support::{into_media_source, is_channel_active},
+use crate::runtime::{
+    ChannelInstanceId,
+    recording::{
+        MediaPacketSink, MediaTap,
+        test_support::{into_media_source, is_channel_active},
+    },
+    transport_adapter::{TransportMediaId, TransportSessionKey},
 };
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 struct NoopSink;
 

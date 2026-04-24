@@ -3,15 +3,13 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 
+use super::{super::WsWriter, post_auth::PostAuthSessionProtocol};
 use crate::runtime::{
     ConnectionId,
     channel::{Channel, SessionCloseReason, SessionOutbound},
     metrics::RuntimeMetrics,
     transport_adapter::RuntimeTransportAdapter,
 };
-
-use super::super::WsWriter;
-use super::post_auth::PostAuthSessionProtocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::websocket_server) enum SessionProtocolOutcome {

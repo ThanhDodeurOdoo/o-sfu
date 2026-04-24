@@ -1,10 +1,10 @@
-use crate::runtime::metrics::{DurationHistogramSnapshot, RuntimeMetricsSnapshot};
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::shared::{
     HistogramBucketValue, LabeledValue, append_counter, append_histogram,
     append_labeled_counter_family, close_code_label,
 };
+use crate::runtime::metrics::{DurationHistogramSnapshot, RuntimeMetricsSnapshot};
 
 pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_labeled_counter_family(

@@ -1,9 +1,8 @@
+use o_sfu_rfc::{rtp, webrtc};
 use o_sfu_router::{
     CodecSetting, HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind,
     MediaStream, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
-
-use o_sfu_rfc::{rtp, webrtc};
 
 const AUDIO_PAYLOAD_TYPE_OPUS: u8 = 111;
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;

@@ -6,6 +6,13 @@
 use std::time::Duration;
 
 use futures_util::SinkExt;
+use o_sfu::{
+    config::Config,
+    testing::{
+        http::{METRICS_PATH, STATS_PATH, StatsResponse},
+        server::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
+    },
+};
 use o_sfu_protocol::{
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     signaling::{
@@ -16,14 +23,6 @@ use o_sfu_protocol::{
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
-
-use o_sfu::{
-    config::Config,
-    testing::{
-        http::{METRICS_PATH, STATS_PATH, StatsResponse},
-        server::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
-    },
-};
 
 use super::{
     TestWebSocket, connect_websocket, create_channel,

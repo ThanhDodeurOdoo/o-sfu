@@ -7,9 +7,8 @@ use std::{
 
 use str0m::media::Mid;
 
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
 use super::route_control::PacketLayerGate;
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 /// A single forwarding destination within the media route index.
 #[derive(Debug, Clone)]
@@ -258,10 +257,13 @@ impl RemoteAddrDemux {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use super::RemoteAddrDemux;
-    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
-    use crate::runtime::transport_adapter::TransportSessionKey;
     use o_sfu_protocol::shared::SessionId;
+
+    use super::RemoteAddrDemux;
+    use crate::runtime::{
+        rtc_adapter::test_support::test_transport_session_key,
+        transport_adapter::TransportSessionKey,
+    };
 
     fn session_key(channel_instance_id: u64, session_numeric_id: i64) -> TransportSessionKey {
         test_transport_session_key(

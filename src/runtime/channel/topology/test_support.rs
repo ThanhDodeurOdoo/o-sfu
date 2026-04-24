@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{RouterId, SessionPermissions as RouterSessionPermissions};
 
 use super::{ChannelRouterObserverFactory, ChannelTopology};
-use crate::config::MediaCodecFlags;
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::channel::rtp_capabilities::router_rtp_capabilities;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
-use o_sfu_protocol::shared::SessionId;
+use crate::{
+    config::MediaCodecFlags,
+    runtime::{
+        ChannelInstanceId,
+        channel::rtp_capabilities::router_rtp_capabilities,
+        metrics::RuntimeMetrics,
+        recording::{MediaSource, MediaTap, RecordingService},
+    },
+};
 
 impl ChannelTopology {
     pub(in crate::runtime::channel) fn new(primary_router_id: RouterId) -> Self {

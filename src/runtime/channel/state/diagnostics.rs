@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::runtime::ConnectionId;
-use crate::runtime::diagnostics::{
-    DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
-    DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionTransport,
-    DiagnosticsSessionView, DiagnosticsSubscription,
-};
-use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{SessionId, StreamType};
 
 use super::shared::{ChannelState, ConsumerKey};
+use crate::runtime::{
+    ConnectionId,
+    diagnostics::{
+        DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
+        DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionTransport,
+        DiagnosticsSessionView, DiagnosticsSubscription,
+    },
+    transport_adapter::TransportMediaId,
+};
 
 impl ChannelState {
     pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_session(

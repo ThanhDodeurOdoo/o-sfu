@@ -1,8 +1,10 @@
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::MediaCapabilities;
 
-use super::super::super::session_negotiation::{SessionNegotiationUpdate, SessionTransportReady};
-use super::super::shared::ChannelState;
+use super::super::{
+    super::session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
+    shared::ChannelState,
+};
 use crate::runtime::ConnectionId;
 
 impl ChannelState {

@@ -5,10 +5,9 @@
 //! issuer, UUID, and instance id, and it re-checks pointer identity after
 //! taking each room's lifecycle lock so stale directory handles become no-ops.
 
-use std::collections::BTreeSet;
-use std::future::Future;
-use std::sync::Arc;
+use std::{collections::BTreeSet, future::Future, sync::Arc};
 
+use o_sfu_protocol::shared::{SessionId, SessionPermissions};
 use tokio::sync::{RwLock, mpsc};
 
 use super::{
@@ -17,13 +16,14 @@ use super::{
     directory::{ChannelDirectory, ChannelDirectoryEntry},
     factory::{ChannelCreationIntent, ChannelFactory},
 };
-use crate::runtime::diagnostics::{DiagnosticsEventData, DiagnosticsStore};
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::recording::MediaTap;
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::{MediaPort, ObservabilityPort, RuntimeTransportAdapter};
-use crate::runtime::{ChannelInstanceId, ConnectionId};
-use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+use crate::runtime::{
+    ChannelInstanceId, ConnectionId,
+    diagnostics::{DiagnosticsEventData, DiagnosticsStore},
+    metrics::RuntimeMetrics,
+    recording::MediaTap,
+    telemetry::schema::event as telemetry_event,
+    transport_adapter::{MediaPort, ObservabilityPort, RuntimeTransportAdapter},
+};
 
 #[cfg(test)]
 mod test_support;

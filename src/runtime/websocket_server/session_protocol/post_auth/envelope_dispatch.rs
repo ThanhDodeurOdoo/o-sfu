@@ -1,16 +1,20 @@
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::websocket_server::WsWriter;
-use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionInfo};
-use o_sfu_protocol::signaling::{
-    ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
-    RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
+use o_sfu_protocol::{
+    shared::{DownloadStates, SessionId, SessionInfo},
+    signaling::{
+        ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
+        RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
+    },
 };
 use tracing::{debug, info, instrument};
 
-use super::super::{
-    controller::SessionProtocolOutcome, flow_state::FlowChange, frame_codec::send_server_response,
+use super::{
+    super::{
+        controller::SessionProtocolOutcome, flow_state::FlowChange,
+        frame_codec::send_server_response,
+    },
+    controller::PostAuthSessionProtocol,
 };
-use super::controller::PostAuthSessionProtocol;
+use crate::runtime::{telemetry::schema::event as telemetry_event, websocket_server::WsWriter};
 
 impl PostAuthSessionProtocol {
     async fn reject_stale_connection(&self) -> bool {

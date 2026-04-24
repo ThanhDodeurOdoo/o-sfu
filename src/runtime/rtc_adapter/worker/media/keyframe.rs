@@ -8,14 +8,18 @@ use std::time::Instant;
 
 use str0m::media::{KeyframeRequestKind, Rid};
 
-use crate::runtime::metrics::{RtcRouteControlOutcome, RuntimeMetrics};
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
-use super::super::super::{
-    relay_registry::RelayRegistry, route_control::KeyframeRequestDecision, state::RtcBootstrapState,
+use super::{
+    super::super::{
+        relay_registry::RelayRegistry, route_control::KeyframeRequestDecision,
+        state::RtcBootstrapState,
+    },
+    control::owned_local_producer_mid,
+    types::RemoteKeyframeRequest,
 };
-use super::control::owned_local_producer_mid;
-use super::types::RemoteKeyframeRequest;
+use crate::runtime::{
+    metrics::{RtcRouteControlOutcome, RuntimeMetrics},
+    transport_adapter::{TransportMediaId, TransportSessionKey},
+};
 
 pub(crate) fn respond_request_remote_keyframe(
     state: &mut RtcBootstrapState,

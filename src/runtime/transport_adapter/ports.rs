@@ -26,17 +26,21 @@
 //! whether the backend is backed by str0m, a fake adapter, or a future
 //! transport implementation
 
-use std::collections::BTreeSet;
-use std::time::Instant;
+use std::{collections::BTreeSet, time::Instant};
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::rtc_adapter::TransportSessionHealth;
-use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
-use crate::runtime::transport_adapter::types::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
-};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
+
+use crate::runtime::{
+    ChannelInstanceId,
+    rtc_adapter::TransportSessionHealth,
+    transport_adapter::{
+        SourcePolicyUpdateSubscription,
+        types::{
+            ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
+            TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        },
+    },
+};
 
 /// Handles the SDP negotiation lifecycle for a transport session
 pub(crate) trait NegotiationPort {

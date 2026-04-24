@@ -33,8 +33,7 @@ use o_sfu_protocol::{
     },
 };
 use serde::Deserialize;
-use tokio::sync::mpsc;
-use tokio::time::timeout;
+use tokio::{sync::mpsc, time::timeout};
 use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
@@ -593,10 +592,10 @@ async fn send_welcome(
 #[cfg(test)]
 mod tests {
     use axum::extract::ws::Message;
+    use o_sfu_protocol::signaling::WebSocketCloseCode;
     use serde_json::json;
 
     use super::parse_auth_payload;
-    use o_sfu_protocol::signaling::WebSocketCloseCode;
 
     #[test]
     fn parse_auth_payload_accepts_single_auth_message() {

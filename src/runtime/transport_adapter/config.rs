@@ -1,9 +1,12 @@
 use std::{net::IpAddr, sync::Arc};
 
-use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::diagnostics::DiagnosticsStore;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::packet_sink_registry::ChannelPacketSinkRegistry;
+use crate::{
+    config::{MediaCodecFlags, RtcPortRange},
+    runtime::{
+        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+        packet_sink_registry::ChannelPacketSinkRegistry,
+    },
+};
 
 /// transport bitrate limit per session
 ///

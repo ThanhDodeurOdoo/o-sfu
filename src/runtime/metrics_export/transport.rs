@@ -1,10 +1,9 @@
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
-
 use super::shared::{
     HistogramBucketValue, LabeledGaugeValue, LabeledValue, LabeledValue2, append_counter,
     append_histogram, append_labeled_counter_family, append_labeled_counter_family_2,
     append_labeled_gauge_family,
 };
+use crate::runtime::metrics::RuntimeMetricsSnapshot;
 
 pub(super) fn append_transport_health_gauges(
     output: &mut String,

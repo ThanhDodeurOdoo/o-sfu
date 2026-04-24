@@ -1,6 +1,5 @@
-use crate::runtime::transport_adapter::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
-
 use super::{Channel, effects::SourcePacketPolicyEffectPlan};
+use crate::runtime::transport_adapter::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
 
 impl Channel {
     pub(super) async fn sync_source_packet_selection_policy(

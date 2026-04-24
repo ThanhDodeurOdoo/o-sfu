@@ -1,14 +1,15 @@
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-use super::super::{
-    forwarded_packet::ForwardedPacket,
-    forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
-    state::RtcBootstrapState,
+use super::{
+    super::{
+        forwarded_packet::ForwardedPacket,
+        forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
+        state::RtcBootstrapState,
+    },
+    buffers::PacketLoopBuffers,
 };
-use super::buffers::PacketLoopBuffers;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::transport_adapter::SourcePolicySignal;
+use crate::runtime::{metrics::RuntimeMetrics, transport_adapter::SourcePolicySignal};
 
 pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,

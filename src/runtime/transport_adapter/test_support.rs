@@ -1,12 +1,13 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
+
+#[cfg(any(test, feature = "testing-transport"))]
+use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
+#[cfg(test)]
+use str0m::media::Mid;
 
 pub(crate) use super::fake::FakeWebRtcAdapter;
 #[cfg(test)]
 pub(crate) use super::fake::FakeWebRtcEvent;
-use super::ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort};
-use super::runtime_adapter::RuntimeTransportAdapter;
 #[cfg(test)]
 use super::shard_set::RtcTransportAdapterShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
@@ -15,6 +16,10 @@ use super::types::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{SessionOffer, SourcePacketGate, TransportAdapterError};
+use super::{
+    ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
+    runtime_adapter::RuntimeTransportAdapter,
+};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::ChannelInstanceId;
 #[cfg(any(test, feature = "testing-transport"))]
@@ -23,10 +28,6 @@ use crate::runtime::rtc_adapter::TransportSessionHealth;
 use crate::runtime::rtc_adapter::test_support::DebugRouteEntry;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
-#[cfg(any(test, feature = "testing-transport"))]
-use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
-#[cfg(test)]
-use str0m::media::Mid;
 
 #[cfg(any(test, feature = "testing-transport"))]
 impl NegotiationPort for FakeWebRtcAdapter {

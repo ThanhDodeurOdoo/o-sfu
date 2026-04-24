@@ -2,12 +2,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use o_sfu_router::RouterId;
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::diagnostics::DiagnosticsStore;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::recording::MediaTap;
-
 use super::{Channel, ChannelConfig, ChannelRuntimeContext, ChannelRuntimePolicy};
+use crate::runtime::{
+    ChannelInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelCreationIntent {

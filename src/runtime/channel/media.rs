@@ -1,15 +1,14 @@
-use tracing::warn;
-
-use crate::runtime::ConnectionId;
-use crate::runtime::diagnostics::DiagnosticsEventData;
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::MediaPort;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
+use tracing::warn;
 
 use super::{
     Channel, ChannelMediaCounts,
     effects::{SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan},
     state::ConsumerBootstrapOrigin,
+};
+use crate::runtime::{
+    ConnectionId, diagnostics::DiagnosticsEventData, telemetry::schema::event as telemetry_event,
+    transport_adapter::MediaPort,
 };
 
 impl Channel {

@@ -17,27 +17,26 @@ use std::{
 };
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::bwe::Bitrate;
 use str0m::{
+    bwe::Bitrate,
     media::{Direction, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
 use tracing::{debug, warn};
 
-use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
-};
-
-use super::super::super::{
-    bitrate::RtcBitrateState,
-    commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
-    local_send_rewrite::forget_transport_media_rewrites,
-    media_registry::RegisteredMediaHandle,
-    state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
-};
 use super::{
+    super::super::{
+        bitrate::RtcBitrateState,
+        commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
+        local_send_rewrite::forget_transport_media_rewrites,
+        media_registry::RegisteredMediaHandle,
+        state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
+    },
     control::{ensure_route_source_registered, register_consumer_route, remove_consumer_route},
     types::AddSendMediaRequest,
+};
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
 };
 
 pub(crate) fn respond_remove_media(

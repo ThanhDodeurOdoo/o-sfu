@@ -1,7 +1,15 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
-use tokio::{net::TcpListener, task::JoinHandle, task::yield_now, time::timeout};
+use o_sfu_protocol::{
+    shared::{SessionId, StreamType},
+    signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload},
+};
+use tokio::{
+    net::TcpListener,
+    task::{JoinHandle, yield_now},
+    time::timeout,
+};
 
 use super::{
     RuntimeState, build_transport_adapter,
@@ -15,8 +23,6 @@ use super::{
     packet_sink_registry::ChannelPacketSinkRegistry,
 };
 use crate::config::Config;
-use o_sfu_protocol::shared::{SessionId, StreamType};
-use o_sfu_protocol::signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload};
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
@@ -35,8 +41,10 @@ impl SourcePolicyDirtyState {
     }
 }
 
-pub use super::packet_sink_registry::ActiveChannelRegistry;
-pub use super::rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot};
+pub use super::{
+    packet_sink_registry::ActiveChannelRegistry,
+    rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot},
+};
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]

@@ -1,8 +1,12 @@
-use std::sync::{
-    Arc, Mutex, PoisonError,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
 };
-use std::time::Instant;
+
+use o_sfu_protocol::shared::SessionId;
 
 use crate::runtime::{
     ChannelInstanceId,
@@ -10,7 +14,6 @@ use crate::runtime::{
     rtc_adapter::{sample_forwarded_packet, test_support::test_transport_session_key},
     transport_adapter::{TransportMediaId, TransportSessionKey},
 };
-use o_sfu_protocol::shared::SessionId;
 
 struct CountingSink {
     frames: AtomicUsize,

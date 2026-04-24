@@ -32,20 +32,18 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use futures_util::stream::SplitStream;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
 use tokio::sync::mpsc;
 use tracing::{Instrument, Span, field, info};
 
+use super::{WsWriter, session_protocol::SessionProtocol};
 use crate::runtime::{
     ConnectionId, RuntimeState,
     channel::{Channel, SessionOutbound},
     request_origin::resolve_remote_address,
     telemetry,
 };
-
-use super::{WsWriter, session_protocol::SessionProtocol};
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 

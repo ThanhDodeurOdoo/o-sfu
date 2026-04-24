@@ -260,12 +260,13 @@ impl SessionFlowState {
 
 #[cfg(test)]
 mod tests {
-    use super::{PendingFlowAction, RenegotiationDisposition, SessionFlowState};
     use o_sfu_protocol::{
         shared::StreamType,
         signaling::{RequestId, ServerRequest, SessionDescriptionPayload},
     };
     use o_sfu_router::MediaCapabilities;
+
+    use super::{PendingFlowAction, RenegotiationDisposition, SessionFlowState};
 
     #[test]
     fn queued_publish_streams_are_unique() {

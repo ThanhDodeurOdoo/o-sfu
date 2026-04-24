@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
     StreamType as RouterStreamType, derive_consumable_rtp_parameters,
@@ -21,25 +22,28 @@ use super::super::{
         SourceTransportMediaIndexEntry,
     },
 };
-use crate::config::MediaCodecFlags;
-use crate::runtime::channel::{
-    ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
-    session_negotiation::SessionTransportReady, topology::RoutedProducerId,
+use crate::{
+    config::MediaCodecFlags,
+    runtime::{
+        ChannelInstanceId, ConnectionId,
+        channel::{
+            ChannelAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
+            session_negotiation::SessionTransportReady, topology::RoutedProducerId,
+        },
+        metrics::RuntimeMetrics,
+        recording::{MediaSource, MediaTap, RecordingService},
+        source_model::{
+            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+            PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+            SourceEncodingId, SourceSelector, SourceTransportBinding,
+        },
+        test_rtp_samples::{
+            sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
+            sample_video_rtp_parameters,
+        },
+        transport_adapter::TransportMediaId,
+    },
 };
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
-use crate::runtime::source_model::{
-    PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-    PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-    SourceEncodingId, SourceSelector, SourceTransportBinding,
-};
-use crate::runtime::test_rtp_samples::{
-    sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
-    sample_video_rtp_parameters,
-};
-use crate::runtime::transport_adapter::TransportMediaId;
-use crate::runtime::{ChannelInstanceId, ConnectionId};
-use o_sfu_protocol::shared::{DownloadStates, SessionId, SessionPermissions, StreamType};
 
 fn test_state() -> ChannelState {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());

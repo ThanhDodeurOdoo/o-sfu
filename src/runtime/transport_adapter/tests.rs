@@ -5,8 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{
-    MediaCodecCapability, MediaKind, MediaKind as RouterMediaKind, MediaStream, StreamBinding,
+    MediaCapabilities as RouterRtpCapabilities, MediaCodecCapability, MediaKind,
+    MediaKind as RouterMediaKind, MediaStream, StreamBinding,
 };
 use str0m::media::Mid;
 use tokio::time::timeout;
@@ -20,17 +22,14 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         rtc_adapter::RtcTransportAdapter,
-        transport_adapter::test_support::FakeWebRtcAdapter,
         transport_adapter::{
             ActiveSpeakerSource, MediaPort, NegotiationPort, ObservabilityPort,
             RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SessionPort,
             SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            TransportMediaId, TransportSessionKey, test_support::FakeWebRtcAdapter,
         },
     },
 };
-use o_sfu_protocol::shared::SessionId;
-use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
 fn test_session_key(
     channel_instance_id: u64,

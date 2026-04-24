@@ -10,7 +10,6 @@ use o_sfu_protocol::{
     shared::{DownloadStates, SessionId, SessionInfo, StreamType},
     signaling::{ServerMessage, ServerRequest, TrackBinding},
 };
-
 use o_sfu_tests::support::{
     TEST_CHANNEL_KEY,
     fake_media::{FakeClock, FakeMediaSource},

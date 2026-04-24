@@ -1,19 +1,18 @@
 use std::collections::BTreeMap;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE},
+};
 use hmac::{Hmac, KeyInit, Mac};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
+use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use thiserror::Error;
 
-use o_sfu_protocol::shared::{SessionId, SessionPermissions};
-use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
-
 use crate::time::secs_since_epoch;
-
-pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -204,6 +203,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use base64::Engine as _;
+    use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtAudience, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
     use serde::Serialize;
     use serde_json::json;
 
@@ -211,8 +212,6 @@ mod tests {
         AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
         WebSocketConnectClaims, decode_base64, secs_since_epoch, sign, sign_hs256, verify,
     };
-    use o_sfu_protocol::shared::{SessionId, SessionPermissions};
-    use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtAudience, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 
     const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

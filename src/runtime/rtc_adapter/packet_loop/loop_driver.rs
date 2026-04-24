@@ -9,30 +9,32 @@ use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::super::bitrate::RtcBitrateState;
 #[cfg(test)]
 use super::super::commands::debug::DebugRtcWorkerCommand;
 #[cfg(test)]
 use super::super::worker::handle_debug_worker_command;
-use super::super::{
-    commands::RtcWorkerCommand,
-    forwarding_planner::populate_forward_routes,
-    relay_registry::RelayRegistry,
-    routing_miss::PacketLoopRoutingState,
-    state::{RtcBootstrapState, RtcSnapshotState},
-    worker::{WorkerCommandContext, handle_worker_command},
-};
 use super::{
+    super::{
+        bitrate::RtcBitrateState,
+        commands::RtcWorkerCommand,
+        forwarding_planner::populate_forward_routes,
+        relay_registry::RelayRegistry,
+        routing_miss::PacketLoopRoutingState,
+        state::{RtcBootstrapState, RtcSnapshotState},
+        worker::{WorkerCommandContext, handle_worker_command},
+    },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
     keyframe_requests::flush_pending_keyframe_requests,
     session_drain::drain_ready_sessions,
 };
-use crate::config::{MediaCodecFlags, RtcPortRange};
-use crate::runtime::{
-    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-    packet_sink_registry::ChannelPacketSinkRegistry, transport_adapter::SourcePolicySignal,
+use crate::{
+    config::{MediaCodecFlags, RtcPortRange},
+    runtime::{
+        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+        packet_sink_registry::ChannelPacketSinkRegistry, transport_adapter::SourcePolicySignal,
+    },
 };
 
 pub(crate) struct PacketLoopConfig {

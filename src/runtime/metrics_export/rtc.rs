@@ -1,6 +1,5 @@
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
-
 use super::shared::{LabeledValue, append_counter, append_labeled_counter_family};
+use crate::runtime::metrics::RuntimeMetricsSnapshot;
 
 pub(super) fn append_rtc_datagram_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_labeled_counter_family(

@@ -1,24 +1,26 @@
-use std::collections::BTreeMap;
 use std::{
-    sync::{Arc, Mutex},
+    collections::BTreeMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
-    TransportSessionKey,
-};
 use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{
     MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind,
     MediaStream as RouterRtpParameters, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 
 use super::source_policy::SourcePolicySignal;
 #[cfg(test)]
 use crate::runtime::ChannelInstanceId;
+use crate::runtime::transport_adapter::{
+    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
+    TransportSessionKey,
+};
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 

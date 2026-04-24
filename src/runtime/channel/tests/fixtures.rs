@@ -1,34 +1,33 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
+pub(super) use o_sfu_protocol::shared::{
+    DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
+};
 pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
     RouterId, SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
 };
-pub(super) use tokio::sync::mpsc;
-pub(super) use tokio::{task::yield_now, time::timeout};
+pub(super) use tokio::{sync::mpsc, task::yield_now, time::timeout};
 
 pub(super) use super::super::{
     ChannelAdmissionPolicy, ChannelConfig, ChannelEventMessage, ChannelEventRequest,
     ChannelJoinError, ChannelManager, ChannelManagerJoinError, JoinSessionRequest,
     SessionCloseReason, SessionOutbound, topology::ChannelTopology,
 };
-pub(super) use crate::runtime::ConnectionId;
-use crate::runtime::channel::session_negotiation::{
-    SessionNegotiationUpdate, SessionTransportReady,
+pub(super) use crate::runtime::{
+    ConnectionId,
+    transport_adapter::{
+        ActiveSpeakerSource, RuntimeTransportAdapter, TransportMediaId,
+        test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+    },
 };
-use crate::runtime::test_rtp_samples::{
-    sample_audio_rtp_parameters, sample_client_rtp_capabilities,
-    sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
-    sample_video_rtp_parameters,
-};
-pub(super) use crate::runtime::transport_adapter::test_support::{
-    FakeWebRtcAdapter, FakeWebRtcEvent,
-};
-pub(super) use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, RuntimeTransportAdapter, TransportMediaId,
-};
-pub(super) use o_sfu_protocol::shared::{
-    DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
+use crate::runtime::{
+    channel::session_negotiation::{SessionNegotiationUpdate, SessionTransportReady},
+    test_rtp_samples::{
+        sample_audio_rtp_parameters, sample_client_rtp_capabilities,
+        sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
+        sample_video_rtp_parameters,
+    },
 };
 
 /// Realistic client RTP capabilities (default codecs)

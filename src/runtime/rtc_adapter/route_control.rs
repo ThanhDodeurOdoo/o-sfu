@@ -6,9 +6,8 @@ use std::{
 
 use str0m::media::{KeyframeRequestKind, Rid};
 
-use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportMediaId};
-
 use super::relay_registry::RelayTargetId;
+use crate::runtime::transport_adapter::{ActiveSpeakerSource, TransportMediaId};
 
 const ACTIVE_SPEAKER_HOLD_WINDOW: Duration = Duration::from_millis(250);
 const ACTIVE_SPEAKER_AUDIO_LEVEL_THRESHOLD_DBOV: i8 = -48;
@@ -452,8 +451,9 @@ mod tests {
         KeyframeRequestDecision, PacketLayerGate, PacketRouteDecision, RouteControlState,
         aggregate_packet_gates, coalesce_keyframe_kind,
     };
-    use crate::runtime::rtc_adapter::relay_registry::RelayTargetId;
-    use crate::runtime::transport_adapter::TransportMediaId;
+    use crate::runtime::{
+        rtc_adapter::relay_registry::RelayTargetId, transport_adapter::TransportMediaId,
+    };
 
     #[test]
     fn route_control_absorbs_repeated_keyframe_requests_within_the_window() {

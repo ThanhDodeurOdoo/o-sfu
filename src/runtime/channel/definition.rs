@@ -1,11 +1,11 @@
 use o_sfu_protocol::shared::{AvailableFeatures, SessionId};
 use uuid::Uuid;
 
-use crate::config::RuntimeFeatureFlags;
-use crate::runtime::transport_adapter::TransportSessionKey;
-use crate::runtime::{ChannelInstanceId, ConnectionId};
-
 use super::{ChannelConfig, ChannelRuntimeContext, ChannelRuntimePolicy};
+use crate::{
+    config::RuntimeFeatureFlags,
+    runtime::{ChannelInstanceId, ConnectionId, transport_adapter::TransportSessionKey},
+};
 
 #[derive(Debug, Clone)]
 struct ChannelIdentity {

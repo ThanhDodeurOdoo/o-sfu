@@ -5,36 +5,38 @@
 //! The main rule here is that channel state only commits a producer once the
 //! caller has a validated session and a real transport media id to attach.
 
+use std::collections::BTreeMap;
+
+use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 use o_sfu_router::{
     MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc,
 };
-use std::collections::BTreeMap;
 use tracing::{error, warn};
 
-use crate::runtime::ConnectionId;
-use crate::runtime::source_model::{
-    PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-    PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-    SourceEncodingId, SourceModelError, SourceTransportBinding,
-};
-use crate::runtime::transport_adapter::TransportMediaId;
-use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
-
-use super::super::{
-    super::{
-        ChannelEventMessage, SessionOutbound, TrackBindingUpdate,
-        outbound::{MessageFanout, OutboundSender},
-        topology::RoutedProducerId,
-    },
-    ids::ProducerRuntimeId,
-    shared::{
-        ChannelState, ConsumerKey, PublishedProducer, SourceKey, SourceTransportMediaIndexEntry,
-        TransportMediaRemoval,
-    },
-};
 use super::{
+    super::{
+        super::{
+            ChannelEventMessage, SessionOutbound, TrackBindingUpdate,
+            outbound::{MessageFanout, OutboundSender},
+            topology::RoutedProducerId,
+        },
+        ids::ProducerRuntimeId,
+        shared::{
+            ChannelState, ConsumerKey, PublishedProducer, SourceKey,
+            SourceTransportMediaIndexEntry, TransportMediaRemoval,
+        },
+    },
     router_stream_type::to_router_stream_type,
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
+};
+use crate::runtime::{
+    ConnectionId,
+    source_model::{
+        PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+        PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+        SourceEncodingId, SourceModelError, SourceTransportBinding,
+    },
+    transport_adapter::TransportMediaId,
 };
 
 #[allow(

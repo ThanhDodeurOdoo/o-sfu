@@ -5,14 +5,6 @@
 
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::{
-    shared::{SessionId, SessionInfo, StreamType},
-    signaling::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
-};
-use reqwest::StatusCode;
-use tokio::time::Duration;
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-
 use o_sfu::{
     config::RtcPortRange,
     testing::{
@@ -20,14 +12,21 @@ use o_sfu::{
         server::spawn_test_server,
     },
 };
-
-use o_sfu_tests::support::protocol_harness::{
-    ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config, read_until_server_message,
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo, StreamType},
+    signaling::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
 };
 use o_sfu_tests::support::{
     TEST_AUTH_KEY, TEST_CHANNEL_KEY, create_channel, disconnect_sessions_via_http, metrics_text,
+    protocol_harness::{
+        ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config,
+        read_until_server_message,
+    },
     signed_connect_claims,
 };
+use reqwest::StatusCode;
+use tokio::time::Duration;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[tokio::test]
 async fn websocket_welcome_and_initial_offer_work_from_integration_test() {

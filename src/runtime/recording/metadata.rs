@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
 use o_sfu_protocol::shared::StreamType;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

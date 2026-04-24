@@ -8,19 +8,22 @@
 
 use std::time::Duration;
 
-use crate::runtime::rtc_adapter::TransportSessionHealth;
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
-use super::counter::{
-    Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
+use super::{
+    counter::{
+        Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
+    },
+    labels::{
+        ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus,
+        HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
+        RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
+        TransportHealthTransition, TransportIceState, TransportSessionLifetimeBucket,
+        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
+        WsSessionLoopExitReason, WsStartupFailureKind,
+    },
 };
-use super::labels::{
-    ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute,
-    RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-    RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition,
-    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
-};
+use crate::runtime::rtc_adapter::TransportSessionHealth;
 
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeMetrics {

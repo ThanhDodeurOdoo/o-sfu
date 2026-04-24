@@ -1,9 +1,9 @@
-use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
+use o_sfu_rfc::webrtc as rfc_webrtc;
+use o_sfu_router::RfcReference;
 use serde::Serialize;
 use tracing::{error, trace, warn};
 
-use o_sfu_rfc::webrtc as rfc_webrtc;
-use o_sfu_router::RfcReference;
+use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 
 const ROLE_PATH: &str = "$.role";
 const FINGERPRINTS_PATH: &str = "$.fingerprints";

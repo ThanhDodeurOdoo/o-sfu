@@ -2,12 +2,11 @@ use std::sync::PoisonError;
 
 use tokio::sync::mpsc;
 
-use crate::runtime::transport_adapter::TransportMediaId;
-
 use super::{
     ForwardedPacket, InterNodeRelaySender, RELAY_MAILBOX_CAPACITY, RelayEnqueueOutcome,
     RelayPacketMailbox, RelayRegistry, RelaySourceRegistration, RelayTargetTransport,
 };
+use crate::runtime::transport_adapter::TransportMediaId;
 
 impl RelayPacketMailbox {
     pub(in crate::runtime::rtc_adapter) fn channel_for_test()

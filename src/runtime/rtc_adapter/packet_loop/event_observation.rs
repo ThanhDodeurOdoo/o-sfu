@@ -4,10 +4,12 @@ use str0m::{Event, IceConnectionState};
 use tracing::{debug, trace};
 
 use super::super::state::{RtcSnapshotState, TransportSessionHealth};
-use crate::runtime::diagnostics::{DiagnosticsStore, health_json_value, maybe_health_json_value};
-use crate::runtime::metrics::{RuntimeMetrics, TransportIceState};
-use crate::runtime::telemetry::schema;
-use crate::runtime::transport_adapter::TransportSessionKey;
+use crate::runtime::{
+    diagnostics::{DiagnosticsStore, health_json_value, maybe_health_json_value},
+    metrics::{RuntimeMetrics, TransportIceState},
+    telemetry::schema,
+    transport_adapter::TransportSessionKey,
+};
 
 pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     match event {

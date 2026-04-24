@@ -251,9 +251,8 @@ mod tests {
 
     use o_sfu_router::CodecSetting;
 
-    use crate::config::MediaCodecFlags;
-
     use super::router_rtp_capabilities;
+    use crate::config::MediaCodecFlags;
 
     #[test]
     fn default_router_capabilities_match_the_browser_codec_baseline() {

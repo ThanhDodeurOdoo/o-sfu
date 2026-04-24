@@ -1,27 +1,34 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
+use o_sfu_protocol::shared::{DownloadStates, RecordingState, SessionId, StreamType};
 use o_sfu_router::{
     MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, MediaKind, RouterId,
 };
 
-use crate::runtime::ConnectionId;
-use crate::runtime::recording::RecordingService;
-use crate::runtime::source_model::{
-    ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+use super::{
+    super::{
+        ChannelAdmissionPolicy, ChannelSessionPermissions,
+        outbound::OutboundSender,
+        session_negotiation::SessionNegotiation,
+        topology::{
+            ChannelRouterObserverFactory, ChannelTopology, RoutedConsumerId, RoutedProducerId,
+        },
+    },
+    ids::ProducerRuntimeId,
+    layout::SessionLayout,
+    presence::SessionPresence,
 };
-use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
-use o_sfu_protocol::shared::{DownloadStates, RecordingState, SessionId, StreamType};
-
-use super::super::{
-    ChannelAdmissionPolicy, ChannelSessionPermissions,
-    outbound::OutboundSender,
-    session_negotiation::SessionNegotiation,
-    topology::{ChannelRouterObserverFactory, ChannelTopology, RoutedConsumerId, RoutedProducerId},
+use crate::runtime::{
+    ConnectionId,
+    recording::RecordingService,
+    source_model::{
+        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+    },
+    transport_adapter::{SourcePacketGate, TransportMediaId},
 };
-use super::ids::ProducerRuntimeId;
-use super::layout::SessionLayout;
-use super::presence::SessionPresence;
 
 const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
     [StreamType::Audio, StreamType::Camera, StreamType::Screen];

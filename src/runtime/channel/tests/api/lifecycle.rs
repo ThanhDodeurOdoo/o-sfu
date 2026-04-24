@@ -1,11 +1,11 @@
-use o_sfu_protocol::shared::{SessionId, SessionInfo, SessionPermissions};
-use o_sfu_protocol::signaling::RecordingOptions;
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo, SessionPermissions},
+    signaling::RecordingOptions,
+};
 use tokio::sync::mpsc;
 
-use crate::runtime::ConnectionId;
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
-
 use super::super::super::{Channel, ChannelJoinError, SessionCleanup, SessionOutbound};
+use crate::runtime::{ConnectionId, transport_adapter::RuntimeTransportAdapter};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelTestLifecycle<'a> {

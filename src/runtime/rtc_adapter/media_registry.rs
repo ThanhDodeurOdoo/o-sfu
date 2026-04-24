@@ -4,19 +4,17 @@
 //! `(session_key, mid)` reverse lookup within `RtcBootstrapState`, plus the
 //! worker-local remote-source placeholders used by cross-worker relay routes.
 
-use std::collections::BTreeSet;
-use std::time::Instant;
+use std::{collections::BTreeSet, time::Instant};
 
-use str0m::media::Mid;
-use str0m::rtp::Ssrc;
+use str0m::{media::Mid, rtp::Ssrc};
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
+use super::{commands::RemoteSourceControl, state::RtcBootstrapState};
+use crate::runtime::{
+    ChannelInstanceId,
+    transport_adapter::{
+        ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    },
 };
-
-use super::commands::RemoteSourceControl;
-use super::state::RtcBootstrapState;
 
 // ---------------------------------------------------------------------------
 // Registered media handle
@@ -421,12 +419,11 @@ impl RtcBootstrapState {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::*;
-
+    use o_sfu_protocol::shared::SessionId;
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 
+    use super::*;
     use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
-    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn consumer_media_lookup_uses_the_reverse_index() {

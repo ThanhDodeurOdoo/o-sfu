@@ -4,18 +4,16 @@ use str0m::{
     media::{ExtensionValues, Rid},
     rtp::{RtpHeader, RtpPacket},
 };
-
 #[cfg(test)]
 use str0m::{
     media::{Mid, Pt},
     rtp::Ssrc,
 };
 
+use super::{
+    local_forwarding::LocalForwardedRtp, shared_payload::SharedPayload, state::RtcBootstrapState,
+};
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
-use super::local_forwarding::LocalForwardedRtp;
-use super::shared_payload::SharedPayload;
-use super::state::RtcBootstrapState;
 
 #[derive(Debug)]
 pub(crate) struct ForwardedPacket {
@@ -301,14 +299,13 @@ fn sample_forwarded_packet_without_mid(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use o_sfu_protocol::shared::SessionId;
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 
+    use super::*;
     use crate::runtime::rtc_adapter::{
         media_registry::RegisteredMediaHandle, test_support::test_transport_session_key,
     };
-    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn forwarded_packet_resolves_transport_media_id_through_the_registry() {

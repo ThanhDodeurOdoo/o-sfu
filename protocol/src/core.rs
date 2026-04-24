@@ -32,6 +32,11 @@ mod sticky_replay;
 #[cfg(feature = "verification-models")]
 pub mod verification;
 
+use outbound_batch::{FlushMode, OutboundBatcher};
+use request_tracker::RequestTracker;
+use sticky_replay::StickyReplayState;
+
+pub use crate::bundle_api::BundleConnectionState as ConnectionState;
 use crate::{
     bundle_api::BundleConnectionState,
     shared::{
@@ -45,11 +50,6 @@ use crate::{
         TrackBinding, WebSocketCloseCode, WelcomePayload,
     },
 };
-use outbound_batch::{FlushMode, OutboundBatcher};
-use request_tracker::RequestTracker;
-use sticky_replay::StickyReplayState;
-
-pub use crate::bundle_api::BundleConnectionState as ConnectionState;
 
 /// Timer id used by the recovery backoff scheduler.
 pub const RECOVERY_TIMER_ID: u32 = 1;

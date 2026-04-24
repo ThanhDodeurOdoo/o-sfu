@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
     MediaCapabilities, MediaKind as RouterMediaKind, Producer as RouterProducer,
@@ -11,7 +11,6 @@ use o_sfu_router::{
 };
 
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
-use o_sfu_protocol::shared::SessionId;
 
 #[cfg(test)]
 mod test_support;

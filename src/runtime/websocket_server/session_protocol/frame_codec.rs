@@ -1,11 +1,11 @@
 use axum::extract::ws::Message;
 use futures_util::SinkExt;
-
-use crate::runtime::websocket_server::WsWriter;
 use o_sfu_protocol::signaling::{
     EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
     WebSocketCloseCode,
 };
+
+use crate::runtime::websocket_server::WsWriter;
 
 pub(super) async fn send_server_messages(
     writer: &mut WsWriter,

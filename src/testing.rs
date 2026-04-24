@@ -17,17 +17,16 @@ pub mod http {
 
     use axum::http::{HeaderMap, HeaderValue, header};
 
+    pub use crate::runtime::http_server::contract::{
+        CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, IncomingBitRateStats,
+        METRICS_PATH, STATS_PATH, StatsResponse,
+    };
     use crate::{
         config::{
             Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
             TelemetryConfig,
         },
         runtime::{http_server::request_base_url, resolve_remote_address},
-    };
-
-    pub use crate::runtime::http_server::contract::{
-        CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, IncomingBitRateStats,
-        METRICS_PATH, STATS_PATH, StatsResponse,
     };
 
     fn testing_config(trust_proxy_headers: bool) -> Config {
@@ -115,6 +114,7 @@ pub mod concurrency {
 }
 
 pub mod transport {
-    pub use crate::runtime::{RemoteAddrDemux, TransportSessionKey, test_transport_session_key};
     pub use o_sfu_protocol::shared::SessionId;
+
+    pub use crate::runtime::{RemoteAddrDemux, TransportSessionKey, test_transport_session_key};
 }

@@ -137,9 +137,7 @@ impl SourcePolicySignal {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
     use tokio::{task::yield_now, time::timeout};
 

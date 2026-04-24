@@ -1,7 +1,8 @@
-use super::fixtures::*;
 use futures_util::future::join_all;
 use str0m::{Event, IceConnectionState};
 use tokio::time::timeout;
+
+use super::fixtures::*;
 
 fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
     offer_sdp

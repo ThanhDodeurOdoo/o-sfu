@@ -3,7 +3,6 @@
 //! - JSON Web Algorithms (JWA): <https://www.rfc-editor.org/rfc/rfc7518>
 
 pub use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
 use serde::{Deserialize, Serialize};
 
 /// JWT `typ` header value.

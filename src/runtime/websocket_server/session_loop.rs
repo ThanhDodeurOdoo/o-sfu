@@ -1,20 +1,22 @@
+use std::time::Duration;
+
 use axum::{Error as AxumError, extract::ws::Message};
 use futures_util::{SinkExt, StreamExt};
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::{Instant, sleep_until};
+use o_sfu_protocol::signaling::WebSocketCloseCode;
+use tokio::{
+    sync::mpsc,
+    time::{Instant, sleep_until},
+};
 use tracing::debug;
 
-use super::{close_writer, controller::WsReader};
+use super::{
+    WsWriter, close_writer,
+    controller::WsReader,
+    session_protocol::{SessionProtocol, SessionProtocolOutcome},
+};
 use crate::runtime::{
     channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
-};
-use o_sfu_protocol::signaling::WebSocketCloseCode;
-
-use super::{
-    WsWriter,
-    session_protocol::{SessionProtocol, SessionProtocolOutcome},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

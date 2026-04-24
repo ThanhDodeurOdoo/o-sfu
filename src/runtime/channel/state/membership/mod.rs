@@ -3,17 +3,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_protocol::shared::{SessionId, SessionInfo};
 use tracing::{debug, error, warn};
 
-use crate::runtime::ConnectionId;
-
-use super::super::{
-    ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
-    outbound::{MessageFanout, OutboundSender},
-    session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
-    topology::{ChannelTopology, ChannelTopologyError},
+use super::{
+    super::{
+        ChannelEventMessage, ChannelJoinError, ChannelSessionPermissions, SessionCloseReason,
+        outbound::{MessageFanout, OutboundSender},
+        session_negotiation::{SessionNegotiation, SessionNegotiationUpdate},
+        topology::{ChannelTopology, ChannelTopologyError},
+    },
+    layout::SessionLayout,
+    presence::SessionPresence,
+    shared::{ActiveSession, ChannelState, TransportMediaRemoval},
 };
-use super::layout::SessionLayout;
-use super::presence::SessionPresence;
-use super::shared::{ActiveSession, ChannelState, TransportMediaRemoval};
+use crate::runtime::ConnectionId;
 
 #[cfg(test)]
 mod test_support;
@@ -428,31 +429,36 @@ mod tests {
 
     use std::sync::Arc;
 
-    use o_sfu_router::{ConsumerId, MediaStream, ProducerId, RouterId};
+    use o_sfu_protocol::shared::{SessionPermissions, StreamType};
+    use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::config::MediaCodecFlags;
-    use crate::runtime::channel::{
-        ChannelAdmissionPolicy,
-        rtp_capabilities::router_rtp_capabilities,
-        state::{
-            ids::ProducerRuntimeId, shared::ConsumerKey, shared::ConsumerState, shared::SourceKey,
-            shared::SourceTransportMediaIndexEntry,
+    use crate::{
+        config::MediaCodecFlags,
+        runtime::{
+            ChannelInstanceId, ConnectionId,
+            channel::{
+                ChannelAdmissionPolicy,
+                rtp_capabilities::router_rtp_capabilities,
+                state::{
+                    ids::ProducerRuntimeId,
+                    shared::{
+                        ConsumerKey, ConsumerState, SourceKey, SourceTransportMediaIndexEntry,
+                    },
+                },
+                topology::{RoutedConsumerId, RoutedProducerId},
+            },
+            metrics::RuntimeMetrics,
+            recording::{MediaSource, MediaTap, RecordingService},
+            source_model::{
+                PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+                PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+                SourceEncodingId, SourceTransportBinding,
+            },
+            transport_adapter::TransportMediaId,
         },
-        topology::{RoutedConsumerId, RoutedProducerId},
     };
-    use crate::runtime::metrics::RuntimeMetrics;
-    use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
-    use crate::runtime::source_model::{
-        PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-        PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceTransportBinding,
-    };
-    use crate::runtime::transport_adapter::TransportMediaId;
-    use crate::runtime::{ChannelInstanceId, ConnectionId};
-    use o_sfu_protocol::shared::{SessionPermissions, StreamType};
-    use o_sfu_router::MediaKind;
 
     fn test_state() -> ChannelState {
         let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());

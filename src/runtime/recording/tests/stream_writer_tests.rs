@@ -1,3 +1,4 @@
+use o_sfu_protocol::shared::StreamType;
 use serde_json::json;
 
 use crate::runtime::recording::{
@@ -7,7 +8,6 @@ use crate::runtime::recording::{
         StreamWriter,
     },
 };
-use o_sfu_protocol::shared::StreamType;
 
 #[test]
 fn stream_writer_serializes_ortp_header_and_frames() {

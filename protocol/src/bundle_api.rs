@@ -260,8 +260,7 @@ impl BundleUpdate {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::fmt::Debug;
+    use std::{collections::BTreeMap, fmt::Debug};
 
     use serde::{Serialize, de::DeserializeOwned};
     use serde_json::{Value, json};

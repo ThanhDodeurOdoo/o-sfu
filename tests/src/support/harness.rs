@@ -3,18 +3,12 @@
     reason = "shared integration-test support is compiled by multiple test targets, each of which uses only a subset of the helpers"
 )]
 
-use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-use futures_util::{SinkExt, StreamExt};
-use o_sfu_protocol::shared::{SessionId, SessionPermissions};
-use reqwest::StatusCode;
-use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{Message, Result as WebSocketResult, protocol::frame::coding::CloseCode},
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
+use futures_util::{SinkExt, StreamExt};
 use o_sfu::{
     config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
@@ -28,6 +22,13 @@ use o_sfu::{
         http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH},
         server::TestServer,
     },
+};
+use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+use reqwest::StatusCode;
+use tokio::net::TcpStream;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, Result as WebSocketResult, protocol::frame::coding::CloseCode},
 };
 
 pub type TestWebSocket =

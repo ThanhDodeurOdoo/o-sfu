@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 
+use super::{Command, Commands, ProtocolCore, ProtocolEvent};
 use crate::{
     shared::SessionId,
     signaling::{
         PeerInfoPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor, TrackBinding,
     },
 };
-
-use super::{Command, Commands, ProtocolCore, ProtocolEvent};
 
 pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMessage) -> Commands {
     match message {

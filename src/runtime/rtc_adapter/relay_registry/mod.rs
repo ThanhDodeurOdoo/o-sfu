@@ -6,11 +6,11 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+
 use tokio::sync::mpsc;
 
-use crate::runtime::transport_adapter::TransportMediaId;
-
 use super::forwarded_packet::ForwardedPacket;
+use crate::runtime::transport_adapter::TransportMediaId;
 
 #[cfg(test)]
 mod test_support;
@@ -350,11 +350,12 @@ impl fmt::Debug for RelayRegistry {
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_protocol::shared::SessionId;
+
     use super::*;
     use crate::runtime::rtc_adapter::{
         sample_forwarded_packet, state::RtcBootstrapState, test_support::test_transport_session_key,
     };
-    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn relay_registry_tracks_active_sources() {

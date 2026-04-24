@@ -257,11 +257,12 @@ impl PacketLoopRoutingState {
 
 #[cfg(test)]
 mod tests {
-    use super::{PacketLoopRoutingMissKey, PacketLoopRoutingState, UnknownSourceRateLimiter};
     use std::{
         net::{Ipv4Addr, SocketAddr},
         time::{Duration, Instant},
     };
+
+    use super::{PacketLoopRoutingMissKey, PacketLoopRoutingState, UnknownSourceRateLimiter};
 
     #[test]
     fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() {

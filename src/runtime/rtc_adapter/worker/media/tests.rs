@@ -4,11 +4,13 @@ use std::{
     time::Instant,
 };
 
+use o_sfu_protocol::shared::SessionId;
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Rid};
-use str0m::rtp::Ssrc;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use str0m::{
+    media::{KeyframeRequestKind, MediaKind, Mid, Rid},
+    rtp::Ssrc,
+};
+use tokio::sync::{mpsc, oneshot};
 
 use super::{
     AddSendMediaRequest, RemoteKeyframeRequest, request_keyframe_for_source,
@@ -16,23 +18,24 @@ use super::{
     respond_request_remote_keyframe, respond_set_remote_source_packet_gate,
     respond_set_source_packet_gate,
 };
-use crate::config::MediaCodecFlags;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::rtc_adapter::{
-    bitrate::RtcBitrateState,
-    bootstrap,
-    commands::{RemoteSourceControl, RtcWorkerCommand},
-    demux::{MediaRouteDestination, MediaRouteEntry},
-    media_registry::RegisteredMediaHandle,
-    relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
-    route_control::PacketLayerGate,
-    state::RtcBootstrapState,
-    test_support::test_transport_session_key,
+use crate::{
+    config::MediaCodecFlags,
+    runtime::{
+        metrics::RuntimeMetrics,
+        rtc_adapter::{
+            bitrate::RtcBitrateState,
+            bootstrap,
+            commands::{RemoteSourceControl, RtcWorkerCommand},
+            demux::{MediaRouteDestination, MediaRouteEntry},
+            media_registry::RegisteredMediaHandle,
+            relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
+            route_control::PacketLayerGate,
+            state::RtcBootstrapState,
+            test_support::test_transport_session_key,
+        },
+        transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
+    },
 };
-use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
-};
-use o_sfu_protocol::shared::SessionId;
 
 fn prepare_source_session(
     state: &mut RtcBootstrapState,

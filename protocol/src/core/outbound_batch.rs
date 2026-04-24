@@ -1,10 +1,9 @@
 use std::mem::take;
 
-use crate::signaling::{Envelope, EnvelopeBatch};
-
 use super::{
     BATCH_FLUSH_DELAY_MS, BATCH_FLUSH_TIMER_ID, Command, Commands, MAX_OUTBOUND_BATCH_LEN,
 };
+use crate::signaling::{Envelope, EnvelopeBatch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FlushMode {

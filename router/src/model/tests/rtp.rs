@@ -1,10 +1,11 @@
+use o_sfu_rfc::webrtc;
+
 use crate::{
     HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind, MediaStream,
-    RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError, StreamBinding, can_consume,
-    derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
+    ParseDiagnostic, ParseDiagnosticKind, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError,
+    StreamBinding, can_consume, derive_consumable_rtp_parameters,
+    negotiate_consumer_rtp_parameters,
 };
-use crate::{ParseDiagnostic, ParseDiagnosticKind};
-use o_sfu_rfc::webrtc;
 
 #[test]
 fn codec_capability_builder_keeps_optional_fields() {

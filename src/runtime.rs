@@ -19,9 +19,11 @@
 use std::{collections::BTreeSet, process, sync::Arc, time::Instant as StdInstant};
 
 use anyhow::Result;
-use tokio::runtime::Builder;
-use tokio::task::JoinHandle;
-use tokio::time::{self, Instant};
+use tokio::{
+    runtime::Builder,
+    task::JoinHandle,
+    time::{self, Instant},
+};
 use tracing::info;
 
 use crate::config::Config;
@@ -46,10 +48,7 @@ pub mod testing;
 mod transport_adapter;
 pub(crate) mod websocket_server;
 
-use channel::ChannelAdmissionPolicy;
-use channel::ChannelManager;
-use channel::ChannelManagerConfig;
-use channel::ChannelRuntimePolicy;
+use channel::{ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig, ChannelRuntimePolicy};
 use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
 pub(crate) use ids::{ChannelInstanceId, ConnectionId};

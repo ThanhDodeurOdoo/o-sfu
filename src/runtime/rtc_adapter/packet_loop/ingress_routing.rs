@@ -21,17 +21,21 @@ use std::{
     time::Instant,
 };
 
-use str0m::Input;
-use str0m::ice::StunMessage;
-use str0m::net::{Protocol, Receive};
+use str0m::{
+    Input,
+    ice::StunMessage,
+    net::{Protocol, Receive},
+};
 use tracing::{debug, trace, warn};
 
 use super::super::{
     routing_miss::{PacketLoopRoutingMissKey, PacketLoopRoutingState},
     state::{RtcBootstrapState, RtcSnapshotState},
 };
-use crate::runtime::metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics};
-use crate::runtime::transport_adapter::TransportSessionKey;
+use crate::runtime::{
+    metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics},
+    transport_adapter::TransportSessionKey,
+};
 
 enum CachedRouteOutcome {
     Routed,

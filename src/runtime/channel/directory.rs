@@ -1,12 +1,9 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use tokio::sync::Mutex;
 
-use crate::runtime::ChannelInstanceId;
-use crate::time::rfc3339_now;
-
 use super::Channel;
+use crate::{runtime::ChannelInstanceId, time::rfc3339_now};
 
 const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
 

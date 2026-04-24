@@ -9,8 +9,9 @@ use str0m::{
 };
 
 use super::fixtures::*;
-use crate::runtime::rtc_adapter::client_rtp_capabilities_from_answer;
-use crate::runtime::transport_adapter::TransportMediaId;
+use crate::runtime::{
+    rtc_adapter::client_rtp_capabilities_from_answer, transport_adapter::TransportMediaId,
+};
 
 #[tokio::test]
 async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {

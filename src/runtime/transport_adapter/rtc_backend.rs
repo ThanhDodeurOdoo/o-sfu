@@ -1,17 +1,21 @@
-use std::collections::BTreeSet;
-use std::time::Instant;
+use std::{collections::BTreeSet, time::Instant};
 
-use super::ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort};
-use super::shard_set::RtcTransportAdapterShardSet;
-use super::types::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
-};
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
-use crate::runtime::transport_adapter::SourcePolicyUpdateSubscription;
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 use str0m::media::MediaKind as Str0mMediaKind;
+
+use super::{
+    ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
+    shard_set::RtcTransportAdapterShardSet,
+    types::{
+        ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
+        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    },
+};
+use crate::runtime::{
+    ChannelInstanceId,
+    rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer},
+    transport_adapter::SourcePolicyUpdateSubscription,
+};
 
 impl NegotiationPort for RtcTransportAdapterShardSet {
     async fn create_initial_session_offer(

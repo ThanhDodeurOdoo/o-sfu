@@ -1,8 +1,9 @@
-use super::ProofRouterModel;
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
     SessionId, SessionPermissions, StreamType, Transport, TransportDirection, TransportId,
 };
+
+use super::ProofRouterModel;
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
 type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;

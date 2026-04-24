@@ -8,6 +8,7 @@ mod settings;
 mod telemetry;
 mod transport;
 
+pub(crate) use self::log_view::ConfigLogView;
 pub use self::{
     codec_flags::MediaCodecFlags,
     diagnostics::DiagnosticsConfig,
@@ -16,5 +17,3 @@ pub use self::{
     telemetry::{TelemetryConfig, TelemetryLogFormat, TelemetryResource, TraceExportConfig},
     transport::RtcPortRange,
 };
-
-pub(crate) use self::log_view::ConfigLogView;

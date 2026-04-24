@@ -1,9 +1,7 @@
 use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 
-use crate::runtime::ConnectionId;
-use crate::runtime::transport_adapter::TransportMediaId;
-
 use super::super::super::Channel;
+use crate::runtime::{ConnectionId, transport_adapter::TransportMediaId};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelTestInspect<'a> {

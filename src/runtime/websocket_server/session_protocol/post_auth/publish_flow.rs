@@ -7,11 +7,8 @@
 use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
 use tracing::{info, instrument};
 
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::websocket_server::WsWriter;
-
-use super::super::controller::SessionProtocolOutcome;
-use super::controller::PostAuthSessionProtocol;
+use super::{super::controller::SessionProtocolOutcome, controller::PostAuthSessionProtocol};
+use crate::runtime::{telemetry::schema::event as telemetry_event, websocket_server::WsWriter};
 
 impl PostAuthSessionProtocol {
     #[instrument(

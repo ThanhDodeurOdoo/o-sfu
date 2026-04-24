@@ -39,12 +39,11 @@ mod tests {
 
     use axum::http::{HeaderMap, HeaderValue};
 
+    use super::{resolve_remote_address, trusted_forwarded_header};
     use crate::config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TelemetryConfig,
     };
-
-    use super::{resolve_remote_address, trusted_forwarded_header};
 
     fn test_config(trust_proxy_headers: bool) -> Config {
         Config {

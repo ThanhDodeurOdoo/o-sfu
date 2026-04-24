@@ -10,11 +10,12 @@ use std::{
 
 use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId, TransportId};
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
 use super::{MediaPacketSink, MediaSource, into_packet_sink, session::RecordingSession};
+use crate::runtime::{
+    ChannelInstanceId,
+    metrics::RuntimeMetrics,
+    transport_adapter::{TransportMediaId, TransportSessionKey},
+};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

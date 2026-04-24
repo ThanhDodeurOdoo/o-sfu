@@ -1,7 +1,9 @@
 use o_sfu_protocol::shared::{RecordingState, RecordingStateUpdate, SessionId, StopCode};
 
-use super::super::{ChannelEventMessage, ChannelSessionPermissions, outbound::MessageFanout};
-use super::shared::ChannelState;
+use super::{
+    super::{ChannelEventMessage, ChannelSessionPermissions, outbound::MessageFanout},
+    shared::ChannelState,
+};
 use crate::runtime::ConnectionId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

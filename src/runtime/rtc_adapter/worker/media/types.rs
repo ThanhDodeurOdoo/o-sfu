@@ -3,9 +3,8 @@
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
 use super::super::super::{commands::RemoteSourceControl, relay_registry::RelayTargetId};
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteSourceKind {

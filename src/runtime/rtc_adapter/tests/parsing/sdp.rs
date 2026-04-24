@@ -1,7 +1,8 @@
-use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 use o_sfu_rfc::webrtc;
 use o_sfu_router::RfcReference;
 use tracing::{error, trace, warn};
+
+use super::parse_diagnostic::{AdapterParseDiagnostic, ParseResult};
 
 const MEDIA_DESCRIPTION_PREFIX: &str = "m=";
 const VALID_BUT_UNSUPPORTED_TRANSPORT_PROTOCOLS: [&str; 5] = [

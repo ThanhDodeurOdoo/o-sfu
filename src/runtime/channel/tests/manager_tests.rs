@@ -1,10 +1,15 @@
+use std::{collections::BTreeSet, time::Instant};
+
 use super::fixtures::*;
-use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
-use crate::runtime::diagnostics::DiagnosticsStore;
-use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
-use crate::runtime::{metrics::RuntimeMetrics, recording::MediaTap};
-use std::collections::BTreeSet;
-use std::time::Instant;
+use crate::{
+    config::{MediaCodecFlags, RuntimeFeatureFlags},
+    runtime::{
+        diagnostics::DiagnosticsStore,
+        metrics::RuntimeMetrics,
+        recording::MediaTap,
+        transport_adapter::{SourcePacketGate, TransportMediaId},
+    },
+};
 
 async fn publish_audio_and_camera(
     channel: &Arc<super::super::Channel>,

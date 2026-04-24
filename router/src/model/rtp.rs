@@ -9,8 +9,9 @@
 
 use std::borrow::Cow;
 
-use super::MediaKind;
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
+
+use super::MediaKind;
 
 pub type MediaCodec = rfc_rtp::CodecName;
 pub type HeaderExtensionUri = rfc_webrtc::RtpHeaderExtensionUri;

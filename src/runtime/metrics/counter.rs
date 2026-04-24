@@ -1,5 +1,8 @@
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::{marker::PhantomData, time::Duration};
+use std::{
+    marker::PhantomData,
+    sync::atomic::{AtomicI64, AtomicU64, Ordering},
+    time::Duration,
+};
 
 pub(super) trait MetricLabel: Copy {
     const COUNT: usize;

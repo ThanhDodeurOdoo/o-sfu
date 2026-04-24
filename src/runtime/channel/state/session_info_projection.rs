@@ -1,13 +1,16 @@
 use std::collections::BTreeMap;
 
-use crate::runtime::ConnectionId;
-use o_sfu_protocol::shared::SessionInfo;
-use o_sfu_protocol::shared::{SessionId, StreamType};
-use o_sfu_protocol::signaling::PeerSnapshot;
+use o_sfu_protocol::{
+    shared::{SessionId, SessionInfo, StreamType},
+    signaling::PeerSnapshot,
+};
 
-use super::layout::SessionLayout;
-use super::presence::SessionPresence;
-use super::shared::{ActiveSession, ChannelState, SourceKey};
+use super::{
+    layout::SessionLayout,
+    presence::SessionPresence,
+    shared::{ActiveSession, ChannelState, SourceKey},
+};
+use crate::runtime::ConnectionId;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct SessionMediaView {

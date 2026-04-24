@@ -11,8 +11,6 @@ use std::{
 use str0m::media::Mid;
 use tokio::sync::oneshot;
 
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
-
 use super::super::{
     bitrate::RtcBitrateState,
     commands::debug::{
@@ -20,6 +18,7 @@ use super::super::{
     },
     state::{RtcBootstrapState, RtcSnapshotState},
 };
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 pub(super) fn handle_debug_command(
     state: &mut RtcBootstrapState,

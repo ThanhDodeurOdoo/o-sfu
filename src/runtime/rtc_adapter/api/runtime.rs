@@ -26,10 +26,6 @@ use std::{
     time::Instant,
 };
 
-use crate::runtime::ChannelInstanceId;
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
-};
 use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot},
@@ -37,14 +33,22 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::super::{
-    bitrate::RtcBitrateState,
-    commands::{RtcWorkerCommand, RtcWorkerResponse},
-    packet_loop::{self, PacketLoopConfig},
-    relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
-    state::TransportSessionHealth,
+use super::{
+    super::{
+        bitrate::RtcBitrateState,
+        commands::{RtcWorkerCommand, RtcWorkerResponse},
+        packet_loop::{self, PacketLoopConfig},
+        relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
+        state::TransportSessionHealth,
+    },
+    facade::{RtcTransportAdapter, RtcTransportObservabilityFacade, RtcWorkerHandle},
 };
-use super::facade::{RtcTransportAdapter, RtcTransportObservabilityFacade, RtcWorkerHandle};
+use crate::runtime::{
+    ChannelInstanceId,
+    transport_adapter::{
+        ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
+    },
+};
 
 /// Publication slot for the lazily booted packet-loop handle.
 ///

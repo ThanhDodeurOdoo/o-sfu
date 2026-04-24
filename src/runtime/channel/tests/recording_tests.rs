@@ -1,14 +1,17 @@
-use super::fixtures::*;
-use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
-use crate::runtime::{
-    channel::{ChannelManagerConfig, ChannelRuntimePolicy, rtp_capabilities},
-    diagnostics::DiagnosticsStore,
-    metrics::RuntimeMetrics,
-    recording::MediaTap,
-};
 use o_sfu_protocol::{
     shared::{RecordingState, RecordingStateUpdate, StopCode},
     signaling::RecordingOptions,
+};
+
+use super::fixtures::*;
+use crate::{
+    config::{MediaCodecFlags, RuntimeFeatureFlags},
+    runtime::{
+        channel::{ChannelManagerConfig, ChannelRuntimePolicy, rtp_capabilities},
+        diagnostics::DiagnosticsStore,
+        metrics::RuntimeMetrics,
+        recording::MediaTap,
+    },
 };
 
 async fn build_recording_channel() -> (

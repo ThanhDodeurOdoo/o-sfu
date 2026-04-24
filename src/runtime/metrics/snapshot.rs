@@ -1,12 +1,15 @@
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
-use super::catalog::RuntimeMetrics;
-use super::labels::{
-    ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus, HttpRoute,
-    RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-    RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind, TransportHealthTransition,
-    TransportIceState, TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-    WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+use super::{
+    catalog::RuntimeMetrics,
+    labels::{
+        ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus,
+        HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
+        RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
+        TransportHealthTransition, TransportIceState, TransportSessionLifetimeBucket,
+        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
+        WsSessionLoopExitReason, WsStartupFailureKind,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

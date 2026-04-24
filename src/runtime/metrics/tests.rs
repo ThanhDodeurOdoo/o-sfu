@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use crate::runtime::rtc_adapter::TransportSessionHealth;
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::{
@@ -8,6 +7,7 @@ use super::{
     RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
     TransportIceState, WsSessionLoopExitReason,
 };
+use crate::runtime::rtc_adapter::TransportSessionHealth;
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.active_channels, 1);

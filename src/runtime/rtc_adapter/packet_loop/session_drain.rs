@@ -6,15 +6,15 @@ use std::{
 use str0m::{Event, Input, Output};
 use tracing::{trace, warn};
 
-use super::super::state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState};
 use super::{
+    super::state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState},
     buffers::PacketLoopBuffers,
     event_observation::{log_rtc_event, observe_rtc_event},
     keyframe_requests::PendingKeyframeRequest,
 };
-use crate::runtime::diagnostics::DiagnosticsStore;
-use crate::runtime::metrics::RuntimeMetrics;
-use crate::runtime::transport_adapter::TransportSessionKey;
+use crate::runtime::{
+    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, transport_adapter::TransportSessionKey,
+};
 
 pub(super) fn drain_ready_sessions(
     state: &mut RtcBootstrapState,

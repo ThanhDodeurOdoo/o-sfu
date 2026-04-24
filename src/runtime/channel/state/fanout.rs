@@ -1,9 +1,12 @@
-use super::super::{
-    ChannelEventMessage,
-    outbound::{MessageFanout, fanout_all, fanout_all_except},
-};
-use super::shared::ChannelState;
 use o_sfu_protocol::shared::SessionId;
+
+use super::{
+    super::{
+        ChannelEventMessage,
+        outbound::{MessageFanout, fanout_all, fanout_all_except},
+    },
+    shared::ChannelState,
+};
 
 impl ChannelState {
     pub(in crate::runtime::channel) fn fanout_all(

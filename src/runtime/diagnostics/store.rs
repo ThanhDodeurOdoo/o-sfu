@@ -7,17 +7,17 @@
 //! Runtime code records events here as they happen, and the query layer later
 //! reads those bounded histories when building operator responses.
 
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Mutex, PoisonError};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::{Mutex, PoisonError},
+};
 
+use o_sfu_protocol::shared::SessionId;
 use serde_json::{Map, Value};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-
-use crate::runtime::ChannelInstanceId;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::types::DiagnosticsEvent;
-use o_sfu_protocol::shared::SessionId;
+use crate::runtime::ChannelInstanceId;
 
 const GLOBAL_RECENT_EVENT_LIMIT: usize = 64;
 const SCOPE_RECENT_EVENT_LIMIT: usize = 32;
@@ -253,11 +253,11 @@ fn reversed_events(events: &VecDeque<DiagnosticsEvent>) -> Vec<DiagnosticsEvent>
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_protocol::shared::SessionId;
     use serde_json::{Map, Value};
 
     use super::{DiagnosticsEventData, DiagnosticsStore, GLOBAL_RECENT_EVENT_LIMIT};
     use crate::runtime::ChannelInstanceId;
-    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn global_events_keep_the_newest_entries_in_reverse_chronological_order() {

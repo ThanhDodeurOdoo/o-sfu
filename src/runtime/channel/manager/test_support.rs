@@ -1,16 +1,20 @@
 use std::sync::Arc;
 
-use crate::config::{MediaCodecFlags, RuntimeFeatureFlags};
-use crate::runtime::diagnostics::DiagnosticsStore;
-use crate::runtime::recording::MediaTap;
-use crate::runtime::transport_adapter::RuntimeTransportAdapter;
-use crate::runtime::{ConnectionId, metrics::RuntimeMetrics};
 use o_sfu_protocol::shared::SessionId;
 
-use super::super::{
-    ChannelAdmissionPolicy, ChannelRuntimePolicy, rtp_capabilities::router_rtp_capabilities,
+use super::{
+    super::{
+        ChannelAdmissionPolicy, ChannelRuntimePolicy, rtp_capabilities::router_rtp_capabilities,
+    },
+    ChannelManager, ChannelManagerConfig, ChannelManagerJoinError, JoinSessionRequest,
 };
-use super::{ChannelManager, ChannelManagerConfig, ChannelManagerJoinError, JoinSessionRequest};
+use crate::{
+    config::{MediaCodecFlags, RuntimeFeatureFlags},
+    runtime::{
+        ConnectionId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
+        transport_adapter::RuntimeTransportAdapter,
+    },
+};
 
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
 

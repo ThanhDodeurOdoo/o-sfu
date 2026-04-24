@@ -15,15 +15,8 @@
 //! that each transition keeps its ordering and failure handling explicit at the
 //! boundary where room state meets transport state
 
-use tracing::warn;
-
-use crate::runtime::ConnectionId;
-use crate::runtime::diagnostics::DiagnosticsEventData;
-use crate::runtime::telemetry::schema::event as telemetry_event;
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, MediaPort, SourcePacketGate, TransportMediaId,
-};
 use o_sfu_protocol::shared::{SessionId, StreamType};
+use tracing::warn;
 
 use super::{
     Channel, ChannelMediaCounts,
@@ -33,6 +26,12 @@ use super::{
         PlannedSubscriptionChange, PreparedConsumerBootstrap, SourcePacketSelectionUpdate,
         TransportMediaRemoval,
     },
+};
+use crate::runtime::{
+    ConnectionId,
+    diagnostics::DiagnosticsEventData,
+    telemetry::schema::event as telemetry_event,
+    transport_adapter::{ActiveSpeakerSource, MediaPort, SourcePacketGate, TransportMediaId},
 };
 
 #[derive(Debug, Clone, Copy)]

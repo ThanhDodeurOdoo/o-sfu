@@ -12,15 +12,15 @@ use std::{
 };
 
 use o_sfu_rfc::webrtc;
-use str0m::bwe::Bitrate;
-use str0m::{Candidate, Rtc};
+use str0m::{Candidate, Rtc, bwe::Bitrate};
 use tokio::net::UdpSocket;
 use tracing::info;
 
 use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
-use crate::config::MediaCodecFlags;
-use crate::config::RtcPortRange;
-use crate::runtime::transport_adapter::{TransportAdapterError, TransportSessionKey};
+use crate::{
+    config::{MediaCodecFlags, RtcPortRange},
+    runtime::transport_adapter::{TransportAdapterError, TransportSessionKey},
+};
 pub(super) fn bind_shared_rtc_socket(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,

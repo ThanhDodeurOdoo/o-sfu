@@ -13,8 +13,8 @@ use o_sfu_router::{
     MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, RtcpFeedback,
     RtcpFeedbackKind, StreamBinding,
 };
-use str0m::bwe::Bitrate;
 use str0m::{
+    bwe::Bitrate,
     change::SdpAnswer,
     format::PayloadParams,
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
@@ -23,13 +23,12 @@ use str0m::{
 use tokio::sync::oneshot;
 use tracing::warn;
 
-use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
-};
-
 use super::super::{
     media_registry::RegisteredMediaHandle,
     state::{RtcBootstrapState, RtcSessionState},
+};
+use crate::runtime::transport_adapter::{
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 pub(super) fn respond_resolve_negotiated_producer_parameters(

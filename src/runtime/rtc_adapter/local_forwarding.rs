@@ -6,9 +6,10 @@ use str0m::{
     rtp::{RtpHeader, RtpPacket, SeqNo, StreamTx},
 };
 
-use super::local_send_rewrite::next_rewritten_seq_no;
-use super::shared_payload::SharedPayload;
-use super::state::RtcSessionState;
+use super::{
+    local_send_rewrite::next_rewritten_seq_no, shared_payload::SharedPayload,
+    state::RtcSessionState,
+};
 use crate::runtime::transport_adapter::TransportMediaId;
 
 #[derive(Debug, Clone)]
@@ -191,11 +192,12 @@ fn packet_rid(header: &RtpHeader) -> Option<Rid> {
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_protocol::shared::SessionId;
+
     use super::*;
     use crate::runtime::rtc_adapter::{
         sample_forwarded_packet, test_support::test_transport_session_key,
     };
-    use o_sfu_protocol::shared::SessionId;
 
     #[test]
     fn local_send_contract_keeps_payload_inside_the_adapter_boundary() {

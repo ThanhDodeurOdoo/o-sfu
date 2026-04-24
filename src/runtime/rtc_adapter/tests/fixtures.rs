@@ -12,6 +12,7 @@ pub(super) use std::{
     time::{Duration, Instant},
 };
 
+pub(super) use o_sfu_protocol::shared::SessionId;
 pub(super) use o_sfu_router::{
     MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding,
 };
@@ -25,17 +26,18 @@ pub(super) use super::super::{
     state::TransportSessionHealth,
     test_support::test_transport_session_key,
 };
-pub(super) use crate::runtime::{
-    diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
-};
 pub(super) use crate::{
     config::{MediaCodecFlags, RtcPortRange},
-    runtime::transport_adapter::{
-        ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
-        SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    runtime::{
+        diagnostics::DiagnosticsStore,
+        metrics::RuntimeMetrics,
+        recording::MediaTap,
+        transport_adapter::{
+            ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
+            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
+        },
     },
 };
-pub(super) use o_sfu_protocol::shared::SessionId;
 
 pub(super) fn transport_key(
     channel_instance_id: u64,

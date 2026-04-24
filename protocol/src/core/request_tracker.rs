@@ -34,9 +34,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::signaling::RequestId;
-
 use super::{Command, Commands, PendingRequestKind, REQUEST_TIMEOUT_TIMER_ID_BASE};
+use crate::signaling::RequestId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingRequestState {

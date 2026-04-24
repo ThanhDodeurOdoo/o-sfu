@@ -2,18 +2,17 @@ use std::fmt;
 
 use str0m::RtcError;
 
-use crate::runtime::{
-    metrics::{RtpForwardDestinationKind, RtpRelayDropKind},
-    packet_sink_registry::RegisteredPacketSink,
-    transport_adapter::{TransportMediaId, TransportSessionKey},
-};
-
 use super::{
     demux::MediaRouteDestination,
     forwarded_packet::ForwardedPacket,
     local_forwarding::LocalPacketDestination,
     relay_registry::{InterNodeRelaySender, RelayEnqueueOutcome, RelayPacketMailbox},
     state::RtcBootstrapState,
+};
+use crate::runtime::{
+    metrics::{RtpForwardDestinationKind, RtpRelayDropKind},
+    packet_sink_registry::RegisteredPacketSink,
+    transport_adapter::{TransportMediaId, TransportSessionKey},
 };
 
 #[derive(Debug, Clone)]
@@ -274,20 +273,26 @@ impl fmt::Debug for InterNodeRelayPacketDestination {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Instant;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Instant,
+    };
 
+    use o_sfu_protocol::shared::SessionId;
     use str0m::media::Mid;
 
     use super::*;
-    use crate::runtime::recording::MediaPacketSink;
-    use crate::runtime::rtc_adapter::{
-        relay_registry::InterNodeRelaySender, route_control::PacketLayerGate,
-        sample_forwarded_packet, test_support::test_transport_session_key,
+    use crate::runtime::{
+        recording::MediaPacketSink,
+        rtc_adapter::{
+            relay_registry::InterNodeRelaySender, route_control::PacketLayerGate,
+            sample_forwarded_packet, test_support::test_transport_session_key,
+        },
+        transport_adapter::TransportMediaId,
     };
-    use crate::runtime::transport_adapter::TransportMediaId;
-    use o_sfu_protocol::shared::SessionId;
 
     struct CountingSink {
         packets: AtomicUsize,
