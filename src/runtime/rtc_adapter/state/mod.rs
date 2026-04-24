@@ -12,7 +12,7 @@ use std::{
     mem::take,
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use str0m::Rtc;
@@ -21,11 +21,10 @@ use str0m::media::{Mid, Rid};
 use str0m::rtp::Ssrc;
 use tokio::net::UdpSocket;
 
-use crate::runtime::transport_adapter::{
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
-};
+use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 
+use super::bitrate::IncomingMediaBitrate;
 use super::demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux};
 use super::local_send_rewrite::{LocalSendRewriteKey, LocalSendRewriteState};
 use super::media_registry::{
@@ -33,8 +32,6 @@ use super::media_registry::{
     RemoteSourceRegistration,
 };
 use super::route_control::RouteControlState;
-
-pub(super) const BITRATE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportSessionHealth {
@@ -77,83 +74,6 @@ pub(super) struct PendingRecvStream {
     pub(super) rid: Option<Rid>,
 }
 
-#[derive(Debug, Default)]
-pub(super) struct SessionIncomingBitrates {
-    per_media: BTreeMap<TransportMediaId, RecentBitrate>,
-}
-
-impl SessionIncomingBitrates {
-    pub(super) fn record(
-        &mut self,
-        transport_media_id: TransportMediaId,
-        now: Instant,
-        payload_bytes: usize,
-    ) -> bool {
-        let first_observation = !self.per_media.contains_key(&transport_media_id);
-        self.per_media
-            .entry(transport_media_id)
-            .or_default()
-            .record(now, payload_bytes);
-        first_observation
-    }
-
-    pub(super) fn snapshot(&self, now: Instant) -> Vec<(TransportMediaId, u64)> {
-        self.per_media
-            .iter()
-            .filter_map(|(media_id, bitrate)| {
-                let bits = bitrate.snapshot(now);
-                if bits > 0 {
-                    Some((*media_id, bits))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub(super) fn total(&self, now: Instant) -> u64 {
-        self.per_media
-            .values()
-            .map(|bitrate| bitrate.snapshot(now))
-            .sum()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RecentBitrate {
-    window_start: Instant,
-    bytes_in_window: u64,
-}
-
-impl Default for RecentBitrate {
-    fn default() -> Self {
-        Self {
-            window_start: Instant::now(),
-            bytes_in_window: 0,
-        }
-    }
-}
-
-impl RecentBitrate {
-    fn record(&mut self, now: Instant, payload_bytes: usize) {
-        if now.duration_since(self.window_start) >= BITRATE_WINDOW {
-            self.window_start = now;
-            self.bytes_in_window = 0;
-        }
-        self.bytes_in_window = self
-            .bytes_in_window
-            .saturating_add(u64::try_from(payload_bytes).unwrap_or(u64::MAX));
-    }
-
-    fn snapshot(&self, now: Instant) -> u64 {
-        if now.duration_since(self.window_start) >= BITRATE_WINDOW {
-            0
-        } else {
-            self.bytes_in_window.saturating_mul(8)
-        }
-    }
-}
-
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
@@ -163,6 +83,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
     pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
     pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
+    pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
@@ -241,11 +162,6 @@ pub(crate) struct RtcSnapshotState {
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct RtcBitrateState {
-    pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
-}
-
 impl RtcSnapshotState {
     pub(super) fn add_session(&mut self, session_key: &TransportSessionKey) {
         self.live_sessions.insert(session_key.clone());
@@ -279,40 +195,5 @@ impl RtcSnapshotState {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         self.transport_health_by_session.get(session_key).copied()
-    }
-}
-
-impl RtcBitrateState {
-    pub(super) fn record_incoming_media(
-        &mut self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        now: Instant,
-        payload_bytes: usize,
-    ) -> bool {
-        self.incoming_bitrates_by_session
-            .entry(session_key.clone())
-            .or_default()
-            .record(transport_media_id, now, payload_bytes)
-    }
-
-    pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) {
-        self.incoming_bitrates_by_session.remove(session_key);
-    }
-
-    pub(crate) fn transport_bitrate_snapshot_at(
-        &self,
-        session_keys: &[TransportSessionKey],
-        now: Instant,
-    ) -> TransportBitrateSnapshot {
-        let mut snapshot = TransportBitrateSnapshot::default();
-        for session_key in session_keys {
-            let Some(session_bitrates) = self.incoming_bitrates_by_session.get(session_key) else {
-                continue;
-            };
-            snapshot.total = snapshot.total.saturating_add(session_bitrates.total(now));
-            snapshot.per_media.extend(session_bitrates.snapshot(now));
-        }
-        snapshot
     }
 }

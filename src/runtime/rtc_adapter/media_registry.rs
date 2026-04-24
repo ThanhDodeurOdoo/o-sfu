@@ -164,6 +164,7 @@ impl RtcBootstrapState {
                 .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
             self.clear_producer_ssrc_bindings(transport_media_id, session_key);
             self.route_control.forget_source(transport_media_id);
+            self.remove_incoming_bitrate_counter(transport_media_id);
         } else if let RegisteredMediaHandle::Consumer {
             session_key, mid, ..
         } = &handle

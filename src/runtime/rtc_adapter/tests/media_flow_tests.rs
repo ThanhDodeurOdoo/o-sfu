@@ -420,6 +420,7 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     .await;
 
     let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
+    assert_eq!(snapshot.total, 960);
     assert_eq!(snapshot.per_media.len(), 1);
     assert_eq!(
         snapshot
@@ -460,6 +461,44 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
             now + Duration::from_secs(2),
         )
     };
+    assert_eq!(snapshot.total, 0);
+    assert!(snapshot.per_media.is_empty());
+}
+
+#[tokio::test]
+async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 23, SessionId::Integer(23));
+    let rtp_parameters = sample_router_rtp_parameters("cam-up", 99_999);
+
+    assert!(
+        prepare_transport_session(&adapter, &session_key)
+            .await
+            .is_ok()
+    );
+    let transport_media_id = adapter
+        .add_recv_media(&session_key, Str0mMediaKind::Video, &rtp_parameters)
+        .await
+        .expect("should declare recv media");
+
+    record_incoming_media(
+        &adapter,
+        &session_key,
+        transport_media_id,
+        120,
+        Instant::now(),
+    )
+    .await;
+    assert_eq!(
+        adapter
+            .transport_bitrate_snapshot(slice::from_ref(&session_key))
+            .total,
+        960
+    );
+
+    assert!(adapter.close_session(&session_key).await.is_ok());
+
+    let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
     assert_eq!(snapshot.total, 0);
     assert!(snapshot.per_media.is_empty());
 }

@@ -9,6 +9,7 @@ use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::super::bitrate::RtcBitrateState;
 #[cfg(test)]
 use super::super::commands::debug::DebugRtcWorkerCommand;
 #[cfg(test)]
@@ -18,7 +19,7 @@ use super::super::{
     forwarding_planner::populate_forward_routes,
     relay_registry::RelayRegistry,
     routing_miss::PacketLoopRoutingState,
-    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBootstrapState, RtcSnapshotState},
     worker::{WorkerCommandContext, handle_worker_command},
 };
 use super::{
@@ -106,7 +107,6 @@ pub(crate) async fn run_packet_loop(
 
         let snapshot = snapshot_and_pump(
             &mut bootstrap_state,
-            &bitrate_state,
             &snapshot_state,
             &config,
             &mut relay_rx,
@@ -302,7 +302,6 @@ fn handle_debug_worker_command_and_clear_routing_cache(
 
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     relay_rx: &mut mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
@@ -333,7 +332,6 @@ fn snapshot_and_pump(
     flush_pending_keyframe_requests(state, &config.metrics, buffers);
     record_incoming_stats(
         state,
-        bitrate_state,
         &config.source_policy_signal,
         &config.metrics,
         buffers,

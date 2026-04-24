@@ -17,9 +17,10 @@ use crate::runtime::transport_adapter::{
 };
 
 use super::super::{
+    bitrate::RtcBitrateState,
     commands::{CloseSessionOutcome, CloseSessionState, RelayCleanup},
     media_registry::RegisteredMediaHandle,
-    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBootstrapState, RtcSnapshotState},
 };
 use super::media::refresh_source_packet_gate;
 

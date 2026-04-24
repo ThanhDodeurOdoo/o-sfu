@@ -23,12 +23,13 @@ use std::{
 };
 
 use super::super::{
+    bitrate::RtcBitrateState,
     commands::{
         CloseSessionOutcome, CloseSessionState, RemoteSourceControl, RemoveMediaOutcome,
         RtcWorkerCommand,
     },
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
-    state::{RtcBitrateState, RtcSnapshotState},
+    state::RtcSnapshotState,
 };
 use crate::config::{MediaCodecFlags, RtcPortRange};
 use crate::runtime::{

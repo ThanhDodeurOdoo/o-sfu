@@ -2,6 +2,7 @@
 //!
 //! Internal modules:
 //! - `api`: runtime adapter facade and worker lifecycle
+//! - `bitrate`: worker-local incoming bitrate counters and cold snapshot assembly
 //! - `commands`: production worker mailbox contract plus explicit test-only debug commands
 //! - `worker`: command dispatch and worker-local state mutations
 //! - `state`: pure state types and session scheduling
@@ -22,6 +23,7 @@
 //! - `negotiated_capabilities`: answer-side RTP capability projection for native signaling
 
 mod api;
+mod bitrate;
 mod bootstrap;
 mod commands;
 mod demux;

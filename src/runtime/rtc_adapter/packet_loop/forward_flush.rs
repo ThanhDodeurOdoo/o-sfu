@@ -1,12 +1,10 @@
-use std::sync::{Arc, Mutex};
-
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use super::super::{
     forwarded_packet::ForwardedPacket,
     forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
-    state::{RtcBitrateState, RtcBootstrapState},
+    state::RtcBootstrapState,
 };
 use super::buffers::PacketLoopBuffers;
 use crate::runtime::metrics::RuntimeMetrics;
@@ -14,7 +12,6 @@ use crate::runtime::transport_adapter::SourcePolicySignal;
 
 pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     source_policy_signal: &SourcePolicySignal,
     metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
@@ -33,14 +30,9 @@ pub(super) fn record_incoming_stats(
             if voice_activity.is_some() || audio_level.is_some() {
                 source_policy_signal.mark_dirty(packet.source_session_key().channel_instance_id());
             }
-            let first_ingress = bitrate_state.lock().is_ok_and(|mut snapshot| {
-                snapshot.record_incoming_media(
-                    packet.source_session_key(),
-                    transport_media_id,
-                    packet.received_at(),
-                    payload_len,
-                )
-            });
+            let first_ingress = state
+                .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
+                .unwrap_or(false);
             if first_ingress {
                 debug!(
                     session_id = ?packet.source_session_key().session_id(),

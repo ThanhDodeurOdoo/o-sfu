@@ -38,6 +38,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::super::{
+    bitrate::RtcBitrateState,
     commands::{RtcWorkerCommand, RtcWorkerResponse},
     packet_loop::{self, PacketLoopConfig},
     relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
@@ -114,7 +115,7 @@ impl RtcTransportAdapter {
         #[cfg(test)]
         let (debug_tx, debug_rx) = mpsc::channel(64);
         let (relay_tx, relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
-        let bitrate_state = Arc::new(Mutex::new(super::super::state::RtcBitrateState::default()));
+        let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
         let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
         let shutdown_token = CancellationToken::new();
         let worker_handle = RtcWorkerHandle {

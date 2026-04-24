@@ -14,10 +14,11 @@ use tokio::sync::oneshot;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 use super::super::{
+    bitrate::RtcBitrateState,
     commands::debug::{
         DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcWorkerCommand,
     },
-    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBootstrapState, RtcSnapshotState},
 };
 
 pub(super) fn handle_debug_command(
@@ -97,8 +98,8 @@ pub(super) fn handle_debug_command(
             now,
             response,
         } => respond_debug_record_incoming_media(
+            state,
             bitrate_state,
-            snapshot_state,
             &session_key,
             transport_media_id,
             payload_bytes,
@@ -322,17 +323,22 @@ fn into_debug_packet_gate(
 }
 
 fn respond_debug_record_incoming_media(
+    state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     payload_bytes: usize,
     now: Instant,
     response: oneshot::Sender<()>,
 ) {
-    let _ = snapshot_state;
-    if let Ok(mut bitrate) = bitrate_state.lock() {
-        bitrate.record_incoming_media(session_key, transport_media_id, now, payload_bytes);
+    if state
+        .record_incoming_bitrate(transport_media_id, now, payload_bytes)
+        .is_none()
+        && let Ok(mut bitrate) = bitrate_state.lock()
+    {
+        let counter = bitrate.register_incoming_media(session_key, transport_media_id, now);
+        counter.record(now, payload_bytes);
+        state.register_incoming_bitrate_counter(transport_media_id, counter);
     }
     let _ = response.send(());
 }

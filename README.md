@@ -16,18 +16,6 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 - more observability (prometheus, open telemetry,...)
 - stronger guarantees (rust + formal proofs + fuzzing + UB tests + puppetter full stack tests)
 
-## Missing Features
-
-compared to [Odoo SFU](https://github.com/odoo/sfu):
-- Simulcast
-- Recording
-
-additional features:
-- router sharding (local and multi server)
-
-
-Comments may be a bit lacking (although I added some for the most important parts in recent commits) because I don't want to write big comments when the code is still changing a lot (the code could get outdated and I forget to change the comments).
-
 ## Architecture
 
 ```mermaid
@@ -70,11 +58,11 @@ flowchart TD
 
 Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.
 
-## Running the server and contributing
+### API documentation
 
-See [CONTRIBUTING.md](../.github/CONTRIBUTING.md)
+you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly the same (Bundle API and http API)
 
-## Env variables (based on odoo/sfu)
+### Env variables (based on odoo/sfu)
 
 | Variable                           | Default         | Implemented | Description                                                                                                                                                       |
 | :--------------------------------- | :-------------- | :---------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -113,10 +101,14 @@ See [CONTRIBUTING.md](../.github/CONTRIBUTING.md)
 | `DATA_PATH`/`MEDIA_DIR`            | `/tmp/odoo_sfu` |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders).                                                                                  |
 
 
+## Running the server and contributing
 
-## random thoughts
+See [CONTRIBUTING.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/.github/CONTRIBUTING.md)
 
-## Recording:
+
+## Future work:
+
+### Recording:
 
 the o-sfu architecture helps a lot with recording compared to the previous version, since we now have complete control over the rtp packet dispatch, don't have to pipe streams through a transport layer and use ports and ffmpeg (at the real time recording step). we can just write packet frames to the disk directly and bypass all that old boilerplate.
 another advantage is the router/recording topology, we have recording nodes that should just act as "opaque" media consuming "entities" and their locality shouldn't matter much so recording and forwarding could be physically separated.
@@ -124,10 +116,16 @@ another advantage is the router/recording topology, we have recording nodes that
 also the recording feature on the official repo is still in active development so the API may change, and this repo
 will adapt accordingly.
 
-## scalability (sharding)
+### scalability (sharding)
 
 channels will have multiple routers and the load will be sharded across them. In the long term an optional controller server will
 allow the SFUs to share shards between them.
+
+### Simulcast/SVC
+
+WIP
+
+## Tooling
 
 ## Observability
 
@@ -142,14 +140,6 @@ https://github.com/ThanhDodeurOdoo/o-sfu-telemetry contains the optional Prometh
   - `/metrics` is the authoritative low-cardinality time-series surface.
   - `/v1/stats` remains a compatibility snapshot surface.
 
-## Benchmnarks
+### Benchmarking
 
-https://github.com/ThanhDodeurOdoo/o-sfu-benchmarks
-
-## crypto
-
-investigate chacha20 instead of classical dtls/srtp
-
-## API documentation
-
-Can copy the one form odoo/sfu since it's roughly the same (Bundle API and http API)
+  https://github.com/ThanhDodeurOdoo/o-sfu-benchmarks

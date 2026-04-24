@@ -24,9 +24,10 @@ use super::super::commands::debug::DebugRtcWorkerCommand;
 use super::debug;
 use super::{
     super::{
+        bitrate::RtcBitrateState,
         commands::RtcWorkerCommand,
         relay_registry::RelayRegistry,
-        state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
+        state::{RtcBootstrapState, RtcSnapshotState},
     },
     media,
     negotiation::{self, OfferBootstrapConfig},
@@ -100,6 +101,7 @@ pub(crate) fn handle_worker_command(
         | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_media_command(
                 state,
+                context.bitrate_state,
                 context.max_bitrate_in_bps,
                 context.metrics,
                 context.relay_registry,
@@ -204,6 +206,7 @@ fn respond_expired_active_speaker_channel_instance_ids(
 
 fn handle_media_command(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     max_bitrate_in_bps: u64,
     metrics: &RuntimeMetrics,
     relay_registry: &RelayRegistry,
@@ -214,7 +217,13 @@ fn handle_media_command(
             session_key,
             transport_media_id,
             response,
-        } => media::respond_remove_media(state, &session_key, transport_media_id, response),
+        } => media::respond_remove_media(
+            state,
+            bitrate_state,
+            &session_key,
+            transport_media_id,
+            response,
+        ),
         RtcWorkerCommand::AddRecvMedia {
             session_key,
             media_kind,
@@ -222,6 +231,7 @@ fn handle_media_command(
             response,
         } => media::respond_add_recv_media(
             state,
+            bitrate_state,
             max_bitrate_in_bps,
             &session_key,
             media_kind,

@@ -11,6 +11,11 @@
 //!   to hand out a second local offer while the previous one still awaits an
 //!   answer
 
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::bwe::Bitrate;
 use str0m::{
@@ -24,6 +29,7 @@ use crate::runtime::transport_adapter::{
 };
 
 use super::super::super::{
+    bitrate::RtcBitrateState,
     commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
     local_send_rewrite::forget_transport_media_rewrites,
     media_registry::RegisteredMediaHandle,
@@ -36,15 +42,22 @@ use super::{
 
 pub(crate) fn respond_remove_media(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     response: RtcWorkerResponse<RemoveMediaOutcome>,
 ) {
-    let _ = response.send(worker_remove_media(state, session_key, transport_media_id));
+    let _ = response.send(worker_remove_media(
+        state,
+        bitrate_state,
+        session_key,
+        transport_media_id,
+    ));
 }
 
 pub(crate) fn respond_add_recv_media(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
@@ -53,6 +66,7 @@ pub(crate) fn respond_add_recv_media(
 ) {
     let _ = response.send(worker_add_recv_media(
         state,
+        bitrate_state,
         max_bitrate_in_bps,
         session_key,
         media_kind,
@@ -91,6 +105,7 @@ pub(crate) fn respond_resolve_media_mid(
 /// SDP, route, and remote-source side effect that still points at it.
 fn worker_remove_media(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<RemoveMediaOutcome, TransportAdapterError> {
@@ -106,6 +121,9 @@ fn worker_remove_media(
     };
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
+            if let Ok(mut bitrate) = bitrate_state.lock() {
+                bitrate.remove_incoming_media(&session_key, transport_media_id);
+            }
             if let Some(session_state) = state.sessions.get_mut(&session_key) {
                 session_state
                     .sdp_negotiation
@@ -243,6 +261,7 @@ fn worker_stage_native_media_removal(
 /// point every addition must stage the next renegotiation offer first.
 fn worker_add_recv_media(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
@@ -279,6 +298,11 @@ fn worker_add_recv_media(
         session_key: session_key.clone(),
         mid,
     });
+    if let Ok(mut bitrate) = bitrate_state.lock() {
+        let counter =
+            bitrate.register_incoming_media(session_key, transport_media_id, Instant::now());
+        state.register_incoming_bitrate_counter(transport_media_id, counter);
+    }
     debug!(
         session_id = ?session_key.session_id(),
         media_worker_id = session_key.media_worker_id(),

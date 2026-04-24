@@ -26,7 +26,7 @@ use crate::runtime::rtc_adapter::{
     relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId},
     route_control::{KeyframeRequestDecision, PacketLayerGate},
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
-    state::{RtcBitrateState, RtcBootstrapState, RtcSnapshotState},
+    state::{RtcBootstrapState, RtcSnapshotState},
     test_support::test_transport_session_key,
 };
 use crate::runtime::transport_adapter::{
@@ -400,7 +400,6 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let producer_session = test_transport_session_key(28, 0, 29, SessionId::Integer(30));
     let consumer_session = test_transport_session_key(28, 0, 31, SessionId::Integer(32));
     let mut state = RtcBootstrapState::default();
-    let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
     let media_tap = MediaTap::default();
     let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
@@ -440,7 +439,6 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
 
     record_incoming_stats(
         &mut state,
-        &bitrate_state,
         &SourcePolicySignal::default(),
         &metrics,
         &mut buffers,

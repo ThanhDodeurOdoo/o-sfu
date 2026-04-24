@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, time::Instant};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Rid};
@@ -15,6 +19,7 @@ use super::{
 use crate::config::MediaCodecFlags;
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::rtc_adapter::{
+    bitrate::RtcBitrateState,
     bootstrap,
     commands::{RemoteSourceControl, RtcWorkerCommand},
     demux::{MediaRouteDestination, MediaRouteEntry},
@@ -491,9 +496,16 @@ fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
         session_key: session_key.clone(),
         mid: producer_mid,
     });
+    let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
     let (response_tx, response_rx) = oneshot::channel();
 
-    respond_remove_media(&mut state, &session_key, transport_media_id, response_tx);
+    respond_remove_media(
+        &mut state,
+        &bitrate_state,
+        &session_key,
+        transport_media_id,
+        response_tx,
+    );
 
     assert_eq!(
         response_rx.blocking_recv(),
