@@ -1,4 +1,4 @@
-use o_sfu_rfc::rtp as rfc_rtp;
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
     HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability,
     MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
@@ -33,7 +33,10 @@ pub(crate) fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<Me
             }
         }
         for (id, extension) in media_line.extmaps() {
-            let header_extension = RouterHeaderExtension::new(extension.as_uri().to_owned(), id);
+            let header_extension = RouterHeaderExtension::new(
+                rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
+                id,
+            );
             if !header_extensions.contains(&header_extension) {
                 header_extensions.push(header_extension);
             }

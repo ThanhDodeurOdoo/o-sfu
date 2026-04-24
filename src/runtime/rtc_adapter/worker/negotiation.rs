@@ -22,7 +22,7 @@ use tracing::debug;
 
 use super::{
     super::{
-        bootstrap,
+        bootstrap, sdp_simulcast,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
     publication::refresh_negotiated_producer_parameters,
@@ -248,7 +248,7 @@ fn apply_pending_recv_streams(
         .sdp_negotiation
         .pending_recv_streams
         .iter()
-        .map(|(mid, stream)| (*mid, stream.clone()))
+        .flat_map(|(mid, streams)| streams.iter().map(|stream| (*mid, stream.clone())))
         .collect::<Vec<_>>();
     let mut api = session_state.rtc.direct_api();
     for (mid, stream) in &pending_recv_streams {
@@ -312,7 +312,13 @@ fn ensure_initial_negotiation_media(bootstrap_mids: &mut Vec<Mid>, sdp_api: &mut
     *bootstrap_mids = INITIAL_NEGOTIATION_MEDIA_KINDS
         .into_iter()
         .map(|media_kind| {
-            sdp_api.add_media(media_kind, INITIAL_NEGOTIATION_DIRECTION, None, None, None)
+            sdp_api.add_media(
+                media_kind,
+                INITIAL_NEGOTIATION_DIRECTION,
+                None,
+                None,
+                sdp_simulcast::bootstrap_recv_simulcast(media_kind),
+            )
         })
         .collect();
 }

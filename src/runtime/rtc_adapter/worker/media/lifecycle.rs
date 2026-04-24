@@ -30,6 +30,7 @@ use super::{
         commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
         local_send_rewrite::forget_transport_media_rewrites,
         media_registry::RegisteredMediaHandle,
+        sdp_simulcast,
         state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
     },
     control::{ensure_route_source_registered, register_consumer_route, remove_consumer_route},
@@ -279,7 +280,7 @@ fn worker_add_recv_media(
             if !has_media {
                 api.declare_media(mid, media_kind);
             }
-            if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
+            for (ssrc, rid) in recv_encoding_identities(rtp_parameters) {
                 api.expect_stream_rx(ssrc, None, mid, rid);
                 if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
                     stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
@@ -330,22 +331,32 @@ fn worker_stage_native_recv_media(
     if let Some(pending_offer) = existing_pending_offer {
         sdp_api.merge(pending_offer);
     }
-    let mid = sdp_api.add_media(media_kind, Direction::RecvOnly, None, None, None);
+    let mid = sdp_api.add_media(
+        media_kind,
+        Direction::RecvOnly,
+        None,
+        None,
+        sdp_simulcast::publish_recv_simulcast(media_kind, rtp_parameters),
+    );
     let Some((offer, pending_offer)) = sdp_api.apply() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
-    if let Some((ssrc, rid)) = primary_encoding_identity(rtp_parameters) {
-        session_state
-            .sdp_negotiation
-            .pending_recv_streams
-            .insert(mid, PendingRecvStream { ssrc, rid });
-    } else {
+    let pending_streams = recv_encoding_identities(rtp_parameters)
+        .into_iter()
+        .map(|(ssrc, rid)| PendingRecvStream { ssrc, rid })
+        .collect::<Vec<_>>();
+    if pending_streams.is_empty() {
         session_state
             .sdp_negotiation
             .pending_recv_streams
             .remove(&mid);
+    } else {
+        session_state
+            .sdp_negotiation
+            .pending_recv_streams
+            .insert(mid, pending_streams);
     }
     Ok(mid)
 }
@@ -518,4 +529,14 @@ fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ss
     let ssrc = encoding.ssrc().map(Ssrc::from)?;
     let rid = encoding.rid().map(Into::into);
     Some((ssrc, rid))
+}
+
+fn recv_encoding_identities(rtp_parameters: &RouterRtpParameters) -> Vec<(Ssrc, Option<Rid>)> {
+    rtp_parameters
+        .encodings()
+        .filter_map(|encoding| {
+            let ssrc = encoding.ssrc().map(Ssrc::from)?;
+            Some((ssrc, encoding.rid().map(Into::into)))
+        })
+        .collect()
 }

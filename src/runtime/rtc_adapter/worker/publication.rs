@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use o_sfu_rfc::rtp as rfc_rtp;
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
     HeaderExtension as RouterHeaderExtension, MediaFormat as RouterMediaFormat,
     MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, RtcpFeedback,
@@ -25,6 +25,7 @@ use tracing::warn;
 
 use super::super::{
     media_registry::RegisteredMediaHandle,
+    sdp_simulcast,
     state::{RtcBootstrapState, RtcSessionState},
 };
 use crate::runtime::transport_adapter::{
@@ -108,7 +109,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 .into_iter()
                 .map(project_header_extension)
                 .collect::<Vec<_>>();
-            let rids = media_line.rids();
+            let rids = sdp_simulcast::send_rids_for_mid(answer_sdp, mid);
             let primary_ssrcs = media_line
                 .ssrc_info()
                 .into_iter()
@@ -277,25 +278,31 @@ fn rtcp_feedback(payload_params: &PayloadParams) -> Vec<RtcpFeedback> {
 }
 
 fn project_header_extension((id, extension): (u8, &Extension)) -> RouterHeaderExtension {
-    RouterHeaderExtension::new(extension.as_uri().to_owned(), id)
+    RouterHeaderExtension::new(
+        rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
+        id,
+    )
 }
 
 fn project_bindings(
     session_state: &mut RtcSessionState,
     mid: Mid,
     primary_payload_type: Option<u8>,
-    rids: Vec<Rid>,
+    rids: Vec<sdp_simulcast::NegotiatedRid>,
     primary_ssrcs: Vec<u32>,
 ) -> Vec<StreamBinding> {
     if !rids.is_empty() {
         let mut bindings = rids
             .into_iter()
             .map(|rid| {
-                let mut binding = StreamBinding::new().with_rid(rid.to_string());
+                let mut binding = StreamBinding::new().with_rid(rid.rid.to_string());
                 if let Some(payload_type) = primary_payload_type {
                     binding = binding.with_payload_type(payload_type);
                 }
-                if let Some(ssrc) = stream_rx_ssrc(session_state, mid, Some(rid)) {
+                if let Some(max_bitrate) = rid.max_bitrate {
+                    binding = binding.with_max_bitrate(max_bitrate);
+                }
+                if let Some(ssrc) = stream_rx_ssrc(session_state, mid, Some(rid.rid)) {
                     binding = binding.with_ssrc(ssrc);
                 }
                 binding

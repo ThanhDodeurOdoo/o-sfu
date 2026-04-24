@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use o_sfu_rfc::webrtc;
 use o_sfu_router::MediaKind as RouterMediaKind;
 use str0m::{
     Candidate, Rtc,
@@ -10,7 +11,8 @@ use str0m::{
 
 use super::fixtures::*;
 use crate::runtime::{
-    rtc_adapter::client_rtp_capabilities_from_answer, transport_adapter::TransportMediaId,
+    rtc_adapter::client_rtp_capabilities_from_answer,
+    test_rtp_samples::sample_simulcast_video_rtp_parameters, transport_adapter::TransportMediaId,
 };
 
 #[tokio::test]
@@ -54,6 +56,62 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     assert_eq!(
         adapter.create_initial_session_offer(&session_key).await,
         Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
+async fn rtc_initial_session_offer_advertises_simulcast_receive_surface() {
+    let adapter = RtcTransportAdapter::default();
+    let session_key = transport_key(1, 134, SessionId::Integer(134));
+
+    let offer_sdp = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed")
+        .into_sdp();
+
+    assert!(
+        contains_sdp_extmap_uri(&offer_sdp, webrtc::rtp_header_extension_uri::RTP_STREAM_ID),
+        "server offers should advertise the RTP stream-id extension needed for RID-based simulcast"
+    );
+    assert!(
+        contains_sdp_extmap_uri(
+            &offer_sdp,
+            webrtc::rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID
+        ),
+        "server offers should advertise the repaired RTP stream-id extension needed for RTX repair streams"
+    );
+    assert!(
+        offer_sdp.contains(&sdp_rid_line(
+            "lo",
+            webrtc::sdp::rid::DIRECTION_RECV,
+            Some(150_000)
+        )),
+        "video offers should declare the low receive RID with its RFC 8851 bitrate restriction"
+    );
+    assert!(
+        offer_sdp.contains(&sdp_rid_line(
+            "hi",
+            webrtc::sdp::rid::DIRECTION_RECV,
+            Some(900_000)
+        )),
+        "video offers should declare the high receive RID with its RFC 8851 bitrate restriction"
+    );
+    assert!(
+        offer_sdp.contains(&sdp_simulcast_line(
+            webrtc::sdp::simulcast::DIRECTION_RECV,
+            &["lo", "hi"]
+        )),
+        "video offers should connect the declared RIDs through RFC 8853 simulcast"
+    );
+    assert!(
+        offer_sdp.contains(&format!(
+            "a={}:96 {} {}",
+            webrtc::sdp::attribute::RTCP_FB,
+            webrtc::rtcp_feedback::kind::NACK,
+            webrtc::rtcp_feedback::parameter::PLI
+        )),
+        "video offers should retain the keyframe feedback surface used after layer switches"
     );
 }
 
@@ -109,6 +167,106 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
     assert!(
         projected.codecs().all(|codec| codec.codec_name() != "H264"),
         "the projected client capability set must reflect the answer instead of the router default"
+    );
+}
+
+#[tokio::test]
+async fn rtc_simulcast_publish_offer_and_answer_preserve_encoding_facts() {
+    let adapter = rtc_adapter_with_bitrate_limits(2_222_222, 3_333_333);
+    let session_key = transport_key(1, 135, SessionId::Integer(135));
+
+    let mut remote = build_remote_rtc(55_135);
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_simulcast_video_rtp_parameters(Some("simulcast-up")),
+        )
+        .await
+        .expect("simulcast publish intent should stage a renegotiation offer");
+
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged simulcast renegotiation offer should be available")
+        .into_sdp();
+    assert!(
+        renegotiation_offer.contains(&sdp_rid_line(
+            "lo",
+            webrtc::sdp::rid::DIRECTION_RECV,
+            Some(150_000)
+        )),
+        "simulcast publish offers should preserve the low RID restriction from router-native parameters"
+    );
+    assert!(
+        renegotiation_offer.contains(&sdp_rid_line(
+            "hi",
+            webrtc::sdp::rid::DIRECTION_RECV,
+            Some(900_000)
+        )),
+        "simulcast publish offers should preserve the high RID restriction from router-native parameters"
+    );
+    assert!(
+        renegotiation_offer.contains(&sdp_simulcast_line(
+            webrtc::sdp::simulcast::DIRECTION_RECV,
+            &["lo", "hi"]
+        )),
+        "simulcast publish offers should describe the source as one media section with several encodings"
+    );
+
+    let raw_answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
+        )
+        .expect("remote simulcast answer should build")
+        .to_sdp_string();
+    let negotiated_mid = resolve_mid(&adapter, transport_media_id)
+        .await
+        .expect("transport media should resolve to the server-assigned mid");
+    let answer_sdp = add_answer_simulcast_for_mid(&raw_answer_sdp, &format!("{negotiated_mid}"));
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &answer_sdp)
+            .await,
+        Ok(())
+    );
+
+    let negotiated_parameters = adapter
+        .negotiated_producer_parameters(&session_key, transport_media_id)
+        .await
+        .expect("answered simulcast publish should project router RTP parameters");
+    let encodings = negotiated_parameters.encodings().collect::<Vec<_>>();
+    assert_eq!(encodings.len(), 2);
+    let Some(low_encoding) = encodings.first() else {
+        return;
+    };
+    let Some(high_encoding) = encodings.get(1) else {
+        return;
+    };
+    assert_eq!(low_encoding.rid(), Some("lo"));
+    assert_eq!(low_encoding.ssrc(), Some(31_001));
+    assert_eq!(low_encoding.max_bitrate(), Some(150_000));
+    assert_eq!(high_encoding.rid(), Some("hi"));
+    assert_eq!(high_encoding.ssrc(), Some(31_002));
+    assert_eq!(high_encoding.max_bitrate(), Some(900_000));
+    assert!(
+        negotiated_parameters
+            .header_extensions()
+            .any(|extension| extension.uri() == webrtc::rtp_header_extension_uri::RTP_STREAM_ID),
+        "answer projection should keep the RTP stream-id extension as router-native metadata"
     );
 }
 
@@ -735,6 +893,60 @@ fn media_section_for_mid<'a>(sdp: &'a str, mid: &str) -> Option<&'a str> {
         .find("\r\nm=")
         .map_or(sdp.len(), |offset| marker_start + offset + 2);
     Some(&sdp[section_start..section_end])
+}
+
+fn contains_sdp_extmap_uri(sdp: &str, uri: &str) -> bool {
+    let prefix = format!("a={}:", webrtc::sdp::attribute::EXTMAP);
+    sdp.lines()
+        .any(|line| line.starts_with(&prefix) && line.contains(uri))
+}
+
+fn sdp_rid_line(rid: &str, direction: &str, max_bitrate: Option<u64>) -> String {
+    let mut line = format!("a={}:{} {}", webrtc::sdp::attribute::RID, rid, direction);
+    if let Some(max_bitrate) = max_bitrate {
+        line.push(' ');
+        line.push_str(webrtc::sdp::rid_restriction::MAX_BITRATE);
+        line.push('=');
+        line.push_str(&max_bitrate.to_string());
+    }
+    line
+}
+
+fn sdp_simulcast_line(direction: &str, rids: &[&str]) -> String {
+    format!(
+        "a={}:{} {}",
+        webrtc::sdp::attribute::SIMULCAST,
+        direction,
+        rids.join(&webrtc::sdp::simulcast::STREAM_SEPARATOR.to_string())
+    )
+}
+
+fn add_answer_simulcast_for_mid(answer_sdp: &str, mid: &str) -> String {
+    let marker = format!("a=mid:{mid}");
+    let marker_start = answer_sdp
+        .find(&marker)
+        .expect("answer should contain the staged media section");
+    let section_end = answer_sdp[marker_start..]
+        .find("\r\nm=")
+        .map_or(answer_sdp.len(), |offset| marker_start + offset + 2);
+    let direction_marker = format!("a={}\r\n", webrtc::sdp::simulcast::DIRECTION_SEND);
+    let insert_at = answer_sdp[marker_start..section_end]
+        .find(&direction_marker)
+        .map_or(section_end, |offset| {
+            marker_start + offset + direction_marker.len()
+        });
+    let simulcast_lines = format!(
+        "{}\r\n{}\r\n{}",
+        sdp_rid_line("lo", webrtc::sdp::rid::DIRECTION_SEND, Some(150_000)),
+        sdp_rid_line("hi", webrtc::sdp::rid::DIRECTION_SEND, Some(900_000)),
+        sdp_simulcast_line(webrtc::sdp::simulcast::DIRECTION_SEND, &["lo", "hi"]),
+    );
+    let mut sdp = String::with_capacity(answer_sdp.len() + simulcast_lines.len() + 2);
+    sdp.push_str(&answer_sdp[..insert_at]);
+    sdp.push_str(&simulcast_lines);
+    sdp.push_str("\r\n");
+    sdp.push_str(&answer_sdp[insert_at..]);
+    sdp
 }
 
 fn build_remote_rtc(port: u16) -> Rtc {

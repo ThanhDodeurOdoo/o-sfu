@@ -15,6 +15,7 @@
 //! - `relay_registry`: source-media-scoped relay targets for inter-worker mailboxes and future inter-node forwarding
 //! - `route_control`: transport-native control policy for keyed feedback absorption and gating
 //! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
+//! - `sdp_simulcast`: RTC-edge SDP RID/simulcast offer and answer helpers
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding and session RTC state initialization for the real offer/answer path
 //! - `test_support`: runtime-owned re-exports for rtc-adapter test helpers that should not live on the production module root
@@ -38,6 +39,7 @@ mod packet_loop;
 mod relay_registry;
 mod route_control;
 mod routing_miss;
+mod sdp_simulcast;
 mod shared_payload;
 mod state;
 pub(crate) mod test_support;
