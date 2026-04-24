@@ -437,13 +437,18 @@ mod tests {
         ChannelAdmissionPolicy,
         rtp_capabilities::router_rtp_capabilities,
         state::{
-            ids::ProducerRuntimeId, shared::ConsumerKey, shared::ConsumerState,
-            shared::ProducerTransportMediaIndexEntry,
+            ids::ProducerRuntimeId, shared::ConsumerKey, shared::ConsumerState, shared::SourceKey,
+            shared::SourceTransportMediaIndexEntry,
         },
         topology::{RoutedConsumerId, RoutedProducerId},
     };
     use crate::runtime::metrics::RuntimeMetrics;
     use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
+    use crate::runtime::source_model::{
+        PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+        PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+        SourceEncodingId, SourceTransportBinding,
+    };
     use crate::runtime::transport_adapter::TransportMediaId;
     use crate::runtime::{ChannelInstanceId, ConnectionId};
     use o_sfu_protocol::shared::{SessionPermissions, StreamType};
@@ -472,13 +477,40 @@ mod tests {
         transport_media_id: Option<TransportMediaId>,
     ) -> ProducerRuntimeId {
         let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
-        state.producer_ids_by_owner_stream.insert(
-            super::super::shared::ProducerKey::new(session_id, stream_type),
-            producer_id,
-        );
+        let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
+        let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
+        let transport_binding = transport_media_id.map(SourceTransportBinding::new);
+        let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id,
+            owner: PublishedSourceOwner::new(session_id.clone(), connection_id),
+            stream_type,
+            media_kind: MediaKind::Video,
+            mid: None,
+            encodings: vec![SourceEncodingDescriptor::new(
+                SourceEncodingDescriptorParts {
+                    encoding_id,
+                    source_id,
+                    rid: None,
+                    primary_ssrc: None,
+                    repair_ssrc: None,
+                    max_bitrate: None,
+                    negotiated_format: None,
+                    transport_binding,
+                },
+            )],
+        })
+        .expect("test source graph should be valid");
+        state.sources.insert(source_id, source);
+        state
+            .source_ids_by_owner_stream
+            .insert(SourceKey::new(session_id, stream_type), source_id);
+        state
+            .producer_id_by_source_id
+            .insert(source_id, producer_id);
         state.producers.insert(
             producer_id,
             super::super::shared::PublishedProducer {
+                source_id,
                 owner_session_id: session_id.clone(),
                 owner_connection_id: connection_id,
                 stream_type,
@@ -491,9 +523,11 @@ mod tests {
             },
         );
         if let Some(transport_media_id) = transport_media_id {
-            state.producer_transport_media_index.insert(
+            state.source_transport_media_index.insert(
                 transport_media_id,
-                ProducerTransportMediaIndexEntry::new(
+                SourceTransportMediaIndexEntry::new(
+                    source_id,
+                    vec![encoding_id],
                     session_id.clone(),
                     connection_id,
                     stream_type,

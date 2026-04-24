@@ -9,7 +9,7 @@ use crate::runtime::diagnostics::{
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{SessionId, StreamType};
 
-use super::shared::{ChannelState, ConsumerKey, ProducerKey};
+use super::shared::{ChannelState, ConsumerKey, SourceKey};
 
 impl ChannelState {
     pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_session(
@@ -18,7 +18,7 @@ impl ChannelState {
     ) -> BTreeMap<SessionId, DiagnosticsIncomingBitrate> {
         let mut incoming_bitrate = BTreeMap::new();
         for (transport_media_id, bits) in per_media {
-            let Some(entry) = self.producer_transport_media_entry(*transport_media_id) else {
+            let Some(entry) = self.source_transport_media_entry(*transport_media_id) else {
                 continue;
             };
             let session_bitrate: &mut DiagnosticsIncomingBitrate = incoming_bitrate
@@ -84,11 +84,19 @@ impl ChannelState {
                 producer.owner_session_id == *session_id
                     && producer.owner_connection_id == connection_id
             })
-            .map(|producer| DiagnosticsPublication {
-                active: producer.active,
-                media_kind: DiagnosticsMediaKind::from(producer.media_kind),
-                stream_type: producer.stream_type,
-                transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
+            .filter_map(|producer| {
+                let source = self.sources.get(&producer.source_id)?;
+                Some(DiagnosticsPublication {
+                    active: producer.active,
+                    encoding_ids: source
+                        .encodings()
+                        .map(|encoding| encoding.encoding_id().as_u64())
+                        .collect(),
+                    media_kind: DiagnosticsMediaKind::from(producer.media_kind),
+                    source_id: producer.source_id.as_u64(),
+                    stream_type: producer.stream_type,
+                    transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
+                })
             })
             .collect()
     }
@@ -143,9 +151,11 @@ impl ChannelState {
                 consumer_transport_media_id: None,
                 producer_session_id: key.producer_session_id.clone(),
                 source_transport_media_id: self
-                    .producer_ids_by_owner_stream
-                    .get(&ProducerKey::new(&key.producer_session_id, key.stream_type))
-                    .and_then(|producer_id| self.producers.get(producer_id))
+                    .producer_id_for_source_key(&SourceKey::new(
+                        &key.producer_session_id,
+                        key.stream_type,
+                    ))
+                    .and_then(|producer_id| self.producers.get(&producer_id))
                     .and_then(|producer| producer.transport_media_id)
                     .map(TransportMediaId::as_u64),
                 state: DiagnosticsRouteState::Pending,

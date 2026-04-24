@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::{
     super::{ChannelEventMessage, outbound::MessageFanout},
     ids::ProducerRuntimeId,
-    shared::{ChannelState, ProducerKey, SourcePacketSelection},
+    shared::{ChannelState, SourceKey, SourcePacketSelection},
 };
 
 const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;
@@ -103,8 +103,8 @@ impl ChannelState {
                     source.transport_media_id(),
                     StreamType::Audio,
                 )?;
-                self.producer_ids_by_owner_stream
-                    .contains_key(&ProducerKey::new(&owner_session_id, StreamType::Camera))
+                self.source_ids_by_owner_stream
+                    .contains_key(&SourceKey::new(&owner_session_id, StreamType::Camera))
                     .then_some(owner_session_id)
             })
             .take(ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT)
@@ -149,8 +149,8 @@ impl ChannelState {
                 source.transport_media_id(),
                 StreamType::Audio,
             )?;
-            self.producer_ids_by_owner_stream
-                .contains_key(&ProducerKey::new(&owner_session_id, StreamType::Camera))
+            self.source_ids_by_owner_stream
+                .contains_key(&SourceKey::new(&owner_session_id, StreamType::Camera))
                 .then_some(owner_session_id)
         })
     }
@@ -160,7 +160,7 @@ impl ChannelState {
         transport_media_id: TransportMediaId,
         stream_type: StreamType,
     ) -> Option<SessionId> {
-        self.producer_transport_media_entry(transport_media_id)
+        self.source_transport_media_entry(transport_media_id)
             .filter(|entry| entry.stream_type() == stream_type)
             .map(|entry| entry.owner_session_id().clone())
     }

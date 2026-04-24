@@ -7,7 +7,7 @@ use o_sfu_protocol::signaling::PeerSnapshot;
 
 use super::layout::SessionLayout;
 use super::presence::SessionPresence;
-use super::shared::{ActiveSession, ChannelState, ProducerKey};
+use super::shared::{ActiveSession, ChannelState, SourceKey};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct SessionMediaView {
@@ -118,10 +118,9 @@ impl ChannelState {
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<bool> {
-        let producer_id = self
-            .producer_ids_by_owner_stream
-            .get(&ProducerKey::new(session_id, stream_type))?;
-        let producer = self.producers.get(producer_id)?;
+        let producer_id =
+            self.producer_id_for_source_key(&SourceKey::new(session_id, stream_type))?;
+        let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != connection_id {
             return None;
         }

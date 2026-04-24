@@ -7,6 +7,9 @@ use o_sfu_router::{
 
 use crate::runtime::ConnectionId;
 use crate::runtime::recording::RecordingService;
+use crate::runtime::source_model::{
+    PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+};
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use o_sfu_protocol::shared::{DownloadStates, RecordingState, SessionId, StreamType};
 
@@ -40,16 +43,22 @@ pub(in crate::runtime::channel) struct ChannelState {
     /// Monotonically increasing: each join, including re-joins, gets a fresh id
     /// so stale async callbacks from a previous connection are rejected.
     pub(super) next_connection_id: u64,
+    pub(super) next_source_id: u64,
+    pub(super) next_source_encoding_id: u64,
     pub(super) next_producer_id: u64,
     pub(super) next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
+    /// Source graph keyed by stable room-domain source id.
+    pub(super) sources: BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
+    /// Compatibility source lookup keyed by the publisher session and stream type.
+    pub(super) source_ids_by_owner_stream: BTreeMap<SourceKey, PublishedSourceId>,
+    /// Current routed producer realization keyed by source id.
+    pub(super) producer_id_by_source_id: BTreeMap<PublishedSourceId, ProducerRuntimeId>,
     /// Keyed by typed runtime producer id. Compatibility wire ids are rendered at the edge.
     pub(super) producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
-    /// Producer lookup keyed by the publisher session and stream type.
-    pub(super) producer_ids_by_owner_stream: BTreeMap<ProducerKey, ProducerRuntimeId>,
-    /// Producer ownership and stream metadata keyed by transport-owned media ids.
-    pub(super) producer_transport_media_index:
-        BTreeMap<TransportMediaId, ProducerTransportMediaIndexEntry>,
+    /// Source ownership and encoding metadata keyed by transport-owned media ids.
+    pub(super) source_transport_media_index:
+        BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     pub(super) pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
     /// Shadow of session/producer/consumer state inside the pure router core.
@@ -80,7 +89,7 @@ impl ConsumerKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ProducerKey {
+pub(super) struct SourceKey {
     owner_session_id: SessionId,
     stream_type: StreamType,
 }
@@ -105,6 +114,7 @@ pub(in crate::runtime::channel) struct ActiveSession {
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::channel) struct PublishedProducer {
+    pub(super) source_id: PublishedSourceId,
     pub(super) owner_session_id: SessionId,
     pub(super) owner_connection_id: ConnectionId,
     pub(super) stream_type: StreamType,
@@ -117,7 +127,9 @@ pub(in crate::runtime::channel) struct PublishedProducer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::channel) struct ProducerTransportMediaIndexEntry {
+pub(in crate::runtime::channel) struct SourceTransportMediaIndexEntry {
+    pub(super) source_id: PublishedSourceId,
+    pub(super) encoding_ids: Vec<SourceEncodingId>,
     owner_session_id: SessionId,
     owner_connection_id: ConnectionId,
     stream_type: StreamType,
@@ -163,6 +175,8 @@ impl ChannelState {
             admission_policy,
             sessions: BTreeMap::new(),
             next_connection_id: 0,
+            next_source_id: 1,
+            next_source_encoding_id: 1,
             next_producer_id: 1,
             next_consumer_id: 1,
             recording_state: RecordingState {
@@ -171,9 +185,11 @@ impl ChannelState {
                 transcription: Some(false),
                 video: Some(false),
             },
+            sources: BTreeMap::new(),
+            source_ids_by_owner_stream: BTreeMap::new(),
+            producer_id_by_source_id: BTreeMap::new(),
             producers: BTreeMap::new(),
-            producer_ids_by_owner_stream: BTreeMap::new(),
-            producer_transport_media_index: BTreeMap::new(),
+            source_transport_media_index: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             pending_consumer_bootstraps: BTreeSet::new(),
             topology: ChannelTopology::new_with_recording_observer_factory(
@@ -239,17 +255,11 @@ impl ChannelState {
         session_id: &SessionId,
     ) {
         for stream_type in PUBLISHABLE_STREAM_TYPES {
-            let producer_key = ProducerKey::new(session_id, stream_type);
-            let Some(producer_id) = self.producer_ids_by_owner_stream.remove(&producer_key) else {
+            let source_key = SourceKey::new(session_id, stream_type);
+            let Some(source_id) = self.source_ids_by_owner_stream.remove(&source_key) else {
                 continue;
             };
-            let Some(producer) = self.producers.remove(&producer_id) else {
-                continue;
-            };
-            if let Some(transport_media_id) = producer.transport_media_id {
-                self.producer_transport_media_index
-                    .remove(&transport_media_id);
-            }
+            self.remove_source_registry_entry(source_id);
         }
         self.consumer_index.retain(|key, _consumer_state| {
             key.consumer_session_id != *session_id && key.producer_session_id != *session_id
@@ -314,7 +324,7 @@ impl ChannelState {
     }
 
     pub(in crate::runtime::channel) fn publication_count(&self) -> usize {
-        self.producers.len()
+        self.sources.len()
     }
 
     pub(in crate::runtime::channel) fn subscription_count(&self) -> usize {
@@ -342,13 +352,17 @@ impl TransportMediaRemoval {
     }
 }
 
-impl ProducerTransportMediaIndexEntry {
+impl SourceTransportMediaIndexEntry {
     pub(super) fn new(
+        source_id: PublishedSourceId,
+        encoding_ids: Vec<SourceEncodingId>,
         owner_session_id: SessionId,
         owner_connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Self {
         Self {
+            source_id,
+            encoding_ids,
             owner_session_id,
             owner_connection_id,
             stream_type,
@@ -375,11 +389,37 @@ impl ProducerTransportMediaIndexEntry {
     }
 }
 
-impl ProducerKey {
+impl SourceKey {
     pub(super) fn new(owner_session_id: &SessionId, stream_type: StreamType) -> Self {
         Self {
             owner_session_id: owner_session_id.clone(),
             stream_type,
         }
+    }
+}
+
+impl ChannelState {
+    pub(super) fn producer_id_for_source_key(
+        &self,
+        source_key: &SourceKey,
+    ) -> Option<ProducerRuntimeId> {
+        let source_id = self.source_ids_by_owner_stream.get(source_key)?;
+        self.producer_id_by_source_id.get(source_id).copied()
+    }
+
+    pub(super) fn remove_source_registry_entry(
+        &mut self,
+        source_id: PublishedSourceId,
+    ) -> Option<PublishedProducer> {
+        self.sources.remove(&source_id);
+        self.source_ids_by_owner_stream
+            .retain(|_key, registered_source_id| *registered_source_id != source_id);
+        let producer_id = self.producer_id_by_source_id.remove(&source_id)?;
+        let producer = self.producers.remove(&producer_id)?;
+        if let Some(transport_media_id) = producer.transport_media_id {
+            self.source_transport_media_index
+                .remove(&transport_media_id);
+        }
+        Some(producer)
     }
 }

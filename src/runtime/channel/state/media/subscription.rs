@@ -11,7 +11,7 @@ use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 use super::super::{
     super::{ChannelEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
-    shared::{ChannelState, ConsumerKey, ConsumerState, PublishedProducer},
+    shared::{ChannelState, ConsumerKey, ConsumerState, PublishedProducer, SourceKey},
 };
 use super::router_stream_type::to_router_stream_type;
 
@@ -455,15 +455,11 @@ impl ChannelState {
             return Some(ConsumerRouteState::Absent);
         }
         let Some(producer_id) =
-            self.producer_ids_by_owner_stream
-                .get(&super::super::shared::ProducerKey::new(
-                    producer_session_id,
-                    stream_type,
-                ))
+            self.producer_id_for_source_key(&SourceKey::new(producer_session_id, stream_type))
         else {
             return Some(ConsumerRouteState::Absent);
         };
-        let Some(producer) = self.producers.get(producer_id) else {
+        let Some(producer) = self.producers.get(&producer_id) else {
             return Some(ConsumerRouteState::Absent);
         };
         let route_active = producer.active
@@ -494,13 +490,11 @@ impl ChannelState {
                     {
                         return None;
                     }
-                    let producer_id = self.producer_ids_by_owner_stream.get(
-                        &super::super::shared::ProducerKey::new(
-                            &key.producer_session_id,
-                            key.stream_type,
-                        ),
-                    )?;
-                    let producer = self.producers.get(producer_id)?;
+                    let producer_id = self.producer_id_for_source_key(&SourceKey::new(
+                        &key.producer_session_id,
+                        key.stream_type,
+                    ))?;
+                    let producer = self.producers.get(&producer_id)?;
                     if !producer.active
                         || !self.desired_download_active(
                             consumer_session_id,

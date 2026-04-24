@@ -251,6 +251,8 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
     assert_eq!(session_detail.channel_uuid, channel.uuid());
     assert_eq!(session_detail.session.session_id, alice_session_id);
     assert_eq!(session_detail.session.publications.len(), 1);
+    assert_eq!(session_detail.session.publications[0].source_id, 1);
+    assert_eq!(session_detail.session.publications[0].encoding_ids.len(), 1);
     assert!(
         session_detail
             .recent_events

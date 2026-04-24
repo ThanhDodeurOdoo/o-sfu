@@ -64,7 +64,9 @@ pub(crate) struct DiagnosticsSessionTransport {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiagnosticsPublication {
     pub(crate) active: bool,
+    pub(crate) encoding_ids: Vec<u64>,
     pub(crate) media_kind: DiagnosticsMediaKind,
+    pub(crate) source_id: u64,
     pub(crate) stream_type: StreamType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) transport_media_id: Option<u64>,

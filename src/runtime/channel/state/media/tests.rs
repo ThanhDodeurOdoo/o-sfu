@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, MediaStream, ProducerId, RouterId,
+    ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
     StreamType as RouterStreamType, derive_consumable_rtp_parameters,
 };
 use tokio::sync::mpsc;
@@ -17,8 +17,8 @@ use tokio::sync::mpsc;
 use super::super::{
     ids::ProducerRuntimeId,
     shared::{
-        ChannelState, ConsumerKey, ConsumerState, ProducerKey, ProducerTransportMediaIndexEntry,
-        PublishedProducer,
+        ChannelState, ConsumerKey, ConsumerState, PublishedProducer, SourceKey,
+        SourceTransportMediaIndexEntry,
     },
 };
 use crate::config::MediaCodecFlags;
@@ -28,8 +28,14 @@ use crate::runtime::channel::{
 };
 use crate::runtime::metrics::RuntimeMetrics;
 use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
+use crate::runtime::source_model::{
+    PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+    PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+    SourceEncodingId, SourceTransportBinding,
+};
 use crate::runtime::test_rtp_samples::{
-    sample_client_rtp_capabilities, sample_video_rtp_parameters,
+    sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
+    sample_video_rtp_parameters,
 };
 use crate::runtime::transport_adapter::TransportMediaId;
 use crate::runtime::{ChannelInstanceId, ConnectionId};
@@ -111,6 +117,56 @@ fn install_test_consumer_route(
     (route_key, consumer_connection_id)
 }
 
+fn install_test_source_graph(
+    state: &mut ChannelState,
+    session_id: &SessionId,
+    connection_id: ConnectionId,
+    stream_type: StreamType,
+    producer_id: ProducerRuntimeId,
+    transport_media_id: TransportMediaId,
+) -> PublishedSourceId {
+    let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
+    let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
+    let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(session_id.clone(), connection_id),
+        stream_type,
+        media_kind: RouterMediaKind::Video,
+        mid: None,
+        encodings: vec![SourceEncodingDescriptor::new(
+            SourceEncodingDescriptorParts {
+                encoding_id,
+                source_id,
+                rid: None,
+                primary_ssrc: None,
+                repair_ssrc: None,
+                max_bitrate: None,
+                negotiated_format: None,
+                transport_binding: Some(SourceTransportBinding::new(transport_media_id)),
+            },
+        )],
+    })
+    .expect("test source graph should be valid");
+    state.sources.insert(source_id, source);
+    state
+        .source_ids_by_owner_stream
+        .insert(SourceKey::new(session_id, stream_type), source_id);
+    state
+        .producer_id_by_source_id
+        .insert(source_id, producer_id);
+    state.source_transport_media_index.insert(
+        transport_media_id,
+        SourceTransportMediaIndexEntry::new(
+            source_id,
+            vec![encoding_id],
+            session_id.clone(),
+            connection_id,
+            stream_type,
+        ),
+    );
+    source_id
+}
+
 #[test]
 fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
     let mut state = test_state();
@@ -132,31 +188,28 @@ fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(777));
     let transport_media_id = TransportMediaId::default();
-    state.producer_ids_by_owner_stream.insert(
-        ProducerKey::new(&session_id, StreamType::Camera),
+    let source_id = install_test_source_graph(
+        &mut state,
+        &session_id,
+        connection_id,
+        StreamType::Camera,
         producer_id,
+        transport_media_id,
     );
     state.producers.insert(
         producer_id,
         PublishedProducer {
+            source_id,
             owner_session_id: session_id.clone(),
             owner_connection_id: connection_id,
             stream_type: StreamType::Camera,
             media_kind: RouterMediaKind::Video,
-            consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
+            consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
             routed_producer_id,
             transport_media_id: Some(transport_media_id),
             source_packet_selection: None,
             active: true,
         },
-    );
-    state.producer_transport_media_index.insert(
-        transport_media_id,
-        ProducerTransportMediaIndexEntry::new(
-            session_id.clone(),
-            connection_id,
-            StreamType::Camera,
-        ),
     );
 
     let producer_target = state
@@ -278,13 +331,18 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
         &state.router_rtp_capabilities(),
     )
     .expect("publisher RTP parameters should derive consumable router parameters");
-    state.producer_ids_by_owner_stream.insert(
-        ProducerKey::new(&publisher_session_id, StreamType::Camera),
+    let source_id = install_test_source_graph(
+        &mut state,
+        &publisher_session_id,
+        publisher_connection_id,
+        StreamType::Camera,
         producer_id,
+        TransportMediaId::new(10),
     );
     state.producers.insert(
         producer_id,
         PublishedProducer {
+            source_id,
             owner_session_id: publisher_session_id.clone(),
             owner_connection_id: publisher_connection_id,
             stream_type: StreamType::Camera,
@@ -295,14 +353,6 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             source_packet_selection: None,
             active: true,
         },
-    );
-    state.producer_transport_media_index.insert(
-        TransportMediaId::new(10),
-        ProducerTransportMediaIndexEntry::new(
-            publisher_session_id.clone(),
-            publisher_connection_id,
-            StreamType::Camera,
-        ),
     );
 
     let (route_updates, planned_bootstraps) = state
@@ -387,6 +437,124 @@ fn commit_published_track_populates_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         Some(connection_id)
     );
+    assert_eq!(state.sources.len(), 1);
+    let source_id = state
+        .inspect_source_id_for_transport_media_id(transport_media_id)
+        .expect("transport media should resolve to a source id");
+    assert!(
+        state.sources.contains_key(&source_id),
+        "transport media source id should point into the source registry"
+    );
+    assert_eq!(
+        state
+            .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)
+            .expect("transport media should resolve to source encodings")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn commit_published_track_registers_all_source_encodings() {
+    let mut state = test_state();
+    let session_id = SessionId::Integer(1);
+
+    join_test_session(&mut state, &session_id);
+    let connection_id = state
+        .session_connection_id(&session_id)
+        .expect("publisher should have a connection id");
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                &session_id,
+                connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(
+                &session_id,
+                connection_id,
+                SessionTransportReady::Publish,
+            )
+            .session_present
+    );
+
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &sample_simulcast_video_rtp_parameters(Some("camera-0")),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("simulcast RTP parameters should derive consumable router parameters");
+    let prepared_track = state
+        .validate_publish_descriptor(
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            RouterMediaKind::Video,
+        )
+        .expect("publish descriptor should validate once the session is publish-ready")
+        .into_prepared_track(consumable_rtp_parameters);
+    let transport_media_id = TransportMediaId::new(101);
+
+    assert!(
+        state
+            .commit_published_track(prepared_track, transport_media_id)
+            .is_some()
+    );
+
+    let source_id = state
+        .inspect_source_id_for_transport_media_id(transport_media_id)
+        .expect("transport media should resolve to the committed source");
+    let source = state
+        .sources
+        .get(&source_id)
+        .expect("source registry should own the committed source");
+    assert_eq!(source.owner().session_id(), &session_id);
+    assert_eq!(source.owner().connection_id(), connection_id);
+    assert_eq!(source.stream_type(), StreamType::Camera);
+    assert_eq!(
+        source.mid().map(o_sfu_router::Mid::as_str),
+        Some("camera-0")
+    );
+    let encodings = source.encodings().collect::<Vec<_>>();
+    assert_eq!(encodings.len(), 2);
+    assert_eq!(
+        encodings[0].rid().map(o_sfu_router::Rid::as_str),
+        Some("lo")
+    );
+    assert_eq!(
+        encodings[1].rid().map(o_sfu_router::Rid::as_str),
+        Some("hi")
+    );
+    assert_eq!(
+        encodings[0].primary_ssrc(),
+        Some(o_sfu_router::Ssrc::new(31_001))
+    );
+    assert_eq!(
+        encodings[1].primary_ssrc(),
+        Some(o_sfu_router::Ssrc::new(31_002))
+    );
+    assert_eq!(encodings[0].max_bitrate(), Some(150_000));
+    assert_eq!(encodings[1].max_bitrate(), Some(900_000));
+    assert_eq!(
+        encodings
+            .iter()
+            .filter_map(|encoding| encoding.transport_binding())
+            .map(SourceTransportBinding::transport_media_id)
+            .collect::<Vec<_>>(),
+        vec![transport_media_id, transport_media_id]
+    );
+    assert_eq!(
+        state
+            .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)
+            .expect("transport media should resolve to source encoding ids"),
+        encodings
+            .iter()
+            .map(|encoding| encoding.encoding_id())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -455,4 +623,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
+    assert!(state.sources.is_empty());
+    assert!(state.source_ids_by_owner_stream.is_empty());
+    assert!(state.producer_id_by_source_id.is_empty());
 }

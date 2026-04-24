@@ -2,9 +2,10 @@ use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
 use crate::runtime::ConnectionId;
+use crate::runtime::source_model::{PublishedSourceId, SourceEncodingId};
 use crate::runtime::transport_adapter::TransportMediaId;
 
-use super::shared::{ChannelState, ProducerKey};
+use super::shared::{ChannelState, SourceKey};
 
 impl ChannelState {
     pub(in crate::runtime::channel) fn session_permissions(
@@ -61,10 +62,9 @@ impl ChannelState {
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<TransportMediaId> {
-        let producer_id = self
-            .producer_ids_by_owner_stream
-            .get(&ProducerKey::new(session_id, stream_type))?;
-        let producer = self.producers.get(producer_id)?;
+        let producer_id =
+            self.producer_id_for_source_key(&SourceKey::new(session_id, stream_type))?;
+        let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != connection_id {
             return None;
         }
@@ -75,15 +75,31 @@ impl ChannelState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<SessionId> {
-        self.producer_transport_media_entry(transport_media_id)
+        self.source_transport_media_entry(transport_media_id)
             .map(|entry| entry.owner_session_id().clone())
+    }
+
+    pub(in crate::runtime::channel) fn inspect_source_id_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<PublishedSourceId> {
+        self.source_transport_media_entry(transport_media_id)
+            .map(|entry| entry.source_id)
+    }
+
+    pub(in crate::runtime::channel) fn inspect_source_encoding_ids_for_transport_media_id(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<Vec<SourceEncodingId>> {
+        self.source_transport_media_entry(transport_media_id)
+            .map(|entry| entry.encoding_ids.clone())
     }
 
     pub(in crate::runtime::channel) fn inspect_producer_owner_connection_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<ConnectionId> {
-        self.producer_transport_media_entry(transport_media_id)
-            .map(super::shared::ProducerTransportMediaIndexEntry::owner_connection_id)
+        self.source_transport_media_entry(transport_media_id)
+            .map(super::shared::SourceTransportMediaIndexEntry::owner_connection_id)
     }
 }

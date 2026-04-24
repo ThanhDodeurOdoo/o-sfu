@@ -26,7 +26,7 @@
 
 #![allow(
     dead_code,
-    reason = "simulcast/SVC groundwork freezes the shared source vocabulary before the later source-registry slice wires everything into chanel state"
+    reason = "the consumer selector vocabulary is frozen before the later consumer-source registry slice wires every selector into channel state"
 )]
 
 use std::fmt::{self, Display, Formatter};

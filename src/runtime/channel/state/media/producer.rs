@@ -5,11 +5,18 @@
 //! The main rule here is that channel state only commits a producer once the
 //! caller has a validated session and a real transport media id to attach.
 
-use o_sfu_router::{MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters};
+use o_sfu_router::{
+    MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc,
+};
 use std::collections::BTreeMap;
 use tracing::{error, warn};
 
 use crate::runtime::ConnectionId;
+use crate::runtime::source_model::{
+    PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+    PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+    SourceEncodingId, SourceModelError, SourceTransportBinding,
+};
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 
@@ -21,8 +28,8 @@ use super::super::{
     },
     ids::ProducerRuntimeId,
     shared::{
-        ChannelState, ConsumerKey, ProducerKey, ProducerTransportMediaIndexEntry,
-        PublishedProducer, TransportMediaRemoval,
+        ChannelState, ConsumerKey, PublishedProducer, SourceKey, SourceTransportMediaIndexEntry,
+        TransportMediaRemoval,
     },
 };
 use super::{
@@ -41,6 +48,7 @@ use super::{
 /// producer. useful so so stale replacement callbacks can be rejected
 /// without guessing which layer drifted.
 pub(in crate::runtime::channel) struct ProducerRouteTarget {
+    source_id: PublishedSourceId,
     producer_id: ProducerRuntimeId,
     owner_connection_id: ConnectionId,
     routed_producer_id: RoutedProducerId,
@@ -74,6 +82,17 @@ pub(in crate::runtime::channel) struct PreparedPublishedTrack {
     stream_type: StreamType,
     media_kind: RouterMediaKind,
     consumable_rtp_parameters: RouterRtpParameters,
+}
+
+#[derive(Debug)]
+struct PublishedSourceInstall {
+    source_key: SourceKey,
+    source_descriptor: PublishedSourceDescriptor,
+    source_encoding_ids: Vec<SourceEncodingId>,
+    producer_id: ProducerRuntimeId,
+    routed_producer_id: RoutedProducerId,
+    pending: PreparedPublishedTrack,
+    transport_media_id: TransportMediaId,
 }
 
 #[derive(Debug)]
@@ -161,6 +180,56 @@ impl ChannelState {
         pending: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
     ) -> Option<(ProducerRuntimeId, Vec<PendingConsumerBootstrapTarget>)> {
+        let source_key = self.validate_publish_commit(&pending, transport_media_id)?;
+        let source_descriptor = self
+            .source_descriptor_for_publish(&pending, transport_media_id)
+            .map_err(|error| {
+                error!(
+                    session_id = ?pending.owner_session_id,
+                    owner_connection_id = ?pending.owner_connection_id,
+                    ?pending.stream_type,
+                    ?transport_media_id,
+                    ?error,
+                    "failed to build source descriptor for negotiated publish"
+                );
+            })
+            .ok()?;
+        let source_encoding_ids = source_descriptor
+            .encodings()
+            .map(SourceEncodingDescriptor::encoding_id)
+            .collect::<Vec<_>>();
+        let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
+        let routed_producer_id = self.add_routed_producer_for_publish(&pending)?;
+        let owner_session_id = pending.owner_session_id.clone();
+        let owner_connection_id = pending.owner_connection_id;
+        let stream_type = pending.stream_type;
+        let media_kind = pending.media_kind;
+
+        self.install_published_source(PublishedSourceInstall {
+            source_key,
+            source_descriptor,
+            source_encoding_ids,
+            producer_id,
+            routed_producer_id,
+            pending,
+            transport_media_id,
+        });
+        let consumer_targets = self.publish_consumer_targets(
+            &owner_session_id,
+            owner_connection_id,
+            producer_id,
+            stream_type,
+            media_kind,
+            transport_media_id,
+        );
+        Some((producer_id, consumer_targets))
+    }
+
+    fn validate_publish_commit(
+        &self,
+        pending: &PreparedPublishedTrack,
+        transport_media_id: TransportMediaId,
+    ) -> Option<SourceKey> {
         let Some(session) = self.sessions.get(&pending.owner_session_id) else {
             warn!(
                 session_id = ?pending.owner_session_id,
@@ -185,25 +254,56 @@ impl ChannelState {
             );
             return None;
         }
-        let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
-        let routed_producer_id = match self.topology.add_producer(
+        let source_key = SourceKey::new(&pending.owner_session_id, pending.stream_type);
+        if self.source_ids_by_owner_stream.contains_key(&source_key) {
+            warn!(
+                session_id = ?pending.owner_session_id,
+                owner_connection_id = ?pending.owner_connection_id,
+                ?pending.stream_type,
+                ?transport_media_id,
+                "cannot commit negotiated publish because a source already exists for this compatibility stream"
+            );
+            return None;
+        }
+        Some(source_key)
+    }
+
+    fn add_routed_producer_for_publish(
+        &mut self,
+        pending: &PreparedPublishedTrack,
+    ) -> Option<RoutedProducerId> {
+        match self.topology.add_producer(
             &pending.owner_session_id,
             pending.media_kind,
             to_router_stream_type(pending.stream_type),
         ) {
-            Ok(producer_id) => producer_id,
+            Ok(producer_id) => Some(producer_id),
             Err(error) => {
                 error!(
                     session_id = ?pending.owner_session_id,
                     ?error,
                     "failed to mirror publish request into channel router producer state"
                 );
-                return None;
+                None
             }
-        };
+        }
+    }
+
+    fn install_published_source(&mut self, install: PublishedSourceInstall) {
+        let PublishedSourceInstall {
+            source_key,
+            source_descriptor,
+            source_encoding_ids,
+            producer_id,
+            routed_producer_id,
+            pending,
+            transport_media_id,
+        } = install;
+        let source_id = source_descriptor.source_id();
         self.producers.insert(
             producer_id,
             PublishedProducer {
+                source_id,
                 owner_session_id: pending.owner_session_id.clone(),
                 owner_connection_id: pending.owner_connection_id,
                 stream_type: pending.stream_type,
@@ -215,27 +315,59 @@ impl ChannelState {
                 active: true,
             },
         );
-        self.producer_ids_by_owner_stream.insert(
-            ProducerKey::new(&pending.owner_session_id, pending.stream_type),
-            producer_id,
-        );
-        self.producer_transport_media_index.insert(
+        self.sources.insert(source_id, source_descriptor);
+        self.source_ids_by_owner_stream
+            .insert(source_key, source_id);
+        self.producer_id_by_source_id.insert(source_id, producer_id);
+        self.source_transport_media_index.insert(
             transport_media_id,
-            ProducerTransportMediaIndexEntry::new(
+            SourceTransportMediaIndexEntry::new(
+                source_id,
+                source_encoding_ids,
                 pending.owner_session_id.clone(),
                 pending.owner_connection_id,
                 pending.stream_type,
             ),
         );
-        let consumer_targets = self.publish_consumer_targets(
-            &pending.owner_session_id,
-            pending.owner_connection_id,
-            producer_id,
-            pending.stream_type,
-            pending.media_kind,
-            transport_media_id,
-        );
-        Some((producer_id, consumer_targets))
+    }
+
+    fn source_descriptor_for_publish(
+        &mut self,
+        pending: &PreparedPublishedTrack,
+        transport_media_id: TransportMediaId,
+    ) -> Result<PublishedSourceDescriptor, SourceModelError> {
+        let source_id = PublishedSourceId::allocate(&mut self.next_source_id);
+        let encodings = pending
+            .consumable_rtp_parameters
+            .encodings()
+            .map(|binding| {
+                let encoding_id = SourceEncodingId::allocate(&mut self.next_source_encoding_id);
+                SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+                    encoding_id,
+                    source_id,
+                    rid: binding.rid().map(Rid::new),
+                    primary_ssrc: binding.ssrc().map(Ssrc::new),
+                    repair_ssrc: None,
+                    max_bitrate: binding.max_bitrate(),
+                    negotiated_format: negotiated_format_for_binding(
+                        &pending.consumable_rtp_parameters,
+                        binding.payload_type(),
+                    ),
+                    transport_binding: Some(SourceTransportBinding::new(transport_media_id)),
+                })
+            })
+            .collect::<Vec<_>>();
+        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id,
+            owner: PublishedSourceOwner::new(
+                pending.owner_session_id.clone(),
+                pending.owner_connection_id,
+            ),
+            stream_type: pending.stream_type,
+            media_kind: pending.media_kind,
+            mid: pending.consumable_rtp_parameters.mid().map(Mid::new),
+            encodings,
+        })
     }
 
     /// Plans bootstrap work for peers that should consume a newly published track
@@ -287,17 +419,17 @@ impl ChannelState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<StreamType> {
-        self.producer_transport_media_index
+        self.source_transport_media_index
             .get(&transport_media_id)
-            .map(ProducerTransportMediaIndexEntry::stream_type)
+            .map(SourceTransportMediaIndexEntry::stream_type)
     }
 
     #[must_use]
-    pub(in crate::runtime::channel) fn producer_transport_media_entry(
+    pub(in crate::runtime::channel) fn source_transport_media_entry(
         &self,
         transport_media_id: TransportMediaId,
-    ) -> Option<&ProducerTransportMediaIndexEntry> {
-        self.producer_transport_media_index.get(&transport_media_id)
+    ) -> Option<&SourceTransportMediaIndexEntry> {
+        self.source_transport_media_index.get(&transport_media_id)
     }
 
     #[must_use]
@@ -307,15 +439,15 @@ impl ChannelState {
         owner_connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<ProducerRouteTarget> {
-        let producer_id = *self
-            .producer_ids_by_owner_stream
-            .get(&ProducerKey::new(owner_session_id, stream_type))?;
+        let producer_id =
+            self.producer_id_for_source_key(&SourceKey::new(owner_session_id, stream_type))?;
         let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != owner_connection_id {
             return None;
         }
         let transport_media_id = producer.transport_media_id?;
         Some(ProducerRouteTarget {
+            source_id: producer.source_id,
             producer_id,
             owner_connection_id: producer.owner_connection_id,
             routed_producer_id: producer.routed_producer_id,
@@ -396,13 +528,7 @@ impl ChannelState {
         });
         self.pending_consumer_bootstraps
             .retain(|key| key.producer_session_id != *session_id || key.stream_type != stream_type);
-        let removed_producer = self.producers.remove(&producer_target.producer_id)?;
-        self.producer_ids_by_owner_stream
-            .remove(&ProducerKey::new(session_id, stream_type));
-        if let Some(transport_media_id) = removed_producer.transport_media_id {
-            self.producer_transport_media_index
-                .remove(&transport_media_id);
-        }
+        self.remove_source_registry_entry(producer_target.source_id)?;
         let session_info_snapshot = match stream_type {
             StreamType::Camera | StreamType::Screen => {
                 Some(BTreeMap::from([self.session_info_snapshot(session_id)?]))
@@ -434,7 +560,8 @@ impl ChannelState {
     ) -> Option<ProducerActivityOutcome> {
         let current_connection_id = self.session_connection_id(session_id);
         let producer = self.producers.get(&producer_target.producer_id)?;
-        if producer.owner_connection_id != producer_target.owner_connection_id
+        if producer.source_id != producer_target.source_id
+            || producer.owner_connection_id != producer_target.owner_connection_id
             || Some(producer.owner_connection_id) != current_connection_id
             || producer.routed_producer_id != producer_target.routed_producer_id
             || producer.transport_media_id != Some(producer_target.transport_media_id)
@@ -522,4 +649,22 @@ impl UnpublishTrackOutcome {
             }
         }
     }
+}
+
+fn negotiated_format_for_binding(
+    parameters: &RouterRtpParameters,
+    payload_type: Option<u8>,
+) -> Option<MediaFormat> {
+    if let Some(payload_type) = payload_type
+        && let Some(format) = parameters
+            .formats()
+            .find(|format| format.payload_type() == payload_type)
+    {
+        return Some(format.clone());
+    }
+    parameters
+        .formats()
+        .find(|format| !format.codec().is_rtx())
+        .or_else(|| parameters.formats().next())
+        .cloned()
 }
