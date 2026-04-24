@@ -1,14 +1,29 @@
-//! Channel-owned transaction helpers for staged publish and transport cleanup
+//! Channel-owned transaction helpers for staged publish and transport cleanup.
 //!
-//! The staged publish path has three phases:
-//! - validate the current session and reserve transport media
-//! - keep that reserved media in `PendingPublishTransactions` while the
-//!   offer/answer round-trip is still in flight
-//! - commit or clean it up once the answer made the final producer parameters
-//!   available
+//! # role (between chanel and transport)
 //!
-//! The important boundary is that transport work happens outside the channel
-//! lock, but the full staged publish lifecycle still has one owner.
+//! This module owns the room-side unit of work for media changes that need
+//! transport calls. `ChannelState` stays authoritative for live producers and
+//! consumers. The transport adapter stays authoritative for allocated media
+//! lines. This file owns the short-lived (only latts for transactions)
+//! bridge between those two layers so websocket publish and unpublish
+//! flows do not have to remember rollback  details
+//!
+//!
+//! # Staged publish lifecycle
+//!
+//! A publish is staged only after chanel state validates the current session
+//! and the transport adapter reserves a media line While the browser answers
+//! renegotiation, that reservation lives in `PendingPublishTransactions`.
+//! Answer handling later drains the transaction and either commits it into
+//! channel state or consumes it through transport cleanup.
+//!
+//! # Concurrency
+//!
+//! This is cold-path orchestration. Transport calls happen after channel state
+//! locks are released. The pending-publish registry has its own mutex, but that
+//! lock is held only for lookup, insertion and draining. Commit and cleanup run
+//! after the registry lock is released.
 
 use std::collections::BTreeMap;
 
@@ -32,17 +47,31 @@ use super::{
 #[cfg(test)]
 mod test_support;
 
-/// Connection-local registry for staged publishes that are waiting on the
-/// negotiation answer
+/// Registry for publish transactions that reserved transport media but are not
+/// live in room state yet
 ///
-/// The key invariant is that one `(session, connection, stream_type)` can own
-/// at most one staged publish. That prevent racing publish intents from leaking
-/// multiple reserved transport-media handles for the same stream.
+/// # Invariant
+///
+/// At most one `(session, connection, stream_type)` entry may be staged at a
+/// time. The key includes the runtime-local connection id so stale replaced
+/// sockets cannot share ownership with the current websocket for the same user
+/// facing session id.
+///
+/// This registry owns only in-flight reservations. Once a publish commits, the
+/// producer and its transport media belong to chanel state Once a publish is
+/// rolled back, the transaction must be consumed through reservation cleanup.
 #[derive(Debug, Default)]
 pub(super) struct PendingPublishTransactions {
+    /// In-flight publish ownership keyed by the exact websocket connection that
+    /// reserved the transport media.
     staged: BTreeMap<PendingPublishKey, PendingPublishTransaction>,
 }
 
+/// Stable key for one staged publish slot
+///
+/// This uses the protocol session identity for room ownershio, the runtime
+/// connection id for stale-socket rejection and the stream type for the
+/// per-session media slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingPublishKey {
     session_id: SessionId,
@@ -50,16 +79,70 @@ struct PendingPublishKey {
     stream_type: StreamType,
 }
 
-#[derive(Debug, Clone)]
-/// Staged publish that already owns reserved transport media but is not live in
-/// channel state yet
+/// Publish transaction that owns a reserved transport media line until the
+/// channel either commits it or rolls it back.
 ///
-/// This type is the authoritative staged publish lifecycle owner. Callers stage
-/// it before renegotiation, then either commit it after the answer lands or
-/// clean it up when the publish is cancelled or the connection dies.
+/// The descriptor proves only that the session was publish-ready when staging
+/// started. The reservation proves that the transport adapter allocated media
+/// that must be accounted for. Keeping both values together prevents call sites
+/// from committing channel state while forgetting the transport owner, or from
+/// cleaning transport media while leaving a descriptor that can still commit.
+#[derive(Debug)]
 pub(super) struct PendingPublishTransaction {
+    /// Stage-time channel validation. Commit must re-check it because
+    /// replacement or disconnect can make the descriptor stale while transport
+    /// work is in flight.
     descriptor: ValidatedPublishDescriptor,
+    /// Transport media ownership while the publish is not yet a live producer.
+    reservation: StagedMediaReservation,
+}
+
+/// Legal ownership states for one staged transport-media reservation.
+///
+/// These states are intentionally local to the transaction boundary. The
+/// websocket layer sees publish intent and answer handling. `ChannelState` sees
+/// only committed producers. The transport adapter sees media add or remove
+/// calls. This enum records which layer is responsible for the reserved media
+/// right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StagedMediaReservationState {
+    /// The media line exists in the transport adapter but is not committed in
+    /// chanel state.
+    Reserved,
+    /// The chanel committed the producer, so normal unpublish or leave cleanup
+    /// owns the transport media from this point onward.
+    Committed,
+    /// The transaction made an explicit cleanup decision.
+    ///
+    /// This does not prove the transport adapter removed the handle
+    /// successfully. Cleanup is best-effort at this boundary and failures are
+    /// reported through logs.
+    Released,
+}
+
+/// Owner for transport media reserved by a staged publish.
+///
+/// # note
+///
+/// Transport cleanup is async, so this guard must not try to clean up in
+/// `Drop`. Instead the guard is consumed by either `cleanup` or `commit`
+/// `Drop` only asserts in tests and debug builds when a reservation is still
+/// armed. That makes forgotten cleanup visible without hiding async work inside
+/// a destructor.
+#[derive(Debug)]
+#[must_use = "staged media reservations must be committed or cleaned up explicitly"]
+struct StagedMediaReservation {
+    /// Protocol-facing session identity used to rebuild the transport session
+    /// key for cleanup.
+    owner_session_id: SessionId,
+    /// Runtime-local conection identity that prevents a replacement socket
+    /// from inheriting stale transport media.
+    owner_connection_id: ConnectionId,
+    /// Transport-owned media handle that must be removed unless the publish
+    /// becomes a live producer.
     transport_media_id: TransportMediaId,
+    /// Current ownership state for the reserved media.
+    state: StagedMediaReservationState,
 }
 
 #[derive(Debug)]
@@ -76,6 +159,12 @@ struct CommittedPublish {
 }
 
 impl PendingPublishTransactions {
+    /// Returns weather this connection already has a staged publish for the
+    /// stream.
+    ///
+    /// This is an idempotency check for websocket publish intents. It is only a
+    /// snapshot; callers that reserve transport media must still call `stage`
+    /// afterward to win the registry slot under the lock.
     pub(super) fn contains(
         &self,
         session_id: &SessionId,
@@ -91,8 +180,10 @@ impl PendingPublishTransactions {
 
     /// Attempt to register a new staged publish.
     ///
-    /// Duplicate rejection is what keeps racing publish intents from leaving
-    /// multiple staged transport-media handles behind for one stream.
+    /// If this returns `Err`, the returned transaction is still armed and the
+    /// caller must consume it through cleanup. This shape lets the caller
+    /// reserve transport media outside the registry lock while still keeping
+    /// the post-await duplicate race safe.
     pub(super) fn stage(
         &mut self,
         transaction: PendingPublishTransaction,
@@ -105,6 +196,11 @@ impl PendingPublishTransactions {
         Ok(())
     }
 
+    /// Removes one staged publish from the registry and transfers ownership to
+    /// the caller.
+    ///
+    /// The retirned transaction must be commited or cleaned up explicitly.
+    /// This method is used by explicit unpublish before the answer lands.
     pub(super) fn take(
         &mut self,
         session_id: &SessionId,
@@ -118,6 +214,11 @@ impl PendingPublishTransactions {
         ))
     }
 
+    /// Drains every staged publish owned by one websocket connection.
+    ///
+    /// Conection cleanup and answered negotiation use this transfer so no
+    /// later event can see the same staged reservation after cleanup or commit
+    /// has started.
     pub(super) fn take_for_connection(
         &mut self,
         session_id: &SessionId,
@@ -151,13 +252,25 @@ impl PendingPublishKey {
 }
 
 impl PendingPublishTransaction {
+    /// Creates a staged publish transaction from channel validation and a
+    /// transport media reservation.
+    ///
+    /// The descriptor and reservation must describe the same owner. The
+    /// constructor derives reservation ownership from the descriptor so callers
+    /// cannot accidentally pair a media handle with a different connection.
     pub(super) fn new(
         descriptor: ValidatedPublishDescriptor,
         transport_media_id: TransportMediaId,
     ) -> Self {
+        let owner_session_id = descriptor.owner_session_id().clone();
+        let owner_connection_id = descriptor.owner_connection_id();
         Self {
             descriptor,
-            transport_media_id,
+            reservation: StagedMediaReservation::new(
+                owner_session_id,
+                owner_connection_id,
+                transport_media_id,
+            ),
         }
     }
 
@@ -169,8 +282,9 @@ impl PendingPublishTransaction {
         )
     }
 
+    #[cfg(test)]
     pub(super) const fn transport_media_id(&self) -> TransportMediaId {
-        self.transport_media_id
+        self.reservation.transport_media_id()
     }
 
     /// Finish a staged publish through the real transport-facing commit path.
@@ -179,33 +293,38 @@ impl PendingPublishTransaction {
     /// transport layer cannot surface the final negotiated producer
     /// parameters, the transaction cleans up its reserved media here because
     /// there is nothing useful left to commit.
+    ///
+    /// `Some` means the producer is now live and channel state owns the
+    /// transport media. `None` means no producer was created and the
+    /// reservation cleanup path was attempted.
     pub(super) async fn commit(
         self,
         channel: &Channel,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) -> Option<String> {
-        let session_key = channel.transport_session_key(
-            self.descriptor.owner_session_id(),
-            self.descriptor.owner_connection_id(),
-        );
+        let owner_session_id = self.descriptor.owner_session_id().clone();
+        let owner_connection_id = self.descriptor.owner_connection_id();
+        let stream_type = self.descriptor.stream_type();
+        let transport_media_id = self.reservation.transport_media_id();
+        let session_key = channel.transport_session_key(&owner_session_id, owner_connection_id);
         let negotiated_parameters = match media_port
-            .negotiated_producer_parameters(&session_key, self.transport_media_id)
+            .negotiated_producer_parameters(&session_key, transport_media_id)
             .await
         {
             Ok(rtp_parameters) => rtp_parameters,
             Err(error) => {
-                self.cleanup(
+                self.cleanup_reserved_media(
                     channel,
                     media_port,
                     "transport adapter failed to remove staged publish media after negotiated parameter lookup failed",
                 )
                 .await;
                 warn!(
-                    session_id = ?self.descriptor.owner_session_id(),
-                    connection_id = ?self.descriptor.owner_connection_id(),
-                    stream_type = ?self.descriptor.stream_type(),
-                    transport_media_id = ?self.transport_media_id,
+                    session_id = ?owner_session_id,
+                    connection_id = ?owner_connection_id,
+                    ?stream_type,
+                    ?transport_media_id,
                     ?error,
                     "failed to load negotiated publish parameters during channel commit"
                 );
@@ -221,6 +340,13 @@ impl PendingPublishTransaction {
         .await
     }
 
+    /// Commits a staged publish when the caller already has router native
+    /// producer parameters.
+    ///
+    /// This is the narrow test and helper entrypoint for flows that already
+    /// resolved transport negotiation. It has the same ownership contract as
+    /// `commit`: success transfers transport media to the live producer and
+    /// rejection consumes the reservation through cleanup.
     pub(super) async fn commit_with_parameters(
         self,
         channel: &Channel,
@@ -228,10 +354,14 @@ impl PendingPublishTransaction {
         media_port: &impl MediaPort,
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<String> {
-        let owner_session_id = self.descriptor.owner_session_id().clone();
-        let owner_connection_id = self.descriptor.owner_connection_id();
-        let stream_type = self.descriptor.stream_type();
-        let transport_media_id = self.transport_media_id;
+        let Self {
+            descriptor,
+            reservation,
+        } = self;
+        let owner_session_id = descriptor.owner_session_id().clone();
+        let owner_connection_id = descriptor.owner_connection_id();
+        let stream_type = descriptor.stream_type();
+        let transport_media_id = reservation.transport_media_id();
         let committed_publish = {
             let mut state = channel.state.write().await;
             let media_counts_before = ChannelMediaCounts {
@@ -242,9 +372,7 @@ impl PendingPublishTransaction {
             // session was replaced or lost publish readiness while transport
             // work was happening, `commit_published_track` rejects it and we
             // compensate by removing the reserved transport media below
-            let prepared_track = self
-                .descriptor
-                .into_prepared_track(consumable_rtp_parameters);
+            let prepared_track = descriptor.into_prepared_track(consumable_rtp_parameters);
             let consumer_targets = state.commit_published_track(prepared_track, transport_media_id);
             let media_counts_after = ChannelMediaCounts {
                 publications: state.publication_count(),
@@ -267,11 +395,9 @@ impl PendingPublishTransaction {
             })
         };
         let Some(committed_publish) = committed_publish else {
-            channel
-                .cleanup_transport_media(
-                    &owner_session_id,
-                    owner_connection_id,
-                    transport_media_id,
+            reservation
+                .cleanup(
+                    channel,
                     media_port,
                     "transport adapter failed to remove published transport media after channel commit failed",
                 )
@@ -285,6 +411,7 @@ impl PendingPublishTransaction {
             );
             return None;
         };
+        reservation.commit();
         let producer_id = committed_publish.producer_id.clone();
         committed_publish
             .finish(channel, observability_port, media_port)
@@ -292,21 +419,87 @@ impl PendingPublishTransaction {
         Some(producer_id)
     }
 
-    /// Remove the reserved transport media when the staged publish cannot
-    /// complete.
+    /// Consumes a staged publish that cannot become live.
     ///
-    /// Kepping cleanup on the transaction makes all failure paths use the same
-    /// owner session and transport-media handle.
-    async fn cleanup(&self, channel: &Channel, media_port: &impl MediaPort, failure_message: &str) {
+    /// All rolback paths funnel through this method so the transport-media
+    /// owner and the failure log context stay consistent
+    async fn cleanup_reserved_media(
+        self,
+        channel: &Channel,
+        media_port: &impl MediaPort,
+        failure_message: &str,
+    ) {
+        self.reservation
+            .cleanup(channel, media_port, failure_message)
+            .await;
+    }
+}
+
+impl StagedMediaReservation {
+    /// Arms a reservation for transport media that is not yet live in channel
+    /// state.
+    fn new(
+        owner_session_id: SessionId,
+        owner_connection_id: ConnectionId,
+        transport_media_id: TransportMediaId,
+    ) -> Self {
+        Self {
+            owner_session_id,
+            owner_connection_id,
+            transport_media_id,
+            state: StagedMediaReservationState::Reserved,
+        }
+    }
+
+    const fn transport_media_id(&self) -> TransportMediaId {
+        self.transport_media_id
+    }
+
+    /// Attempts to remove the reserved media and marks the reservation as
+    /// released
+    ///
+    /// Cleanup is best-effort because the transport session may already be
+    /// closing. The important ownership fact is that this transaction made the
+    /// cleanup decision and must not be committed afterward.
+    async fn cleanup(
+        mut self,
+        channel: &Channel,
+        media_port: &impl MediaPort,
+        failure_message: &str,
+    ) {
         channel
             .cleanup_transport_media(
-                self.descriptor.owner_session_id(),
-                self.descriptor.owner_connection_id(),
+                &self.owner_session_id,
+                self.owner_connection_id,
                 self.transport_media_id,
                 media_port,
                 failure_message,
             )
             .await;
+        self.state = StagedMediaReservationState::Released;
+    }
+
+    /// Transfers ownership from the staged transaction to the committed
+    /// producer stored in chanel state
+    fn commit(mut self) {
+        self.state = StagedMediaReservationState::Committed;
+    }
+}
+
+impl Drop for StagedMediaReservation {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        assert_ne!(
+            self.state,
+            StagedMediaReservationState::Reserved,
+            "staged media reservation dropped while still reserved"
+        );
+        #[cfg(all(debug_assertions, not(test)))]
+        debug_assert_ne!(
+            self.state,
+            StagedMediaReservationState::Reserved,
+            "staged media reservation dropped while still reserved"
+        );
     }
 }
 
@@ -341,6 +534,10 @@ impl CommittedPublish {
 }
 
 impl Channel {
+    /// Records the live media gauge delta after a chanel state transition.
+    ///
+    /// Callers pass both snapshots because the state lock should already be
+    /// released by the time metrics and transport side effects run.
     pub(super) fn record_media_count_delta(
         &self,
         before: ChannelMediaCounts,
@@ -357,6 +554,12 @@ impl Channel {
             .add_active_subscriptions(after_subscriptions.saturating_sub(before_subscriptions));
     }
 
+    /// Returns weather this connection already owns a staged publish for one
+    /// stream
+    ///
+    /// This is a websocket idempotency helper. It is not an authority for
+    /// future staging because another task may reserve and stage transport
+    /// media after this snapshot.
     pub(crate) async fn has_staged_publish(
         &self,
         session_id: &SessionId,
@@ -370,6 +573,17 @@ impl Channel {
         )
     }
 
+    /// Validates the current room state and reserves transport media for a
+    /// negotiated publish.
+    ///
+    /// The returned `true` means the publish is staged, not live. The caller
+    /// must still drive renegotiation and later call `commit_staged_publishes`
+    /// after the answer lands. The method avoids holding chanel state or
+    /// pending-registry locks across the transport call.
+    ///
+    /// If another task stages the same stream during the transport await, this
+    /// method consumes the duplicate reservation through cleanup and returns
+    /// `false`
     pub(crate) async fn stage_negotiated_publish(
         &self,
         session_id: &SessionId,
@@ -410,7 +624,7 @@ impl Channel {
                 return false;
             }
         };
-        // The transport await above laeves a race window where another publish
+        // The transport await above leaves a race window where another publish
         // intent can win first. We re-check under the registry lock and clean
         // up immediately so no orphan staged media survives outside the
         // transaction table
@@ -421,22 +635,26 @@ impl Channel {
                     validated_descriptor,
                     transport_media_id,
                 ))
-                .is_err()
+                .err()
         };
-        if duplicate_stage {
-            self.cleanup_transport_media(
-                session_id,
-                connection_id,
-                transport_media_id,
-                media_port,
-                "transport adapter failed to remove duplicated staged publish media",
-            )
-            .await;
+        if let Some(staged_publish) = duplicate_stage {
+            staged_publish
+                .cleanup_reserved_media(
+                    self,
+                    media_port,
+                    "transport adapter failed to remove duplicated staged publish media",
+                )
+                .await;
             return false;
         }
         true
     }
 
+    /// Cancels one staged publish before it becomes a live producer.
+    ///
+    /// This is the explicit unpublish-before-answer path. `true` means a
+    /// reservation existed and cleanup was attempted. `false` means the stream
+    /// was not staged for this connection.
     pub(crate) async fn rollback_staged_publish(
         &self,
         session_id: &SessionId,
@@ -454,43 +672,52 @@ impl Channel {
         let Some(staged_publish) = staged_publish else {
             return false;
         };
-        self.cleanup_transport_media(
-            session_id,
-            connection_id,
-            staged_publish.transport_media_id(),
-            media_port,
-            "transport adapter failed to remove staged publish media during rollback",
-        )
-        .await;
+        staged_publish
+            .cleanup_reserved_media(
+                self,
+                media_port,
+                "transport adapter failed to remove staged publish media during rollback",
+            )
+            .await;
         true
     }
 
+    /// Cleans up every staged publish owned by a websocket connection.
+    ///
+    /// Session replacement, logical disconnect and websocket drop use this to
+    /// drain all in-flight reservations before the connection can disapear.
+    /// Cleanup remains best-effort because transport teardown may already be in
+    /// progress
     pub(crate) async fn rollback_staged_publishes_for_connection(
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
         media_port: &impl MediaPort,
     ) {
-        // Connection teardown drains every staged publish for that connection in
-        // one place so websocket drop, replacement and bulk cleanup cannot
-        // leave reserved producer media behind.
         let staged_publishes = self
             .pending_publish_transactions
             .lock()
             .await
             .take_for_connection(session_id, connection_id);
         for staged_publish in staged_publishes {
-            self.cleanup_transport_media(
-                session_id,
-                connection_id,
-                staged_publish.transport_media_id(),
-                media_port,
-                "transport adapter failed to remove staged publish media during connection cleanup",
-            )
-            .await;
+            staged_publish
+                .cleanup_reserved_media(
+                    self,
+                    media_port,
+                    "transport adapter failed to remove staged publish media during connection cleanup",
+                )
+                .await;
         }
     }
 
+    /// Commits every staged publish for a connection after negotiation
+    /// answered successfully
+    ///
+    /// The registry is drained before commit work starts so a later websocket
+    /// message cannot commit the same reservation twice. Each transaction then
+    /// re-checks current chanel state before creating a live producer. If that
+    /// state is stale, the transaction consumes its transport reservation
+    /// through cleanup instead.
     pub(crate) async fn commit_staged_publishes(
         &self,
         session_id: &SessionId,
@@ -498,8 +725,6 @@ impl Channel {
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) {
-        // Drain first so a later renegotiation cannot re-commit the same staged
-        // publish if more messages arrive while we are finishing this batch.
         let staged_publishes = self
             .pending_publish_transactions
             .lock()
@@ -512,6 +737,11 @@ impl Channel {
         }
     }
 
+    /// Releases a pending consumer-bootstrap reservation after the matching
+    /// effect path no longer needs it.
+    ///
+    /// This mirrors staged-publish ownership on the subscriber side: channel
+    /// state owns the reservation, while metrics are updated after unlock>
     pub(super) async fn release_pending_consumer_bootstrap(
         &self,
         target: &PendingConsumerBootstrapTarget,
@@ -530,6 +760,11 @@ impl Channel {
         self.record_media_count_delta(media_counts_before, media_counts_after);
     }
 
+    /// Best-effort transport-media cleanup for a known chanel owner.
+    ///
+    /// The chanel has already decided that the media should no longer be
+    /// owned by room state. A transport failure is logged but does not rebuild
+    /// previous chanel state
     pub(super) async fn cleanup_transport_media(
         &self,
         session_id: &SessionId,
@@ -555,6 +790,12 @@ impl Channel {
         }
     }
 
+    /// Removes a batch of committed transport media where the caller needs to
+    /// know whether every transport cleanup succeeded.
+    ///
+    /// Unlike staged publish rollback,this is used by transitions that already
+    /// removed live channel state and need a strict transport outcome to decide
+    /// weather the outer cleanup can keep going.
     pub(super) async fn cleanup_transport_removals_strict(
         &self,
         media_port: &impl MediaPort,
@@ -628,4 +869,31 @@ fn media_kind_for_stream_type(stream_type: StreamType) -> o_sfu_router::MediaKin
 
 fn pending_publish_parameters() -> RouterRtpParameters {
     RouterRtpParameters::new(vec![], vec![], vec![])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StagedMediaReservation;
+    use crate::runtime::{ConnectionId, transport_adapter::TransportMediaId};
+    use o_sfu_protocol::shared::SessionId;
+
+    #[test]
+    #[should_panic(expected = "staged media reservation dropped while still reserved")]
+    fn reserved_staged_media_reservation_panics_when_dropped_in_tests() {
+        let _reservation = StagedMediaReservation::new(
+            SessionId::Integer(1),
+            ConnectionId::from_raw(1),
+            TransportMediaId::new(1),
+        );
+    }
+
+    #[test]
+    fn committed_staged_media_reservation_can_drop_in_tests() {
+        StagedMediaReservation::new(
+            SessionId::Integer(1),
+            ConnectionId::from_raw(1),
+            TransportMediaId::new(1),
+        )
+        .commit();
+    }
 }

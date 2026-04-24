@@ -2481,6 +2481,16 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
         1,
         "the duplicate staged transport media should be compensated exactly once"
     );
+    assert!(
+        rollback_staged_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
+    );
 }
 
 fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
