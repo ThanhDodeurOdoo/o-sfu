@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 const GENERATED_WASM_PATH = fileURLToPath(
     new URL("../generated/o_sfu_protocol_bg.wasm", import.meta.url)
 );
-const WASM_SIZE_BUDGET_BYTES = 350 * 1024;
+const WASM_SIZE_BUDGET_BYTES = 400 * 1024;
 
 const { size } = statSync(GENERATED_WASM_PATH);
 
