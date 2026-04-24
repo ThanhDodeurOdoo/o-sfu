@@ -9,7 +9,7 @@ use crate::runtime::diagnostics::{
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{SessionId, StreamType};
 
-use super::shared::{ChannelState, ConsumerKey, SourceKey};
+use super::shared::{ChannelState, ConsumerKey};
 
 impl ChannelState {
     pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_session(
@@ -115,21 +115,22 @@ impl ChannelState {
                 {
                     return None;
                 }
+                let source = self.sources.get(&key.source_id)?;
                 let route_state = self.consumer_route_state(
                     session_id,
-                    &key.producer_session_id,
-                    key.stream_type,
+                    source.owner().session_id(),
+                    source.stream_type(),
                 )?;
                 Some(DiagnosticsSubscription {
                     consumer_transport_media_id: Some(consumer_state.consumer_media.as_u64()),
-                    producer_session_id: key.producer_session_id.clone(),
+                    producer_session_id: source.owner().session_id().clone(),
                     source_transport_media_id: Some(consumer_state.source_media.as_u64()),
                     state: match route_state {
                         super::ConsumerRouteState::Active => DiagnosticsRouteState::Active,
                         super::ConsumerRouteState::Inactive => DiagnosticsRouteState::Inactive,
                         super::ConsumerRouteState::Absent => return None,
                     },
-                    stream_type: key.stream_type,
+                    stream_type: source.stream_type(),
                 })
             })
             .collect::<Vec<_>>();
@@ -146,21 +147,20 @@ impl ChannelState {
             .filter(|key| key.consumer_session_id == *session_id)
             .cloned()
             .collect::<BTreeSet<ConsumerKey>>();
-        subscriptions.extend(pending_keys.difference(&existing_keys).map(|key| {
-            DiagnosticsSubscription {
+        subscriptions.extend(pending_keys.difference(&existing_keys).filter_map(|key| {
+            let source = self.sources.get(&key.source_id)?;
+            Some(DiagnosticsSubscription {
                 consumer_transport_media_id: None,
-                producer_session_id: key.producer_session_id.clone(),
+                producer_session_id: source.owner().session_id().clone(),
                 source_transport_media_id: self
-                    .producer_id_for_source_key(&SourceKey::new(
-                        &key.producer_session_id,
-                        key.stream_type,
-                    ))
-                    .and_then(|producer_id| self.producers.get(&producer_id))
+                    .producer_id_by_source_id
+                    .get(&key.source_id)
+                    .and_then(|producer_id| self.producers.get(producer_id))
                     .and_then(|producer| producer.transport_media_id)
                     .map(TransportMediaId::as_u64),
                 state: DiagnosticsRouteState::Pending,
-                stream_type: key.stream_type,
-            }
+                stream_type: source.stream_type(),
+            })
         }));
         subscriptions
     }

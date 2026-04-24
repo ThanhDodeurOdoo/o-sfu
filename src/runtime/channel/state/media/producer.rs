@@ -204,6 +204,7 @@ impl ChannelState {
         let owner_connection_id = pending.owner_connection_id;
         let stream_type = pending.stream_type;
         let media_kind = pending.media_kind;
+        let source_id = source_descriptor.source_id();
 
         self.install_published_source(PublishedSourceInstall {
             source_key,
@@ -214,14 +215,16 @@ impl ChannelState {
             pending,
             transport_media_id,
         });
-        let consumer_targets = self.publish_consumer_targets(
-            &owner_session_id,
+        let consumer_snapshot = ConsumerBootstrapProducerSnapshot::pending(
+            source_id,
+            owner_session_id,
             owner_connection_id,
             producer_id,
             stream_type,
             media_kind,
             transport_media_id,
         );
+        let consumer_targets = self.publish_consumer_targets(&consumer_snapshot);
         Some((producer_id, consumer_targets))
     }
 
@@ -377,38 +380,26 @@ impl ChannelState {
     /// transport bootstrap fails.
     pub(in crate::runtime::channel) fn publish_consumer_targets(
         &self,
-        producer_session_id: &SessionId,
-        producer_connection_id: ConnectionId,
-        producer_id: ProducerRuntimeId,
-        stream_type: StreamType,
-        media_kind: RouterMediaKind,
-        transport_media_id: TransportMediaId,
+        producer: &ConsumerBootstrapProducerSnapshot,
     ) -> Vec<PendingConsumerBootstrapTarget> {
         self.sessions
             .iter()
             .filter_map(|(peer_session_id, peer_session)| {
-                if peer_session_id == producer_session_id || !peer_session.negotiation.can_consume()
+                if peer_session_id == producer.owner_session_id()
+                    || !peer_session.negotiation.can_consume()
                 {
                     return None;
                 }
                 if self.consumer_bootstrap_exists(&ConsumerKey::new(
                     peer_session_id,
-                    producer_session_id,
-                    stream_type,
+                    producer.source_id(),
                 )) {
                     return None;
                 }
                 Some(PendingConsumerBootstrapTarget::new(
                     peer_session_id.clone(),
                     peer_session.connection_id,
-                    ConsumerBootstrapProducerSnapshot::pending(
-                        producer_session_id.clone(),
-                        producer_connection_id,
-                        producer_id,
-                        stream_type,
-                        media_kind,
-                        transport_media_id,
-                    ),
+                    (*producer).clone(),
                 ))
             })
             .collect()
@@ -484,7 +475,7 @@ impl ChannelState {
         }];
         transport_removals.extend(self.consumer_index.iter().filter_map(
             |(key, consumer_state)| {
-                if key.producer_session_id != *session_id || key.stream_type != stream_type {
+                if key.source_id != producer_target.source_id {
                     return None;
                 }
                 Some(TransportMediaRemoval {
@@ -523,11 +514,6 @@ impl ChannelState {
             );
             return None;
         }
-        self.consumer_index.retain(|key, _consumer_state| {
-            key.producer_session_id != *session_id || key.stream_type != stream_type
-        });
-        self.pending_consumer_bootstraps
-            .retain(|key| key.producer_session_id != *session_id || key.stream_type != stream_type);
         self.remove_source_registry_entry(producer_target.source_id)?;
         let session_info_snapshot = match stream_type {
             StreamType::Camera | StreamType::Screen => {

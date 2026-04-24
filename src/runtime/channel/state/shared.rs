@@ -8,7 +8,7 @@ use o_sfu_router::{
 use crate::runtime::ConnectionId;
 use crate::runtime::recording::RecordingService;
 use crate::runtime::source_model::{
-    PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+    ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
 };
 use crate::runtime::transport_adapter::{SourcePacketGate, TransportMediaId};
 use o_sfu_protocol::shared::{DownloadStates, RecordingState, SessionId, StreamType};
@@ -59,31 +59,30 @@ pub(in crate::runtime::channel) struct ChannelState {
     /// Source ownership and encoding metadata keyed by transport-owned media ids.
     pub(super) source_transport_media_index:
         BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
+    /// Desired per-consumer source state keyed above transport realization.
+    pub(super) consumer_source_selections: BTreeMap<ConsumerKey, ConsumerSourceSelection>,
+    /// Concrete routed consumer media currently realizing a source selection.
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     pub(super) pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
     /// Shadow of session/producer/consumer state inside the pure router core.
     pub(super) topology: ChannelTopology,
 }
 
-/// Uniquely identifies a consumer subscription: which session consumes which
-/// other session's stream for a given stream type.
+/// Uniquely identifies one consumer's desired or realized route to a source.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::runtime::channel) struct ConsumerKey {
     pub(super) consumer_session_id: SessionId,
-    pub(super) producer_session_id: SessionId,
-    pub(super) stream_type: StreamType,
+    pub(super) source_id: PublishedSourceId,
 }
 
 impl ConsumerKey {
     pub(in crate::runtime::channel) fn new(
         consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
-        stream_type: StreamType,
+        source_id: PublishedSourceId,
     ) -> Self {
         Self {
             consumer_session_id: consumer_session_id.clone(),
-            producer_session_id: producer_session_id.clone(),
-            stream_type,
+            source_id,
         }
     }
 }
@@ -190,6 +189,7 @@ impl ChannelState {
             producer_id_by_source_id: BTreeMap::new(),
             producers: BTreeMap::new(),
             source_transport_media_index: BTreeMap::new(),
+            consumer_source_selections: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             pending_consumer_bootstraps: BTreeSet::new(),
             topology: ChannelTopology::new_with_recording_observer_factory(
@@ -207,7 +207,11 @@ impl ChannelState {
         self.consumer_index
             .iter()
             .filter_map(|(key, consumer_state)| {
-                if !departing_session_ids.contains(&key.producer_session_id)
+                let source_owner_departing =
+                    self.sources.get(&key.source_id).is_some_and(|source| {
+                        departing_session_ids.contains(source.owner().session_id())
+                    });
+                if !source_owner_departing
                     && !departing_session_ids.contains(&key.consumer_session_id)
                 {
                     return None;
@@ -261,12 +265,12 @@ impl ChannelState {
             };
             self.remove_source_registry_entry(source_id);
         }
-        self.consumer_index.retain(|key, _consumer_state| {
-            key.consumer_session_id != *session_id && key.producer_session_id != *session_id
-        });
-        self.pending_consumer_bootstraps.retain(|key| {
-            key.consumer_session_id != *session_id && key.producer_session_id != *session_id
-        });
+        self.consumer_index
+            .retain(|key, _consumer_state| key.consumer_session_id != *session_id);
+        self.pending_consumer_bootstraps
+            .retain(|key| key.consumer_session_id != *session_id);
+        self.consumer_source_selections
+            .retain(|key, _selection| key.consumer_session_id != *session_id);
     }
 
     pub(in crate::runtime::channel) fn session_for_connection(
@@ -411,6 +415,12 @@ impl ChannelState {
         &mut self,
         source_id: PublishedSourceId,
     ) -> Option<PublishedProducer> {
+        self.consumer_index
+            .retain(|key, _consumer_state| key.source_id != source_id);
+        self.pending_consumer_bootstraps
+            .retain(|key| key.source_id != source_id);
+        self.consumer_source_selections
+            .retain(|key, _selection| key.source_id != source_id);
         self.sources.remove(&source_id);
         self.source_ids_by_owner_stream
             .retain(|_key, registered_source_id| *registered_source_id != source_id);

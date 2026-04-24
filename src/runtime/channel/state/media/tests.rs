@@ -31,7 +31,7 @@ use crate::runtime::recording::{MediaSource, MediaTap, RecordingService};
 use crate::runtime::source_model::{
     PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
     PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-    SourceEncodingId, SourceTransportBinding,
+    SourceEncodingId, SourceSelector, SourceTransportBinding,
 };
 use crate::runtime::test_rtp_samples::{
     sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
@@ -99,11 +99,31 @@ fn install_test_consumer_route(
             ConsumerCapability::Compatible,
         )
         .unwrap_or_else(|error| panic!("failed to create test consumer route: {error:?}"));
-    let route_key = ConsumerKey {
-        consumer_session_id: consumer_session_id.clone(),
-        producer_session_id: producer_session_id.clone(),
-        stream_type: StreamType::Camera,
-    };
+    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+    let source_id = install_test_source_graph(
+        state,
+        producer_session_id,
+        producer_connection_id,
+        StreamType::Camera,
+        producer_id,
+        TransportMediaId::new(1),
+    );
+    state.producers.insert(
+        producer_id,
+        PublishedProducer {
+            source_id,
+            owner_session_id: producer_session_id.clone(),
+            owner_connection_id: producer_connection_id,
+            stream_type: StreamType::Camera,
+            media_kind: RouterMediaKind::Video,
+            consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
+            routed_producer_id,
+            transport_media_id: Some(TransportMediaId::new(1)),
+            source_packet_selection: None,
+            active: true,
+        },
+    );
+    let route_key = ConsumerKey::new(consumer_session_id, source_id);
     let consumer_state = ConsumerState {
         routed_consumer_id,
         consumer_connection_id,
@@ -370,6 +390,16 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
 
     assert!(route_updates.is_empty());
     assert_eq!(planned_bootstraps.len(), 1);
+    let selection = state
+        .consumer_source_selections
+        .get(&ConsumerKey::new(&subscriber_session_id, source_id))
+        .expect("compat subscription should create a source-level selection");
+    assert!(!selection.active());
+    assert_eq!(
+        selection.selector(),
+        SourceSelector::Open,
+        "compat downloads default to an unconstrained source selector"
+    );
     assert!(
         state.subscription_count() >= 1,
         "planning the bootstrap must reserve the pending consumer slot immediately"

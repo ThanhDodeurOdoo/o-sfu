@@ -97,7 +97,7 @@ impl SubscriptionEffectPlan {
         channel: &Channel,
         session_id: &SessionId,
         connection_id: ConnectionId,
-        target_session_id: &SessionId,
+        _target_session_id: &SessionId,
         route_updates: Vec<ConsumerRouteUpdate>,
     ) -> Self {
         let transport_ops = route_updates
@@ -106,7 +106,7 @@ impl SubscriptionEffectPlan {
                 consumer_session_id: session_id.clone(),
                 consumer_connection_id: route_update.consumer_connection_id(),
                 consumer_media: route_update.consumer_media(),
-                producer_session_id: target_session_id.clone(),
+                producer_session_id: route_update.producer_session_id().clone(),
                 producer_connection_id: route_update.source_connection_id(),
                 source_media: route_update.source_media(),
                 stream_type: route_update.stream_type(),
@@ -122,7 +122,8 @@ impl SubscriptionEffectPlan {
                 .insert_field("active", route_update.active())
                 .insert_field(
                     "producer_session_id",
-                    serde_json::to_value(target_session_id).unwrap_or(serde_json::Value::Null),
+                    serde_json::to_value(route_update.producer_session_id())
+                        .unwrap_or(serde_json::Value::Null),
                 )
                 .insert_field(
                     "source_transport_media_id",

@@ -26,7 +26,7 @@
 
 #![allow(
     dead_code,
-    reason = "the consumer selector vocabulary is frozen before the later consumer-source registry slice wires every selector into channel state"
+    reason = "non-default selector variants are reserved for the next quality-policy slices"
 )]
 
 use std::fmt::{self, Display, Formatter};
@@ -195,6 +195,41 @@ pub(crate) enum SourceRoomPolicySelector {
     Featured,
     /// Source is consumed as a small or background view.
     Thumbnail,
+}
+
+/// Consumer-side desired state for one published source.
+///
+/// The active flag is the compatibility-level subscription decision. The
+/// selector is the source-level quality intent that later adaptation and
+/// layout policy can resolve into a transport-native gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConsumerSourceSelection {
+    active: bool,
+    selector: SourceSelector,
+}
+
+impl ConsumerSourceSelection {
+    #[must_use]
+    pub(crate) const fn open(active: bool) -> Self {
+        Self {
+            active,
+            selector: SourceSelector::Open,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn active(self) -> bool {
+        self.active
+    }
+
+    #[must_use]
+    pub(crate) const fn selector(self) -> SourceSelector {
+        self.selector
+    }
+
+    pub(crate) const fn set_active(&mut self, active: bool) {
+        self.active = active;
+    }
 }
 
 /// Authoritative room-domain description of one published source.

@@ -475,7 +475,7 @@ mod tests {
         stream_type: StreamType,
         routed_producer_id: RoutedProducerId,
         transport_media_id: Option<TransportMediaId>,
-    ) -> ProducerRuntimeId {
+    ) -> (ProducerRuntimeId, PublishedSourceId) {
         let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
         let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
         let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
@@ -534,7 +534,7 @@ mod tests {
                 ),
             );
         }
-        producer_id
+        (producer_id, source_id)
     }
 
     #[test]
@@ -607,7 +607,7 @@ mod tests {
             .session_connection_id(&SessionId::Integer(2))
             .expect("consumer session should exist");
         let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(10));
-        let producer_id = install_test_published_producer(
+        let (producer_id, source_id) = install_test_published_producer(
             &mut state,
             &SessionId::Integer(1),
             producer_connection_id,
@@ -616,11 +616,7 @@ mod tests {
             Some(TransportMediaId::new(11)),
         );
         state.consumer_index.insert(
-            ConsumerKey {
-                consumer_session_id: SessionId::Integer(2),
-                producer_session_id: SessionId::Integer(1),
-                stream_type: StreamType::Camera,
-            },
+            ConsumerKey::new(&SessionId::Integer(2), source_id),
             ConsumerState {
                 routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
                 consumer_connection_id,
