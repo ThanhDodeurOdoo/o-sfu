@@ -283,7 +283,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
             .set_source_packet_gate(
                 &producer_session_key,
                 source_media_id,
-                Some(SourcePacketGate::Rid("hi".into())),
+                SourcePacketGate::Rid("hi".into()),
             )
             .await
             .is_ok()
@@ -302,7 +302,7 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
             .set_source_packet_gate(
                 &producer_session_key,
                 source_media_id,
-                Some(SourcePacketGate::Rid("lo".into())),
+                SourcePacketGate::Rid("lo".into()),
             )
             .await
             .is_ok()

@@ -138,7 +138,7 @@ pub(crate) trait MediaPort {
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        packet_gate: Option<SourcePacketGate>,
+        packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError>;
 }
 

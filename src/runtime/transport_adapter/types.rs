@@ -112,9 +112,14 @@ impl ActiveSpeakerSource {
     }
 }
 
-/// Generic transport-owned packet gate applied to one published source.
+/// Transport-owned packet gate applied to one published source.
+///
+/// Room policy decides in source-domain terms. The transport boundary receives
+/// only the packet-facing projection that the worker can apply without knowing
+/// room layout, source identity, or future relay placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourcePacketGate {
+    Open,
     Rid(String),
 }
 

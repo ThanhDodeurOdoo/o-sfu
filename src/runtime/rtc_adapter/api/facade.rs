@@ -394,13 +394,14 @@ impl RtcTransportMediaFacade<'_> {
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        packet_gate: Option<SourcePacketGate>,
+        packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        let packet_gate = packet_gate.map(|packet_gate| match packet_gate {
-            SourcePacketGate::Rid(rid) => {
-                super::super::route_control::PacketLayerGate::Rid(rid.as_str().into())
-            }
-        });
+        let packet_gate = match packet_gate {
+            SourcePacketGate::Open => None,
+            SourcePacketGate::Rid(rid) => Some(super::super::route_control::PacketLayerGate::Rid(
+                rid.as_str().into(),
+            )),
+        };
         self.set_route_control_source_packet_gate(
             source_session_key,
             source_transport_media_id,

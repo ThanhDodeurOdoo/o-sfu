@@ -34,7 +34,7 @@ use crate::runtime::{
     source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError, SourceTransportBinding,
+        SourceEncodingId, SourceModelError, SourceSelector, SourceTransportBinding,
     },
     transport_adapter::TransportMediaId,
 };
@@ -316,7 +316,7 @@ impl ChannelState {
                 consumable_rtp_parameters: pending.consumable_rtp_parameters,
                 routed_producer_id,
                 transport_media_id: Some(transport_media_id),
-                source_packet_selection: None,
+                source_packet_selector: SourceSelector::Open,
                 active: true,
             },
         );

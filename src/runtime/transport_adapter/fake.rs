@@ -60,7 +60,7 @@ pub(crate) enum FakeWebRtcEvent {
     SourcePacketGateUpdated {
         session_id: SessionId,
         transport_media_id: TransportMediaId,
-        packet_gate: Option<SourcePacketGate>,
+        packet_gate: SourcePacketGate,
     },
 }
 
@@ -509,7 +509,7 @@ impl FakeWebRtcAdapter {
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-        packet_gate: Option<SourcePacketGate>,
+        packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::SourcePacketGateUpdated {
             session_id: session_key.session_id().clone(),

@@ -175,7 +175,7 @@ impl MediaPort for FakeWebRtcAdapter {
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        packet_gate: Option<SourcePacketGate>,
+        packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         Self::set_source_packet_gate(
             self,

@@ -454,7 +454,7 @@ mod tests {
             source_model::{
                 PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
                 PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-                SourceEncodingId, SourceTransportBinding,
+                SourceEncodingId, SourceSelector, SourceTransportBinding,
             },
             transport_adapter::TransportMediaId,
         },
@@ -524,7 +524,7 @@ mod tests {
                 consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
                 routed_producer_id,
                 transport_media_id,
-                source_packet_selection: None,
+                source_packet_selector: SourceSelector::Open,
                 active: true,
             },
         );

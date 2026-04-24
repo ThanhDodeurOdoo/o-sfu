@@ -164,9 +164,10 @@ impl SourceTransportBinding {
 /// consumer wants the source open, pinned to a concrete source encoding or left
 /// to a room policy bucket. Transport code should receive a projected
 /// transport-native gate after this intent is resolved
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SourceSelector {
     /// No source-level limit has been requested.
+    #[default]
     Open,
     /// Select one source encoding by runtime identity.
     Encoding(SourceEncodingId),

@@ -88,7 +88,7 @@ fn assert_source_packet_selection_update(
             FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
-                packet_gate: None,
+                packet_gate: SourcePacketGate::Open,
             },
             None,
         ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
@@ -96,7 +96,7 @@ fn assert_source_packet_selection_update(
             FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id: updated_session_id,
                 transport_media_id: updated_media_id,
-                packet_gate: Some(SourcePacketGate::Rid(rid)),
+                packet_gate: SourcePacketGate::Rid(rid),
             },
             Some(expected_rid),
         ) => {
@@ -575,7 +575,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
             FakeWebRtcEvent::SourcePacketGateUpdated {
                 session_id,
                 transport_media_id,
-                packet_gate: None,
+                packet_gate: SourcePacketGate::Open,
             } if *session_id == SessionId::Integer(1)
                 && *transport_media_id == first_camera_media_id
         )

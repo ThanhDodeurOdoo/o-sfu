@@ -5,11 +5,14 @@ use o_sfu_protocol::shared::{SessionId, StreamType};
 use super::{
     super::{ChannelEventMessage, outbound::MessageFanout},
     ids::ProducerRuntimeId,
-    shared::{ChannelState, SourceKey, SourcePacketSelection},
+    shared::{ChannelState, SourceKey},
 };
 use crate::runtime::{
     ConnectionId,
-    transport_adapter::{ActiveSpeakerSource, TransportMediaId},
+    source_model::{
+        PublishedSourceDescriptor, SourceEncodingDescriptor, SourceEncodingId, SourceSelector,
+    },
+    transport_adapter::{ActiveSpeakerSource, SourcePacketGate, TransportMediaId},
 };
 
 const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;
@@ -21,7 +24,8 @@ pub(in crate::runtime::channel) struct SourcePacketSelectionUpdate {
     owner_session_id: SessionId,
     owner_connection_id: ConnectionId,
     transport_media_id: TransportMediaId,
-    selection: Option<SourcePacketSelection>,
+    selector: SourceSelector,
+    packet_gate: SourcePacketGate,
 }
 
 impl SourcePacketSelectionUpdate {
@@ -41,8 +45,12 @@ impl SourcePacketSelectionUpdate {
         self.transport_media_id
     }
 
-    pub(in crate::runtime::channel) fn selection(&self) -> Option<&SourcePacketSelection> {
-        self.selection.as_ref()
+    pub(in crate::runtime::channel) const fn selector(&self) -> SourceSelector {
+        self.selector
+    }
+
+    pub(in crate::runtime::channel) fn packet_gate(&self) -> &SourcePacketGate {
+        &self.packet_gate
     }
 }
 
@@ -74,22 +82,25 @@ impl ChannelState {
             .iter()
             .filter_map(|(producer_id, producer)| {
                 let transport_media_id = producer.transport_media_id?;
-                let desired_selection = desired_source_packet_selection(
+                let source = self.sources.get(&producer.source_id)?;
+                let desired_selector = desired_source_packet_selector(
                     session_count,
                     producer.stream_type,
-                    &producer.consumable_rtp_parameters,
+                    source,
                     &cleared_camera_session_ids,
                     &producer.owner_session_id,
                 );
-                if desired_selection == producer.source_packet_selection {
+                if desired_selector == producer.source_packet_selector {
                     return None;
                 }
+                let packet_gate = source_packet_gate_for_selector(source, desired_selector)?;
                 Some(SourcePacketSelectionUpdate {
                     producer_id: *producer_id,
                     owner_session_id: producer.owner_session_id.clone(),
                     owner_connection_id: producer.owner_connection_id,
                     transport_media_id,
-                    selection: desired_selection,
+                    selector: desired_selector,
+                    packet_gate,
                 })
             })
             .collect()
@@ -182,9 +193,7 @@ impl ChannelState {
             {
                 continue;
             }
-            producer
-                .source_packet_selection
-                .clone_from(&update.selection);
+            producer.source_packet_selector = update.selector();
         }
     }
 
@@ -214,28 +223,40 @@ impl ChannelState {
     }
 }
 
-fn desired_source_packet_selection(
+fn desired_source_packet_selector(
     session_count: usize,
     stream_type: StreamType,
-    producer_rtp_parameters: &o_sfu_router::MediaStream,
+    source: &PublishedSourceDescriptor,
     cleared_camera_session_ids: &BTreeSet<SessionId>,
     owner_session_id: &SessionId,
-) -> Option<SourcePacketSelection> {
+) -> SourceSelector {
     if stream_type != StreamType::Camera
         || session_count < MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD
     {
-        return None;
+        return SourceSelector::Open;
     }
-    let shared_selection =
-        lowest_declared_rid(producer_rtp_parameters).map(SourcePacketSelection::Rid)?;
     if cleared_camera_session_ids.contains(owner_session_id) {
-        return None;
+        return SourceSelector::Open;
     }
-    Some(shared_selection)
+    lowest_declared_encoding(source).map_or(SourceSelector::Open, SourceSelector::Encoding)
 }
 
-fn lowest_declared_rid(producer_rtp_parameters: &o_sfu_router::MediaStream) -> Option<String> {
-    let encodings = producer_rtp_parameters.encodings().collect::<Vec<_>>();
+fn source_packet_gate_for_selector(
+    source: &PublishedSourceDescriptor,
+    selector: SourceSelector,
+) -> Option<SourcePacketGate> {
+    match selector {
+        SourceSelector::Open => Some(SourcePacketGate::Open),
+        SourceSelector::Encoding(encoding_id) => source
+            .encoding(encoding_id)
+            .and_then(SourceEncodingDescriptor::rid)
+            .map(|rid| SourcePacketGate::Rid(rid.as_str().to_owned())),
+        SourceSelector::RoomPolicy(_) => None,
+    }
+}
+
+fn lowest_declared_encoding(source: &PublishedSourceDescriptor) -> Option<SourceEncodingId> {
+    let encodings = source.encodings().collect::<Vec<_>>();
     if encodings.len() < 2 || encodings.iter().any(|encoding| encoding.rid().is_none()) {
         return None;
     }
@@ -252,5 +273,101 @@ fn lowest_declared_rid(producer_rtp_parameters: &o_sfu_router::MediaStream) -> O
                 (encoding.max_bitrate().unwrap_or(u64::MAX), *index)
             }
         })
-        .and_then(|(_index, encoding)| encoding.rid().map(str::to_owned))
+        .map(|(_index, encoding)| encoding.encoding_id())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "test fixtures should fail loudly when they build invalid source graphs"
+    )]
+
+    use o_sfu_router::{MediaKind, Rid};
+
+    use super::*;
+    use crate::runtime::source_model::{
+        PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+        SourceEncodingDescriptorParts,
+    };
+
+    fn source_with_encodings(
+        encodings: Vec<SourceEncodingDescriptor>,
+    ) -> PublishedSourceDescriptor {
+        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id: PublishedSourceId::from_raw(7),
+            owner: PublishedSourceOwner::new(SessionId::Integer(42), ConnectionId::from_raw(9)),
+            stream_type: StreamType::Camera,
+            media_kind: MediaKind::Video,
+            mid: None,
+            encodings,
+        })
+        .expect("test source graph should be valid")
+    }
+
+    fn encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+        rid: Option<&str>,
+        max_bitrate: Option<u64>,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: rid.map(Rid::new),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate,
+            negotiated_format: None,
+            transport_binding: None,
+        })
+    }
+
+    #[test]
+    fn source_selector_bridge_projects_selected_encoding_to_transport_rid() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let high_encoding_id = SourceEncodingId::from_raw(1);
+        let low_encoding_id = SourceEncodingId::from_raw(2);
+        let source = source_with_encodings(vec![
+            encoding(source_id, high_encoding_id, Some("hi"), Some(750_000)),
+            encoding(source_id, low_encoding_id, Some("lo"), Some(150_000)),
+        ]);
+
+        let selector = lowest_declared_encoding(&source)
+            .map_or(SourceSelector::Open, SourceSelector::Encoding);
+
+        assert_eq!(selector, SourceSelector::Encoding(low_encoding_id));
+        assert_eq!(
+            source_packet_gate_for_selector(&source, selector),
+            Some(SourcePacketGate::Rid(String::from("lo")))
+        );
+    }
+
+    #[test]
+    fn source_selector_bridge_keeps_open_as_an_explicit_transport_gate() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let source = source_with_encodings(vec![encoding(
+            source_id,
+            SourceEncodingId::from_raw(1),
+            None,
+            None,
+        )]);
+
+        assert_eq!(
+            source_packet_gate_for_selector(&source, SourceSelector::Open),
+            Some(SourcePacketGate::Open)
+        );
+    }
+
+    #[test]
+    fn source_selector_bridge_requires_rid_for_rid_packet_selection() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let encoding_id = SourceEncodingId::from_raw(1);
+        let source = source_with_encodings(vec![encoding(source_id, encoding_id, None, None)]);
+
+        assert_eq!(
+            source_packet_gate_for_selector(&source, SourceSelector::Encoding(encoding_id)),
+            None
+        );
+    }
 }

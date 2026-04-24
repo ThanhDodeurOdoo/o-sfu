@@ -328,9 +328,8 @@ impl MediaPort for RuntimeTransportAdapter {
         &self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        packet_gate: Option<SourcePacketGate>,
+        packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        let has_packet_gate = packet_gate.is_some();
         let result = dispatch_transport_backend!(self, |backend| {
             backend
                 .set_source_packet_gate(
@@ -344,7 +343,7 @@ impl MediaPort for RuntimeTransportAdapter {
             warn!(
                 ?source_session_key,
                 ?source_transport_media_id,
-                has_packet_gate,
+                ?packet_gate,
                 ?error,
                 "transport adapter failed to update source packet gate"
             );

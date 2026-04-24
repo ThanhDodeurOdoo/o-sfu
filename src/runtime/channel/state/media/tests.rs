@@ -123,7 +123,7 @@ fn install_test_consumer_route(
             consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
             routed_producer_id,
             transport_media_id: Some(TransportMediaId::new(1)),
-            source_packet_selection: None,
+            source_packet_selector: SourceSelector::Open,
             active: true,
         },
     );
@@ -231,7 +231,7 @@ fn producer_activity_does_not_flip_channel_state_when_router_update_fails() {
             consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
             routed_producer_id,
             transport_media_id: Some(transport_media_id),
-            source_packet_selection: None,
+            source_packet_selector: SourceSelector::Open,
             active: true,
         },
     );
@@ -374,7 +374,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             consumable_rtp_parameters,
             routed_producer_id,
             transport_media_id: Some(TransportMediaId::new(10)),
-            source_packet_selection: None,
+            source_packet_selector: SourceSelector::Open,
             active: true,
         },
     );

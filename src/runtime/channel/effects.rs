@@ -31,7 +31,7 @@ use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{ActiveSpeakerSource, MediaPort, SourcePacketGate, TransportMediaId},
+    transport_adapter::{ActiveSpeakerSource, MediaPort, TransportMediaId},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -534,7 +534,7 @@ impl SourcePacketPolicyEffectPlan {
                         update.owner_connection_id(),
                     ),
                     update.transport_media_id(),
-                    update.selection().map(SourcePacketGate::from),
+                    update.packet_gate().clone(),
                 )
                 .await
                 .is_err()
