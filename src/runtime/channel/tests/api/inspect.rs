@@ -1,7 +1,9 @@
 use o_sfu_protocol::shared::{SessionId, SessionInfo, StreamType};
 
 use super::super::super::Channel;
-use crate::runtime::{ConnectionId, transport_adapter::TransportMediaId};
+use crate::runtime::{
+    ConnectionId, source_model::SourceEncodingId, transport_adapter::TransportMediaId,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelTestInspect<'a> {
@@ -133,6 +135,17 @@ impl ChannelTestInspect<'_> {
             .read()
             .await
             .inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id)
+    }
+
+    pub(crate) async fn source_encoding_ids_for_transport_media_id(
+        self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<Vec<SourceEncodingId>> {
+        self.channel
+            .state
+            .read()
+            .await
+            .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)
     }
 
     pub(crate) async fn session_info_snapshot(

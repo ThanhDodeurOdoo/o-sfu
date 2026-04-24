@@ -2262,6 +2262,75 @@ async fn staged_negotiated_publish_commit_moves_through_channel_owned_transactio
 }
 
 #[tokio::test]
+async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
+    );
+    let transport_media_id =
+        staged_publish_transport_media_id(&channel, &session_id, connection_id, StreamType::Camera)
+            .await
+            .expect("staged publish should expose its transport media id");
+    fake.set_negotiated_producer_parameters(
+        transport_media_id,
+        test_simulcast_video_rtp_parameters(),
+    );
+
+    commit_staged_publishes(&channel, &session_id, connection_id, &adapter).await;
+
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        0
+    );
+    assert!(
+        channel
+            .is_stream_published(&session_id, StreamType::Camera)
+            .await
+    );
+    assert_eq!(
+        channel
+            .test_api()
+            .inspect()
+            .source_encoding_ids_for_transport_media_id(transport_media_id)
+            .await
+            .expect("transport media should resolve to source encodings")
+            .len(),
+        2
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    let subscriber_messages = drain_outbound(&mut subscriber_rx);
+    assert_bootstrap_for_stream(&subscriber_messages, StreamType::Camera);
+    assert!(
+        subscriber_messages.iter().any(|message| matches!(
+            message,
+            SessionOutbound::Request(request)
+                if matches!(
+                    request.as_ref(),
+                    ChannelEventRequest::BootstrapRemoteTrack(payload)
+                        if payload.source_descriptor().encodings().count() == 2
+                )
+        )),
+        "consumer bootstrap should carry the full committed source encoding graph"
+    );
+}
+
+#[tokio::test]
 async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_are_missing() {
     let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_sessions_with_fake().await;
@@ -2363,6 +2432,83 @@ async fn staged_negotiated_publish_commit_cleans_up_when_session_state_rejects_i
                 if *owner == session_id
         )),
         "commit rejection should clean up the staged transport media"
+    );
+}
+
+#[tokio::test]
+async fn staged_negotiated_publish_commit_rejects_replaced_connection() {
+    let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+    let session_id = SessionId::Integer(1);
+    let connection_id = channel
+        .test_api()
+        .inspect()
+        .session_connection_id(&session_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        stage_negotiated_publish(
+            &channel,
+            &session_id,
+            connection_id,
+            StreamType::Camera,
+            &adapter,
+        )
+        .await
+    );
+    let transport_media_id =
+        staged_publish_transport_media_id(&channel, &session_id, connection_id, StreamType::Camera)
+            .await
+            .expect("staged publish should expose its transport media id");
+    let (replacement_sender, _replacement_rx) = test_sender();
+    let replacement_connection_id = channel
+        .test_api()
+        .lifecycle()
+        .join_session_without_transport_cleanup(
+            session_id.clone(),
+            None,
+            SessionPermissions::default(),
+            replacement_sender,
+            &adapter,
+        )
+        .await
+        .expect("replacement session should join");
+    let _ = drain_outbound(&mut publisher_rx);
+    let _ = drain_outbound(&mut subscriber_rx);
+
+    commit_staged_publishes(&channel, &session_id, connection_id, &adapter).await;
+
+    assert_ne!(replacement_connection_id, connection_id);
+    assert_eq!(
+        staged_publish_count(&channel, &session_id, connection_id).await,
+        0
+    );
+    assert_eq!(channel.test_api().inspect().producer_count().await, 0);
+    assert!(
+        !channel
+            .is_stream_published(&session_id, StreamType::Camera)
+            .await
+    );
+    assert_eq!(
+        channel
+            .test_api()
+            .inspect()
+            .source_encoding_ids_for_transport_media_id(transport_media_id)
+            .await,
+        None
+    );
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    assert!(
+        fake.snapshot_events().iter().any(|event| matches!(
+            event,
+            FakeWebRtcEvent::MediaRemoved {
+                session_id: owner,
+                transport_media_id: removed_media_id,
+            } if *owner == session_id && *removed_media_id == transport_media_id
+        )),
+        "stale replaced publish commit should clean up the staged transport media"
     );
 }
 
