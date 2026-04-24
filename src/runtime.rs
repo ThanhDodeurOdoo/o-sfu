@@ -37,6 +37,7 @@ mod packet_sink_registry;
 mod recording;
 mod request_origin;
 mod rtc_adapter;
+pub(crate) mod source_model;
 pub(crate) mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_rtp_samples;
