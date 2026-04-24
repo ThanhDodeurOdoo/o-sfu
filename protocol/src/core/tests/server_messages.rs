@@ -12,12 +12,14 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
             session_id: String::from("peer-1").into(),
             stream_type: StreamType::Audio,
             active: true,
+            source: None,
         },
         TrackBinding {
             mid: String::from("1"),
             session_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: true,
+            source: None,
         },
     ])));
     let second_tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
@@ -26,6 +28,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
             session_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: false,
+            source: None,
         },
     ])));
 
@@ -39,12 +42,14 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
                         session_id: String::from("peer-1").into(),
                         stream_type: StreamType::Audio,
                         active: true,
+                        source: None,
                     },
                     TrackBinding {
                         mid: String::from("1"),
                         session_id: String::from("peer-2").into(),
                         stream_type: StreamType::Camera,
                         active: true,
+                        source: None,
                     },
                 ],
             },
@@ -57,6 +62,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
             session_id: String::from("peer-1").into(),
             stream_type: StreamType::Audio,
             active: true,
+            source: None,
         })
     );
     assert_eq!(
@@ -66,6 +72,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
             session_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: true,
+            source: None,
         })
     );
 
@@ -78,6 +85,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
                     session_id: String::from("peer-2").into(),
                     stream_type: StreamType::Camera,
                     active: false,
+                    source: None,
                 }],
             },
         }]
@@ -91,6 +99,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
             session_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: false,
+            source: None,
         })
     );
 }
@@ -107,12 +116,14 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
             session_id: String::from("peer-1").into(),
             stream_type: StreamType::Audio,
             active: true,
+            source: None,
         },
         TrackBinding {
             mid: String::from("1"),
             session_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: true,
+            source: None,
         },
     ])));
     let _ = core.on_ws_message(&tracks);
@@ -133,6 +144,64 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
     );
     assert_eq!(core.track_binding("0"), None);
     assert!(core.track_binding("1").is_some());
+}
+
+#[test]
+fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+
+    let source = SourceDescriptor {
+        source_id: String::from("source-7"),
+        session_id: String::from("peer-1").into(),
+        stream_type: StreamType::Camera,
+        active: true,
+        mid: Some(String::from("cam-0")),
+        encodings: vec![
+            SourceEncodingDescriptor {
+                encoding_id: String::from("encoding-1"),
+                rid: Some(String::from("lo")),
+                max_bitrate: Some(150_000),
+            },
+            SourceEncodingDescriptor {
+                encoding_id: String::from("encoding-2"),
+                rid: Some(String::from("hi")),
+                max_bitrate: Some(900_000),
+            },
+        ],
+    };
+    let tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
+        TrackBinding {
+            mid: String::from("cam-0"),
+            session_id: String::from("peer-1").into(),
+            stream_type: StreamType::Camera,
+            active: true,
+            source: Some(source.clone()),
+        },
+    ])));
+
+    assert_eq!(
+        core.on_ws_message(&tracks),
+        vec![
+            Command::EmitEvent {
+                event: ProtocolEvent::TrackSnapshot {
+                    bindings: vec![TrackBinding {
+                        mid: String::from("cam-0"),
+                        session_id: String::from("peer-1").into(),
+                        stream_type: StreamType::Camera,
+                        active: true,
+                        source: Some(source.clone()),
+                    }],
+                },
+            },
+            Command::EmitEvent {
+                event: ProtocolEvent::SourceSnapshot {
+                    sources: vec![source],
+                },
+            },
+        ]
+    );
 }
 
 #[test]

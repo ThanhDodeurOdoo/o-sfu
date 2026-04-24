@@ -56,6 +56,31 @@ pub struct TrackBinding {
     #[serde(rename = "type")]
     pub stream_type: StreamType,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceDescriptor {
+    pub source_id: String,
+    pub session_id: SessionId,
+    #[serde(rename = "type")]
+    pub stream_type: StreamType,
+    pub active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mid: Option<String>,
+    pub encodings: Vec<SourceEncodingDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceEncodingDescriptor {
+    pub encoding_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bitrate: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

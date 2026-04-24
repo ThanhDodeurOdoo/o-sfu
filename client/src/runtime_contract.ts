@@ -9,6 +9,7 @@ import {
     type RecordingState,
     type SessionId,
     type SessionInfo,
+    type SourceDescriptor,
     type StreamType
 } from "./public_api.js";
 import type { TrackBinding } from "./protocol.js";
@@ -37,6 +38,7 @@ export const CommandKind = {
     CLOSE_WEB_SOCKET: "closeWebSocket",
     EMIT_STATE_CHANGE: "emitStateChange",
     REPLACE_TRACK_BINDINGS: "replaceTrackBindings",
+    REPLACE_SOURCE_DESCRIPTORS: "replaceSourceDescriptors",
     REMOVE_SESSION_TRACKS: "removeSessionTracks",
     EMIT_UPDATE: "emitUpdate",
     REGISTER_PENDING_REQUEST: "registerPendingRequest",
@@ -63,6 +65,7 @@ export type HostCommand =
     | { kind: typeof CommandKind.CLOSE_WEB_SOCKET; code: number }
     | { kind: typeof CommandKind.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
     | { kind: typeof CommandKind.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
+    | { kind: typeof CommandKind.REPLACE_SOURCE_DESCRIPTORS; sources: SourceDescriptor[] }
     | { kind: typeof CommandKind.REMOVE_SESSION_TRACKS; sessionId: SessionId }
     | { kind: typeof CommandKind.EMIT_UPDATE; update: ClientUpdateDetail }
     | {
@@ -267,6 +270,20 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
                 }
             });
             return command as HostCommand;
+        case CommandKind.REPLACE_SOURCE_DESCRIPTORS:
+            if (!Array.isArray(command.sources)) {
+                throw new Error(`${context}.sources must be an array`);
+            }
+            command.sources.forEach((source, index) => {
+                const validated = validateOptionalSourceDescriptor(
+                    source,
+                    `${context}.sources[${index}]`
+                );
+                if (validated === null || validated === undefined) {
+                    throw new Error(`${context}.sources[${index}] must be a source descriptor`);
+                }
+            });
+            return command as HostCommand;
         case CommandKind.REMOVE_SESSION_TRACKS:
             validateSessionId(command.sessionId, `${context}.sessionId`);
             return command as HostCommand;
@@ -310,6 +327,24 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
             if (payload.track === null || typeof payload.track !== "object") {
                 throw new Error(`${context}.payload.track must be an object`);
             }
+            return update as ClientUpdateDetail;
+        }
+        case CLIENT_UPDATE.SOURCE: {
+            const payload = asRecord(update.payload, `${context}.payload`);
+            if (!Array.isArray(payload.sources)) {
+                throw new Error(`${context}.payload.sources must be an array`);
+            }
+            payload.sources.forEach((source, index) => {
+                const validated = validateOptionalSourceDescriptor(
+                    source,
+                    `${context}.payload.sources[${index}]`
+                );
+                if (validated === null || validated === undefined) {
+                    throw new Error(
+                        `${context}.payload.sources[${index}] must be a source descriptor`
+                    );
+                }
+            });
             return update as ClientUpdateDetail;
         }
         case CLIENT_UPDATE.DISCONNECT: {
@@ -357,7 +392,41 @@ function validateOptionalTrackBinding(
     validateSessionId(binding.sessionId, `${context}.sessionId`);
     validateStreamType(binding.type, `${context}.type`);
     requireBoolean(binding.active, `${context}.active`);
+    if (binding.source !== undefined) {
+        const source = validateOptionalSourceDescriptor(binding.source, `${context}.source`);
+        if (source === null) {
+            throw new Error(`${context}.source must be a source descriptor when provided`);
+        }
+    }
     return value;
+}
+
+function validateOptionalSourceDescriptor(
+    value: unknown,
+    context: string
+): SourceDescriptor | null | undefined {
+    if (value === null || value === undefined) {
+        return value;
+    }
+    const source = asRecord(value, context);
+    requireString(source.sourceId, `${context}.sourceId`);
+    validateSessionId(source.sessionId, `${context}.sessionId`);
+    validateStreamType(source.type, `${context}.type`);
+    requireBoolean(source.active, `${context}.active`);
+    requireOptionalString(source.mid, `${context}.mid`);
+    if (!Array.isArray(source.encodings)) {
+        throw new Error(`${context}.encodings must be an array`);
+    }
+    source.encodings.forEach((encoding, index) => {
+        const descriptor = asRecord(encoding, `${context}.encodings[${index}]`);
+        requireString(descriptor.encodingId, `${context}.encodings[${index}].encodingId`);
+        requireOptionalString(descriptor.rid, `${context}.encodings[${index}].rid`);
+        requireOptionalNonNegativeInteger(
+            descriptor.maxBitrate,
+            `${context}.encodings[${index}].maxBitrate`
+        );
+    });
+    return value as SourceDescriptor;
 }
 
 function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {
@@ -500,4 +569,13 @@ function requireInteger(value: unknown, context: string): number {
         throw new Error(`${context} must be a non-negative integer`);
     }
     return value;
+}
+
+function requireOptionalNonNegativeInteger(value: unknown, context: string): void {
+    if (value === undefined) {
+        return;
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw new Error(`${context} must be a non-negative integer when provided`);
+    }
 }

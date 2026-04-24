@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::{
     shared::SessionId,
-    signaling::{PeerInfoPayload, ServerBroadcastPayload, ServerMessage, TrackBinding},
+    signaling::{
+        PeerInfoPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor, TrackBinding,
+    },
 };
 
 use super::{Command, Commands, ProtocolCore, ProtocolEvent};
@@ -15,12 +17,23 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
             peer_info_commands(payload)
         }
         ServerMessage::PeerLeft(payload) => {
-            remove_track_bindings_for_session(core, &payload.session_id);
-            vec![Command::EmitEvent {
+            let source_snapshot_changed =
+                remove_track_bindings_for_session(core, &payload.session_id);
+            let mut commands = if source_snapshot_changed {
+                vec![Command::EmitEvent {
+                    event: ProtocolEvent::SourceSnapshot {
+                        sources: source_descriptors_from_track_bindings(core),
+                    },
+                }]
+            } else {
+                Vec::new()
+            };
+            commands.push(Command::EmitEvent {
                 event: ProtocolEvent::PeerLeft {
                     session_id: payload.session_id,
                 },
-            }]
+            });
+            commands
         }
         ServerMessage::Broadcast(payload) => broadcast_commands(payload),
         ServerMessage::RecordingChange(payload) => {
@@ -33,19 +46,58 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
 }
 
 fn replace_track_snapshot(core: &mut ProtocolCore, bindings: Vec<TrackBinding>) -> Commands {
+    let had_source_descriptors = core
+        .track_bindings
+        .values()
+        .any(|binding| binding.source.is_some());
+    let next_sources = source_descriptors_from_bindings(&bindings);
     core.track_bindings = bindings
         .iter()
         .cloned()
         .map(|binding| (binding.mid.clone(), binding))
         .collect::<BTreeMap<_, _>>();
-    vec![Command::EmitEvent {
+    let mut commands = vec![Command::EmitEvent {
         event: ProtocolEvent::TrackSnapshot { bindings },
-    }]
+    }];
+    if had_source_descriptors || !next_sources.is_empty() {
+        let sources = next_sources.values().cloned().collect();
+        commands.push(Command::EmitEvent {
+            event: ProtocolEvent::SourceSnapshot { sources },
+        });
+    }
+    commands
 }
 
-fn remove_track_bindings_for_session(core: &mut ProtocolCore, session_id: &SessionId) {
-    core.track_bindings
-        .retain(|_, binding| &binding.session_id != session_id);
+fn remove_track_bindings_for_session(core: &mut ProtocolCore, session_id: &SessionId) -> bool {
+    let mut removed_source_descriptors = false;
+    core.track_bindings.retain(|_, binding| {
+        let remove = &binding.session_id == session_id;
+        removed_source_descriptors |= remove && binding.source.is_some();
+        !remove
+    });
+    removed_source_descriptors
+}
+
+fn source_descriptors_from_bindings(
+    bindings: &[TrackBinding],
+) -> BTreeMap<String, SourceDescriptor> {
+    bindings
+        .iter()
+        .filter_map(|binding| {
+            let source = binding.source.clone()?;
+            Some((source.source_id.clone(), source))
+        })
+        .collect()
+}
+
+fn source_descriptors_from_track_bindings(core: &ProtocolCore) -> Vec<SourceDescriptor> {
+    let mut sources = BTreeMap::new();
+    for binding in core.track_bindings.values() {
+        if let Some(source) = binding.source.clone() {
+            sources.insert(source.source_id.clone(), source);
+        }
+    }
+    sources.into_values().collect()
 }
 
 fn peer_info_commands(payload: PeerInfoPayload) -> Commands {

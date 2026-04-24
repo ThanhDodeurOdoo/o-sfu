@@ -6,6 +6,7 @@ import type {
     RecordingStopCode,
     SessionId,
     SessionInfo,
+    SourceDescriptor,
     StreamType
 } from "./public_api.js";
 
@@ -69,6 +70,7 @@ export interface TrackBinding {
     sessionId: SessionId;
     type: StreamType;
     active: boolean;
+    source?: SourceDescriptor;
 }
 
 export interface PeerInfoPayload {

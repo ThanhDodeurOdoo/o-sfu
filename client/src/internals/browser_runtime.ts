@@ -1,4 +1,5 @@
 import {
+    CLIENT_UPDATE,
     CLIENT_LOG_LEVEL,
     type ClientLogDetail,
     type ClientUpdateDetail,
@@ -214,6 +215,19 @@ export class BrowserRuntime {
                     `received ${command.bindings.length} remote track bindings`
                 );
                 hooks.remoteTracks.replaceTrackBindings(command.bindings, hooks.onUpdate);
+                return [];
+            case CommandKind.REPLACE_SOURCE_DESCRIPTORS:
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.DEBUG,
+                    `received ${command.sources.length} remote source descriptors`
+                );
+                hooks.onUpdate({
+                    name: CLIENT_UPDATE.SOURCE,
+                    payload: {
+                        sources: command.sources
+                    }
+                });
                 return [];
             case CommandKind.REMOVE_SESSION_TRACKS:
                 emitRuntimeLog(

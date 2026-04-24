@@ -5,7 +5,9 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use crate::runtime::ConnectionId;
-use crate::runtime::source_model::{ConsumerSourceSelection, PublishedSourceId};
+use crate::runtime::source_model::{
+    ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+};
 use crate::runtime::transport_adapter::TransportMediaId;
 use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType};
 
@@ -93,6 +95,7 @@ pub(crate) struct RemoteTrackBootstrap {
     mid: String,
     producer_id: ProducerRuntimeId,
     rtp_parameters: RouterRtpParameters,
+    source_descriptor: PublishedSourceDescriptor,
     session_id: SessionId,
     active: bool,
     stream_type: StreamType,
@@ -338,6 +341,7 @@ impl ChannelState {
         if !target.producer.matches_pending_producer(producer) {
             return None;
         }
+        let source_descriptor = self.sources.get(&target.producer.source_id)?.clone();
         let consumer_key = ConsumerKey::new(&target.consumer_session_id, target.source_id());
         if self.consumer_bootstrap_exists(&consumer_key) {
             return None;
@@ -379,6 +383,7 @@ impl ChannelState {
                         .map_or_else(|| consumer_id.into_wire_id(), ToOwned::to_owned),
                     producer_id: prepared_producer.producer_id,
                     rtp_parameters: negotiated_rtp_parameters,
+                    source_descriptor,
                     session_id: prepared_producer.owner_session_id.clone(),
                     active: prepared_producer.active.unwrap_or(true),
                     stream_type: prepared_producer.stream_type,
@@ -778,6 +783,10 @@ impl RemoteTrackBootstrap {
 
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session_id
+    }
+
+    pub(crate) fn source_descriptor(&self) -> &PublishedSourceDescriptor {
+        &self.source_descriptor
     }
 
     pub(crate) const fn active(&self) -> bool {

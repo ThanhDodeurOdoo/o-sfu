@@ -4,8 +4,9 @@ use super::{
     AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse, Envelope,
     EnvelopeDecodeError, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
     RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage,
-    ServerRequest, ServerResponse, SessionDescriptionPayload, StreamIntentPayload,
-    SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
+    ServerRequest, ServerResponse, SessionDescriptionPayload, SourceDescriptor,
+    SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
+    WebSocketCloseCode, WelcomePayload,
 };
 use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
@@ -215,6 +216,7 @@ fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> ser
         session_id: SessionId::Integer(5),
         stream_type: StreamType::Camera,
         active: true,
+        source: None,
     }])
     .into_envelope()?;
     assert_eq!(
@@ -262,6 +264,70 @@ fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> ser
             "p": {
                 "sessionId": 9,
             },
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::Result<()> {
+    let source = SourceDescriptor {
+        source_id: String::from("source-7"),
+        session_id: SessionId::Integer(5),
+        stream_type: StreamType::Camera,
+        active: true,
+        mid: Some(String::from("0")),
+        encodings: vec![
+            SourceEncodingDescriptor {
+                encoding_id: String::from("encoding-1"),
+                rid: Some(String::from("lo")),
+                max_bitrate: Some(150_000),
+            },
+            SourceEncodingDescriptor {
+                encoding_id: String::from("encoding-2"),
+                rid: Some(String::from("hi")),
+                max_bitrate: Some(900_000),
+            },
+        ],
+    };
+    let track_update = ServerMessage::Tracks(vec![TrackBinding {
+        mid: String::from("0"),
+        session_id: SessionId::Integer(5),
+        stream_type: StreamType::Camera,
+        active: true,
+        source: Some(source),
+    }])
+    .into_envelope()?;
+
+    assert_eq!(
+        serde_json::to_value(&track_update)?,
+        json!({
+            "t": "tracks",
+            "p": [{
+                "mid": "0",
+                "sessionId": 5,
+                "type": "camera",
+                "active": true,
+                "source": {
+                    "sourceId": "source-7",
+                    "sessionId": 5,
+                    "type": "camera",
+                    "active": true,
+                    "mid": "0",
+                    "encodings": [
+                        {
+                            "encodingId": "encoding-1",
+                            "rid": "lo",
+                            "maxBitrate": 150_000,
+                        },
+                        {
+                            "encodingId": "encoding-2",
+                            "rid": "hi",
+                            "maxBitrate": 900_000,
+                        },
+                    ],
+                },
+            }],
         })
     );
     Ok(())

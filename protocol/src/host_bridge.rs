@@ -9,7 +9,7 @@ use crate::{
         Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
-    signaling::{RequestId, TrackBinding},
+    signaling::{RequestId, SourceDescriptor, TrackBinding},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -96,6 +96,9 @@ pub enum HostCommand {
     ReplaceTrackBindings {
         bindings: Vec<TrackBinding>,
     },
+    ReplaceSourceDescriptors {
+        sources: Vec<SourceDescriptor>,
+    },
     RemoveSessionTracks {
         #[serde(rename = "sessionId")]
         session_id: SessionId,
@@ -130,6 +133,9 @@ fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
     match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
             vec![HostCommand::ReplaceTrackBindings { bindings }]
+        }
+        ProtocolEvent::SourceSnapshot { sources } => {
+            vec![HostCommand::ReplaceSourceDescriptors { sources }]
         }
         ProtocolEvent::PeerLeft { session_id } => vec![
             HostCommand::RemoveSessionTracks {
@@ -225,7 +231,7 @@ fn project_bundle_update(event: ProtocolEvent) -> Option<BundleUpdate> {
                 .map(|peer| (bundle_session_info_key(&peer.session_id), peer.info))
                 .collect::<BundleSessionInfoSnapshotById>(),
         ),
-        ProtocolEvent::TrackSnapshot { .. } => return None,
+        ProtocolEvent::TrackSnapshot { .. } | ProtocolEvent::SourceSnapshot { .. } => return None,
         ProtocolEvent::PeerInfo { session_id, info } => BundleUpdate::SessionInfoChange(
             [(bundle_session_info_key(&session_id), info)]
                 .into_iter()
@@ -250,7 +256,7 @@ mod tests {
         bundle_api::BundleConnectionState,
         core::{Command, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent},
         shared::{SessionId, StreamType},
-        signaling::{RequestId, TrackBinding},
+        signaling::{RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding},
     };
 
     #[test]
@@ -299,6 +305,7 @@ mod tests {
                         session_id: SessionId::Integer(7),
                         stream_type: StreamType::Camera,
                         active: true,
+                        source: None,
                     }],
                 },
             },
@@ -344,6 +351,45 @@ mod tests {
                     "streamType": "screen"
                 }
             ])
+        );
+    }
+
+    #[test]
+    fn host_command_bridge_projects_source_snapshots() {
+        let commands = host_commands(vec![Command::EmitEvent {
+            event: ProtocolEvent::SourceSnapshot {
+                sources: vec![SourceDescriptor {
+                    source_id: String::from("source-7"),
+                    session_id: SessionId::Integer(7),
+                    stream_type: StreamType::Camera,
+                    active: true,
+                    mid: Some(String::from("0")),
+                    encodings: vec![SourceEncodingDescriptor {
+                        encoding_id: String::from("encoding-1"),
+                        rid: Some(String::from("lo")),
+                        max_bitrate: Some(150_000),
+                    }],
+                }],
+            },
+        }]);
+
+        assert_eq!(
+            serde_json::to_value(commands).unwrap_or_default(),
+            json!([{
+                "kind": "replaceSourceDescriptors",
+                "sources": [{
+                    "sourceId": "source-7",
+                    "sessionId": 7,
+                    "type": "camera",
+                    "active": true,
+                    "mid": "0",
+                    "encodings": [{
+                        "encodingId": "encoding-1",
+                        "rid": "lo",
+                        "maxBitrate": 150_000
+                    }]
+                }]
+            }])
         );
     }
 

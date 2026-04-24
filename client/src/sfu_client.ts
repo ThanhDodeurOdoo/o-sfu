@@ -12,6 +12,7 @@ import {
     type RecordingState,
     type SessionId,
     type SessionInfo,
+    type SourceDescriptor,
     type SfuStats,
     type SfuClientSurface,
     type StreamType,
@@ -52,6 +53,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public errors: Error[] = [];
     public recordingState: RecordingState = {};
+    public sourceDescriptors: readonly SourceDescriptor[] = [];
     /**
      * Compatibility/debug view of the remote consumer map kept for Discuss
      * diagnostics and the bundle contract (exposed to odoo).
@@ -265,12 +267,17 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             update.payload.state
         ) {
             this.recordingState = update.payload.state;
+            return;
+        }
+        if (update.name === CLIENT_UPDATE.SOURCE) {
+            this.sourceDescriptors = update.payload.sources;
         }
     }
 
     private _handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
         this.errors.push(resolvedError);
+        this.sourceDescriptors = [];
         this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${resolvedError.message}`);
         this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
@@ -328,6 +335,12 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
                     `remote ${update.payload.type} track update for session ${update.payload.sessionId}: active=${update.payload.active}, muted=${update.payload.track.muted}, readyState=${update.payload.track.readyState}`
+                );
+                break;
+            case CLIENT_UPDATE.SOURCE:
+                this._emitLog(
+                    CLIENT_LOG_LEVEL.DEBUG,
+                    `received ${update.payload.sources.length} remote source descriptors`
                 );
                 break;
             case CLIENT_UPDATE.DISCONNECT:

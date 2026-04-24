@@ -10,6 +10,10 @@ export type ConnectionState =
 
 export type StreamType = "audio" | "camera" | "screen";
 
+export type PublishedSourceId = string;
+
+export type SourceEncodingId = string;
+
 export interface ConnectOptions {
     channelUUID?: string;
     iceServers?: RTCIceServer[];
@@ -19,6 +23,21 @@ export interface DownloadStates {
     audio?: boolean;
     camera?: boolean;
     screen?: boolean;
+}
+
+export interface SourceEncodingDescriptor {
+    encodingId: SourceEncodingId;
+    rid?: string;
+    maxBitrate?: number;
+}
+
+export interface SourceDescriptor {
+    sourceId: PublishedSourceId;
+    sessionId: SessionId;
+    type: StreamType;
+    active: boolean;
+    mid?: string;
+    encodings: SourceEncodingDescriptor[];
 }
 
 export interface SessionInfo {
@@ -91,6 +110,7 @@ export type RecordingStopCode =
 
 export const CLIENT_UPDATE = {
     TRACK: "track",
+    SOURCE: "source",
     DISCONNECT: "disconnect",
     INFO_CHANGE: "info_change",
     BROADCAST: "broadcast",
@@ -117,6 +137,10 @@ export interface TrackUpdateDetail {
     active: boolean;
 }
 
+export interface SourceUpdateDetail {
+    sources: SourceDescriptor[];
+}
+
 export interface DisconnectUpdateDetail {
     sessionId: SessionId;
 }
@@ -135,6 +159,7 @@ export interface ChannelInfoChangeDetail {
 
 export type ClientUpdateDetail =
     | { name: typeof CLIENT_UPDATE.TRACK; payload: TrackUpdateDetail }
+    | { name: typeof CLIENT_UPDATE.SOURCE; payload: SourceUpdateDetail }
     | { name: typeof CLIENT_UPDATE.DISCONNECT; payload: DisconnectUpdateDetail }
     | { name: typeof CLIENT_UPDATE.INFO_CHANGE; payload: InfoChangeUpdateDetail }
     | { name: typeof CLIENT_UPDATE.BROADCAST; payload: BroadcastUpdateDetail }
@@ -153,6 +178,7 @@ export interface SfuClientSurface extends EventTarget {
     readonly errors: Error[];
     readonly availableFeatures: AvailableFeatures;
     readonly recordingState: RecordingState;
+    readonly sourceDescriptors: readonly SourceDescriptor[];
 
     connect(url: string, jwt: string, options?: ConnectOptions): void;
     disconnect(): void;

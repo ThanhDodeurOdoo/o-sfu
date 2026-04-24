@@ -150,6 +150,34 @@ test("wrapped protocol core validates replaceTrackBindings host commands", () =>
     );
 });
 
+test("wrapped protocol core validates source descriptors", () => {
+    const core = wrapProtocolCoreBindings(
+        validCore({
+            connect() {
+                return [
+                    {
+                        kind: "replaceSourceDescriptors",
+                        sources: [
+                            {
+                                active: true,
+                                encodings: [{ encodingId: "encoding-1", maxBitrate: -1 }],
+                                sessionId: 7,
+                                sourceId: "source-1",
+                                type: "camera"
+                            }
+                        ]
+                    }
+                ];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => core.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.sources[0].encodings[0].maxBitrate must be a non-negative integer when provided"
+    );
+});
+
 test("wrapped protocol core rejects NaN and infinite numeric session IDs", () => {
     const nanSessionIdCore = wrapProtocolCoreBindings(
         validCore({

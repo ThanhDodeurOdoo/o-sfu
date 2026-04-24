@@ -143,8 +143,26 @@ async fn assert_track_snapshot(
     bindings: Vec<TrackBinding>,
 ) -> Option<()> {
     let batch = read_protocol_server_batch(websocket).await?;
-    let messages = protocol_server_messages(&batch)?;
-    assert_eq!(messages, vec![ServerMessage::Tracks(bindings)]);
+    let mut messages = protocol_server_messages(&batch)?;
+    let Some(ServerMessage::Tracks(actual_bindings)) = messages.pop() else {
+        panic!("expected track snapshot");
+    };
+    assert!(messages.is_empty());
+    assert_eq!(actual_bindings.len(), bindings.len());
+    for (actual, expected) in actual_bindings.iter().zip(bindings.iter()) {
+        assert_eq!(actual.mid, expected.mid);
+        assert_eq!(actual.session_id, expected.session_id);
+        assert_eq!(actual.stream_type, expected.stream_type);
+        assert_eq!(actual.active, expected.active);
+        let Some(source) = actual.source.as_ref() else {
+            panic!("track snapshot should carry source descriptors");
+        };
+        assert_eq!(source.session_id, expected.session_id);
+        assert_eq!(source.stream_type, expected.stream_type);
+        assert_eq!(source.active, expected.active);
+        assert_eq!(source.mid.as_deref(), Some(expected.mid.as_str()));
+        assert_eq!(source.encodings.len(), 1);
+    }
     Some(())
 }
 
@@ -163,6 +181,7 @@ fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
         session_id: SessionId::Integer(81),
         stream_type,
         active: true,
+        source: None,
     }
 }
 

@@ -58,15 +58,20 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         bob.read_server_frame().await.is_some(),
         "bob should consume translated tracks snapshot"
     );
-    assert_eq!(
-        bob.core.track_binding("cam-0"),
-        Some(&TrackBinding {
-            mid: String::from("cam-0"),
-            session_id: ProtocolSessionId::Integer(51),
-            stream_type: ProtocolStreamType::Camera,
-            active: true,
-        })
-    );
+    let Some(track_binding) = bob.core.track_binding("cam-0") else {
+        panic!("subscriber should keep the camera track binding");
+    };
+    assert_eq!(track_binding.session_id, ProtocolSessionId::Integer(51));
+    assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
+    assert!(track_binding.active);
+    let Some(source) = track_binding.source.as_ref() else {
+        panic!("track binding should carry the additive source descriptor");
+    };
+    assert_eq!(source.source_id, "source-1");
+    assert_eq!(source.session_id, ProtocolSessionId::Integer(51));
+    assert_eq!(source.stream_type, ProtocolStreamType::Camera);
+    assert_eq!(source.mid.as_deref(), Some("cam-0"));
+    assert_eq!(source.encodings.len(), 1);
     assert!(
         bob.read_server_frame().await.is_some(),
         "bob should consume the serialized renegotiation request after track bootstrap"
@@ -156,15 +161,19 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the translated track snapshot after publish commit"
     );
-    assert_eq!(
-        bob.core.track_binding("fake-mid-0"),
-        Some(&TrackBinding {
-            mid: String::from("fake-mid-0"),
-            session_id: ProtocolSessionId::Integer(53),
-            stream_type: ProtocolStreamType::Camera,
-            active: true,
-        })
-    );
+    let Some(track_binding) = bob.core.track_binding("fake-mid-0") else {
+        panic!("subscriber should keep the camera track binding");
+    };
+    assert_eq!(track_binding.session_id, ProtocolSessionId::Integer(53));
+    assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
+    assert!(track_binding.active);
+    let Some(source) = track_binding.source.as_ref() else {
+        panic!("track binding should carry the additive source descriptor");
+    };
+    assert_eq!(source.session_id, ProtocolSessionId::Integer(53));
+    assert_eq!(source.stream_type, ProtocolStreamType::Camera);
+    assert_eq!(source.mid.as_deref(), Some("fake-mid-0"));
+    assert_eq!(source.encodings.len(), 1);
     assert!(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the follow-up renegotiation request for the new remote track"

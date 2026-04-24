@@ -12,7 +12,8 @@ mod tests;
 pub use catalog::{
     AuthPayload, ClientBroadcastPayload, PeerInfoPayload, PeerLeftPayload, PeerSnapshot,
     RecordingActionResult, RecordingOptions, ServerBroadcastPayload, SessionDescriptionPayload,
-    StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
+    SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload,
+    TrackBinding, WelcomePayload,
 };
 pub use close_code::WebSocketCloseCode;
 pub use codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope};

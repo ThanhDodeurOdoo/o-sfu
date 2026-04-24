@@ -41,8 +41,8 @@ use crate::{
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
         EnvelopeBatch, PeerSnapshot, RecordingOptions, RequestId, ServerEnvelope, ServerMessage,
-        ServerRequest, ServerResponse, StreamIntentPayload, SubscribePayload, TrackBinding,
-        WebSocketCloseCode, WelcomePayload,
+        ServerRequest, ServerResponse, SourceDescriptor, StreamIntentPayload, SubscribePayload,
+        TrackBinding, WebSocketCloseCode, WelcomePayload,
     },
 };
 use outbound_batch::{FlushMode, OutboundBatcher};
@@ -140,6 +140,9 @@ pub enum ProtocolEvent {
     },
     TrackSnapshot {
         bindings: Vec<TrackBinding>,
+    },
+    SourceSnapshot {
+        sources: Vec<SourceDescriptor>,
     },
     PeerInfo {
         session_id: SessionId,
@@ -529,11 +532,22 @@ impl ProtocolCore {
     fn clear_runtime_state_with_commands(&mut self) -> Commands {
         let mut commands = self.outbound_batch.clear_with_commands();
         commands.extend(self.request_tracker.clear_with_commands());
+        let had_source_descriptors = self
+            .track_bindings
+            .values()
+            .any(|binding| binding.source.is_some());
         if !self.track_bindings.is_empty() {
             self.track_bindings.clear();
             commands.push(Command::EmitEvent {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: Vec::new(),
+                },
+            });
+        }
+        if had_source_descriptors {
+            commands.push(Command::EmitEvent {
+                event: ProtocolEvent::SourceSnapshot {
+                    sources: Vec::new(),
                 },
             });
         }

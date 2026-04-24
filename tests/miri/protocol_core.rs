@@ -262,6 +262,7 @@ fn disconnect_clears_pending_requests_track_snapshots_and_runtime_obligations() 
             session_id: SessionId::String("peer-1".to_owned()),
             stream_type: StreamType::Audio,
             active: true,
+            source: None,
         },
     ])));
     assert_eq!(
@@ -273,6 +274,7 @@ fn disconnect_clears_pending_requests_track_snapshots_and_runtime_obligations() 
                     session_id: SessionId::String("peer-1".to_owned()),
                     stream_type: StreamType::Audio,
                     active: true,
+                    source: None,
                 }],
             },
         }]

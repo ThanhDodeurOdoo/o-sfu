@@ -3,11 +3,13 @@ use std::collections::BTreeMap;
 use o_sfu_protocol::{
     shared::{SessionId, SessionInfo, StreamType},
     signaling::{
-        PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, TrackBinding,
+        PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor,
+        SourceEncodingDescriptor, TrackBinding,
     },
 };
 
 use crate::runtime::channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate};
+use crate::runtime::source_model::PublishedSourceDescriptor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TranslatedServerMessage {
@@ -75,6 +77,7 @@ impl RemoteTrackProjection {
                 session_id: payload.session_id().clone(),
                 stream_type: payload.stream_type(),
                 active: payload.active(),
+                source: Some(source_descriptor_from_bootstrap(payload)),
             },
         );
     }
@@ -138,6 +141,9 @@ impl RemoteTrackProjection {
             };
             if binding.active != next_active {
                 binding.active = next_active;
+                if let Some(source) = binding.source.as_mut() {
+                    source.active = next_active;
+                }
                 changed = true;
             }
         }
@@ -157,6 +163,9 @@ impl RemoteTrackProjection {
             }
             if binding.active != active {
                 binding.active = active;
+                if let Some(source) = binding.source.as_mut() {
+                    source.active = active;
+                }
                 changed = true;
             }
         }
@@ -170,4 +179,27 @@ impl RemoteTrackProjection {
         });
         self.bindings_by_mid.len() != binding_count
     }
+}
+
+fn source_descriptor_from_bootstrap(payload: &RemoteTrackBootstrap) -> SourceDescriptor {
+    let source = payload.source_descriptor();
+    SourceDescriptor {
+        source_id: source.source_id().to_string(),
+        session_id: payload.session_id().clone(),
+        stream_type: payload.stream_type(),
+        active: payload.active(),
+        mid: Some(payload.mid().to_owned()),
+        encodings: source_encodings(source),
+    }
+}
+
+fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDescriptor> {
+    source
+        .encodings()
+        .map(|encoding| SourceEncodingDescriptor {
+            encoding_id: encoding.encoding_id().to_string(),
+            rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
+            max_bitrate: encoding.max_bitrate(),
+        })
+        .collect()
 }

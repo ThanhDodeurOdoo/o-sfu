@@ -275,6 +275,7 @@ class FakeProtocolCore {
         this.subscriptionUpdates = [];
         this.submittedAnswers = [];
         this.publicationUpdates = [];
+        this.sourceDescriptors = new Map();
         this.trackBindings = new Map();
         this.transportReadyCalls = 0;
         this.transportFailureState = null;
@@ -297,6 +298,7 @@ class FakeProtocolCore {
         this.state = "disconnected";
         this.features = { ...EMPTY_FEATURES };
         this.recordingState = {};
+        this.sourceDescriptors.clear();
         this.trackBindings.clear();
         return [{ kind: "emitStateChange", state: "disconnected" }];
     }
@@ -445,6 +447,21 @@ class FakeProtocolCore {
                             name: CLIENT_UPDATE.INFO_CHANGE,
                             payload: new Map([["31", { isRaisingHand: true }]])
                         }
+                    }
+                ];
+            case "source-descriptors":
+                this.sourceDescriptors.set("source-1", {
+                    active: true,
+                    encodings: [{ encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" }],
+                    mid: "0",
+                    sessionId: 42,
+                    sourceId: "source-1",
+                    type: "camera"
+                });
+                return [
+                    {
+                        kind: "replaceSourceDescriptors",
+                        sources: [...this.sourceDescriptors.values()]
                     }
                 ];
             case "track-inactive":
@@ -960,6 +977,49 @@ test("info_change map payloads are normalized into plain objects", async () => {
             }
         }
     ]);
+});
+
+test("source descriptor updates are exposed as additive client state", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const client = new SfuClient({
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const receivedUpdates = [];
+    client.addEventListener("update", (event) => {
+        receivedUpdates.push(event.detail);
+    });
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("source-descriptors");
+    await tick();
+
+    const expectedSources = [
+        {
+            active: true,
+            encodings: [{ encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" }],
+            mid: "0",
+            sessionId: 42,
+            sourceId: "source-1",
+            type: "camera"
+        }
+    ];
+    assert.deepEqual(receivedUpdates, [
+        {
+            name: CLIENT_UPDATE.SOURCE,
+            payload: {
+                sources: expectedSources
+            }
+        }
+    ]);
+    assert.deepEqual(client.sourceDescriptors, expectedSources);
 });
 
 test("renegotiation attaches pending audio only to upload-eligible mids", async () => {
