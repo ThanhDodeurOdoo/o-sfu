@@ -34,7 +34,9 @@ use crate::{
     runtime::{
         ChannelInstanceId,
         metrics::RuntimeMetrics,
-        transport_adapter::{ActiveSpeakerSource, TransportAdapterError},
+        transport_adapter::{
+            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError,
+        },
     },
 };
 
@@ -62,6 +64,7 @@ pub(crate) fn handle_worker_command(
     match command {
         RtcWorkerCommand::CreateInitialSessionOffer { .. }
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
+        | RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { .. }
         | RtcWorkerCommand::NextActiveSpeakerDeadline { .. }
         | RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
@@ -157,6 +160,9 @@ fn handle_negotiation_command(
         RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response } => {
             respond_active_speaker_source_snapshot(state, response);
         }
+        RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response } => {
+            respond_active_speaker_diagnostic_snapshot(state, response);
+        }
         RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
             respond_next_active_speaker_deadline(state, response);
         }
@@ -187,6 +193,14 @@ fn respond_active_speaker_source_snapshot(
     response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
 ) {
     let snapshot = state.active_speaker_source_snapshot(Instant::now());
+    let _ = response.send(Ok(snapshot));
+}
+
+fn respond_active_speaker_diagnostic_snapshot(
+    state: &RtcBootstrapState,
+    response: oneshot::Sender<Result<Vec<ActiveSpeakerSourceDiagnostic>, TransportAdapterError>>,
+) {
+    let snapshot = state.active_speaker_diagnostic_snapshot(Instant::now());
     let _ = response.send(Ok(snapshot));
 }
 

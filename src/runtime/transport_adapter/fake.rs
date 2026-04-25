@@ -18,8 +18,9 @@ use super::source_policy::SourcePolicySignal;
 #[cfg(test)]
 use crate::runtime::ChannelInstanceId;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer,
-    SourcePacketGate, TransportAdapterError, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+    ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot,
+    SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
@@ -279,6 +280,25 @@ impl FakeWebRtcAdapter {
             Ok(active_speaker_sources) => active_speaker_sources.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
+    }
+
+    pub(crate) async fn active_speaker_diagnostic_snapshot(
+        &self,
+    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        self.active_speaker_source_snapshot()
+            .await
+            .into_iter()
+            .map(|source| {
+                ActiveSpeakerSourceDiagnostic::new(
+                    source.transport_media_id(),
+                    ActiveSpeakerActivityState::Active,
+                    ActiveSpeakerActivityReason::Vad,
+                    None,
+                    0,
+                    None,
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn receiver_bandwidth_snapshot(

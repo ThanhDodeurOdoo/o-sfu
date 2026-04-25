@@ -27,10 +27,10 @@ pub(crate) use queries::{
 };
 pub(crate) use store::{DiagnosticsEventData, DiagnosticsStore};
 pub(crate) use types::{
-    DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
-    DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionLookup,
-    DiagnosticsSessionTransport, DiagnosticsSessionView, DiagnosticsSource,
-    DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
-    DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection, health_json_value,
-    maybe_health_json_value,
+    DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
+    DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState,
+    DiagnosticsSessionLookup, DiagnosticsSessionTransport, DiagnosticsSessionView,
+    DiagnosticsSource, DiagnosticsSourceEncoding, DiagnosticsSourceSelection,
+    DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
+    health_json_value, maybe_health_json_value,
 };

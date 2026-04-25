@@ -12,7 +12,8 @@ use super::{commands::RemoteSourceControl, state::RtcBootstrapState};
 use crate::runtime::{
     ChannelInstanceId,
     transport_adapter::{
-        ActiveSpeakerSource, TransportAdapterError, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError,
+        TransportMediaId, TransportSessionKey,
     },
 };
 
@@ -263,6 +264,13 @@ impl RtcBootstrapState {
 
     pub(super) fn active_speaker_source_snapshot(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
         self.route_control.active_speaker_sources(now)
+    }
+
+    pub(super) fn active_speaker_diagnostic_snapshot(
+        &self,
+        now: Instant,
+    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        self.route_control.active_speaker_diagnostics(now)
     }
 
     pub(super) fn expired_active_speaker_channel_instance_ids(

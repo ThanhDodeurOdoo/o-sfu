@@ -248,6 +248,41 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
 }
 
 #[tokio::test]
+async fn multiparty_without_active_audio_uses_thumbnail_policy_without_featured_camera() {
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
+    publish_camera(&channel, &SessionId::Integer(1), &adapter).await;
+    publish_camera(&channel, &SessionId::Integer(2), &adapter).await;
+
+    let events = fake.snapshot_events();
+    assert_consumer_packet_selection_update(
+        &events,
+        &SessionId::Integer(3),
+        &SessionId::Integer(1),
+        "lo",
+    );
+    assert_consumer_packet_selection_update(
+        &events,
+        &SessionId::Integer(3),
+        &SessionId::Integer(2),
+        "lo",
+    );
+
+    for session_id in [
+        SessionId::Integer(1),
+        SessionId::Integer(2),
+        SessionId::Integer(3),
+    ] {
+        let (_session_id, info) = channel
+            .test_api()
+            .inspect()
+            .session_info_snapshot(&session_id)
+            .await
+            .expect("session info should exist");
+        assert_ne!(info.is_featured, Some(true));
+    }
+}
+
+#[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_sessions_with_fake().await;
@@ -579,6 +614,14 @@ async fn publish_audio_and_camera(
             .await
             .is_some()
     );
+    publish_camera(channel, session_id, adapter).await;
+}
+
+async fn publish_camera(
+    channel: &Arc<Channel>,
+    session_id: &SessionId,
+    adapter: &RuntimeTransportAdapter,
+) {
     assert!(
         channel
             .test_api()

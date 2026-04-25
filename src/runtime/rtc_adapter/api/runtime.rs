@@ -46,8 +46,8 @@ use super::{
 use crate::runtime::{
     ChannelInstanceId,
     transport_adapter::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportAdapterError,
-        TransportBitrateSnapshot, TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
+        TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
     },
 };
 
@@ -226,6 +226,14 @@ impl RtcTransportAdapter {
         self.observability().active_speaker_source_snapshot().await
     }
 
+    pub(crate) async fn active_speaker_diagnostic_snapshot(
+        &self,
+    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        self.observability()
+            .active_speaker_diagnostic_snapshot()
+            .await
+    }
+
     pub(crate) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
         self.observability().next_active_speaker_deadline().await
     }
@@ -285,6 +293,20 @@ impl RtcTransportObservabilityFacade<'_> {
         self.adapter
             .send_worker_command(&worker_handle, |response| {
                 RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
+            })
+            .await
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn active_speaker_diagnostic_snapshot(
+        self,
+    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+            return Vec::new();
+        };
+        self.adapter
+            .send_worker_command(&worker_handle, |response| {
+                RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response }
             })
             .await
             .unwrap_or_default()

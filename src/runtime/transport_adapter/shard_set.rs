@@ -15,8 +15,9 @@ use crate::runtime::{
         config::RtcTransportAdapterShardSetConfig,
         source_policy::SourcePolicySignal,
         types::{
-            ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot,
-            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
+            ReceiverBandwidthSnapshot, TransportAdapterError, TransportBitrateSnapshot,
+            TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -210,7 +211,27 @@ impl RtcTransportAdapterShardSet {
         for shard in &self.extra_shards {
             snapshot.extend(shard.active_speaker_source_snapshot().await);
         }
-        snapshot.sort_by_key(|source| Reverse(source.observed_at()));
+        snapshot.sort_by_key(|source| {
+            (
+                Reverse(source.observed_at()),
+                source.transport_media_id().as_u64(),
+            )
+        });
+        snapshot.dedup_by_key(|source| source.transport_media_id());
+        snapshot
+    }
+
+    pub(super) async fn active_speaker_diagnostic_snapshot(
+        &self,
+    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        let mut snapshot = self
+            .primary_shard
+            .active_speaker_diagnostic_snapshot()
+            .await;
+        for shard in &self.extra_shards {
+            snapshot.extend(shard.active_speaker_diagnostic_snapshot().await);
+        }
+        snapshot.sort_by_key(|source| source.transport_media_id().as_u64());
         snapshot.dedup_by_key(|source| source.transport_media_id());
         snapshot
     }

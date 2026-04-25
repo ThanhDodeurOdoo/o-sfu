@@ -10,9 +10,9 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer,
-        SourcePacketGate, TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
-        TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
+        ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
+        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -404,6 +404,12 @@ impl ObservabilityPort for RuntimeTransportAdapter {
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         dispatch_transport_backend!(self, |backend| {
             backend.active_speaker_source_snapshot().await
+        })
+    }
+
+    async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        dispatch_transport_backend!(self, |backend| {
+            backend.active_speaker_diagnostic_snapshot().await
         })
     }
 

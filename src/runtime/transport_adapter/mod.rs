@@ -23,8 +23,9 @@ pub(crate) use source_policy::{
 };
 pub use types::TransportSessionKey;
 pub(crate) use types::{
-    ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer,
-    SessionUploadEncoding, SessionUploadKind, SessionUploadSlot, SourcePacketGate,
+    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+    ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot,
+    SessionOffer, SessionUploadEncoding, SessionUploadKind, SessionUploadSlot, SourcePacketGate,
     SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
     TransportResult,
 };

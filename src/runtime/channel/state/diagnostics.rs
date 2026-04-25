@@ -6,17 +6,17 @@ use super::shared::{ChannelState, ConsumerKey};
 use crate::runtime::{
     ConnectionId,
     diagnostics::{
-        DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
-        DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionTransport,
-        DiagnosticsSessionView, DiagnosticsSource, DiagnosticsSourceEncoding,
-        DiagnosticsSourceSelection, DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
-        DiagnosticsTemporalLayerSelection,
+        DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
+        DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState,
+        DiagnosticsSessionTransport, DiagnosticsSessionView, DiagnosticsSource,
+        DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
+        DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
     },
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
         SourceEncodingDescriptor, SourceEncodingId, SourceTemporalLayerId,
     },
-    transport_adapter::TransportMediaId,
+    transport_adapter::{ActiveSpeakerSourceDiagnostic, TransportMediaId},
 };
 
 impl ChannelState {
@@ -66,6 +66,10 @@ impl ChannelState {
     pub(in crate::runtime) fn diagnostics_sources(
         &self,
         incoming_bitrate_by_source: &BTreeMap<PublishedSourceId, u64>,
+        active_speaker_diagnostics_by_media: &BTreeMap<
+            TransportMediaId,
+            ActiveSpeakerSourceDiagnostic,
+        >,
     ) -> Vec<DiagnosticsSource> {
         self.sources
             .values()
@@ -78,8 +82,14 @@ impl ChannelState {
                     .encodings()
                     .map(diagnostics_source_encoding)
                     .collect();
+                let transport_media_id = producer.and_then(|producer| producer.transport_media_id);
                 DiagnosticsSource {
                     active: producer.is_some_and(|producer| producer.active),
+                    active_speaker: diagnostics_active_speaker(
+                        source,
+                        transport_media_id,
+                        active_speaker_diagnostics_by_media,
+                    ),
                     current_incoming_bitrate_bps: incoming_bitrate_by_source
                         .get(&source.source_id())
                         .copied()
@@ -90,9 +100,7 @@ impl ChannelState {
                     owner_session_id: source.owner().session_id().clone(),
                     source_id: source.source_id().as_u64(),
                     stream_type: source.stream_type(),
-                    transport_media_id: producer
-                        .and_then(|producer| producer.transport_media_id)
-                        .map(TransportMediaId::as_u64),
+                    transport_media_id: transport_media_id.map(TransportMediaId::as_u64),
                 }
             })
             .collect()
@@ -288,6 +296,25 @@ fn diagnostics_source_selection(
         temporal_layer_selection,
         upgrade_observations: selection.upgrade_observations(),
     }
+}
+
+fn diagnostics_active_speaker(
+    source: &PublishedSourceDescriptor,
+    transport_media_id: Option<TransportMediaId>,
+    active_speaker_diagnostics_by_media: &BTreeMap<TransportMediaId, ActiveSpeakerSourceDiagnostic>,
+) -> Option<DiagnosticsActiveSpeaker> {
+    if source.media_kind() != o_sfu_router::MediaKind::Audio {
+        return None;
+    }
+    let Some(transport_media_id) = transport_media_id else {
+        return Some(DiagnosticsActiveSpeaker::idle());
+    };
+    Some(
+        active_speaker_diagnostics_by_media
+            .get(&transport_media_id)
+            .copied()
+            .map_or_else(DiagnosticsActiveSpeaker::idle, Into::into),
+    )
 }
 
 #[cfg(test)]

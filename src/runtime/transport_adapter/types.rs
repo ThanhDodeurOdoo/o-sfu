@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use o_sfu_protocol::shared::SessionId;
 use thiserror::Error;
@@ -119,6 +122,91 @@ impl ActiveSpeakerSource {
     #[must_use]
     pub(crate) const fn observed_at(self) -> Instant {
         self.observed_at
+    }
+}
+
+/// Diagnostic state for the transport-owned active-speaker policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActiveSpeakerActivityState {
+    Active,
+    Idle,
+    Blocked,
+    RecentlyExpired,
+}
+
+/// Reason attached to one transport-owned active-speaker diagnostic state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActiveSpeakerActivityReason {
+    Vad,
+    AudioLevel,
+    AudioLevelWarmup,
+    VadFalse,
+    LowNoise,
+    BelowSpeechThreshold,
+    MissingAudioMetadata,
+    Expired,
+    NoMetadata,
+}
+
+/// Read-only explanation for one audio source's active-speaker policy state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActiveSpeakerSourceDiagnostic {
+    transport_media_id: TransportMediaId,
+    state: ActiveSpeakerActivityState,
+    reason: ActiveSpeakerActivityReason,
+    last_audio_level_dbov: Option<i8>,
+    confidence_observations: u8,
+    hold_remaining: Option<Duration>,
+}
+
+impl ActiveSpeakerSourceDiagnostic {
+    #[must_use]
+    pub(crate) const fn new(
+        transport_media_id: TransportMediaId,
+        state: ActiveSpeakerActivityState,
+        reason: ActiveSpeakerActivityReason,
+        last_audio_level_dbov: Option<i8>,
+        confidence_observations: u8,
+        hold_remaining: Option<Duration>,
+    ) -> Self {
+        Self {
+            transport_media_id,
+            state,
+            reason,
+            last_audio_level_dbov,
+            confidence_observations,
+            hold_remaining,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn transport_media_id(self) -> TransportMediaId {
+        self.transport_media_id
+    }
+
+    #[must_use]
+    pub(crate) const fn state(self) -> ActiveSpeakerActivityState {
+        self.state
+    }
+
+    #[must_use]
+    pub(crate) const fn reason(self) -> ActiveSpeakerActivityReason {
+        self.reason
+    }
+
+    #[must_use]
+    pub(crate) const fn last_audio_level_dbov(self) -> Option<i8> {
+        self.last_audio_level_dbov
+    }
+
+    #[must_use]
+    pub(crate) const fn confidence_observations(self) -> u8 {
+        self.confidence_observations
+    }
+
+    #[must_use]
+    pub(crate) const fn hold_remaining(self) -> Option<Duration> {
+        self.hold_remaining
     }
 }
 

@@ -2,6 +2,8 @@
 //!
 //!structs and enums shape returned by the diagnostics tools
 
+use std::time::Duration;
+
 use o_sfu_protocol::shared::{RecordingState, SessionId, SessionInfo, StreamType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -9,6 +11,9 @@ use serde_json::{Map, Value, json};
 use crate::runtime::{
     rtc_adapter::TransportSessionHealth,
     source_model::{SourceRoomPolicySelector, SourceSelector},
+    transport_adapter::{
+        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +68,54 @@ pub(crate) enum DiagnosticsTemporalLayerMetadata {
 pub(crate) enum DiagnosticsTemporalLayerSelection {
     NotSelected,
     Selected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticsActiveSpeakerState {
+    Active,
+    Idle,
+    Blocked,
+    RecentlyExpired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticsActiveSpeakerReason {
+    Vad,
+    AudioLevel,
+    AudioLevelWarmup,
+    VadFalse,
+    LowNoise,
+    BelowSpeechThreshold,
+    MissingAudioMetadata,
+    Expired,
+    NoMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiagnosticsActiveSpeaker {
+    pub(crate) state: DiagnosticsActiveSpeakerState,
+    pub(crate) reason: DiagnosticsActiveSpeakerReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_audio_level_dbov: Option<i8>,
+    pub(crate) confidence_observations: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) hold_remaining_ms: Option<u64>,
+}
+
+impl DiagnosticsActiveSpeaker {
+    #[must_use]
+    pub(crate) const fn idle() -> Self {
+        Self {
+            state: DiagnosticsActiveSpeakerState::Idle,
+            reason: DiagnosticsActiveSpeakerReason::NoMetadata,
+            last_audio_level_dbov: None,
+            confidence_observations: 0,
+            hold_remaining_ms: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +185,8 @@ pub(crate) struct DiagnosticsSourceEncoding {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiagnosticsSource {
     pub(crate) active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_speaker: Option<DiagnosticsActiveSpeaker>,
     pub(crate) current_incoming_bitrate_bps: u64,
     pub(crate) encodings: Vec<DiagnosticsSourceEncoding>,
     pub(crate) media_kind: DiagnosticsMediaKind,
@@ -284,6 +339,45 @@ impl From<TransportSessionHealth> for DiagnosticsTransportHealth {
     }
 }
 
+impl From<ActiveSpeakerActivityState> for DiagnosticsActiveSpeakerState {
+    fn from(state: ActiveSpeakerActivityState) -> Self {
+        match state {
+            ActiveSpeakerActivityState::Active => Self::Active,
+            ActiveSpeakerActivityState::Idle => Self::Idle,
+            ActiveSpeakerActivityState::Blocked => Self::Blocked,
+            ActiveSpeakerActivityState::RecentlyExpired => Self::RecentlyExpired,
+        }
+    }
+}
+
+impl From<ActiveSpeakerActivityReason> for DiagnosticsActiveSpeakerReason {
+    fn from(reason: ActiveSpeakerActivityReason) -> Self {
+        match reason {
+            ActiveSpeakerActivityReason::Vad => Self::Vad,
+            ActiveSpeakerActivityReason::AudioLevel => Self::AudioLevel,
+            ActiveSpeakerActivityReason::AudioLevelWarmup => Self::AudioLevelWarmup,
+            ActiveSpeakerActivityReason::VadFalse => Self::VadFalse,
+            ActiveSpeakerActivityReason::LowNoise => Self::LowNoise,
+            ActiveSpeakerActivityReason::BelowSpeechThreshold => Self::BelowSpeechThreshold,
+            ActiveSpeakerActivityReason::MissingAudioMetadata => Self::MissingAudioMetadata,
+            ActiveSpeakerActivityReason::Expired => Self::Expired,
+            ActiveSpeakerActivityReason::NoMetadata => Self::NoMetadata,
+        }
+    }
+}
+
+impl From<ActiveSpeakerSourceDiagnostic> for DiagnosticsActiveSpeaker {
+    fn from(diagnostic: ActiveSpeakerSourceDiagnostic) -> Self {
+        Self {
+            state: diagnostic.state().into(),
+            reason: diagnostic.reason().into(),
+            last_audio_level_dbov: diagnostic.last_audio_level_dbov(),
+            confidence_observations: diagnostic.confidence_observations(),
+            hold_remaining_ms: diagnostic.hold_remaining().map(duration_millis),
+        }
+    }
+}
+
 impl From<o_sfu_router::MediaKind> for DiagnosticsMediaKind {
     fn from(value: o_sfu_router::MediaKind) -> Self {
         match value {
@@ -319,6 +413,10 @@ impl From<SourceSelector> for DiagnosticsSourceSelectionReason {
             SourceSelector::RoomPolicy(_) => Self::RoomPolicy,
         }
     }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) fn health_json_value(health: TransportSessionHealth) -> Value {

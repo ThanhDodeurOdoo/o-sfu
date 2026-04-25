@@ -11,7 +11,8 @@ use super::{relay_registry::RelayTargetId, route_control::PacketLayerGate};
 use crate::runtime::{
     ChannelInstanceId,
     transport_adapter::{
-        ActiveSpeakerSource, SessionOffer, TransportMediaId, TransportResult, TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SessionOffer, TransportMediaId,
+        TransportResult, TransportSessionKey,
     },
 };
 
@@ -201,6 +202,9 @@ pub(super) enum RtcWorkerCommand {
     },
     ActiveSpeakerSourceSnapshot {
         response: RtcWorkerResponse<Vec<ActiveSpeakerSource>>,
+    },
+    ActiveSpeakerDiagnosticSnapshot {
+        response: RtcWorkerResponse<Vec<ActiveSpeakerSourceDiagnostic>>,
     },
     NextActiveSpeakerDeadline {
         response: RtcWorkerResponse<Option<Instant>>,

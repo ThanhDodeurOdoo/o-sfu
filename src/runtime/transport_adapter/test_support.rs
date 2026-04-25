@@ -12,8 +12,8 @@ pub(crate) use super::fake::FakeWebRtcEvent;
 use super::shard_set::RtcTransportAdapterShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{
-    ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
-    TransportSessionKey,
+    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
+    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{SessionOffer, SourcePacketGate, TransportAdapterError};
@@ -210,6 +210,10 @@ impl ObservabilityPort for FakeWebRtcAdapter {
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         Self::active_speaker_source_snapshot(self).await
+    }
+
+    async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        Self::active_speaker_diagnostic_snapshot(self).await
     }
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant> {

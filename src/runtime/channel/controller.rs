@@ -32,7 +32,7 @@
 //! what kind of work can it send back to a session?" this is the file that
 //! should answer that without requiring a deep read of the rest of `channel/`.
 
-use std::{fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
@@ -58,7 +58,9 @@ use crate::{
         },
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
-        transport_adapter::{ObservabilityPort, TransportSessionKey},
+        transport_adapter::{
+            ActiveSpeakerSourceDiagnostic, ObservabilityPort, TransportMediaId, TransportSessionKey,
+        },
     },
 };
 
@@ -793,6 +795,11 @@ impl Channel {
         &self,
         observability_port: &impl ObservabilityPort,
     ) -> Vec<DiagnosticsSource> {
+        let active_speaker_diagnostics = active_speaker_diagnostics_by_media(
+            observability_port
+                .active_speaker_diagnostic_snapshot()
+                .await,
+        );
         let state = self.state.read().await;
         let session_keys = state
             .transport_session_entries()
@@ -804,7 +811,7 @@ impl Channel {
         let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
         let incoming_bitrate_by_source =
             state.diagnostics_incoming_bitrate_by_source(&transport_snapshot.per_media);
-        state.diagnostics_sources(&incoming_bitrate_by_source)
+        state.diagnostics_sources(&incoming_bitrate_by_source, &active_speaker_diagnostics)
     }
 
     /// Resolve a diagnostics request path agaisnt either nummeric or string session ids.
@@ -825,6 +832,15 @@ impl Channel {
                 (session, session_id)
             })
     }
+}
+
+fn active_speaker_diagnostics_by_media(
+    diagnostics: Vec<ActiveSpeakerSourceDiagnostic>,
+) -> BTreeMap<TransportMediaId, ActiveSpeakerSourceDiagnostic> {
+    diagnostics
+        .into_iter()
+        .map(|diagnostic| (diagnostic.transport_media_id(), diagnostic))
+        .collect()
 }
 
 impl fmt::Debug for Channel {
