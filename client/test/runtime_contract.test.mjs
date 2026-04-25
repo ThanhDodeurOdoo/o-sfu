@@ -76,7 +76,8 @@ function validCore(overrides = {}) {
                     kind: "applyNegotiation",
                     requestId: "request-2",
                     negotiationKind: NEGOTIATION_KIND.OFFER,
-                    sdp: "v=0\r\n"
+                    sdp: "v=0\r\n",
+                    uploadSlots: []
                 }
             ];
         },

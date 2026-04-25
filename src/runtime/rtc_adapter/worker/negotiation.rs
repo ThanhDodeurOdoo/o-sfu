@@ -7,6 +7,7 @@
 //! invalidates.
 
 use std::{
+    mem,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
 };
@@ -31,7 +32,10 @@ use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
         metrics::RuntimeMetrics,
-        transport_adapter::{SessionOffer, TransportAdapterError, TransportSessionKey},
+        transport_adapter::{
+            SessionOffer, SessionUploadKind, SessionUploadSlot, TransportAdapterError,
+            TransportSessionKey,
+        },
     },
 };
 
@@ -125,7 +129,12 @@ fn worker_create_initial_session_offer(
 
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = None;
-    Ok(SessionOffer::new(offer.to_sdp_string()))
+    session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .clear();
+    Ok(SessionOffer::new(offer.to_sdp_string())
+        .with_upload_slots(initial_upload_slots(bootstrap_mids, config.codec_flags)))
 }
 
 fn worker_create_session_renegotiation_offer(
@@ -144,7 +153,8 @@ fn worker_create_session_renegotiation_offer(
         }
         return Err(TransportAdapterError::UnsupportedFeature);
     };
-    Ok(SessionOffer::new(offer_sdp))
+    let upload_slots = mem::take(&mut session_state.sdp_negotiation.staged_offer_upload_slots);
+    Ok(SessionOffer::new(offer_sdp).with_upload_slots(upload_slots))
 }
 
 /// Accept the currently pending local offer and reconcile every worker-local
@@ -187,6 +197,10 @@ fn worker_apply_session_answer(
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
+    session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .clear();
     apply_pending_recv_streams(session_state, max_bitrate_in_bps);
     let local_ice_ufrag = session_state.local_ice_ufrag.clone();
     session_state.dtls_started = true;
@@ -297,6 +311,10 @@ fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessio
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .clear();
     for mid in queued_removal_mids {
         session_state
             .sdp_negotiation
@@ -321,6 +339,63 @@ fn ensure_initial_negotiation_media(bootstrap_mids: &mut Vec<Mid>, sdp_api: &mut
             )
         })
         .collect();
+}
+
+fn initial_upload_slots(
+    bootstrap_mids: &[Mid],
+    codec_flags: MediaCodecFlags,
+) -> Vec<SessionUploadSlot> {
+    INITIAL_NEGOTIATION_MEDIA_KINDS
+        .iter()
+        .zip(bootstrap_mids.iter())
+        .map(|(media_kind, mid)| SessionUploadSlot {
+            mid: mid.to_string(),
+            kind: upload_kind(*media_kind),
+            codecs: offered_codecs(*media_kind, codec_flags),
+            simulcast_encodings: sdp_simulcast::bootstrap_upload_encodings(*media_kind),
+        })
+        .collect()
+}
+
+pub(super) fn upload_kind(media_kind: MediaKind) -> SessionUploadKind {
+    if media_kind.is_video() {
+        SessionUploadKind::Video
+    } else {
+        SessionUploadKind::Audio
+    }
+}
+
+pub(super) fn offered_codecs(media_kind: MediaKind, codec_flags: MediaCodecFlags) -> Vec<String> {
+    if media_kind.is_video() {
+        let mut codecs = Vec::new();
+        if codec_flags.vp8_enabled() {
+            codecs.push("VP8".to_owned());
+        }
+        if codec_flags.h264_enabled() {
+            codecs.push("H264".to_owned());
+        }
+        if codec_flags.h265_enabled() {
+            codecs.push("H265".to_owned());
+        }
+        if codec_flags.vp9_enabled() {
+            codecs.push("VP9".to_owned());
+        }
+        if codec_flags.av1_enabled() {
+            codecs.push("AV1".to_owned());
+        }
+        return codecs;
+    }
+    let mut codecs = Vec::new();
+    if codec_flags.opus_enabled() {
+        codecs.push("opus".to_owned());
+    }
+    if codec_flags.pcmu_enabled() {
+        codecs.push("PCMU".to_owned());
+    }
+    if codec_flags.pcma_enabled() {
+        codecs.push("PCMA".to_owned());
+    }
+    codecs
 }
 
 fn ensure_session_ready_for_offer(

@@ -1,5 +1,6 @@
 use o_sfu_protocol::signaling::{
-    RequestId, ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
+    NegotiationUploadEncoding, NegotiationUploadKind, NegotiationUploadSlot, RequestId,
+    ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
 };
 use tracing::{info, instrument, warn};
 
@@ -16,7 +17,8 @@ use super::{
 use crate::runtime::{
     telemetry::schema::event as telemetry_event,
     transport_adapter::{
-        NegotiationPort, SessionOffer, TransportAdapterError, TransportSessionKey,
+        NegotiationPort, SessionOffer, SessionUploadEncoding, SessionUploadKind, SessionUploadSlot,
+        TransportAdapterError, TransportSessionKey,
     },
     websocket_server::WsWriter,
 };
@@ -60,9 +62,7 @@ impl PostAuthSessionProtocol {
             outcome = "offer_ready",
             "created initial transport offer"
         );
-        let offer_request = ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: offer.into_sdp(),
-        });
+        let offer_request = ServerRequest::Offer(session_description_payload(offer));
         self.issue_negotiation_request(
             writer,
             offer_request,
@@ -393,9 +393,7 @@ async fn staged_renegotiation_request(
         .await
     {
         Ok(offer) => Ok(Some(ServerRequest::Renegotiate(
-            SessionDescriptionPayload {
-                sdp: offer.into_sdp(),
-            },
+            session_description_payload(offer),
         ))),
         Err(TransportAdapterError::UnsupportedFeature) => Ok(None),
         Err(
@@ -413,6 +411,41 @@ async fn staged_renegotiation_request(
             );
             Err(WebSocketCloseCode::Error)
         }
+    }
+}
+
+fn session_description_payload(offer: SessionOffer) -> SessionDescriptionPayload {
+    let (sdp, upload_slots) = offer.into_parts();
+    SessionDescriptionPayload {
+        sdp,
+        upload_slots: upload_slots.into_iter().map(protocol_upload_slot).collect(),
+    }
+}
+
+fn protocol_upload_slot(slot: SessionUploadSlot) -> NegotiationUploadSlot {
+    NegotiationUploadSlot {
+        mid: slot.mid,
+        kind: protocol_upload_kind(slot.kind),
+        codecs: slot.codecs,
+        simulcast_encodings: slot
+            .simulcast_encodings
+            .into_iter()
+            .map(protocol_upload_encoding)
+            .collect(),
+    }
+}
+
+fn protocol_upload_kind(kind: SessionUploadKind) -> NegotiationUploadKind {
+    match kind {
+        SessionUploadKind::Audio => NegotiationUploadKind::Audio,
+        SessionUploadKind::Video => NegotiationUploadKind::Video,
+    }
+}
+
+fn protocol_upload_encoding(encoding: SessionUploadEncoding) -> NegotiationUploadEncoding {
+    NegotiationUploadEncoding {
+        rid: encoding.rid,
+        max_bitrate: encoding.max_bitrate,
     }
 }
 

@@ -80,6 +80,7 @@ impl FakeRtcPeer {
         self.rtc.handle_input(Input::Timeout(Instant::now())).ok()?;
         Some(SessionDescriptionPayload {
             sdp: answer.to_sdp_string(),
+            upload_slots: Vec::new(),
         })
     }
 

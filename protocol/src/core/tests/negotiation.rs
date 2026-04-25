@@ -10,6 +10,7 @@ fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
         request_id: RequestId::new("offer-1"),
         request: ServerRequest::Offer(SessionDescriptionPayload {
             sdp: String::from("v=0\r\ns=offer\r\n"),
+            upload_slots: Vec::new(),
         }),
     });
     let offer_commands = core.on_ws_message(&offer_frame);
@@ -22,6 +23,7 @@ fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
                 request_id: RequestId::new("offer-1"),
                 kind: NegotiationKind::Offer,
                 sdp: String::from("v=0\r\ns=offer\r\n"),
+                upload_slots: Vec::new(),
             },
         ]
     );
@@ -42,6 +44,7 @@ fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
             response_to: RequestId::new("offer-1"),
             response: ClientResponse::Offer(SessionDescriptionPayload {
                 sdp: String::from("v=0\r\ns=answer\r\n"),
+                upload_slots: Vec::new(),
             }),
         })
     );
@@ -57,12 +60,14 @@ fn protocol_core_rejects_overlapping_negotiation_requests() {
         request_id: RequestId::new("offer-1"),
         request: ServerRequest::Offer(SessionDescriptionPayload {
             sdp: String::from("v=0\r\ns=offer-1\r\n"),
+            upload_slots: Vec::new(),
         }),
     });
     let second_offer = encode_server_batch(ServerEnvelope::Request {
         request_id: RequestId::new("offer-2"),
         request: ServerRequest::Offer(SessionDescriptionPayload {
             sdp: String::from("v=0\r\ns=offer-2\r\n"),
+            upload_slots: Vec::new(),
         }),
     });
 

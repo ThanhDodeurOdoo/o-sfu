@@ -137,16 +137,52 @@ pub(crate) enum SourcePacketGate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionOffer {
     sdp: String,
+    upload_slots: Vec<SessionUploadSlot>,
 }
 
 impl SessionOffer {
     #[must_use]
     pub(crate) fn new(sdp: String) -> Self {
-        Self { sdp }
+        Self {
+            sdp,
+            upload_slots: Vec::new(),
+        }
     }
 
     #[must_use]
+    pub(crate) fn with_upload_slots(mut self, upload_slots: Vec<SessionUploadSlot>) -> Self {
+        self.upload_slots = upload_slots;
+        self
+    }
+
+    #[must_use]
+    #[cfg(test)]
     pub(crate) fn into_sdp(self) -> String {
         self.sdp
     }
+
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (String, Vec<SessionUploadSlot>) {
+        (self.sdp, self.upload_slots)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionUploadKind {
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionUploadSlot {
+    pub(crate) mid: String,
+    pub(crate) kind: SessionUploadKind,
+    pub(crate) codecs: Vec<String>,
+    pub(crate) simulcast_encodings: Vec<SessionUploadEncoding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionUploadEncoding {
+    pub(crate) rid: String,
+    pub(crate) max_bitrate: Option<u64>,
 }

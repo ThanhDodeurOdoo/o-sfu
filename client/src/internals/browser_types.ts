@@ -35,7 +35,9 @@ export interface ClientWebSocket {
 
 export interface PeerConnectionSender {
     getStats?(): Promise<RTCStatsReport>;
+    getParameters?(): RTCRtpSendParameters;
     replaceTrack(track: MediaTrack | null): Promise<void>;
+    setParameters?(parameters: RTCRtpSendParameters): Promise<void>;
     track?: MediaTrack | null;
 }
 

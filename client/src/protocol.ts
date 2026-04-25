@@ -53,8 +53,21 @@ export interface WelcomePayload {
     peers: PeerSnapshot[];
 }
 
+export interface NegotiationUploadEncoding {
+    maxBitrate?: number;
+    rid: string;
+}
+
+export interface NegotiationUploadSlot {
+    codecs?: string[];
+    kind: "audio" | "video";
+    mid: string;
+    simulcastEncodings?: NegotiationUploadEncoding[];
+}
+
 export interface SessionDescriptionPayload {
     sdp: string;
+    uploadSlots?: NegotiationUploadSlot[];
 }
 
 export interface StreamIntentPayload {

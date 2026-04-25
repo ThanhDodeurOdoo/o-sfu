@@ -35,7 +35,7 @@ use super::{
     route_control::RouteControlState,
 };
 use crate::runtime::transport_adapter::{
-    ReceiverBandwidthSnapshot, TransportMediaId, TransportSessionKey,
+    ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportSessionKey,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +67,7 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) bootstrap_mids: Vec<Mid>,
     pub(super) pending_offer: Option<SdpPendingOffer>,
     pub(super) staged_offer_sdp: Option<String>,
+    pub(super) staged_offer_upload_slots: Vec<SessionUploadSlot>,
     pub(super) initial_offer_applied: bool,
     pub(super) pending_recv_streams: BTreeMap<Mid, Vec<PendingRecvStream>>,
     pub(super) negotiated_producer_parameters: BTreeMap<Mid, RouterRtpParameters>,

@@ -308,6 +308,7 @@ impl ProtocolHarnessPeer {
                     request_id,
                     kind,
                     sdp,
+                    upload_slots: _,
                 } => {
                     if !self.auto_answer_negotiation {
                         self.pending_negotiations

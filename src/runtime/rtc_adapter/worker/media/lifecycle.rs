@@ -37,7 +37,8 @@ use super::{
     types::AddSendMediaRequest,
 };
 use crate::runtime::transport_adapter::{
-    TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+    SessionUploadKind, SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportResult,
+    TransportSessionKey,
 };
 
 pub(crate) fn respond_remove_media(
@@ -249,6 +250,10 @@ fn worker_stage_native_media_removal(
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
     session_state
         .sdp_negotiation
+        .staged_offer_upload_slots
+        .clear();
+    session_state
+        .sdp_negotiation
         .queued_removal_mids
         .remove(&mid);
     Ok(())
@@ -343,6 +348,8 @@ fn worker_stage_native_recv_media(
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state.sdp_negotiation.staged_offer_upload_slots =
+        vec![upload_slot(mid, media_kind, rtp_parameters)];
     let pending_streams = recv_encoding_identities(rtp_parameters)
         .into_iter()
         .map(|(ssrc, rid)| PendingRecvStream { ssrc, rid })
@@ -490,6 +497,10 @@ fn worker_stage_native_send_media(
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .clear();
     Ok(mid)
 }
 
@@ -539,4 +550,39 @@ fn recv_encoding_identities(rtp_parameters: &RouterRtpParameters) -> Vec<(Ssrc, 
             Some((ssrc, encoding.rid().map(Into::into)))
         })
         .collect()
+}
+
+fn upload_slot(
+    mid: Mid,
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+) -> SessionUploadSlot {
+    SessionUploadSlot {
+        mid: mid.to_string(),
+        kind: upload_kind(media_kind),
+        codecs: upload_codecs(rtp_parameters),
+        simulcast_encodings: sdp_simulcast::publish_upload_encodings(media_kind, rtp_parameters),
+    }
+}
+
+fn upload_kind(media_kind: MediaKind) -> SessionUploadKind {
+    if media_kind.is_video() {
+        SessionUploadKind::Video
+    } else {
+        SessionUploadKind::Audio
+    }
+}
+
+fn upload_codecs(rtp_parameters: &RouterRtpParameters) -> Vec<String> {
+    let mut codecs = Vec::new();
+    for format in rtp_parameters.formats() {
+        let codec = format.codec_name();
+        if !codecs
+            .iter()
+            .any(|existing: &String| existing.as_str() == codec)
+        {
+            codecs.push(codec.to_owned());
+        }
+    }
+    codecs
 }

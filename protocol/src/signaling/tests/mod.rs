@@ -2,11 +2,11 @@ use serde_json::json;
 
 use super::{
     AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse, Envelope,
-    EnvelopeDecodeError, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
-    RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage,
-    ServerRequest, ServerResponse, SessionDescriptionPayload, SourceDescriptor,
-    SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
-    WebSocketCloseCode, WelcomePayload,
+    EnvelopeDecodeError, NegotiationUploadEncoding, NegotiationUploadKind, NegotiationUploadSlot,
+    PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions,
+    RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest,
+    ServerResponse, SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor,
+    StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
 };
 use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
@@ -92,6 +92,7 @@ fn protocol_offer_response_decodes_with_response_id() {
             response_to: RequestId::new("1"),
             response: ClientResponse::Offer(SessionDescriptionPayload {
                 sdp: String::from("v=0\r\n"),
+                upload_slots: Vec::new(),
             }),
         })
     );
@@ -392,6 +393,7 @@ fn protocol_server_offer_request_round_trips_through_server_envelope() -> serde_
         request_id: RequestId::new("offer-1"),
         request: ServerRequest::Offer(SessionDescriptionPayload {
             sdp: String::from("v=0\r\n"),
+            upload_slots: Vec::new(),
         }),
     }
     .into_envelope()?;
@@ -402,7 +404,55 @@ fn protocol_server_offer_request_round_trips_through_server_envelope() -> serde_
             request_id: RequestId::new("offer-1"),
             request: ServerRequest::Offer(SessionDescriptionPayload {
                 sdp: String::from("v=0\r\n"),
+                upload_slots: Vec::new(),
             }),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result<()> {
+    let envelope = ServerEnvelope::Request {
+        request_id: RequestId::new("offer-1"),
+        request: ServerRequest::Offer(SessionDescriptionPayload {
+            sdp: String::from("v=0\r\n"),
+            upload_slots: vec![NegotiationUploadSlot {
+                mid: String::from("video-1"),
+                kind: NegotiationUploadKind::Video,
+                codecs: vec![String::from("VP8")],
+                simulcast_encodings: vec![
+                    NegotiationUploadEncoding {
+                        rid: String::from("lo"),
+                        max_bitrate: Some(150_000),
+                    },
+                    NegotiationUploadEncoding {
+                        rid: String::from("hi"),
+                        max_bitrate: Some(900_000),
+                    },
+                ],
+            }],
+        }),
+    }
+    .into_envelope()?;
+
+    assert_eq!(
+        serde_json::to_value(&envelope)?,
+        json!({
+            "t": "offer",
+            "q": "offer-1",
+            "p": {
+                "sdp": "v=0\r\n",
+                "uploadSlots": [{
+                    "mid": "video-1",
+                    "kind": "video",
+                    "codecs": ["VP8"],
+                    "simulcastEncodings": [
+                        { "rid": "lo", "maxBitrate": 150_000 },
+                        { "rid": "hi", "maxBitrate": 900_000 }
+                    ]
+                }]
+            }
         })
     );
     Ok(())
@@ -480,6 +530,7 @@ fn protocol_server_broadcast_and_recording_messages_round_trip_to_wire_envelopes
 fn protocol_server_requests_and_responses_round_trip_to_wire_envelopes() -> serde_json::Result<()> {
     let offer = ServerRequest::Offer(SessionDescriptionPayload {
         sdp: String::from("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"),
+        upload_slots: Vec::new(),
     })
     .into_envelope(RequestId::new("1"))?;
     assert_eq!(

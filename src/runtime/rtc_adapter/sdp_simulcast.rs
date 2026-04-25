@@ -11,6 +11,8 @@ use str0m::media::{
     SimulcastLayer as Str0mSimulcastLayer,
 };
 
+use crate::runtime::transport_adapter::SessionUploadEncoding;
+
 const SDP_ATTRIBUTE_PREFIX: &str = "a=";
 const SDP_MEDIA_PREFIX: &str = "m=";
 const SDP_MID_ATTRIBUTE: &str = "mid";
@@ -47,6 +49,22 @@ pub(super) fn bootstrap_recv_simulcast(media_kind: MediaKind) -> Option<Str0mSim
     ]))
 }
 
+pub(super) fn bootstrap_upload_encodings(media_kind: MediaKind) -> Vec<SessionUploadEncoding> {
+    if !media_kind.is_video() {
+        return Vec::new();
+    }
+    upload_encodings_from_specs(&[
+        SimulcastLayerSpec {
+            rid: DEFAULT_LOW_RID,
+            max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE_BPS),
+        },
+        SimulcastLayerSpec {
+            rid: DEFAULT_HIGH_RID,
+            max_bitrate: Some(DEFAULT_HIGH_MAX_BITRATE_BPS),
+        },
+    ])
+}
+
 pub(super) fn publish_recv_simulcast(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
@@ -72,6 +90,36 @@ pub(super) fn publish_recv_simulcast(
         });
     }
     (layers.len() >= 2).then(|| recv_simulcast_from_specs(&layers))
+}
+
+pub(super) fn publish_upload_encodings(
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+) -> Vec<SessionUploadEncoding> {
+    if !media_kind.is_video() {
+        return Vec::new();
+    }
+    let mut layers = Vec::new();
+    for encoding in rtp_parameters.encodings() {
+        let Some(rid) = encoding.rid() else {
+            continue;
+        };
+        if !webrtc::sdp::rid::is_id(rid)
+            || layers
+                .iter()
+                .any(|layer: &SimulcastLayerSpec<'_>| layer.rid == rid)
+        {
+            continue;
+        }
+        layers.push(SimulcastLayerSpec {
+            rid,
+            max_bitrate: encoding.max_bitrate(),
+        });
+    }
+    if layers.len() < 2 {
+        return Vec::new();
+    }
+    upload_encodings_from_specs(&layers)
 }
 
 pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {
@@ -100,6 +148,16 @@ fn recv_simulcast_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> Str0mSimulcas
             })
             .collect(),
     }
+}
+
+fn upload_encodings_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> Vec<SessionUploadEncoding> {
+    layers
+        .iter()
+        .map(|layer| SessionUploadEncoding {
+            rid: layer.rid.to_owned(),
+            max_bitrate: layer.max_bitrate,
+        })
+        .collect()
 }
 
 fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {

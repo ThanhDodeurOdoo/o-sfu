@@ -30,6 +30,34 @@ pub struct WelcomePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionDescriptionPayload {
     pub sdp: String,
+    #[serde(default, rename = "uploadSlots", skip_serializing_if = "Vec::is_empty")]
+    pub upload_slots: Vec<NegotiationUploadSlot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NegotiationUploadKind {
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NegotiationUploadSlot {
+    pub mid: String,
+    pub kind: NegotiationUploadKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codecs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub simulcast_encodings: Vec<NegotiationUploadEncoding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NegotiationUploadEncoding {
+    pub rid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bitrate: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

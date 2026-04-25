@@ -1,5 +1,10 @@
 import type { StreamType } from "../public_api.js";
 import { STREAM_KIND, type ClientPeerConnection, type MediaTrack } from "./browser_types.js";
+import {
+    applyUploadPublicationPolicy,
+    type SimulcastEncodingOffer,
+    type UploadPublicationPolicy
+} from "./publication_policy.js";
 
 type UploadTransition = {
     hadTrack: boolean;
@@ -9,6 +14,7 @@ type UploadTransition = {
 
 export type PendingRenegotiationAttachment = {
     mid: string;
+    publicationPolicy: UploadPublicationPolicy;
     streamType: StreamType;
 };
 
@@ -18,8 +24,10 @@ export type PendingRenegotiationAttachmentResult = {
 };
 
 export type UploadSlot = {
+    codecs?: readonly string[];
     kind: "audio" | "video";
     mid: string;
+    simulcastEncodings?: readonly SimulcastEncodingOffer[];
 };
 
 export class LocalUploads {
@@ -47,8 +55,9 @@ export class LocalUploads {
     async attachTrack(
         peerConnection: ClientPeerConnection | null,
         mid: string,
-        streamType: StreamType
-    ): Promise<void> {
+        streamType: StreamType,
+        uploadSlot?: UploadSlot
+    ): Promise<UploadPublicationPolicy> {
         if (!peerConnection) {
             throw new Error("cannot attach track without an active peer connection");
         }
@@ -61,7 +70,17 @@ export class LocalUploads {
         }
         await transceiver.sender.replaceTrack(track);
         updateTransceiverDirection(transceiver, track);
+        const publicationPolicy = track
+            ? await applyUploadPublicationPolicy(streamType, transceiver, {
+                  codecs: uploadSlot?.codecs ?? [],
+                  simulcastEncodings: uploadSlot?.simulcastEncodings ?? []
+              })
+            : {
+                  kind: "single" as const,
+                  reason: "no local track is attached"
+              };
         this._senderMidByType.set(streamType, mid);
+        return publicationPolicy;
     }
 
     async detachTrack(
@@ -130,8 +149,13 @@ export class LocalUploads {
                 skipped.push(streamType);
                 continue;
             }
-            await this.attachTrack(peerConnection, slot.mid, streamType);
-            attached.push({ mid: slot.mid, streamType });
+            const publicationPolicy = await this.attachTrack(
+                peerConnection,
+                slot.mid,
+                streamType,
+                slot
+            );
+            attached.push({ mid: slot.mid, publicationPolicy, streamType });
         }
         return { attached, skipped };
     }

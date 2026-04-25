@@ -9,7 +9,7 @@ use crate::{
         Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
     shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
-    signaling::{RequestId, SourceDescriptor, TrackBinding},
+    signaling::{NegotiationUploadSlot, RequestId, SourceDescriptor, TrackBinding},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -74,6 +74,8 @@ pub enum HostCommand {
         #[serde(rename = "negotiationKind")]
         negotiation_kind: HostNegotiationKind,
         sdp: String,
+        #[serde(rename = "uploadSlots")]
+        upload_slots: Vec<NegotiationUploadSlot>,
     },
     AttachTrack {
         mid: String,
@@ -164,10 +166,12 @@ pub fn host_commands(commands: Vec<Command>) -> Vec<HostCommand> {
                 request_id,
                 kind,
                 sdp,
+                upload_slots,
             } => host_commands.push(HostCommand::ApplyNegotiation {
                 request_id,
                 negotiation_kind: kind.into(),
                 sdp,
+                upload_slots,
             }),
             Command::AttachTrack { mid, stream_type } => {
                 host_commands.push(HostCommand::AttachTrack { mid, stream_type });
@@ -289,6 +293,7 @@ mod tests {
                 request_id: RequestId::new("7"),
                 kind: NegotiationKind::Renegotiate,
                 sdp: String::from("v=0"),
+                upload_slots: Vec::new(),
             },
             Command::EmitStateChange {
                 state: BundleConnectionState::Connected,
@@ -323,7 +328,8 @@ mod tests {
                     "kind": "applyNegotiation",
                     "requestId": "7",
                     "negotiationKind": "renegotiate",
-                    "sdp": "v=0"
+                    "sdp": "v=0",
+                    "uploadSlots": []
                 },
                 {
                     "kind": "emitStateChange",

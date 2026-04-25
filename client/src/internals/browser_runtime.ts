@@ -8,13 +8,14 @@ import {
     type StreamType
 } from "../public_api.js";
 import { CommandKind, type HostCommand, type ProtocolCoreBindings } from "../runtime_contract.js";
+import type { NegotiationUploadSlot } from "../protocol.js";
 import type {
     ClientPeerConnection,
     ClientWebSocket,
     SfuClientDependencies,
     TimerHandle
 } from "./browser_types.js";
-import type { LocalUploads, UploadSlot } from "./local_uploads.js";
+import type { LocalUploads } from "./local_uploads.js";
 import type { PendingRequests } from "./pending_requests.js";
 import type { RemoteTracks } from "./remote_tracks.js";
 
@@ -169,6 +170,7 @@ export class BrowserRuntime {
                     command.requestId,
                     command.negotiationKind,
                     command.sdp,
+                    command.uploadSlots,
                     hooks.localUploads,
                     hooks.protocolCore,
                     hooks
@@ -402,6 +404,7 @@ export class BrowserRuntime {
         requestId: string,
         negotiationKind: "offer" | "renegotiate",
         sdp: string,
+        uploadSlots: NegotiationUploadSlot[],
         localUploads: LocalUploads,
         protocolCore: ProtocolCoreBindings,
         hooks: BrowserRuntimeHooks
@@ -420,7 +423,7 @@ export class BrowserRuntime {
         });
         const pendingAttachment = await localUploads.attachPendingTracks(
             this._peerConnection,
-            uploadSlotsFromOfferSdp(sdp)
+            uploadSlots
         );
         if (pendingAttachment.attached.length > 0 || pendingAttachment.skipped.length > 0) {
             for (const attachment of pendingAttachment.attached) {
@@ -429,6 +432,19 @@ export class BrowserRuntime {
                     CLIENT_LOG_LEVEL.DEBUG,
                     `attached pending ${attachment.streamType} track to ${negotiationKind} mid ${attachment.mid}`
                 );
+                if (attachment.publicationPolicy.kind === "simulcast") {
+                    emitRuntimeLog(
+                        hooks,
+                        CLIENT_LOG_LEVEL.INFO,
+                        `enabled RID simulcast for ${attachment.streamType} on mid ${attachment.mid}`
+                    );
+                } else if (attachment.publicationPolicy.reason) {
+                    emitRuntimeLog(
+                        hooks,
+                        CLIENT_LOG_LEVEL.DEBUG,
+                        `using single-encoding ${attachment.streamType} upload on mid ${attachment.mid}: ${attachment.publicationPolicy.reason}`
+                    );
+                }
             }
             for (const streamType of pendingAttachment.skipped) {
                 emitRuntimeLog(
@@ -554,35 +570,6 @@ export class BrowserRuntime {
 
 function orderedStreamTypes(): StreamType[] {
     return ["audio", "camera", "screen"];
-}
-
-function uploadSlotsFromOfferSdp(sdp: string): UploadSlot[] {
-    const uploadSlots: UploadSlot[] = [];
-    const mediaSections = sdp
-        .split(/\r?\nm=/)
-        .map((section, index) => (index === 0 ? section : `m=${section}`))
-        .filter((section) => section.startsWith("m="));
-    for (const section of mediaSections) {
-        const mediaKind = section.startsWith("m=audio ")
-            ? "audio"
-            : section.startsWith("m=video ")
-              ? "video"
-              : null;
-        if (!mediaKind) {
-            continue;
-        }
-        const direction = section.match(
-            /(?:^|\r\n)a=(sendrecv|sendonly|recvonly|inactive)(?:\r?\n|$)/
-        )?.[1];
-        if (direction !== "recvonly") {
-            continue;
-        }
-        const mid = section.match(/(?:^|\r\n)a=mid:([^\r\n]+)(?:\r?\n|$)/)?.[1];
-        if (mid) {
-            uploadSlots.push({ kind: mediaKind, mid });
-        }
-    }
-    return uploadSlots;
 }
 
 function emitRuntimeLog(

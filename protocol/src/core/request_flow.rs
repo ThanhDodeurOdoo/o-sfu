@@ -43,10 +43,14 @@ pub(super) fn submit_negotiation_answer(
     }
     core.pending_negotiation = None;
     let response = match kind {
-        NegotiationKind::Offer => ClientResponse::Offer(SessionDescriptionPayload { sdp }),
-        NegotiationKind::Renegotiate => {
-            ClientResponse::Renegotiate(SessionDescriptionPayload { sdp })
-        }
+        NegotiationKind::Offer => ClientResponse::Offer(SessionDescriptionPayload {
+            sdp,
+            upload_slots: Vec::new(),
+        }),
+        NegotiationKind::Renegotiate => ClientResponse::Renegotiate(SessionDescriptionPayload {
+            sdp,
+            upload_slots: Vec::new(),
+        }),
     };
     let Some(envelope) = ClientEnvelope::Response {
         response_to: request_id.clone(),
@@ -120,6 +124,7 @@ fn handle_negotiation_request(
         request_id: pending_request_id,
         kind,
         sdp: payload.sdp,
+        upload_slots: payload.upload_slots,
     });
     commands
 }

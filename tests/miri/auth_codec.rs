@@ -259,6 +259,7 @@ fn signaling_codecs_round_trip_publish_subscribe_and_responses() {
         response_to: RequestId::new("offer-1"),
         response: ClientResponse::Offer(SessionDescriptionPayload {
             sdp: "v=0\r\ns=answer\r\n".to_owned(),
+            upload_slots: Vec::new(),
         }),
     };
 

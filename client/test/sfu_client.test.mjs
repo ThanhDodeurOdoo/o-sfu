@@ -46,17 +46,32 @@ class FakeWebSocket {
 }
 
 class FakeSender {
-    constructor(statsReport = undefined) {
+    constructor(statsReport = undefined, { parameterApi = true } = {}) {
+        this.parameters = { encodings: [] };
+        this.setParametersCalls = [];
         this.statsReport = statsReport;
         this.track = null;
+        if (!parameterApi) {
+            this.getParameters = undefined;
+            this.setParameters = undefined;
+        }
     }
 
     async getStats() {
         return this.statsReport;
     }
 
+    getParameters() {
+        return structuredClone(this.parameters);
+    }
+
     async replaceTrack(track) {
         this.track = track;
+    }
+
+    async setParameters(parameters) {
+        this.parameters = structuredClone(parameters);
+        this.setParametersCalls.push(structuredClone(parameters));
     }
 }
 
@@ -110,6 +125,9 @@ class FakePeerConnection {
         this.answerSnapshots.push(
             this.transceivers.map((transceiver) => ({
                 mid: transceiver.mid,
+                senderParameters: transceiver.sender.parameters
+                    ? structuredClone(transceiver.sender.parameters)
+                    : null,
                 senderTrack: transceiver.sender.track ?? null
             }))
         );
@@ -266,6 +284,29 @@ class FakeMediaTrack extends EventTarget {
     }
 }
 
+const audioUploadSlot = (mid) => ({
+    codecs: ["opus"],
+    kind: "audio",
+    mid,
+    simulcastEncodings: []
+});
+
+const videoUploadSlot = (
+    mid,
+    {
+        codecs = ["VP8"],
+        simulcastEncodings = [
+            { maxBitrate: 150000, rid: "lo" },
+            { maxBitrate: 900000, rid: "hi" }
+        ]
+    } = {}
+) => ({
+    codecs,
+    kind: "video",
+    mid,
+    simulcastEncodings
+});
+
 class FakeProtocolCore {
     constructor() {
         this.features = { ...EMPTY_FEATURES };
@@ -351,7 +392,8 @@ class FakeProtocolCore {
                             "m=video 9 UDP/TLS/RTP/SAVPF 96",
                             "a=mid:1",
                             "a=recvonly"
-                        ].join("\r\n")
+                        ].join("\r\n"),
+                        uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
                     },
                     ...this._replaceTrackBindings()
                 ];
@@ -373,7 +415,8 @@ class FakeProtocolCore {
                             "m=video 9 UDP/TLS/RTP/SAVPF 96",
                             "a=mid:1",
                             "a=recvonly"
-                        ].join("\r\n")
+                        ].join("\r\n"),
+                        uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
                     },
                     {
                         kind: "attachTrack",
@@ -396,7 +439,8 @@ class FakeProtocolCore {
                             "m=video 9 UDP/TLS/RTP/SAVPF 96",
                             "a=mid:2",
                             "a=recvonly"
-                        ].join("\r\n")
+                        ].join("\r\n"),
+                        uploadSlots: [videoUploadSlot("2", { simulcastEncodings: [] })]
                     }
                 ];
             case "renegotiate-with-pending-camera-and-screen":
@@ -416,7 +460,49 @@ class FakeProtocolCore {
                             "m=video 9 UDP/TLS/RTP/SAVPF 96",
                             "a=mid:3",
                             "a=recvonly"
-                        ].join("\r\n")
+                        ].join("\r\n"),
+                        uploadSlots: [
+                            videoUploadSlot("2", { simulcastEncodings: [] }),
+                            videoUploadSlot("3", { simulcastEncodings: [] })
+                        ]
+                    }
+                ];
+            case "renegotiate-with-pending-simulcast-camera":
+                return [
+                    {
+                        kind: "applyNegotiation",
+                        negotiationKind: "renegotiate",
+                        requestId: "12",
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+                            "a=mid:2",
+                            "a=recvonly",
+                            "a=rtpmap:96 VP8/90000"
+                        ].join("\r\n"),
+                        uploadSlots: [videoUploadSlot("2")]
+                    }
+                ];
+            case "renegotiate-with-pending-h264-simulcast-camera":
+                return [
+                    {
+                        kind: "applyNegotiation",
+                        negotiationKind: "renegotiate",
+                        requestId: "13",
+                        sdp: [
+                            "v=0",
+                            "o=- 1 1 IN IP4 0.0.0.0",
+                            "s=-",
+                            "t=0 0",
+                            "m=video 9 UDP/TLS/RTP/SAVPF 102",
+                            "a=mid:2",
+                            "a=recvonly",
+                            "a=rtpmap:102 H264/90000"
+                        ].join("\r\n"),
+                        uploadSlots: [videoUploadSlot("2", { codecs: ["H264"] })]
                     }
                 ];
             case "renegotiate-with-pending-audio":
@@ -436,7 +522,8 @@ class FakeProtocolCore {
                             "m=audio 9 UDP/TLS/RTP/SAVPF 111",
                             "a=mid:producer-audio",
                             "a=recvonly"
-                        ].join("\r\n")
+                        ].join("\r\n"),
+                        uploadSlots: [audioUploadSlot("producer-audio")]
                     }
                 ];
             case "info-change-map":
@@ -1873,6 +1960,150 @@ test("renegotiation binds a newly published local track before answering", async
     assert.deepEqual(core.submittedAnswers.at(-1), {
         negotiationKind: "renegotiate",
         requestId: "9",
+        sdp: "answer-sdp"
+    });
+});
+
+test("renegotiation configures RID simulcast before answering supported video publishes", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const logs = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+    client.addEventListener("log", (event) => {
+        logs.push(event.detail);
+    });
+
+    const track = {
+        enabled: true,
+        id: "camera-track-simulcast",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    client.publish("camera", track);
+    await tick();
+    sockets[0].emitMessage("renegotiate-with-pending-simulcast-camera");
+    await tick();
+
+    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, track);
+    assert.deepEqual(transceiver.sender.setParametersCalls, [
+        {
+            encodings: [
+                {
+                    active: true,
+                    maxBitrate: 150000,
+                    rid: "lo",
+                    scaleResolutionDownBy: 2
+                },
+                {
+                    active: true,
+                    maxBitrate: 900000,
+                    rid: "hi",
+                    scaleResolutionDownBy: 1
+                }
+            ]
+        }
+    ]);
+    assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
+        encodings: [
+            {
+                active: true,
+                maxBitrate: 150000,
+                rid: "lo",
+                scaleResolutionDownBy: 2
+            },
+            {
+                active: true,
+                maxBitrate: 900000,
+                rid: "hi",
+                scaleResolutionDownBy: 1
+            }
+        ]
+    });
+    assert.deepEqual(core.submittedAnswers.at(-1), {
+        negotiationKind: "renegotiate",
+        requestId: "12",
+        sdp: "answer-sdp"
+    });
+    assert.ok(
+        logs.some(
+            (entry) =>
+                entry.id === "browser_runtime" &&
+                entry.level === "info" &&
+                entry.message === "enabled RID simulcast for camera on mid 2"
+        )
+    );
+});
+
+test("renegotiation falls back to single encoding when the codec path is unsupported", async () => {
+    const core = new FakeProtocolCore();
+    const sockets = [];
+    const peerConnections = [];
+    const client = new SfuClient({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnections.push(peerConnection);
+            return peerConnection;
+        },
+        createProtocolCore: () => core,
+        createWebSocket: (url) => {
+            const socket = new FakeWebSocket(url);
+            sockets.push(socket);
+            return socket;
+        }
+    });
+
+    const track = {
+        enabled: true,
+        id: "camera-track-single",
+        kind: "video",
+        muted: false
+    };
+
+    client.connect("ws://example.test/ws", "jwt-token");
+    await tick();
+    sockets[0].emitMessage("welcome");
+    await tick();
+    sockets[0].emitMessage("offer");
+    await tick();
+
+    client.publish("camera", track);
+    await tick();
+    sockets[0].emitMessage("renegotiate-with-pending-h264-simulcast-camera");
+    await tick();
+
+    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, track);
+    assert.deepEqual(transceiver.sender.setParametersCalls, []);
+    assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
+        encodings: []
+    });
+    assert.deepEqual(core.submittedAnswers.at(-1), {
+        negotiationKind: "renegotiate",
+        requestId: "13",
         sdp: "answer-sdp"
     });
 });

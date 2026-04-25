@@ -471,9 +471,11 @@ pub(super) async fn respond_to_protocol_negotiation_request(
     let response = match request {
         ServerRequest::Offer(_) => ClientResponse::Offer(SessionDescriptionPayload {
             sdp: sdp.to_owned(),
+            upload_slots: Vec::new(),
         }),
         ServerRequest::Renegotiate(_) => ClientResponse::Renegotiate(SessionDescriptionPayload {
             sdp: sdp.to_owned(),
+            upload_slots: Vec::new(),
         }),
     };
     let frame = serde_json::to_string(&vec![

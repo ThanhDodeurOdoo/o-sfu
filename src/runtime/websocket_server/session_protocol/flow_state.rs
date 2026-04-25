@@ -302,6 +302,7 @@ mod tests {
             request_id.clone(),
             ServerRequest::Offer(SessionDescriptionPayload {
                 sdp: String::from("v=0"),
+                upload_slots: Vec::new(),
             }),
             PendingFlowAction::EstablishSession {
                 offered_router_rtp_capabilities: MediaCapabilities::default(),
@@ -329,6 +330,7 @@ mod tests {
             request_id,
             ServerRequest::Renegotiate(SessionDescriptionPayload {
                 sdp: String::from("v=0"),
+                upload_slots: Vec::new(),
             }),
             PendingFlowAction::RefreshSession,
         );

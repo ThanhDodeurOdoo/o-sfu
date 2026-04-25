@@ -174,6 +174,7 @@ fn negotiation_answer_mismatches_do_not_resolve_pending_request() {
         request_id: RequestId::new("offer-1"),
         request: ServerRequest::Offer(SessionDescriptionPayload {
             sdp: "v=0\r\ns=offer\r\n".to_owned(),
+            upload_slots: Vec::new(),
         }),
     });
     assert_eq!(
@@ -184,6 +185,7 @@ fn negotiation_answer_mismatches_do_not_resolve_pending_request() {
                 request_id: RequestId::new("offer-1"),
                 kind: NegotiationKind::Offer,
                 sdp: "v=0\r\ns=offer\r\n".to_owned(),
+                upload_slots: Vec::new(),
             },
         ]
     );
@@ -216,6 +218,7 @@ fn negotiation_answer_mismatches_do_not_resolve_pending_request() {
             response_to: RequestId::new("offer-1"),
             response: ClientResponse::Offer(SessionDescriptionPayload {
                 sdp: "v=0\r\ns=answer\r\n".to_owned(),
+                upload_slots: Vec::new(),
             }),
         }]
     );

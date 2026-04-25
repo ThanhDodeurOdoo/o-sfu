@@ -45,9 +45,9 @@ use crate::{
     },
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
-        EnvelopeBatch, PeerSnapshot, RecordingOptions, RequestId, ServerEnvelope, ServerMessage,
-        ServerRequest, ServerResponse, SourceDescriptor, StreamIntentPayload, SubscribePayload,
-        TrackBinding, WebSocketCloseCode, WelcomePayload,
+        EnvelopeBatch, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
+        ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, SourceDescriptor,
+        StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
     },
 };
 
@@ -78,6 +78,7 @@ pub enum Command {
         request_id: RequestId,
         kind: NegotiationKind,
         sdp: String,
+        upload_slots: Vec<NegotiationUploadSlot>,
     },
     /// Bind an incoming RTP track (identified by its SDP mid) to a stream type.
     AttachTrack {

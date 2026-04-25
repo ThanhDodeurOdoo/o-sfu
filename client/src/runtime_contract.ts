@@ -12,7 +12,7 @@ import {
     type SourceDescriptor,
     type StreamType
 } from "./public_api.js";
-import type { TrackBinding } from "./protocol.js";
+import type { NegotiationUploadSlot, TrackBinding } from "./protocol.js";
 
 export const NEGOTIATION_KIND = {
     OFFER: "offer",
@@ -57,6 +57,7 @@ export type HostCommand =
           requestId: string;
           negotiationKind: NegotiationKind;
           sdp: string;
+          uploadSlots: NegotiationUploadSlot[];
       }
     | { kind: typeof CommandKind.ATTACH_TRACK; mid: string; streamType: StreamType }
     | { kind: typeof CommandKind.DETACH_TRACK; streamType: StreamType }
@@ -238,6 +239,7 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             requireString(command.requestId, `${context}.requestId`);
             validateNegotiationKind(command.negotiationKind, `${context}.negotiationKind`);
             requireString(command.sdp, `${context}.sdp`);
+            validateNegotiationUploadSlots(command.uploadSlots, `${context}.uploadSlots`);
             return command as HostCommand;
         case CommandKind.ATTACH_TRACK:
             requireString(command.mid, `${context}.mid`);
@@ -429,6 +431,40 @@ function validateOptionalSourceDescriptor(
     return value as SourceDescriptor;
 }
 
+function validateNegotiationUploadSlots(value: unknown, context: string): void {
+    if (!Array.isArray(value)) {
+        throw new Error(`${context} must be an array`);
+    }
+    value.forEach((slot, slotIndex) => {
+        const uploadSlot = asRecord(slot, `${context}[${slotIndex}]`);
+        requireString(uploadSlot.mid, `${context}[${slotIndex}].mid`);
+        validateUploadKind(uploadSlot.kind, `${context}[${slotIndex}].kind`);
+        validateOptionalStringArray(uploadSlot.codecs, `${context}[${slotIndex}].codecs`);
+        if (
+            uploadSlot.simulcastEncodings !== undefined &&
+            !Array.isArray(uploadSlot.simulcastEncodings)
+        ) {
+            throw new Error(`${context}[${slotIndex}].simulcastEncodings must be an array`);
+        }
+        for (const [encodingIndex, encoding] of (
+            uploadSlot.simulcastEncodings as unknown[] | undefined
+        )?.entries() ?? []) {
+            const uploadEncoding = asRecord(
+                encoding,
+                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}]`
+            );
+            requireString(
+                uploadEncoding.rid,
+                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].rid`
+            );
+            requireOptionalNonNegativeInteger(
+                uploadEncoding.maxBitrate,
+                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].maxBitrate`
+            );
+        }
+    });
+}
+
 function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {
     const features = asRecord(value, context);
     requireBoolean(features.rtc, `${context}.rtc`);
@@ -497,6 +533,12 @@ function validateStreamType(value: unknown, context: string): StreamType {
     return value;
 }
 
+function validateUploadKind(value: unknown, context: string): void {
+    if (value !== "audio" && value !== "video") {
+        throw new Error(`${context} is invalid: ${String(value)}`);
+    }
+}
+
 function validateSessionId(value: unknown, context: string): SessionId {
     if (typeof value !== "string" && typeof value !== "number") {
         throw new Error(`${context} must be a string or number session ID`);
@@ -549,6 +591,18 @@ function requireOptionalString(value: unknown, context: string): void {
     if (value !== undefined && typeof value !== "string") {
         throw new Error(`${context} must be a string when provided`);
     }
+}
+
+function validateOptionalStringArray(value: unknown, context: string): void {
+    if (value === undefined) {
+        return;
+    }
+    if (!Array.isArray(value)) {
+        throw new Error(`${context} must be an array when provided`);
+    }
+    value.forEach((entry, index) => {
+        requireString(entry, `${context}[${index}]`);
+    });
 }
 
 function requireBoolean(value: unknown, context: string): boolean {

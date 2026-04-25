@@ -611,9 +611,11 @@ impl ServerRequestInput {
         match self {
             Self::Offer(label) => ServerRequest::Offer(SessionDescriptionPayload {
                 sdp: label.into_sdp("offer-"),
+                upload_slots: Vec::new(),
             }),
             Self::Renegotiate(label) => ServerRequest::Renegotiate(SessionDescriptionPayload {
                 sdp: label.into_sdp("renegotiate-"),
+                upload_slots: Vec::new(),
             }),
         }
     }
