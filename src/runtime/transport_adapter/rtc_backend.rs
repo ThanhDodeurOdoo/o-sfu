@@ -7,8 +7,9 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
-        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer,
+        SourcePacketGate, TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+        TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -221,6 +222,13 @@ impl MediaPort for RtcTransportAdapterShardSet {
                 packet_gate,
             )
             .await
+    }
+
+    async fn set_consumer_packet_gates(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        self.set_consumer_packet_gates(updates).await
     }
 
     async fn request_consumer_keyframe(

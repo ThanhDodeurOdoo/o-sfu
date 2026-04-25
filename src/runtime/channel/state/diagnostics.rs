@@ -9,7 +9,8 @@ use crate::runtime::{
         DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
         DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionTransport,
         DiagnosticsSessionView, DiagnosticsSource, DiagnosticsSourceEncoding,
-        DiagnosticsSourceSelection, DiagnosticsSubscription,
+        DiagnosticsSourceSelection, DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
+        DiagnosticsTemporalLayerSelection,
     },
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
@@ -239,17 +240,23 @@ impl ChannelState {
 
 fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> DiagnosticsSourceEncoding {
     let negotiated_format = encoding.negotiated_format();
+    let max_temporal_layer_id = encoding
+        .max_temporal_layer_id()
+        .map(SourceTemporalLayerId::as_u8);
     DiagnosticsSourceEncoding {
         codec: negotiated_format.map(|format| format.codec_name().to_owned()),
         encoding_id: encoding.encoding_id().as_u64(),
         max_bitrate_bps: encoding.max_bitrate(),
-        max_temporal_layer_id: encoding
-            .max_temporal_layer_id()
-            .map(SourceTemporalLayerId::as_u8),
+        max_temporal_layer_id,
         payload_type: negotiated_format.map(o_sfu_router::MediaFormat::payload_type),
         primary_ssrc: encoding.primary_ssrc().map(o_sfu_router::Ssrc::value),
         repair_ssrc: encoding.repair_ssrc().map(o_sfu_router::Ssrc::value),
         rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
+        temporal_layer_metadata: if max_temporal_layer_id.is_some() {
+            DiagnosticsTemporalLayerMetadata::Advertised
+        } else {
+            DiagnosticsTemporalLayerMetadata::Absent
+        },
         transport_media_id: encoding
             .transport_binding()
             .map(|binding| binding.transport_media_id().as_u64()),
@@ -265,6 +272,11 @@ fn diagnostics_source_selection(
         .selector()
         .selected_operating_point()
         .map(|operating_point| operating_point.max_temporal_layer_id().as_u8());
+    let temporal_layer_selection = if selected_temporal_layer_id.is_some() {
+        DiagnosticsTemporalLayerSelection::Selected
+    } else {
+        DiagnosticsTemporalLayerSelection::NotSelected
+    };
     DiagnosticsSourceSelection {
         active: selection.active(),
         pressure_observations: selection.pressure_observations(),
@@ -276,6 +288,110 @@ fn diagnostics_source_selection(
             .and_then(SourceEncodingDescriptor::rid)
             .map(|rid| rid.as_str().to_owned()),
         selected_temporal_layer_id,
+        temporal_layer_selection,
         upgrade_observations: selection.upgrade_observations(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "diagnostics fixtures should fail loudly when they build invalid source graphs"
+    )]
+
+    use o_sfu_router::{MediaKind, Rid};
+
+    use super::*;
+    use crate::runtime::source_model::{
+        PublishedSourceDescriptorParts, PublishedSourceOwner, SourceEncodingDescriptorParts,
+        SourceOperatingPoint, SourceSelector,
+    };
+
+    fn encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+        max_temporal_layer_id: Option<u8>,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: Some(Rid::new("hi")),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: None,
+            max_temporal_layer_id: max_temporal_layer_id.and_then(SourceTemporalLayerId::new),
+            negotiated_format: None,
+            transport_binding: None,
+        })
+    }
+
+    fn source_with_encoding(encoding: SourceEncodingDescriptor) -> PublishedSourceDescriptor {
+        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id: encoding.source_id(),
+            owner: PublishedSourceOwner::new(SessionId::Integer(1), ConnectionId::from_raw(1)),
+            stream_type: StreamType::Camera,
+            media_kind: MediaKind::Video,
+            mid: None,
+            encodings: vec![encoding],
+        })
+        .expect("test source graph should be valid")
+    }
+
+    #[test]
+    fn source_encoding_diagnostics_distinguish_absent_temporal_metadata_from_base_layer() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let absent_encoding =
+            diagnostics_source_encoding(&encoding(source_id, SourceEncodingId::from_raw(1), None));
+        let base_layer_encoding = diagnostics_source_encoding(&encoding(
+            source_id,
+            SourceEncodingId::from_raw(2),
+            Some(SourceTemporalLayerId::base().as_u8()),
+        ));
+
+        assert_eq!(
+            absent_encoding.temporal_layer_metadata,
+            DiagnosticsTemporalLayerMetadata::Absent
+        );
+        assert_eq!(absent_encoding.max_temporal_layer_id, None);
+        assert_eq!(
+            base_layer_encoding.temporal_layer_metadata,
+            DiagnosticsTemporalLayerMetadata::Advertised
+        );
+        assert_eq!(base_layer_encoding.max_temporal_layer_id, Some(0));
+    }
+
+    #[test]
+    fn source_selection_diagnostics_distinguish_unselected_temporal_layer_from_base_layer() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let encoding_id = SourceEncodingId::from_raw(1);
+        let source = source_with_encoding(encoding(
+            source_id,
+            encoding_id,
+            Some(SourceTemporalLayerId::base().as_u8()),
+        ));
+
+        let mut rid_selection = ConsumerSourceSelection::open(true);
+        rid_selection.set_selector(SourceSelector::Encoding(encoding_id));
+        let rid_diagnostics = diagnostics_source_selection(&source, rid_selection);
+        assert_eq!(
+            rid_diagnostics.temporal_layer_selection,
+            DiagnosticsTemporalLayerSelection::NotSelected
+        );
+        assert_eq!(rid_diagnostics.selected_temporal_layer_id, None);
+
+        let mut base_layer_selection = ConsumerSourceSelection::open(true);
+        base_layer_selection.set_selector(SourceSelector::OperatingPoint(
+            SourceOperatingPoint::new(encoding_id, SourceTemporalLayerId::base()),
+        ));
+        let base_layer_diagnostics = diagnostics_source_selection(&source, base_layer_selection);
+        assert_eq!(
+            base_layer_diagnostics.temporal_layer_selection,
+            DiagnosticsTemporalLayerSelection::Selected
+        );
+        assert_eq!(
+            base_layer_diagnostics.selected_temporal_layer_id,
+            Some(SourceTemporalLayerId::base().as_u8())
+        );
     }
 }

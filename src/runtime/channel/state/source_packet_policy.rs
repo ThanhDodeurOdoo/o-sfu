@@ -256,7 +256,7 @@ impl ChannelState {
                 if desired_selector == producer.source_packet_selector {
                     return None;
                 }
-                let packet_gate = source_packet_gate_for_selector(source, desired_selector)?;
+                let packet_gate = source_packet_gate_for_selector(source, desired_selector).ok()?;
                 Some(SourcePacketSelectionUpdate {
                     producer_id: *producer_id,
                     owner_session_id: producer.owner_session_id.clone(),
@@ -289,10 +289,12 @@ impl ChannelState {
         let receiver_bandwidth_by_session =
             receiver_bandwidth_by_session(receiver_bandwidth_snapshot);
         let active_video_route_counts = self.active_video_route_counts_by_consumer();
+        let selectable_encoding_ladders = selectable_encoding_ladders_by_source(&self.sources);
         self.consumer_index
             .iter()
             .filter_map(|(consumer_key, consumer_state)| {
                 let source = self.sources.get(&consumer_key.source_id)?;
+                let encodings = selectable_encoding_ladders.get(&consumer_key.source_id)?;
                 let producer_id = self.producer_id_by_source_id.get(&consumer_key.source_id)?;
                 let producer = self.producers.get(producer_id)?;
                 if !producer.active {
@@ -308,7 +310,8 @@ impl ChannelState {
                 }
                 let adaptation = consumer_adaptation_plan(
                     self.session_count(),
-                    source,
+                    source.stream_type(),
+                    encodings,
                     selection,
                     featured_camera_session_ids.contains(source.owner().session_id()),
                     active_video_route_counts
@@ -322,10 +325,7 @@ impl ChannelState {
                 let packet_gate = if adaptation.selector == selection.selector() {
                     None
                 } else {
-                    Some(source_packet_gate_for_selector(
-                        source,
-                        adaptation.selector,
-                    )?)
+                    Some(source_packet_gate_for_selector(source, adaptation.selector).ok()?)
                 };
                 if packet_gate.is_none()
                     && adaptation.pressure_observations == selection.pressure_observations()
@@ -586,6 +586,15 @@ struct ConsumerAdaptationPlan {
     request_keyframe: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourcePacketGateProjectionError {
+    MissingEncoding,
+    MissingRid,
+    MissingTemporalMetadata,
+    TemporalLayerExceedsAdvertised,
+    UnsupportedRoomPolicy,
+}
+
 /// Normalizes transport-session bandwidth observations to room session ids.
 ///
 /// The selector policy is keyed by receiver session, while the transport
@@ -625,26 +634,26 @@ fn desired_source_packet_selector(
 /// decodable frame.
 fn consumer_adaptation_plan(
     session_count: usize,
-    source: &PublishedSourceDescriptor,
+    stream_type: StreamType,
+    encodings: &[&SourceEncodingDescriptor],
     current: ConsumerSourceSelection,
     featured: bool,
     active_video_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
 ) -> Option<ConsumerAdaptationPlan> {
-    if source.stream_type() != StreamType::Camera {
+    if stream_type != StreamType::Camera {
         return None;
     }
-    let encodings = selectable_encodings(source);
     if encodings.len() < 2 {
         return None;
     }
-    let current_index = selector_index(current.selector(), &encodings);
+    let current_index = selector_index(current.selector(), encodings);
     let target_index = desired_encoding_index(
         session_count,
         featured,
         active_video_route_count,
         receiver_bandwidth_bps,
-        &encodings,
+        encodings,
     );
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
     if target_index == current_index {
@@ -802,34 +811,44 @@ fn selector_index(selector: SourceSelector, encodings: &[&SourceEncodingDescript
 /// simulcast is RID-based. `OperatingPoint` selectors validate their temporal
 /// ceiling against the source descriptor before crossing into transport state.
 ///
-/// `None` means the selector cannot be enforced safely at the transport
+/// Errors mean the selector cannot be enforced safely at the transport
 /// boundary. Callers should skip the update rather than store a selector that
 /// the packet loop cannot apply.
 fn source_packet_gate_for_selector(
     source: &PublishedSourceDescriptor,
     selector: SourceSelector,
-) -> Option<SourcePacketGate> {
+) -> Result<SourcePacketGate, SourcePacketGateProjectionError> {
     match selector {
-        SourceSelector::Open => Some(SourcePacketGate::Open),
-        SourceSelector::Encoding(encoding_id) => source
-            .encoding(encoding_id)
-            .and_then(SourceEncodingDescriptor::rid)
-            .map(|rid| SourcePacketGate::Rid(rid.as_str().to_owned())),
+        SourceSelector::Open => Ok(SourcePacketGate::Open),
+        SourceSelector::Encoding(encoding_id) => {
+            let encoding = source
+                .encoding(encoding_id)
+                .ok_or(SourcePacketGateProjectionError::MissingEncoding)?;
+            let rid = encoding
+                .rid()
+                .ok_or(SourcePacketGateProjectionError::MissingRid)?;
+            Ok(SourcePacketGate::Rid(rid.as_str().to_owned()))
+        }
         SourceSelector::OperatingPoint(operating_point) => {
-            let encoding = source.encoding(operating_point.encoding_id())?;
-            if let Some(max_temporal_layer_id) = encoding.max_temporal_layer_id()
-                && operating_point.max_temporal_layer_id() > max_temporal_layer_id
-            {
-                return None;
+            let encoding = source
+                .encoding(operating_point.encoding_id())
+                .ok_or(SourcePacketGateProjectionError::MissingEncoding)?;
+            let max_temporal_layer_id = encoding
+                .max_temporal_layer_id()
+                .ok_or(SourcePacketGateProjectionError::MissingTemporalMetadata)?;
+            if operating_point.max_temporal_layer_id() > max_temporal_layer_id {
+                return Err(SourcePacketGateProjectionError::TemporalLayerExceedsAdvertised);
             }
-            Some(SourcePacketGate::OperatingPoint(
+            Ok(SourcePacketGate::OperatingPoint(
                 SourcePacketOperatingPoint::new(
                     encoding.rid().map(|rid| rid.as_str().to_owned()),
                     operating_point.max_temporal_layer_id().as_u8(),
                 ),
             ))
         }
-        SourceSelector::RoomPolicy(_) => None,
+        SourceSelector::RoomPolicy(_) => {
+            Err(SourcePacketGateProjectionError::UnsupportedRoomPolicy)
+        }
     }
 }
 
@@ -877,6 +896,18 @@ fn selectable_encodings(source: &PublishedSourceDescriptor) -> Vec<&SourceEncodi
         encodings.sort_by_key(|encoding| encoding.max_bitrate().unwrap_or(u64::MAX));
     }
     encodings
+}
+
+fn selectable_encoding_ladders_by_source(
+    sources: &BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
+) -> BTreeMap<PublishedSourceId, Vec<&SourceEncodingDescriptor>> {
+    sources
+        .iter()
+        .filter_map(|(source_id, source)| {
+            let encodings = selectable_encodings(source);
+            (!encodings.is_empty()).then_some((*source_id, encodings))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -963,7 +994,7 @@ mod tests {
         assert_eq!(selector, SourceSelector::Encoding(low_encoding_id));
         assert_eq!(
             source_packet_gate_for_selector(&source, selector),
-            Some(SourcePacketGate::Rid(String::from("lo")))
+            Ok(SourcePacketGate::Rid(String::from("lo")))
         );
     }
 
@@ -979,7 +1010,7 @@ mod tests {
 
         assert_eq!(
             source_packet_gate_for_selector(&source, SourceSelector::Open),
-            Some(SourcePacketGate::Open)
+            Ok(SourcePacketGate::Open)
         );
     }
 
@@ -991,7 +1022,7 @@ mod tests {
 
         assert_eq!(
             source_packet_gate_for_selector(&source, SourceSelector::Encoding(encoding_id)),
-            None
+            Err(SourcePacketGateProjectionError::MissingRid)
         );
     }
 
@@ -1016,8 +1047,54 @@ mod tests {
                     temporal_layer,
                 ))
             ),
-            Some(SourcePacketGate::OperatingPoint(
+            Ok(SourcePacketGate::OperatingPoint(
                 SourcePacketOperatingPoint::new(Some(String::from("hi")), 1)
+            ))
+        );
+    }
+
+    #[test]
+    fn source_selector_bridge_rejects_operating_points_without_advertised_temporal_metadata() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let encoding_id = SourceEncodingId::from_raw(1);
+        let source =
+            source_with_encodings(vec![encoding(source_id, encoding_id, Some("hi"), None)]);
+        let temporal_layer = SourceTemporalLayerId::base();
+
+        assert_eq!(
+            source_packet_gate_for_selector(
+                &source,
+                SourceSelector::OperatingPoint(SourceOperatingPoint::new(
+                    encoding_id,
+                    temporal_layer,
+                ))
+            ),
+            Err(SourcePacketGateProjectionError::MissingTemporalMetadata)
+        );
+    }
+
+    #[test]
+    fn source_selector_bridge_projects_advertised_base_layer_operating_point() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let encoding_id = SourceEncodingId::from_raw(1);
+        let source = source_with_encodings(vec![layered_encoding(
+            source_id,
+            encoding_id,
+            Some("hi"),
+            0,
+        )]);
+        let temporal_layer = SourceTemporalLayerId::base();
+
+        assert_eq!(
+            source_packet_gate_for_selector(
+                &source,
+                SourceSelector::OperatingPoint(SourceOperatingPoint::new(
+                    encoding_id,
+                    temporal_layer,
+                ))
+            ),
+            Ok(SourcePacketGate::OperatingPoint(
+                SourcePacketOperatingPoint::new(Some(String::from("hi")), 0)
             ))
         );
     }
@@ -1038,7 +1115,7 @@ mod tests {
                     temporal_layer,
                 ))
             ),
-            None
+            Err(SourcePacketGateProjectionError::TemporalLayerExceedsAdvertised)
         );
     }
 }

@@ -103,6 +103,7 @@ pub(crate) fn handle_worker_command(
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. }
         | RtcWorkerCommand::SetConsumerPacketGate { .. }
+        | RtcWorkerCommand::SetConsumerPacketGateBatch { .. }
         | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_media_command(
                 state,
@@ -270,6 +271,7 @@ fn handle_media_command(
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. }
         | RtcWorkerCommand::SetConsumerPacketGate { .. }
+        | RtcWorkerCommand::SetConsumerPacketGateBatch { .. }
         | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_media_route_control_command(state, metrics, relay_registry, command);
         }
@@ -370,6 +372,9 @@ fn handle_media_route_control_command(
         RtcWorkerCommand::SetConsumerPacketGate { .. } => {
             handle_consumer_packet_gate_update(state, command);
         }
+        RtcWorkerCommand::SetConsumerPacketGateBatch { .. } => {
+            handle_consumer_packet_gate_batch_update(state, command);
+        }
         RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_consumer_keyframe_request(state, metrics, command);
         }
@@ -394,6 +399,27 @@ fn handle_consumer_packet_gate_update(state: &mut RtcBootstrapState, command: Rt
             &source_session_key,
             source_transport_media_id,
             packet_gate,
+            response,
+        );
+    }
+}
+
+fn handle_consumer_packet_gate_batch_update(
+    state: &mut RtcBootstrapState,
+    command: RtcWorkerCommand,
+) {
+    if let RtcWorkerCommand::SetConsumerPacketGateBatch {
+        source_session_key,
+        source_transport_media_id,
+        updates,
+        response,
+    } = command
+    {
+        media::respond_set_consumer_packet_gates(
+            state,
+            &source_session_key,
+            source_transport_media_id,
+            updates,
             response,
         );
     }

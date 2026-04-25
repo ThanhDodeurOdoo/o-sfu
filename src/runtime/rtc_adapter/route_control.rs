@@ -214,27 +214,32 @@ impl RouteControlState {
         voice_activity: Option<bool>,
         audio_level_dbov: Option<i8>,
         now: Instant,
-    ) {
+    ) -> bool {
         let should_remove =
             if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
-                source_control.observe_audio_activity(voice_activity, audio_level_dbov, now);
+                if !source_control.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                    return false;
+                }
                 source_control.is_empty()
             } else {
                 if voice_activity.is_none() && audio_level_dbov.is_none() {
-                    return;
+                    return false;
                 }
                 let mut source_control = SourceRouteControl::default();
-                source_control.observe_audio_activity(voice_activity, audio_level_dbov, now);
+                if !source_control.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                    return false;
+                }
                 if source_control.is_empty() {
-                    return;
+                    return false;
                 }
                 self.sources
                     .insert(source_transport_media_id, source_control);
-                return;
+                return true;
             };
         if should_remove {
             self.sources.remove(&source_transport_media_id);
         }
+        true
     }
 
     pub(super) fn set_relay_packet_gate(
@@ -502,15 +507,17 @@ impl SourceRouteControl {
         voice_activity: Option<bool>,
         audio_level_dbov: Option<i8>,
         now: Instant,
-    ) {
+    ) -> bool {
+        let previous = self.source_audio_policy.clone();
         let Some(mut source_policy) = self.source_audio_policy.take().or_else(|| {
             (voice_activity.is_some() || audio_level_dbov.is_some())
                 .then(SourceAudioPolicyState::default)
         }) else {
-            return;
+            return false;
         };
         source_policy.observe_packet(voice_activity, audio_level_dbov, now);
         self.source_audio_policy = Some(source_policy);
+        self.source_audio_policy != previous
     }
 
     fn effective_packet_gate(&self) -> Option<PacketLayerGate> {
@@ -538,7 +545,7 @@ impl SourceRouteControl {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct SourceAudioPolicyState {
     active_until: Option<Instant>,
     last_spoke_at: Option<Instant>,

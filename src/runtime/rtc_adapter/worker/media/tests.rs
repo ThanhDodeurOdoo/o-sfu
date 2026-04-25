@@ -16,7 +16,8 @@ use super::{
     AddSendMediaRequest, RemoteKeyframeRequest, request_keyframe_for_source,
     respond_add_send_media, respond_remove_media, respond_request_consumer_keyframe,
     respond_request_remote_keyframe, respond_set_consumer_packet_gate,
-    respond_set_remote_source_packet_gate, respond_set_source_packet_gate,
+    respond_set_consumer_packet_gates, respond_set_remote_source_packet_gate,
+    respond_set_source_packet_gate,
 };
 use crate::{
     config::MediaCodecFlags,
@@ -25,7 +26,7 @@ use crate::{
         rtc_adapter::{
             bitrate::RtcBitrateState,
             bootstrap,
-            commands::{RemoteSourceControl, RtcWorkerCommand},
+            commands::{ConsumerPacketGateCommand, RemoteSourceControl, RtcWorkerCommand},
             demux::{MediaRouteDestination, MediaRouteEntry},
             media_registry::RegisteredMediaHandle,
             relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
@@ -509,6 +510,95 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
             .effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Open)
     );
+}
+
+#[test]
+fn batched_consumer_packet_gates_refresh_remote_source_once() {
+    let source_session = test_transport_session_key(141, 0, 142, SessionId::Integer(143));
+    let first_consumer_session = test_transport_session_key(141, 1, 144, SessionId::Integer(145));
+    let second_consumer_session = test_transport_session_key(141, 1, 146, SessionId::Integer(147));
+    let first_consumer_mid = Mid::from("cam-down-a");
+    let second_consumer_mid = Mid::from("cam-down-b");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id = TransportMediaId::new(41);
+    let (command_tx, mut command_rx) = mpsc::channel(4);
+    assert!(
+        state
+            .register_remote_source(
+                source_transport_media_id,
+                &source_session,
+                RemoteSourceControl::new(command_tx, RelayTargetId::new(16)),
+            )
+            .is_ok()
+    );
+    let first_consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: first_consumer_session.clone(),
+            mid: first_consumer_mid,
+            source_transport_media_id,
+        });
+    let second_consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: second_consumer_session.clone(),
+            mid: second_consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![
+                MediaRouteDestination {
+                    dest_session: first_consumer_session.clone(),
+                    dest_transport_media_id: first_consumer_transport_media_id,
+                    dest_mid: first_consumer_mid,
+                    active: true,
+                    packet_gate: PacketLayerGate::Open,
+                },
+                MediaRouteDestination {
+                    dest_session: second_consumer_session.clone(),
+                    dest_transport_media_id: second_consumer_transport_media_id,
+                    dest_mid: second_consumer_mid,
+                    active: true,
+                    packet_gate: PacketLayerGate::Open,
+                },
+            ],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_set_consumer_packet_gates(
+        &mut state,
+        &source_session,
+        source_transport_media_id,
+        vec![
+            ConsumerPacketGateCommand::new(
+                first_consumer_session,
+                first_consumer_transport_media_id,
+                PacketLayerGate::Rid("lo".into()),
+            ),
+            ConsumerPacketGateCommand::new(
+                second_consumer_session,
+                second_consumer_transport_media_id,
+                PacketLayerGate::Rid("hi".into()),
+            ),
+        ],
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(vec![Ok(()), Ok(())])));
+    assert!(matches!(
+        command_rx.try_recv().ok(),
+        Some(RtcWorkerCommand::SetRemoteSourcePacketGate {
+            source_session_key,
+            source_transport_media_id: forwarded_source_transport_media_id,
+            target_id,
+            packet_gate: PacketLayerGate::Open,
+        }) if source_session_key == source_session
+            && forwarded_source_transport_media_id == source_transport_media_id
+            && target_id == RelayTargetId::new(16)
+    ));
+    assert!(command_rx.try_recv().is_err());
 }
 
 #[test]

@@ -43,7 +43,7 @@ use tokio::sync::oneshot;
 
 use super::{
     super::super::{
-        commands::{RelayCleanup, RemoteSourceControl},
+        commands::{ConsumerPacketGateCommand, RelayCleanup, RemoteSourceControl},
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayRegistry, RelayTargetId},
@@ -56,7 +56,9 @@ use super::{
 use crate::runtime::{
     metrics::{RtcRouteControlOutcome, RuntimeMetrics},
     rtc_adapter::route_control::KeyframeRequestDecision,
-    transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
+    transport_adapter::{
+        TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+    },
 };
 
 /// Controls whether route-source lookup may create a remote-source entry.
@@ -140,6 +142,21 @@ pub(crate) fn respond_set_consumer_packet_gate(
         source_transport_media_id,
         packet_gate,
     ));
+}
+
+pub(crate) fn respond_set_consumer_packet_gates(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    updates: Vec<ConsumerPacketGateCommand>,
+    response: oneshot::Sender<TransportResult<Vec<TransportResult<()>>>>,
+) {
+    let _ = response.send(Ok(worker_set_consumer_packet_gates(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        updates,
+    )));
 }
 
 pub(crate) fn respond_request_consumer_keyframe(
@@ -443,6 +460,58 @@ fn worker_set_consumer_packet_gate(
     source_transport_media_id: TransportMediaId,
     packet_gate: PacketLayerGate,
 ) -> Result<(), TransportAdapterError> {
+    if update_consumer_packet_gate(
+        state,
+        consumer_session_key,
+        consumer_transport_media_id,
+        source_session_key,
+        source_transport_media_id,
+        packet_gate,
+    )? {
+        refresh_source_packet_gate(state, source_transport_media_id);
+    }
+    Ok(())
+}
+
+fn worker_set_consumer_packet_gates(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    updates: Vec<ConsumerPacketGateCommand>,
+) -> Vec<TransportResult<()>> {
+    let mut route_changed = false;
+    let mut results = Vec::with_capacity(updates.len());
+    for update in updates {
+        let (consumer_session_key, consumer_transport_media_id, packet_gate) = update.into_parts();
+        match update_consumer_packet_gate(
+            state,
+            &consumer_session_key,
+            consumer_transport_media_id,
+            source_session_key,
+            source_transport_media_id,
+            packet_gate,
+        ) {
+            Ok(changed) => {
+                route_changed |= changed;
+                results.push(Ok(()));
+            }
+            Err(error) => results.push(Err(error)),
+        }
+    }
+    if route_changed {
+        refresh_source_packet_gate(state, source_transport_media_id);
+    }
+    results
+}
+
+fn update_consumer_packet_gate(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: PacketLayerGate,
+) -> Result<bool, TransportAdapterError> {
     ensure_route_source(
         state,
         consumer_session_key,
@@ -465,7 +534,6 @@ fn worker_set_consumer_packet_gate(
         }
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
-    let mut route_changed = false;
     {
         let route_entry = state
             .media_route_index
@@ -481,13 +549,10 @@ fn worker_set_consumer_packet_gate(
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         if destination.packet_gate != packet_gate {
             destination.packet_gate = packet_gate;
-            route_changed = true;
+            return Ok(true);
         }
     }
-    if route_changed {
-        refresh_source_packet_gate(state, source_transport_media_id);
-    }
-    Ok(())
+    Ok(false)
 }
 
 /// Request a refresh frame for an already-declared consumer route.

@@ -14,6 +14,7 @@ use o_sfu_router::{MediaKind, MediaStream};
 use super::fixtures::*;
 use crate::runtime::{
     channel::Channel,
+    diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
     test_rtp_samples::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
 };
 
@@ -232,7 +233,15 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
     assert_eq!(detail.sources[0].source_id, 1);
     assert_eq!(detail.sources[0].encodings.len(), 2);
     assert_eq!(detail.sources[0].encodings[0].rid.as_deref(), Some("lo"));
+    assert_eq!(
+        detail.sources[0].encodings[0].temporal_layer_metadata,
+        DiagnosticsTemporalLayerMetadata::Absent
+    );
     assert_eq!(detail.sources[0].encodings[1].rid.as_deref(), Some("hi"));
+    assert_eq!(
+        detail.sources[0].encodings[1].temporal_layer_metadata,
+        DiagnosticsTemporalLayerMetadata::Absent
+    );
     assert!(
         detail
             .recent_events
@@ -302,6 +311,11 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
     assert_eq!(subscription.source_id, 1);
     assert_eq!(subscription.selection.selected_encoding_id, Some(1));
     assert_eq!(subscription.selection.selected_rid.as_deref(), Some("lo"));
+    assert_eq!(subscription.selection.selected_temporal_layer_id, None);
+    assert_eq!(
+        subscription.selection.temporal_layer_selection,
+        DiagnosticsTemporalLayerSelection::NotSelected
+    );
     assert_eq!(
         subscription.selection.selection_reason,
         DiagnosticsSourceSelectionReason::ReceiverAdaptation

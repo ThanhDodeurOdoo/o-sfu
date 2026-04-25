@@ -161,6 +161,35 @@ impl RemoteSourceControl {
 
 pub(crate) type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ConsumerPacketGateCommand {
+    consumer_session_key: TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    packet_gate: PacketLayerGate,
+}
+
+impl ConsumerPacketGateCommand {
+    pub(crate) fn new(
+        consumer_session_key: TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        packet_gate: PacketLayerGate,
+    ) -> Self {
+        Self {
+            consumer_session_key,
+            consumer_transport_media_id,
+            packet_gate,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
+        (
+            self.consumer_session_key,
+            self.consumer_transport_media_id,
+            self.packet_gate,
+        )
+    }
+}
+
 pub(super) enum RtcWorkerCommand {
     CreateInitialSessionOffer {
         session_key: TransportSessionKey,
@@ -268,6 +297,12 @@ pub(super) enum RtcWorkerCommand {
         source_transport_media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
         response: RtcWorkerResponse<()>,
+    },
+    SetConsumerPacketGateBatch {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        updates: Vec<ConsumerPacketGateCommand>,
+        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
     },
     RequestConsumerKeyframe {
         consumer_session_key: TransportSessionKey,

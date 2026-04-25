@@ -76,6 +76,23 @@ impl DirtyChannelRegistry {
         dirty_channels.insert(channel_instance_id);
     }
 
+    fn insert_many(
+        &self,
+        channel_instance_ids: impl IntoIterator<Item = ChannelInstanceId>,
+    ) -> bool {
+        let mut dirty_channels = self
+            .channel_instance_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut inserted_any = false;
+        for channel_instance_id in channel_instance_ids {
+            dirty_channels.insert(channel_instance_id);
+            inserted_any = true;
+        }
+        drop(dirty_channels);
+        inserted_any
+    }
+
     fn drain(&self) -> BTreeSet<ChannelInstanceId> {
         let mut dirty_channels = self
             .channel_instance_ids
@@ -129,6 +146,18 @@ impl SourcePolicySignal {
 
     pub(crate) fn mark_dirty(&self, channel_instance_id: ChannelInstanceId) {
         self.dirty_channels.insert(channel_instance_id);
+        if self.dirty.mark_dirty() {
+            self.notify.notify_one();
+        }
+    }
+
+    pub(crate) fn mark_dirty_channels(
+        &self,
+        channel_instance_ids: impl IntoIterator<Item = ChannelInstanceId>,
+    ) {
+        if !self.dirty_channels.insert_many(channel_instance_ids) {
+            return;
+        }
         if self.dirty.mark_dirty() {
             self.notify.notify_one();
         }
@@ -193,6 +222,26 @@ mod tests {
             Some(BTreeSet::from([
                 ChannelInstanceId::from_raw(4),
                 ChannelInstanceId::from_raw(6),
+            ]))
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_update_observes_batch_dirty_marks() {
+        let signal = SourcePolicySignal::default();
+        let subscription = signal.subscribe();
+        signal.mark_dirty_channels([
+            ChannelInstanceId::from_raw(8),
+            ChannelInstanceId::from_raw(8),
+            ChannelInstanceId::from_raw(10),
+        ]);
+
+        let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
+        assert_eq!(
+            updates.ok(),
+            Some(BTreeSet::from([
+                ChannelInstanceId::from_raw(8),
+                ChannelInstanceId::from_raw(10),
             ]))
         );
     }

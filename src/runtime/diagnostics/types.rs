@@ -51,6 +51,20 @@ pub(crate) enum DiagnosticsSourceSelectionReason {
     RoomPolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticsTemporalLayerMetadata {
+    Absent,
+    Advertised,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticsTemporalLayerSelection {
+    NotSelected,
+    Selected,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiagnosticsIncomingBitrate {
@@ -103,6 +117,7 @@ pub(crate) struct DiagnosticsSourceEncoding {
     pub(crate) max_bitrate_bps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) max_temporal_layer_id: Option<u8>,
+    pub(crate) temporal_layer_metadata: DiagnosticsTemporalLayerMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) payload_type: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +159,7 @@ pub(crate) struct DiagnosticsSourceSelection {
     pub(crate) selected_rid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) selected_temporal_layer_id: Option<u8>,
+    pub(crate) temporal_layer_selection: DiagnosticsTemporalLayerSelection,
     pub(crate) upgrade_observations: u8,
 }
 

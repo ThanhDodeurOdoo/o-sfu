@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Instant};
+use std::time::Instant;
 
 use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
 
@@ -35,7 +35,7 @@ impl PendingKeyframeRequest {
 }
 
 #[derive(Clone)]
-enum ResolvedKeyframeRoute {
+pub(super) enum ResolvedKeyframeRoute {
     Local {
         source_session_key: TransportSessionKey,
     },
@@ -46,7 +46,7 @@ enum ResolvedKeyframeRoute {
 }
 
 #[derive(Clone)]
-struct CoalescedKeyframeRequest {
+pub(super) struct CoalescedKeyframeRequest {
     source_transport_media_id: TransportMediaId,
     route: ResolvedKeyframeRoute,
     rid: Option<Rid>,
@@ -79,8 +79,10 @@ pub(super) fn flush_pending_keyframe_requests(
     metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
-    let mut coalesced_requests = BTreeMap::new();
-    for (consumer_session_key, request) in buffers.pending_keyframe_requests.drain(..) {
+    let pending_keyframe_requests = &mut buffers.pending_keyframe_requests;
+    let coalesced_requests = &mut buffers.coalesced_keyframe_requests;
+    coalesced_requests.clear();
+    for (consumer_session_key, request) in pending_keyframe_requests.drain(..) {
         let Some(source_transport_media_id) = state.consumer_source_transport_media_id_for_mid(
             &consumer_session_key,
             request.consumer_mid,
@@ -90,52 +92,75 @@ pub(super) fn flush_pending_keyframe_requests(
         let Some(route) = resolve_keyframe_route(state, source_transport_media_id) else {
             continue;
         };
-        coalesced_requests
-            .entry(source_transport_media_id)
-            .and_modify(|coalesced: &mut CoalescedKeyframeRequest| {
-                coalesced.coalesce(request.consumer_rid, request.kind);
-            })
-            .or_insert_with(|| {
-                CoalescedKeyframeRequest::new(
-                    source_transport_media_id,
-                    route,
-                    request.consumer_rid,
-                    request.kind,
-                )
-            });
+        coalesced_requests.push(CoalescedKeyframeRequest::new(
+            source_transport_media_id,
+            route,
+            request.consumer_rid,
+            request.kind,
+        ));
     }
+    coalesced_requests.sort_by_key(|request| request.source_transport_media_id);
     let now = Instant::now();
-    for coalesced_request in coalesced_requests.into_values() {
-        match coalesced_request.route {
-            ResolvedKeyframeRoute::Local { source_session_key } => request_keyframe_for_source(
-                state,
-                metrics,
-                &source_session_key,
-                coalesced_request.source_transport_media_id,
-                coalesced_request.rid,
-                coalesced_request.kind,
-                now,
-            ),
-            ResolvedKeyframeRoute::Remote {
-                source_session_key,
-                source_control,
-            } => {
-                match state
-                    .route_control
-                    .decide_keyframe_request(coalesced_request.source_transport_media_id, now)
-                {
-                    KeyframeRequestDecision::Forward => {
-                        source_control.request_keyframe(
-                            source_session_key,
-                            coalesced_request.source_transport_media_id,
-                            coalesced_request.rid,
-                            coalesced_request.kind,
-                        );
-                        metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
-                    }
-                    KeyframeRequestDecision::Absorb => {
-                        metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-                    }
+    let mut current_request: Option<CoalescedKeyframeRequest> = None;
+    for coalesced_request in coalesced_requests.drain(..) {
+        match &mut current_request {
+            Some(current)
+                if current.source_transport_media_id
+                    == coalesced_request.source_transport_media_id =>
+            {
+                current.coalesce(coalesced_request.rid, coalesced_request.kind);
+            }
+            Some(_) => {
+                if let Some(request) = current_request.take() {
+                    flush_coalesced_keyframe_request(state, metrics, request, now);
+                }
+                current_request = Some(coalesced_request);
+            }
+            None => {
+                current_request = Some(coalesced_request);
+            }
+        }
+    }
+    if let Some(request) = current_request {
+        flush_coalesced_keyframe_request(state, metrics, request, now);
+    }
+}
+
+fn flush_coalesced_keyframe_request(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    coalesced_request: CoalescedKeyframeRequest,
+    now: Instant,
+) {
+    match coalesced_request.route {
+        ResolvedKeyframeRoute::Local { source_session_key } => request_keyframe_for_source(
+            state,
+            metrics,
+            &source_session_key,
+            coalesced_request.source_transport_media_id,
+            coalesced_request.rid,
+            coalesced_request.kind,
+            now,
+        ),
+        ResolvedKeyframeRoute::Remote {
+            source_session_key,
+            source_control,
+        } => {
+            match state
+                .route_control
+                .decide_keyframe_request(coalesced_request.source_transport_media_id, now)
+            {
+                KeyframeRequestDecision::Forward => {
+                    source_control.request_keyframe(
+                        source_session_key,
+                        coalesced_request.source_transport_media_id,
+                        coalesced_request.rid,
+                        coalesced_request.kind,
+                    );
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+                }
+                KeyframeRequestDecision::Absorb => {
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
                 }
             }
         }

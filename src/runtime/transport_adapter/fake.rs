@@ -18,8 +18,8 @@ use super::source_policy::SourcePolicySignal;
 #[cfg(test)]
 use crate::runtime::ChannelInstanceId;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer,
+    SourcePacketGate, TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
@@ -560,6 +560,26 @@ impl FakeWebRtcAdapter {
             packet_gate,
         });
         Ok(())
+    }
+
+    pub(crate) async fn set_consumer_packet_gates(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let mut results = Vec::with_capacity(updates.len());
+        for update in updates {
+            results.push(
+                self.set_consumer_packet_gate(
+                    update.consumer_session_key(),
+                    update.consumer_transport_media_id(),
+                    update.source_session_key(),
+                    update.source_transport_media_id(),
+                    update.packet_gate().clone(),
+                )
+                .await,
+            );
+        }
+        results
     }
 
     #[allow(

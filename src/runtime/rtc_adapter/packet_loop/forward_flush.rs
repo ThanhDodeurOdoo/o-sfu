@@ -17,19 +17,24 @@ pub(super) fn record_incoming_stats(
     metrics: &RuntimeMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
-    for packet in &mut buffers.pending_packets {
+    let (pending_packets, dirty_source_policy_channel_ids) = (
+        &mut buffers.pending_packets,
+        &mut buffers.dirty_source_policy_channel_ids,
+    );
+    for packet in pending_packets {
         if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
             let payload_len = packet.payload_len();
             let voice_activity = packet.route_control_voice_activity();
             let audio_level = packet.route_control_audio_level();
-            state.route_control.observe_audio_activity(
+            let audio_policy_changed = state.route_control.observe_audio_activity(
                 transport_media_id,
                 voice_activity,
                 audio_level,
                 packet.received_at(),
             );
-            if voice_activity.is_some() || audio_level.is_some() {
-                source_policy_signal.mark_dirty(packet.source_session_key().channel_instance_id());
+            if audio_policy_changed {
+                dirty_source_policy_channel_ids
+                    .push(packet.source_session_key().channel_instance_id());
             }
             let first_ingress = state
                 .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
@@ -46,6 +51,7 @@ pub(super) fn record_incoming_stats(
             metrics.record_rtp_ingress(payload_len);
         }
     }
+    buffers.flush_source_policy_dirty(source_policy_signal);
 }
 
 pub(super) fn drain_relay_packets(

@@ -15,8 +15,8 @@ use crate::runtime::{
         config::RtcTransportAdapterShardSetConfig,
         source_policy::SourcePolicySignal,
         types::{
-            ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot,
-            TransportSessionKey,
+            ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot,
+            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -154,6 +154,57 @@ impl RtcTransportAdapterShardSet {
         snapshot
     }
 
+    pub(super) async fn set_consumer_packet_gates(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
+        let mut batches =
+            BTreeMap::<ConsumerPacketGateBatchKey, Vec<(usize, ConsumerPacketGateUpdate)>>::new();
+        for (index, update) in updates.iter().enumerate() {
+            if update.consumer_session_key().channel_instance_id()
+                != update.source_session_key().channel_instance_id()
+            {
+                if let Some(result) = results.get_mut(index) {
+                    *result = Err(TransportAdapterError::InvalidInput);
+                }
+                continue;
+            }
+            let key = ConsumerPacketGateBatchKey {
+                shard_index: self.shard_index_for_session(update.consumer_session_key()),
+                source_session_key: update.source_session_key().clone(),
+                source_transport_media_id: update.source_transport_media_id(),
+            };
+            batches
+                .entry(key)
+                .or_default()
+                .push((index, update.clone()));
+        }
+        for (key, batch) in batches {
+            let shard = self.shard_for_index(key.shard_index);
+            let update_count = batch.len();
+            let batch_updates = batch
+                .iter()
+                .map(|(_index, update)| update.clone())
+                .collect::<Vec<_>>();
+            let batch_results = shard
+                .media()
+                .set_consumer_packet_gates(
+                    &key.source_session_key,
+                    key.source_transport_media_id,
+                    batch_updates,
+                )
+                .await
+                .unwrap_or_else(|error| vec![Err(error); update_count]);
+            for ((index, _update), result) in batch.into_iter().zip(batch_results) {
+                if let Some(stored_result) = results.get_mut(index) {
+                    *stored_result = result;
+                }
+            }
+        }
+        results
+    }
+
     pub(super) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         let mut snapshot = self.primary_shard.active_speaker_source_snapshot().await;
         for shard in &self.extra_shards {
@@ -224,4 +275,11 @@ impl RtcTransportAdapterShardSet {
     pub(super) fn all_shards(&self) -> impl Iterator<Item = &Arc<RtcTransportAdapter>> {
         iter::once(&self.primary_shard).chain(self.extra_shards.iter())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ConsumerPacketGateBatchKey {
+    shard_index: usize,
+    source_session_key: TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
 }

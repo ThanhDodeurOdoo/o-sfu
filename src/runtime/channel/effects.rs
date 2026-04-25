@@ -12,6 +12,8 @@
 //! The important invariant is that each transition makes its ordering and failure
 //! handling explicit where room state meets transport state.
 
+use std::collections::BTreeSet;
+
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use tracing::warn;
 
@@ -29,7 +31,8 @@ use crate::runtime::{
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
     transport_adapter::{
-        ActiveSpeakerSource, MediaPort, ReceiverBandwidthSnapshot, TransportMediaId,
+        ActiveSpeakerSource, ConsumerPacketGateUpdate, MediaPort, ReceiverBandwidthSnapshot,
+        TransportMediaId,
     },
 };
 
@@ -619,26 +622,36 @@ impl SourcePacketPolicyEffectPlan {
         media_port: &impl MediaPort,
         updates: Vec<ConsumerPacketSelectionUpdate>,
     ) -> Vec<ConsumerPacketSelectionUpdate> {
+        let mut packet_gate_updates = Vec::with_capacity(updates.len());
+        let mut update_indexes_with_packet_gates = Vec::with_capacity(updates.len());
+        for (index, update) in updates.iter().enumerate() {
+            let Some(packet_gate) = update.packet_gate() else {
+                continue;
+            };
+            packet_gate_updates.push(ConsumerPacketGateUpdate::new(
+                channel.transport_session_key(
+                    update.consumer_session_id(),
+                    update.consumer_connection_id(),
+                ),
+                update.consumer_transport_media_id(),
+                channel.transport_session_key(
+                    update.source_session_id(),
+                    update.source_connection_id(),
+                ),
+                update.source_transport_media_id(),
+                packet_gate.clone(),
+            ));
+            update_indexes_with_packet_gates.push(index);
+        }
+        let rejected_packet_gate_update_offsets =
+            Self::rejected_packet_gate_updates(media_port, &packet_gate_updates).await;
+        let rejected_packet_gate_updates = rejected_packet_gate_update_offsets
+            .into_iter()
+            .filter_map(|offset| update_indexes_with_packet_gates.get(offset).copied())
+            .collect::<BTreeSet<_>>();
         let mut applied_updates = Vec::with_capacity(updates.len());
-        for update in updates {
-            if let Some(packet_gate) = update.packet_gate()
-                && media_port
-                    .set_consumer_packet_gate(
-                        &channel.transport_session_key(
-                            update.consumer_session_id(),
-                            update.consumer_connection_id(),
-                        ),
-                        update.consumer_transport_media_id(),
-                        &channel.transport_session_key(
-                            update.source_session_id(),
-                            update.source_connection_id(),
-                        ),
-                        update.source_transport_media_id(),
-                        packet_gate.clone(),
-                    )
-                    .await
-                    .is_err()
-            {
+        for (index, update) in updates.into_iter().enumerate() {
+            if rejected_packet_gate_updates.contains(&index) {
                 warn!(
                     consumer_session_id = ?update.consumer_session_id(),
                     source_session_id = ?update.source_session_id(),
@@ -660,6 +673,22 @@ impl SourcePacketPolicyEffectPlan {
             applied_updates.push(update);
         }
         applied_updates
+    }
+
+    async fn rejected_packet_gate_updates(
+        media_port: &impl MediaPort,
+        packet_gate_updates: &[ConsumerPacketGateUpdate],
+    ) -> BTreeSet<usize> {
+        let mut rejected_updates = BTreeSet::new();
+        let results = media_port
+            .set_consumer_packet_gates(packet_gate_updates)
+            .await;
+        for index in 0..packet_gate_updates.len() {
+            if !matches!(results.get(index), Some(Ok(()))) {
+                rejected_updates.insert(index);
+            }
+        }
+        rejected_updates
     }
 
     async fn request_adaptation_keyframe(

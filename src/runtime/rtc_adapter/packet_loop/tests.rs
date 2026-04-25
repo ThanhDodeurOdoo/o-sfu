@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     net::SocketAddr,
     sync::{
         Arc, Mutex,
@@ -23,6 +24,7 @@ use super::{
 use crate::{
     config::MediaCodecFlags,
     runtime::{
+        ChannelInstanceId,
         metrics::{RtpForwardDestinationKind, RuntimeMetrics},
         packet_sink_registry::RegisteredPacketSink,
         recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
@@ -465,6 +467,27 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
     assert_eq!(snapshot.rtc_route_control_layer_allowed, 0);
+}
+
+#[test]
+fn packet_loop_buffers_coalesce_source_policy_dirty_channels_before_signal_flush() {
+    let mut buffers = PacketLoopBuffers::new();
+    let signal = SourcePolicySignal::default();
+    let subscription = signal.subscribe();
+    buffers.mark_source_policy_dirty(ChannelInstanceId::from_raw(41));
+    buffers.mark_source_policy_dirty(ChannelInstanceId::from_raw(41));
+    buffers.mark_source_policy_dirty(ChannelInstanceId::from_raw(42));
+
+    buffers.flush_source_policy_dirty(&signal);
+
+    assert_eq!(
+        subscription.take_pending_updates(),
+        BTreeSet::from([
+            ChannelInstanceId::from_raw(41),
+            ChannelInstanceId::from_raw(42),
+        ])
+    );
+    assert!(subscription.take_pending_updates().is_empty());
 }
 
 #[test]

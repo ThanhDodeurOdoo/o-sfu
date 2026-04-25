@@ -10,8 +10,9 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
-        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer,
+        SourcePacketGate, TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+        TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -313,6 +314,29 @@ impl MediaPort for RuntimeTransportAdapter {
             );
         }
         result
+    }
+
+    async fn set_consumer_packet_gates(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let results = dispatch_transport_backend!(self, |backend| {
+            backend.set_consumer_packet_gates(updates).await
+        });
+        for (update, result) in updates.iter().zip(results.iter()) {
+            if let Err(error) = result {
+                warn!(
+                    ?error,
+                    consumer_session_key = ?update.consumer_session_key(),
+                    consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                    source_session_key = ?update.source_session_key(),
+                    source_transport_media_id = ?update.source_transport_media_id(),
+                    packet_gate = ?update.packet_gate(),
+                    "transport adapter failed to update a batched consumer packet gate"
+                );
+            }
+        }
+        results
     }
 
     async fn request_consumer_keyframe(

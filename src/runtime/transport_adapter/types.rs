@@ -134,6 +134,59 @@ pub(crate) enum SourcePacketGate {
     OperatingPoint(SourcePacketOperatingPoint),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConsumerPacketGateUpdate {
+    consumer_session_key: TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: SourcePacketGate,
+}
+
+impl ConsumerPacketGateUpdate {
+    #[must_use]
+    pub(crate) fn new(
+        consumer_session_key: TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Self {
+        Self {
+            consumer_session_key,
+            consumer_transport_media_id,
+            source_session_key,
+            source_transport_media_id,
+            packet_gate,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn consumer_session_key(&self) -> &TransportSessionKey {
+        &self.consumer_session_key
+    }
+
+    #[must_use]
+    pub(crate) const fn consumer_transport_media_id(&self) -> TransportMediaId {
+        self.consumer_transport_media_id
+    }
+
+    #[must_use]
+    pub(crate) fn source_session_key(&self) -> &TransportSessionKey {
+        &self.source_session_key
+    }
+
+    #[must_use]
+    pub(crate) const fn source_transport_media_id(&self) -> TransportMediaId {
+        self.source_transport_media_id
+    }
+
+    #[must_use]
+    pub(crate) fn packet_gate(&self) -> &SourcePacketGate {
+        &self.packet_gate
+    }
+}
+
 /// Packet-facing layered operating point selected for one source route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourcePacketOperatingPoint {

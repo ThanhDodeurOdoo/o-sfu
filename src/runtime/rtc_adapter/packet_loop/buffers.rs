@@ -2,9 +2,12 @@ use std::net::SocketAddr;
 
 use super::{
     super::{forwarded_packet::ForwardedPacket, forwarding_destination::PacketForward},
-    keyframe_requests::PendingKeyframeRequest,
+    keyframe_requests::{CoalescedKeyframeRequest, PendingKeyframeRequest},
 };
-use crate::runtime::transport_adapter::TransportSessionKey;
+use crate::runtime::{
+    ChannelInstanceId,
+    transport_adapter::{SourcePolicySignal, TransportSessionKey},
+};
 
 pub(super) const RECEIVE_BUFFER_LEN: usize = 2000;
 pub(super) const MAX_RELAY_PACKETS_PER_ITERATION: usize = 64;
@@ -38,6 +41,8 @@ pub(super) struct PacketLoopBuffers {
     pub(super) pending_packets: Vec<ForwardedPacket>,
     pub(super) relay_packets: Vec<Option<ForwardedPacket>>,
     pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
+    pub(super) coalesced_keyframe_requests: Vec<CoalescedKeyframeRequest>,
+    pub(super) dirty_source_policy_channel_ids: Vec<ChannelInstanceId>,
     pub(super) forwards: Vec<PacketForward>,
 }
 
@@ -49,6 +54,8 @@ impl PacketLoopBuffers {
             pending_packets: Vec::with_capacity(32),
             relay_packets: Vec::with_capacity(32),
             pending_keyframe_requests: Vec::with_capacity(8),
+            coalesced_keyframe_requests: Vec::with_capacity(8),
+            dirty_source_policy_channel_ids: Vec::with_capacity(8),
             forwards: Vec::with_capacity(64),
         }
     }
@@ -58,6 +65,8 @@ impl PacketLoopBuffers {
         self.pending_packets.clear();
         self.relay_packets.clear();
         self.pending_keyframe_requests.clear();
+        self.coalesced_keyframe_requests.clear();
+        self.dirty_source_policy_channel_ids.clear();
         self.forwards.clear();
     }
 
@@ -76,5 +85,22 @@ impl PacketLoopBuffers {
         self.pending_transmits
             .iter()
             .take(self.pending_transmit_count)
+    }
+
+    #[cfg(test)]
+    pub(super) fn mark_source_policy_dirty(&mut self, channel_instance_id: ChannelInstanceId) {
+        self.dirty_source_policy_channel_ids
+            .push(channel_instance_id);
+    }
+
+    pub(super) fn flush_source_policy_dirty(&mut self, source_policy_signal: &SourcePolicySignal) {
+        if self.dirty_source_policy_channel_ids.is_empty() {
+            return;
+        }
+        self.dirty_source_policy_channel_ids.sort_unstable();
+        self.dirty_source_policy_channel_ids.dedup();
+        source_policy_signal
+            .mark_dirty_channels(self.dirty_source_policy_channel_ids.iter().copied());
+        self.dirty_source_policy_channel_ids.clear();
     }
 }

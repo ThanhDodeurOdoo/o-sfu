@@ -30,8 +30,8 @@ use tokio_util::sync::CancellationToken;
 use super::super::{
     bitrate::RtcBitrateState,
     commands::{
-        CloseSessionOutcome, CloseSessionState, RemoteSourceControl, RemoveMediaOutcome,
-        RtcWorkerCommand,
+        CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
+        RemoveMediaOutcome, RtcWorkerCommand,
     },
     relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
     state::RtcSnapshotState,
@@ -43,9 +43,9 @@ use crate::{
         metrics::RuntimeMetrics,
         packet_sink_registry::ChannelPacketSinkRegistry,
         transport_adapter::{
-            RtcTransportAdapterConfig, SessionOffer, SourcePacketGate, SourcePolicySignal,
-            SourcePolicyUpdateSubscription, TransportAdapterError, TransportMediaId,
-            TransportSessionKey,
+            ConsumerPacketGateUpdate, RtcTransportAdapterConfig, SessionOffer, SourcePacketGate,
+            SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
+            TransportMediaId, TransportResult, TransportSessionKey,
         },
     },
 };
@@ -356,6 +356,32 @@ impl RtcTransportMediaFacade<'_> {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,
                 packet_gate,
+                response,
+            })
+            .await
+    }
+
+    pub(crate) async fn set_consumer_packet_gates(
+        self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        updates: Vec<ConsumerPacketGateUpdate>,
+    ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
+        let updates = updates
+            .into_iter()
+            .map(|update| {
+                ConsumerPacketGateCommand::new(
+                    update.consumer_session_key().clone(),
+                    update.consumer_transport_media_id(),
+                    packet_layer_gate(update.packet_gate().clone()),
+                )
+            })
+            .collect();
+        self.adapter
+            .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGateBatch {
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                updates,
                 response,
             })
             .await
