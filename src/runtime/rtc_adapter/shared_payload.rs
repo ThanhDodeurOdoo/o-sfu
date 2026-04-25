@@ -8,10 +8,6 @@ pub(crate) struct SharedPayload {
 #[derive(Debug)]
 enum SharedPayloadStorage {
     Owned(Vec<u8>),
-    #[allow(
-        dead_code,
-        reason = "Phase 4 keeps the shareable storage variant explicit before relay destinations start constructing it in production"
-    )]
     Shared(Arc<[u8]>),
 }
 

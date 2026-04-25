@@ -172,7 +172,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 }
 
 #[tokio::test]
-async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
+async fn rtc_consumer_rid_policy_drives_the_aggregate_packet_gate() {
     let adapter = RtcTransportAdapter::default();
     let producer_session_key = transport_key(1, 21, SessionId::Integer(21));
     let first_consumer_session_key = transport_key(1, 22, SessionId::Integer(22));
@@ -242,7 +242,7 @@ async fn rtc_consumer_rid_policy_drives_the_source_packet_gate() {
 }
 
 #[tokio::test]
-async fn rtc_source_packet_gate_composes_with_consumer_policy() {
+async fn rtc_consumer_packet_gate_updates_the_aggregate_packet_gate() {
     let adapter = RtcTransportAdapter::default();
     let producer_session_key = transport_key(1, 123, SessionId::Integer(123));
     let consumer_session_key = transport_key(1, 124, SessionId::Integer(124));
@@ -266,7 +266,95 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
         .await
         .expect("producer media should register");
 
-    let _consumer_media_id = adapter
+    let consumer_media_id = adapter
+        .add_send_media(
+            &consumer_session_key,
+            Str0mMediaKind::Video,
+            &producer_session_key,
+            source_media_id,
+            None,
+            &consumer_rtp_parameters,
+        )
+        .await
+        .expect("consumer media should register");
+
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
+        .await
+        .expect("route entry should exist after consumer registration");
+    assert_eq!(
+        route_entry.effective_packet_gate,
+        DebugPacketGate::Rid(String::from("hi"))
+    );
+
+    assert!(
+        adapter
+            .media()
+            .set_consumer_packet_gate(
+                &consumer_session_key,
+                consumer_media_id,
+                &producer_session_key,
+                source_media_id,
+                SourcePacketGate::Rid("lo".into()),
+            )
+            .await
+            .is_ok()
+    );
+
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
+        .await
+        .expect("route entry should still exist after consumer gate update");
+    assert_eq!(
+        route_entry.effective_packet_gate,
+        DebugPacketGate::Rid(String::from("lo"))
+    );
+
+    assert!(
+        adapter
+            .media()
+            .set_consumer_packet_gate(
+                &consumer_session_key,
+                consumer_media_id,
+                &producer_session_key,
+                source_media_id,
+                SourcePacketGate::Open,
+            )
+            .await
+            .is_ok()
+    );
+
+    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
+        .await
+        .expect("route entry should still exist after opening the consumer gate");
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+}
+
+#[tokio::test]
+async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
+    let adapter = RtcTransportAdapter::default();
+    let producer_session_key = transport_key(1, 125, SessionId::Integer(125));
+    let stale_producer_session_key = transport_key(1, 126, SessionId::Integer(125));
+    let consumer_session_key = transport_key(1, 127, SessionId::Integer(127));
+    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 83_000);
+    let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 84_000);
+
+    for session_key in [&producer_session_key, &consumer_session_key] {
+        assert!(
+            prepare_transport_session(&adapter, session_key)
+                .await
+                .is_ok()
+        );
+    }
+
+    let source_media_id = adapter
+        .add_recv_media(
+            &producer_session_key,
+            Str0mMediaKind::Video,
+            &producer_rtp_parameters,
+        )
+        .await
+        .expect("producer media should register");
+
+    let consumer_media_id = adapter
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -280,38 +368,17 @@ async fn rtc_source_packet_gate_composes_with_consumer_policy() {
 
     assert!(
         adapter
-            .set_source_packet_gate(
-                &producer_session_key,
-                source_media_id,
-                SourcePacketGate::Rid("hi".into()),
-            )
-            .await
-            .is_ok()
-    );
-
-    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
-        .await
-        .expect("route entry should exist after source gate update");
-    assert_eq!(
-        route_entry.effective_packet_gate,
-        DebugPacketGate::Rid(String::from("hi"))
-    );
-
-    assert!(
-        adapter
-            .set_source_packet_gate(
-                &producer_session_key,
+            .media()
+            .set_consumer_packet_gate(
+                &consumer_session_key,
+                consumer_media_id,
+                &stale_producer_session_key,
                 source_media_id,
                 SourcePacketGate::Rid("lo".into()),
             )
             .await
-            .is_ok()
+            .is_err()
     );
-
-    let route_entry = route_entry_by_media_id(&adapter, source_media_id)
-        .await
-        .expect("route entry should still exist after conflicting source gate update");
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 }
 
 #[tokio::test]

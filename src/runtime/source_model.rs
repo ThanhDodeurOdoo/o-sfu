@@ -12,8 +12,8 @@
 //!
 //! A published camera, screen share or audio track is modeled as one
 //! [`PublishedSourceId`] plus one or more [`SourceEncodingId`] values. `Mid`,
-//! `Rid`, `Ssrc` and [`TransportMediaId`] stay as negotiated or transport-facing
-//! attachment points. Keeping those identities separate lets later same-room
+//! `Rid` and `Ssrc` stay as negotiated or transport-facing attachment points.
+//! Keeping those identities separate lets later same-room
 //! spillover and recording consume the same source inventory without redefining
 //! it around local worker placement (recording and spillover are not implemented
 //! yet, just built ahead with them in mind, todo: remove comment when it is implemented)
@@ -24,19 +24,12 @@
 //! publications. Packet loops should consume already-projected transport gates
 //! instead of walking these descriptors per packet.
 
-#![allow(
-    dead_code,
-    reason = "non-default selector variants are reserved for the next quality-policy slices"
-)]
-
 use std::fmt::{self, Display, Formatter};
 
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{MediaFormat, MediaKind, Mid, Rid, Ssrc};
 use thiserror::Error;
-
-use crate::runtime::{ConnectionId, transport_adapter::TransportMediaId};
 
 /// Stable room-domain identity for one logical published source.
 ///
@@ -55,6 +48,7 @@ impl PublishedSourceId {
         source_id
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -89,6 +83,7 @@ impl SourceEncodingId {
         encoding_id
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn from_raw(raw: u64) -> Self {
         Self(raw)
@@ -116,6 +111,10 @@ impl Display for SourceEncodingId {
 pub(crate) struct SourceTemporalLayerId(u8);
 
 impl SourceTemporalLayerId {
+    #[allow(
+        dead_code,
+        reason = "production SVC descriptors will construct temporal ids after RFC 9626 negotiation lands"
+    )]
     #[must_use]
     pub(crate) const fn new(value: u8) -> Option<Self> {
         if frame_marking::is_valid_temporal_layer_id(value) {
@@ -125,6 +124,10 @@ impl SourceTemporalLayerId {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "base-layer operating-point diagnostics are staged until production SVC selection is reachable"
+    )]
     #[must_use]
     pub(crate) const fn base() -> Self {
         Self(frame_marking::BASE_LAYER_ID)
@@ -148,6 +151,10 @@ pub(crate) struct SourceOperatingPoint {
 }
 
 impl SourceOperatingPoint {
+    #[allow(
+        dead_code,
+        reason = "operating-point selectors are staged until negotiated temporal metadata is production-reachable"
+    )]
     #[must_use]
     pub(crate) const fn new(
         encoding_id: SourceEncodingId,
@@ -172,54 +179,23 @@ impl SourceOperatingPoint {
 
 /// Publishing session authority attached to a source descriptor.
 ///
-/// The session identifies the logical owner visible to room policy. The
-/// connection id keeps stale async publish work from a replaced websocket from
-/// being mistaken for the live owner during later registry commits.
+/// The session identifies the logical owner visible to room policy. Connection
+/// freshness is tracked by producer and transport indexes, because source
+/// descriptors are room-domain metadata rather than async commit guards.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PublishedSourceOwner {
     session_id: SessionId,
-    connection_id: ConnectionId,
 }
 
 impl PublishedSourceOwner {
     #[must_use]
-    pub(crate) fn new(session_id: SessionId, connection_id: ConnectionId) -> Self {
-        Self {
-            session_id,
-            connection_id,
-        }
+    pub(crate) fn new(session_id: SessionId) -> Self {
+        Self { session_id }
     }
 
     #[must_use]
     pub(crate) fn session_id(&self) -> &SessionId {
         &self.session_id
-    }
-
-    #[must_use]
-    pub(crate) const fn connection_id(&self) -> ConnectionId {
-        self.connection_id
-    }
-}
-
-/// Transport realization currently attached to a source or encoding.
-///
-/// This is an attachment point, not an identity. Several encodings may share
-/// one transport media handle while a later topology may attach mirrored or
-/// relayed handles to the same source graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SourceTransportBinding {
-    transport_media_id: TransportMediaId,
-}
-
-impl SourceTransportBinding {
-    #[must_use]
-    pub(crate) const fn new(transport_media_id: TransportMediaId) -> Self {
-        Self { transport_media_id }
-    }
-
-    #[must_use]
-    pub(crate) const fn transport_media_id(self) -> TransportMediaId {
-        self.transport_media_id
     }
 }
 
@@ -237,8 +213,16 @@ pub(crate) enum SourceSelector {
     /// Select one source encoding by runtime identity.
     Encoding(SourceEncodingId),
     /// Select one source encoding plus a codec-native temporal layer ceiling.
+    #[allow(
+        dead_code,
+        reason = "operating-point selectors stay internal until RFC 9626 metadata negotiation is implemented"
+    )]
     OperatingPoint(SourceOperatingPoint),
     /// Defer the concrete encoding choice to room-level policy.
+    #[allow(
+        dead_code,
+        reason = "room-policy selectors are reserved until layout policy emits explicit quality buckets"
+    )]
     RoomPolicy(SourceRoomPolicySelector),
 }
 
@@ -267,6 +251,10 @@ impl SourceSelector {
 /// later that a thumbnail should map to a lower simulcast encoding while a
 /// featured source stays unconstrained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "room-policy buckets are reserved until layout policy emits explicit quality selectors"
+)]
 pub(crate) enum SourceRoomPolicySelector {
     /// Source is important for the current room layout.
     Featured,
@@ -440,17 +428,6 @@ impl PublishedSourceDescriptor {
             .iter()
             .find(|encoding| encoding.encoding_id() == encoding_id)
     }
-
-    /// Iterates transport handles currently attached through the encodings.
-    ///
-    /// The result is a cold-path projection. It may contain repeated transport
-    /// media ids when several source encodings are realized by one negotiated
-    /// media section.
-    pub(crate) fn transport_bindings(&self) -> impl Iterator<Item = SourceTransportBinding> + '_ {
-        self.encodings
-            .iter()
-            .filter_map(SourceEncodingDescriptor::transport_binding)
-    }
 }
 
 /// Construction input for [`PublishedSourceDescriptor`].
@@ -498,8 +475,6 @@ pub(crate) struct SourceEncodingDescriptor {
     max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated payload and codec information for this encoding.
     negotiated_format: Option<MediaFormat>,
-    /// Current local or relayed transport realization.
-    transport_binding: Option<SourceTransportBinding>,
 }
 
 impl SourceEncodingDescriptor {
@@ -519,7 +494,6 @@ impl SourceEncodingDescriptor {
             max_bitrate: parts.max_bitrate,
             max_temporal_layer_id: parts.max_temporal_layer_id,
             negotiated_format: parts.negotiated_format,
-            transport_binding: parts.transport_binding,
         }
     }
 
@@ -562,11 +536,6 @@ impl SourceEncodingDescriptor {
     pub(crate) fn negotiated_format(&self) -> Option<&MediaFormat> {
         self.negotiated_format.as_ref()
     }
-
-    #[must_use]
-    pub(crate) const fn transport_binding(&self) -> Option<SourceTransportBinding> {
-        self.transport_binding
-    }
 }
 
 /// Construction input for [`SourceEncodingDescriptor`]
@@ -592,8 +561,6 @@ pub(crate) struct SourceEncodingDescriptorParts {
     pub(crate) max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated codec and payload information when available.
     pub(crate) negotiated_format: Option<MediaFormat>,
-    /// Current transport attachment for this encoding.
-    pub(crate) transport_binding: Option<SourceTransportBinding>,
 }
 
 /// Rejection returned while assembling a source descriptor.
@@ -644,7 +611,6 @@ mod tests {
         source_id: PublishedSourceId,
         encoding_id: SourceEncodingId,
         rid: &str,
-        transport_media_id: TransportMediaId,
     ) -> SourceEncodingDescriptor {
         let raw_encoding_id =
             u32::try_from(encoding_id.as_u64()).expect("test encoding id should fit in u32");
@@ -657,16 +623,15 @@ mod tests {
             max_bitrate: Some(150_000 * encoding_id.as_u64()),
             max_temporal_layer_id: None,
             negotiated_format: Some(video_format(96)),
-            transport_binding: Some(SourceTransportBinding::new(transport_media_id)),
         })
     }
 
     #[test]
-    fn descriptor_keeps_source_encoding_and_transport_identity_separate() {
+    fn descriptor_keeps_source_encoding_identity_separate() {
         let source_id = PublishedSourceId::from_raw(7);
         let low_encoding_id = SourceEncodingId::from_raw(1);
         let high_encoding_id = SourceEncodingId::from_raw(2);
-        let owner = PublishedSourceOwner::new(SessionId::Integer(42), ConnectionId::from_raw(9));
+        let owner = PublishedSourceOwner::new(SessionId::Integer(42));
         let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
             owner,
@@ -674,18 +639,14 @@ mod tests {
             media_kind: MediaKind::Video,
             mid: Some(Mid::new("video-0")),
             encodings: vec![
-                source_encoding(source_id, low_encoding_id, "lo", TransportMediaId::new(55)),
-                source_encoding(source_id, high_encoding_id, "hi", TransportMediaId::new(55)),
+                source_encoding(source_id, low_encoding_id, "lo"),
+                source_encoding(source_id, high_encoding_id, "hi"),
             ],
         })
         .expect("source descriptor should be valid");
 
         assert_eq!(descriptor.source_id(), source_id);
         assert_eq!(descriptor.owner().session_id(), &SessionId::Integer(42));
-        assert_eq!(
-            descriptor.owner().connection_id(),
-            ConnectionId::from_raw(9)
-        );
         assert_eq!(descriptor.stream_type(), StreamType::Camera);
         assert_eq!(descriptor.media_kind(), MediaKind::Video);
         assert_eq!(
@@ -710,13 +671,6 @@ mod tests {
         );
         assert_eq!(
             descriptor
-                .transport_bindings()
-                .map(SourceTransportBinding::transport_media_id)
-                .collect::<Vec<_>>(),
-            vec![TransportMediaId::new(55), TransportMediaId::new(55)]
-        );
-        assert_eq!(
-            descriptor
                 .encoding(high_encoding_id)
                 .and_then(SourceEncodingDescriptor::rid)
                 .map(Rid::as_str),
@@ -731,16 +685,11 @@ mod tests {
         let encoding_id = SourceEncodingId::from_raw(1);
         let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(SessionId::Integer(42), ConnectionId::from_raw(9)),
+            owner: PublishedSourceOwner::new(SessionId::Integer(42)),
             stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: None,
-            encodings: vec![source_encoding(
-                other_source_id,
-                encoding_id,
-                "lo",
-                TransportMediaId::new(55),
-            )],
+            encodings: vec![source_encoding(other_source_id, encoding_id, "lo")],
         });
 
         assert_eq!(

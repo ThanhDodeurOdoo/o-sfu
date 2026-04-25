@@ -71,21 +71,6 @@ enum RouteSourceAccess {
     Register(Option<RemoteSourceControl>),
 }
 
-pub(crate) fn respond_set_source_packet_gate(
-    state: &mut RtcBootstrapState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    packet_gate: Option<PacketLayerGate>,
-    response: oneshot::Sender<Result<(), TransportAdapterError>>,
-) {
-    let _ = response.send(worker_set_source_packet_gate(
-        state,
-        source_session_key,
-        source_transport_media_id,
-        packet_gate,
-    ));
-}
-
 pub(crate) fn respond_set_producer_active(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -374,19 +359,6 @@ fn worker_set_producer_active(
         .get_mut(&transport_media_id)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     route_entry.source_active = active;
-    Ok(())
-}
-
-fn worker_set_source_packet_gate(
-    state: &mut RtcBootstrapState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    packet_gate: Option<PacketLayerGate>,
-) -> Result<(), TransportAdapterError> {
-    ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
-    state
-        .route_control
-        .set_source_packet_gate(source_transport_media_id, packet_gate);
     Ok(())
 }
 

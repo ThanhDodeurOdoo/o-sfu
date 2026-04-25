@@ -44,8 +44,8 @@ use crate::{
         packet_sink_registry::ChannelPacketSinkRegistry,
         transport_adapter::{
             ConsumerPacketGateUpdate, RtcTransportAdapterConfig, SessionOffer, SourcePacketGate,
-            SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
-            TransportMediaId, TransportResult, TransportSessionKey,
+            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportResult,
+            TransportSessionKey,
         },
     },
 };
@@ -151,14 +151,6 @@ impl RtcTransportAdapter {
     pub(crate) const fn observability(&self) -> RtcTransportObservabilityFacade<'_> {
         RtcTransportObservabilityFacade { adapter: self }
     }
-
-    #[allow(
-        dead_code,
-        reason = "the shard set owns the lasting runtime subscription path and the single-shard helper remains available for targeted rtc adapter tests"
-    )]
-    pub(crate) fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        self.source_policy_signal.subscribe()
-    }
 }
 
 impl RtcTransportNegotiationFacade<'_> {
@@ -246,10 +238,6 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
-    #[allow(
-        dead_code,
-        reason = "protocol publish commit wiring is landing incrementally and this lookup is already exercised by negotiation tests"
-    )]
     pub(crate) async fn negotiated_producer_parameters(
         self,
         session_key: &TransportSessionKey,
@@ -415,46 +403,6 @@ impl RtcTransportMediaFacade<'_> {
                 response,
             })
             .await
-    }
-
-    #[allow(
-        dead_code,
-        reason = "Phase 6 introduces the server-owned source gate before the channel/runtime policy caller lands, so this adapter entry point is intentionally staged"
-    )]
-    pub(super) async fn set_route_control_source_packet_gate(
-        self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: Option<super::super::route_control::PacketLayerGate>,
-    ) -> Result<(), TransportAdapterError> {
-        self.adapter
-            .request_worker(|response| RtcWorkerCommand::SetSourcePacketGate {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                packet_gate,
-                response,
-            })
-            .await
-    }
-
-    pub(crate) async fn set_source_packet_gate(
-        self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        let packet_gate = match packet_gate {
-            SourcePacketGate::Open => None,
-            SourcePacketGate::Rid(_) | SourcePacketGate::OperatingPoint(_) => {
-                Some(packet_layer_gate(packet_gate))
-            }
-        };
-        self.set_route_control_source_packet_gate(
-            source_session_key,
-            source_transport_media_id,
-            packet_gate,
-        )
-        .await
     }
 
     pub(crate) fn remote_source_control(

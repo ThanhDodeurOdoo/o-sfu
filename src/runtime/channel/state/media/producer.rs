@@ -34,7 +34,7 @@ use crate::runtime::{
     source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError, SourceSelector, SourceTransportBinding,
+        SourceEncodingId, SourceModelError,
     },
     transport_adapter::TransportMediaId,
 };
@@ -184,7 +184,7 @@ impl ChannelState {
     ) -> Option<(ProducerRuntimeId, Vec<PendingConsumerBootstrapTarget>)> {
         let source_key = self.validate_publish_commit(&pending, transport_media_id)?;
         let source_descriptor = self
-            .source_descriptor_for_publish(&pending, transport_media_id)
+            .source_descriptor_for_publish(&pending)
             .map_err(|error| {
                 error!(
                     session_id = ?pending.owner_session_id,
@@ -316,7 +316,6 @@ impl ChannelState {
                 consumable_rtp_parameters: pending.consumable_rtp_parameters,
                 routed_producer_id,
                 transport_media_id: Some(transport_media_id),
-                source_packet_selector: SourceSelector::Open,
                 active: true,
             },
         );
@@ -339,7 +338,6 @@ impl ChannelState {
     fn source_descriptor_for_publish(
         &mut self,
         pending: &PreparedPublishedTrack,
-        transport_media_id: TransportMediaId,
     ) -> Result<PublishedSourceDescriptor, SourceModelError> {
         let source_id = PublishedSourceId::allocate(&mut self.next_source_id);
         let encodings = pending
@@ -359,16 +357,12 @@ impl ChannelState {
                         &pending.consumable_rtp_parameters,
                         binding.payload_type(),
                     ),
-                    transport_binding: Some(SourceTransportBinding::new(transport_media_id)),
                 })
             })
             .collect::<Vec<_>>();
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(
-                pending.owner_session_id.clone(),
-                pending.owner_connection_id,
-            ),
+            owner: PublishedSourceOwner::new(pending.owner_session_id.clone()),
             stream_type: pending.stream_type,
             media_kind: pending.media_kind,
             mid: pending.consumable_rtp_parameters.mid().map(Mid::new),

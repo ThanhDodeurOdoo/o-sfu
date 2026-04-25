@@ -154,9 +154,10 @@ mod tests {
                 InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId,
             },
             route_control::{PacketLayerGate, PacketOperatingPointGate},
-            sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-            sample_forwarded_packet_with_rid,
-            test_support::test_transport_session_key,
+            test_support::{
+                sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+                sample_forwarded_packet_with_rid, test_transport_session_key,
+            },
         },
         transport_adapter::{TransportMediaId, TransportSessionKey},
     };
@@ -954,7 +955,7 @@ mod tests {
                 }],
             },
         );
-        state.set_source_packet_gate(
+        state.set_local_packet_gate(
             gated_source_transport_media_id,
             PacketLayerGate::Rid("hi".into()),
         );
@@ -1044,7 +1045,7 @@ mod tests {
                 }],
             },
         );
-        state.set_source_packet_gate(
+        state.set_local_packet_gate(
             source_transport_media_id,
             PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),
         );

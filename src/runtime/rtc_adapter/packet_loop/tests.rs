@@ -37,9 +37,11 @@ use crate::{
                 InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId,
             },
             route_control::{KeyframeRequestDecision, PacketLayerGate},
-            sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
             state::{RtcBootstrapState, RtcSnapshotState},
-            test_support::test_transport_session_key,
+            test_support::{
+                sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
+                test_transport_session_key,
+            },
         },
         transport_adapter::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
     },

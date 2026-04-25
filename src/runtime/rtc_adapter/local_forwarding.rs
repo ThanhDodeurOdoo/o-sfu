@@ -195,8 +195,8 @@ mod tests {
     use o_sfu_protocol::shared::SessionId;
 
     use super::*;
-    use crate::runtime::rtc_adapter::{
-        sample_forwarded_packet, test_support::test_transport_session_key,
+    use crate::runtime::rtc_adapter::test_support::{
+        sample_forwarded_packet, test_transport_session_key,
     };
 
     #[test]

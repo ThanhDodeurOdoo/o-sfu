@@ -262,18 +262,6 @@ impl MediaPort for RtcTransportAdapterShardSet {
             .ok()
             .flatten()
     }
-
-    async fn set_source_packet_gate(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        self.shard_for_session(source_session_key)
-            .media()
-            .set_source_packet_gate(source_session_key, source_transport_media_id, packet_gate)
-            .await
-    }
 }
 
 impl ObservabilityPort for RtcTransportAdapterShardSet {

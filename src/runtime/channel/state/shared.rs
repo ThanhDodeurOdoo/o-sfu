@@ -26,7 +26,6 @@ use crate::runtime::{
     recording::RecordingService,
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
-        SourceSelector,
     },
     transport_adapter::TransportMediaId,
 };
@@ -129,7 +128,6 @@ pub(in crate::runtime::channel) struct PublishedProducer {
     pub(super) consumable_rtp_parameters: o_sfu_router::MediaStream,
     pub(super) routed_producer_id: RoutedProducerId,
     pub(super) transport_media_id: Option<TransportMediaId>,
-    pub(super) source_packet_selector: SourceSelector,
     pub(super) active: bool,
 }
 

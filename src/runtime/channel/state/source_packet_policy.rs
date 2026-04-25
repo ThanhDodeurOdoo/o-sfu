@@ -4,15 +4,14 @@
 //!
 //! This module is the channel side of simulcast and layered source selection.
 //! It maps authoritative room state plus best-effort transport observations
-//! into [`SourceSelector`] values, then describes the transport calls needed to
-//! apply those values as packet gates.
+//! into per-consumer [`SourceSelector`] values, then describes the transport
+//! calls needed to apply those values as packet gates.
 //!
 //! No function in this file awaits transport work or mutates packet-loop state.
 //! The async effect layer consumes the planned updates, calls the transport
 //! adapter without holding the channel lock, then calls the commit methods here
 //! with only the updates that the transport accepted.
 //!
-//! Producer-wide gates are kept only as a compatibility cleanup surface.
 //! Receiver-driven simulcast policy lives on consumer selections so different
 //! receivers may choose different encodings from the same published source.
 
@@ -22,7 +21,6 @@ use o_sfu_protocol::shared::{SessionId, StreamType};
 
 use super::{
     super::{ChannelEventMessage, outbound::MessageFanout},
-    ids::ProducerRuntimeId,
     shared::{ChannelState, SourceKey},
 };
 #[cfg(test)]
@@ -78,27 +76,6 @@ const UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
 /// watching three active videos gives each thumbnail a `300_000` bps budget,
 /// enough for the `150_000` bps low layer but not the `900_000` bps high layer.
 const THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
-
-/// Producer-level selector update used to clear stale source-wide gates.
-///
-/// Adaptive simulcast should not use this path for receiver quality. Keep it
-/// narrow so producer gates remain a transport cleanup surface while consumer
-/// selections own per-receiver policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::channel) struct SourcePacketSelectionUpdate {
-    /// Producer record that must still be present when the post-transport commit runs.
-    producer_id: ProducerRuntimeId,
-    /// Logical publisher observed while the cleanup decision was planned.
-    owner_session_id: SessionId,
-    /// Publisher connection observed while planning, used to reject stale websocket work.
-    owner_connection_id: ConnectionId,
-    /// Transport media handle that should receive the source-wide gate.
-    transport_media_id: TransportMediaId,
-    /// Source-domain selector that should be stored if the transport accepted the gate.
-    selector: SourceSelector,
-    /// Packet-facing projection already resolved from the source descriptor.
-    packet_gate: SourcePacketGate,
-}
 
 /// One receiver-side source selection that is ready for the effect boundary.
 ///
@@ -185,32 +162,6 @@ impl ConsumerPacketSelectionUpdate {
     }
 }
 
-impl SourcePacketSelectionUpdate {
-    pub(in crate::runtime::channel) const fn producer_id(&self) -> ProducerRuntimeId {
-        self.producer_id
-    }
-
-    pub(in crate::runtime::channel) fn owner_session_id(&self) -> &SessionId {
-        &self.owner_session_id
-    }
-
-    pub(in crate::runtime::channel) const fn owner_connection_id(&self) -> ConnectionId {
-        self.owner_connection_id
-    }
-
-    pub(in crate::runtime::channel) const fn transport_media_id(&self) -> TransportMediaId {
-        self.transport_media_id
-    }
-
-    pub(in crate::runtime::channel) const fn selector(&self) -> SourceSelector {
-        self.selector
-    }
-
-    pub(in crate::runtime::channel) fn packet_gate(&self) -> &SourcePacketGate {
-        &self.packet_gate
-    }
-}
-
 /// Server-owned featured state derived from active-speaker observations.
 ///
 /// This is kept next to packet policy because the same observation decides both
@@ -234,41 +185,6 @@ impl FeaturedSessionUpdate {
 }
 
 impl ChannelState {
-    /// Plans producer-wide packet gates for stale source-level cleanup only.
-    ///
-    /// This method intentionally resolves current producer policy to `Open`.
-    /// Receiver quality is owned by `consumer_packet_selection_updates`, because
-    /// two consumers may need different encodings from the same source.
-    ///
-    /// The returned updates are staged work. They are not authoritative until
-    /// the effect executor applies the transport gate and the commit method
-    /// rechecks the producer identity.
-    pub(in crate::runtime::channel) fn source_packet_selection_updates(
-        &self,
-        _active_speaker_sources: &[ActiveSpeakerSource],
-    ) -> Vec<SourcePacketSelectionUpdate> {
-        self.producers
-            .iter()
-            .filter_map(|(producer_id, producer)| {
-                let transport_media_id = producer.transport_media_id?;
-                let source = self.sources.get(&producer.source_id)?;
-                let desired_selector = desired_source_packet_selector(producer.stream_type, source);
-                if desired_selector == producer.source_packet_selector {
-                    return None;
-                }
-                let packet_gate = source_packet_gate_for_selector(source, desired_selector).ok()?;
-                Some(SourcePacketSelectionUpdate {
-                    producer_id: *producer_id,
-                    owner_session_id: producer.owner_session_id.clone(),
-                    owner_connection_id: producer.owner_connection_id,
-                    transport_media_id,
-                    selector: desired_selector,
-                    packet_gate,
-                })
-            })
-            .collect()
-    }
-
     /// Plans deterministic per-consumer source selectors for live video routes.
     ///
     /// The snapshot inputs are best-effort transport observations. They do not
@@ -484,29 +400,6 @@ impl ChannelState {
             .map(|entry| entry.owner_session_id().clone())
     }
 
-    /// Stores producer-level selectors that still describe the live producer.
-    ///
-    /// The effect executor may have awaited transport work before this method
-    /// runs. Producer identity, connection id and transport media id are checked
-    /// again so a replaced publisher cannot receive a stale selector.
-    pub(in crate::runtime::channel) fn commit_source_packet_selection_updates(
-        &mut self,
-        updates: &[SourcePacketSelectionUpdate],
-    ) {
-        for update in updates {
-            let Some(producer) = self.producers.get_mut(&update.producer_id()) else {
-                continue;
-            };
-            if producer.owner_session_id != *update.owner_session_id()
-                || producer.owner_connection_id != update.owner_connection_id()
-                || producer.transport_media_id != Some(update.transport_media_id())
-            {
-                continue;
-            }
-            producer.source_packet_selector = update.selector();
-        }
-    }
-
     /// Commits selector updates that still match the routed consumer media.
     ///
     /// The effect executor may await transport work before calling this method.
@@ -607,17 +500,6 @@ fn receiver_bandwidth_by_session(snapshot: &ReceiverBandwidthSnapshot) -> BTreeM
         .iter()
         .map(|(session_key, estimate_bps)| (session_key.session_id().clone(), *estimate_bps))
         .collect()
-}
-
-/// Placeholder for source-wide policy while receiver-driven selection is authoritative.
-///
-/// Returning `Open` is intentional. It lets this path clear stale producer gates
-/// left by older policy without reintroducing producer-level quality decisions.
-fn desired_source_packet_selector(
-    _stream_type: StreamType,
-    _source: &PublishedSourceDescriptor,
-) -> SourceSelector {
-    SourceSelector::Open
 }
 
 /// Chooses the next receiver selector using deterministic refresh-based hysteresis.
@@ -931,7 +813,7 @@ mod tests {
     ) -> PublishedSourceDescriptor {
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id: PublishedSourceId::from_raw(7),
-            owner: PublishedSourceOwner::new(SessionId::Integer(42), ConnectionId::from_raw(9)),
+            owner: PublishedSourceOwner::new(SessionId::Integer(42)),
             stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: None,
@@ -955,7 +837,6 @@ mod tests {
             max_bitrate,
             max_temporal_layer_id: None,
             negotiated_format: None,
-            transport_binding: None,
         })
     }
 
@@ -974,7 +855,6 @@ mod tests {
             max_bitrate: None,
             max_temporal_layer_id: SourceTemporalLayerId::new(max_temporal_layer_id),
             negotiated_format: None,
-            transport_binding: None,
         })
     }
 

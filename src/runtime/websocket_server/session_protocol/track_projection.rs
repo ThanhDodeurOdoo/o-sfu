@@ -245,14 +245,9 @@ mod tests {
     use o_sfu_router::{MediaKind, Mid, Rid};
 
     use super::*;
-    use crate::runtime::{
-        ConnectionId,
-        source_model::{
-            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            SourceTransportBinding,
-        },
-        transport_adapter::TransportMediaId,
+    use crate::runtime::source_model::{
+        PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+        SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
     };
 
     #[test]
@@ -291,11 +286,10 @@ mod tests {
             max_bitrate: Some(900_000),
             max_temporal_layer_id: None,
             negotiated_format: None,
-            transport_binding: Some(SourceTransportBinding::new(TransportMediaId::new(3))),
         });
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(SessionId::Integer(7), ConnectionId::from_raw(11)),
+            owner: PublishedSourceOwner::new(SessionId::Integer(7)),
             stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: Some(Mid::new(mid)),

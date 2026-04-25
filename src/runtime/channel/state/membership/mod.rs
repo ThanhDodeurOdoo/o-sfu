@@ -454,7 +454,7 @@ mod tests {
             source_model::{
                 PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
                 PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-                SourceEncodingId, SourceSelector, SourceTransportBinding,
+                SourceEncodingId,
             },
             transport_adapter::TransportMediaId,
         },
@@ -485,10 +485,9 @@ mod tests {
         let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
         let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
         let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
-        let transport_binding = transport_media_id.map(SourceTransportBinding::new);
         let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(session_id.clone(), connection_id),
+            owner: PublishedSourceOwner::new(session_id.clone()),
             stream_type,
             media_kind: MediaKind::Video,
             mid: None,
@@ -502,7 +501,6 @@ mod tests {
                     max_bitrate: None,
                     max_temporal_layer_id: None,
                     negotiated_format: None,
-                    transport_binding,
                 },
             )],
         })
@@ -525,7 +523,6 @@ mod tests {
                 consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
                 routed_producer_id,
                 transport_media_id,
-                source_packet_selector: SourceSelector::Open,
                 active: true,
             },
         );

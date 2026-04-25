@@ -288,8 +288,9 @@ mod tests {
     use crate::runtime::{
         recording::MediaPacketSink,
         rtc_adapter::{
-            relay_registry::InterNodeRelaySender, route_control::PacketLayerGate,
-            sample_forwarded_packet, test_support::test_transport_session_key,
+            relay_registry::InterNodeRelaySender,
+            route_control::PacketLayerGate,
+            test_support::{sample_forwarded_packet, test_transport_session_key},
         },
         transport_adapter::TransportMediaId,
     };

@@ -19,10 +19,6 @@ pub(super) enum KeyframeRequestDecision {
     Absorb,
 }
 
-#[allow(
-    dead_code,
-    reason = "route-level packet gating is intentionally wired before broader orchestration uses it, so only tests construct non-default gates in this slice"
-)]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(super) enum PacketLayerGate {
     #[default]
@@ -171,33 +167,6 @@ impl RouteControlState {
                     source_transport_media_id,
                     SourceRouteControl {
                         local_packet_gate: Some(packet_gate),
-                        ..Default::default()
-                    },
-                );
-                return;
-            };
-        if should_remove {
-            self.sources.remove(&source_transport_media_id);
-        }
-    }
-
-    pub(super) fn set_source_packet_gate(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: Option<PacketLayerGate>,
-    ) {
-        let should_remove =
-            if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
-                source_control.source_packet_gate = packet_gate;
-                source_control.is_empty()
-            } else {
-                let Some(packet_gate) = packet_gate else {
-                    return;
-                };
-                self.sources.insert(
-                    source_transport_media_id,
-                    SourceRouteControl {
-                        source_packet_gate: Some(packet_gate),
                         ..Default::default()
                     },
                 );
@@ -485,7 +454,6 @@ struct KeyframeRequestWindow {
 struct SourceRouteControl {
     keyframe_request: Option<KeyframeRequestWindow>,
     source_audio_policy: Option<SourceAudioPolicyState>,
-    source_packet_gate: Option<PacketLayerGate>,
     local_packet_gate: Option<PacketLayerGate>,
     relay_packet_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
 }
@@ -527,19 +495,15 @@ impl SourceRouteControl {
                     .iter()
                     .chain(self.relay_packet_gates.values()),
             ),
-            intersect_packet_gates(
-                self.source_packet_gate.clone(),
-                self.source_audio_policy
-                    .as_ref()
-                    .map(SourceAudioPolicyState::packet_gate),
-            ),
+            self.source_audio_policy
+                .as_ref()
+                .map(SourceAudioPolicyState::packet_gate),
         )
     }
 
     fn is_empty(&self) -> bool {
         self.keyframe_request.is_none()
             && self.source_audio_policy.is_none()
-            && self.source_packet_gate.is_none()
             && self.local_packet_gate.is_none()
             && self.relay_packet_gates.is_empty()
     }
@@ -900,79 +864,12 @@ mod tests {
     }
 
     #[test]
-    fn route_control_source_packet_gate_intersects_with_local_consumer_policy() {
-        let mut state = RouteControlState::default();
-        let source_transport_media_id = TransportMediaId::new(26);
-
-        state.set_local_packet_gate(
-            source_transport_media_id,
-            Some(PacketLayerGate::Rid("hi".into())),
-        );
-        state.set_source_packet_gate(
-            source_transport_media_id,
-            Some(PacketLayerGate::Rid("hi".into())),
-        );
-
-        assert_eq!(
-            state.effective_packet_gate(source_transport_media_id),
-            Some(PacketLayerGate::Rid("hi".into()))
-        );
-
-        state.set_source_packet_gate(
-            source_transport_media_id,
-            Some(PacketLayerGate::Rid("lo".into())),
-        );
-
-        assert_eq!(
-            state.effective_packet_gate(source_transport_media_id),
-            Some(PacketLayerGate::Block)
-        );
-    }
-
-    #[test]
-    fn route_control_source_packet_gate_intersects_operating_points() {
-        let mut state = RouteControlState::default();
-        let source_transport_media_id = TransportMediaId::new(29);
-
-        state.set_local_packet_gate(
-            source_transport_media_id,
-            Some(PacketLayerGate::OperatingPoint(
-                PacketOperatingPointGate::new(Some("hi".into()), 2),
-            )),
-        );
-        state.set_source_packet_gate(
-            source_transport_media_id,
-            Some(PacketLayerGate::OperatingPoint(
-                PacketOperatingPointGate::new(Some("hi".into()), 1),
-            )),
-        );
-
-        assert_eq!(
-            state.effective_packet_gate(source_transport_media_id),
-            Some(PacketLayerGate::OperatingPoint(
-                PacketOperatingPointGate::new(Some("hi".into()), 1)
-            ))
-        );
-
-        state.set_source_packet_gate(
-            source_transport_media_id,
-            Some(PacketLayerGate::Rid("lo".into())),
-        );
-
-        assert_eq!(
-            state.effective_packet_gate(source_transport_media_id),
-            Some(PacketLayerGate::Block)
-        );
-    }
-
-    #[test]
-    fn route_control_source_packet_gate_composes_with_transport_audio_policy() {
+    fn route_control_local_packet_gate_composes_with_transport_audio_policy() {
         let mut state = RouteControlState::default();
         let source_transport_media_id = TransportMediaId::new(27);
         let now = Instant::now();
 
-        state.set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
-        state.set_source_packet_gate(
+        state.set_local_packet_gate(
             source_transport_media_id,
             Some(PacketLayerGate::Rid("hi".into())),
         );

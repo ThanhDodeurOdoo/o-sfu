@@ -257,9 +257,6 @@ fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> Diagnosti
         } else {
             DiagnosticsTemporalLayerMetadata::Absent
         },
-        transport_media_id: encoding
-            .transport_binding()
-            .map(|binding| binding.transport_media_id().as_u64()),
     }
 }
 
@@ -322,14 +319,13 @@ mod tests {
             max_bitrate: None,
             max_temporal_layer_id: max_temporal_layer_id.and_then(SourceTemporalLayerId::new),
             negotiated_format: None,
-            transport_binding: None,
         })
     }
 
     fn source_with_encoding(encoding: SourceEncodingDescriptor) -> PublishedSourceDescriptor {
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id: encoding.source_id(),
-            owner: PublishedSourceOwner::new(SessionId::Integer(1), ConnectionId::from_raw(1)),
+            owner: PublishedSourceOwner::new(SessionId::Integer(1)),
             stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: None,

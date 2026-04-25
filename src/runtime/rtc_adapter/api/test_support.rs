@@ -25,8 +25,8 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         transport_adapter::{
-            RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer, SourcePacketGate,
-            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
+            RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer, SourcePolicySignal,
+            TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -77,10 +77,6 @@ impl RtcTransportAdapter {
             .await
     }
 
-    #[allow(
-        dead_code,
-        reason = "protocol publish commit wiring is landing incrementally and this lookup is already exercised by negotiation tests"
-    )]
     pub(crate) async fn negotiated_producer_parameters(
         &self,
         session_key: &TransportSessionKey,
@@ -150,36 +146,6 @@ impl RtcTransportAdapter {
                 source_transport_media_id,
                 active,
             )
-            .await
-    }
-
-    #[allow(
-        dead_code,
-        reason = "Phase 6 introduces the server-owned source gate before the channel/runtime policy caller lands, so this adapter entry point is intentionally staged"
-    )]
-    pub(super) async fn set_route_control_source_packet_gate(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: Option<super::super::route_control::PacketLayerGate>,
-    ) -> Result<(), TransportAdapterError> {
-        self.media()
-            .set_route_control_source_packet_gate(
-                source_session_key,
-                source_transport_media_id,
-                packet_gate,
-            )
-            .await
-    }
-
-    pub(crate) async fn set_source_packet_gate(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        self.media()
-            .set_source_packet_gate(source_session_key, source_transport_media_id, packet_gate)
             .await
     }
 

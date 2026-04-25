@@ -5,17 +5,15 @@ use str0m::{
     media::ExtensionValues,
     rtp::{RtpHeader, RtpPacket},
 };
-#[cfg(test)]
-use str0m::{
-    media::{Mid, Pt, Rid},
-    rtp::Ssrc,
-};
 
 use super::{
     local_forwarding::LocalForwardedRtp, route_control::PacketLayerMetadata,
     shared_payload::SharedPayload, state::RtcBootstrapState,
 };
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[derive(Debug)]
 pub(crate) struct ForwardedPacket {
@@ -181,149 +179,19 @@ fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
 }
 
 #[cfg(test)]
-pub(crate) fn sample_forwarded_packet(
-    source_session_key: TransportSessionKey,
-    mid: &str,
-    payload: &[u8],
-) -> ForwardedPacket {
-    sample_forwarded_packet_with_rid(source_session_key, mid, None, payload)
-}
-
-#[cfg(test)]
-pub(crate) fn sample_forwarded_packet_with_rid(
-    source_session_key: TransportSessionKey,
-    mid: &str,
-    rid: Option<&str>,
-    payload: &[u8],
-) -> ForwardedPacket {
-    sample_forwarded_packet_with_extensions(
-        source_session_key,
-        mid,
-        rid,
-        ExtensionValues::default(),
-        payload,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn sample_forwarded_packet_with_audio_activity(
-    source_session_key: TransportSessionKey,
-    mid: &str,
-    voice_activity: Option<bool>,
-    audio_level: Option<i8>,
-    payload: &[u8],
-) -> ForwardedPacket {
-    sample_forwarded_packet_with_extensions(
-        source_session_key,
-        mid,
-        None,
-        ExtensionValues {
-            audio_level,
-            voice_activity,
-            ..ExtensionValues::default()
-        },
-        payload,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn sample_forwarded_packet_with_frame_mark(
-    source_session_key: TransportSessionKey,
-    mid: &str,
-    rid: Option<&str>,
-    frame_mark: u32,
-    payload: &[u8],
-) -> ForwardedPacket {
-    sample_forwarded_packet_with_extensions(
-        source_session_key,
-        mid,
-        rid,
-        ExtensionValues {
-            frame_mark: Some(frame_mark),
-            ..ExtensionValues::default()
-        },
-        payload,
-    )
-}
-
-#[cfg(test)]
-fn sample_forwarded_packet_with_extensions(
-    source_session_key: TransportSessionKey,
-    mid: &str,
-    rid: Option<&str>,
-    ext_vals: ExtensionValues,
-    payload: &[u8],
-) -> ForwardedPacket {
-    let received_at = Instant::now();
-    ForwardedPacket {
-        source_session_key,
-        source_transport_media_id: None,
-        visits_origin_sinks: true,
-        received_at,
-        payload: SharedPayload::from_vec(payload.to_vec()),
-        data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-            header: RtpHeader {
-                version: 2,
-                has_padding: false,
-                has_extension: false,
-                csrc_count: 0,
-                marker: false,
-                payload_type: Pt::from(111),
-                sequence_number: 1,
-                timestamp: 1234,
-                ssrc: Ssrc::from(4321),
-                csrc: [0; 15],
-                ext_vals: ExtensionValues {
-                    rid: rid.map(Rid::from),
-                    mid: Some(Mid::from(mid)),
-                    ..ext_vals
-                },
-                header_len: 12,
-            },
-        }),
-    }
-}
-
-#[cfg(test)]
-fn sample_forwarded_packet_without_mid(
-    source_session_key: TransportSessionKey,
-    ssrc: u32,
-    payload: &[u8],
-) -> ForwardedPacket {
-    let received_at = Instant::now();
-    ForwardedPacket {
-        source_session_key,
-        source_transport_media_id: None,
-        visits_origin_sinks: true,
-        received_at,
-        payload: SharedPayload::from_vec(payload.to_vec()),
-        data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-            header: RtpHeader {
-                version: 2,
-                has_padding: false,
-                has_extension: false,
-                csrc_count: 0,
-                marker: false,
-                payload_type: Pt::from(111),
-                sequence_number: 1,
-                timestamp: 1234,
-                ssrc: Ssrc::from(ssrc),
-                csrc: [0; 15],
-                ext_vals: ExtensionValues::default(),
-                header_len: 12,
-            },
-        }),
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use o_sfu_protocol::shared::SessionId;
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
+    use str0m::media::{Mid, Rid};
 
     use super::*;
     use crate::runtime::rtc_adapter::{
-        media_registry::RegisteredMediaHandle, test_support::test_transport_session_key,
+        forwarded_packet::test_support::{
+            sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+            sample_forwarded_packet_without_mid,
+        },
+        media_registry::RegisteredMediaHandle,
+        test_support::test_transport_session_key,
     };
 
     #[test]

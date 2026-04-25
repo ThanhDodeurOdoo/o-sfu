@@ -266,16 +266,6 @@ pub(super) enum RtcWorkerCommand {
         target_id: RelayTargetId,
         packet_gate: PacketLayerGate,
     },
-    #[allow(
-        dead_code,
-        reason = "Phase 6 stages the source-owned layer policy command ahead of the lasting runtime caller so tests can verify the worker boundary first"
-    )]
-    SetSourcePacketGate {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: Option<PacketLayerGate>,
-        response: RtcWorkerResponse<()>,
-    },
     SetProducerActive {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,

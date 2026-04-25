@@ -379,7 +379,8 @@ mod tests {
 
     use super::*;
     use crate::runtime::rtc_adapter::{
-        sample_forwarded_packet, state::RtcBootstrapState, test_support::test_transport_session_key,
+        state::RtcBootstrapState,
+        test_support::{sample_forwarded_packet, test_transport_session_key},
     };
 
     #[test]

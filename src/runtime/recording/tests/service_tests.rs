@@ -14,7 +14,7 @@ use crate::runtime::{
             RecordingLifecycleState, into_media_source, is_channel_active, transition_error_state,
         },
     },
-    rtc_adapter::{sample_forwarded_packet, test_support::test_transport_session_key},
+    rtc_adapter::test_support::{sample_forwarded_packet, test_transport_session_key},
     transport_adapter::TransportMediaId,
 };
 

@@ -163,13 +163,6 @@ pub(crate) trait MediaPort {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String>;
-
-    async fn set_source_packet_gate(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError>;
 }
 
 /// Exposes read-only transport snapshots for diagnostics and runtime decisions

@@ -99,7 +99,6 @@ pub(crate) fn handle_worker_command(
         | RtcWorkerCommand::RequestRemoteKeyframe { .. }
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
-        | RtcWorkerCommand::SetSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. }
         | RtcWorkerCommand::SetConsumerPacketGate { .. }
@@ -267,7 +266,6 @@ fn handle_media_command(
         RtcWorkerCommand::RequestRemoteKeyframe { .. }
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
-        | RtcWorkerCommand::SetSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. }
         | RtcWorkerCommand::SetConsumerPacketGate { .. }
@@ -328,18 +326,6 @@ fn handle_media_route_control_command(
             source_transport_media_id,
             target_id,
             packet_gate,
-        ),
-        RtcWorkerCommand::SetSourcePacketGate {
-            source_session_key,
-            source_transport_media_id,
-            packet_gate,
-            response,
-        } => media::respond_set_source_packet_gate(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            packet_gate,
-            response,
         ),
         RtcWorkerCommand::SetProducerActive {
             session_key,

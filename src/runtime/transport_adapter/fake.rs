@@ -62,11 +62,6 @@ pub(crate) enum FakeWebRtcEvent {
         consumer_session_id: SessionId,
         source_session_id: SessionId,
     },
-    SourcePacketGateUpdated {
-        session_id: SessionId,
-        transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    },
 }
 
 /// Deterministic transport backend for tests and feature-gated development.
@@ -596,24 +591,6 @@ impl FakeWebRtcAdapter {
         self.record_event(FakeWebRtcEvent::ConsumerKeyframeRequested {
             consumer_session_id: consumer_session_key.session_id().clone(),
             source_session_id: source_session_key.session_id().clone(),
-        });
-        Ok(())
-    }
-
-    #[allow(
-        clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
-    )]
-    pub(crate) async fn set_source_packet_gate(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::SourcePacketGateUpdated {
-            session_id: session_key.session_id().clone(),
-            transport_media_id,
-            packet_gate,
         });
         Ok(())
     }

@@ -380,33 +380,6 @@ impl MediaPort for RuntimeTransportAdapter {
                 .await
         })
     }
-
-    async fn set_source_packet_gate(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        let result = dispatch_transport_backend!(self, |backend| {
-            backend
-                .set_source_packet_gate(
-                    source_session_key,
-                    source_transport_media_id,
-                    packet_gate.clone(),
-                )
-                .await
-        });
-        if let Err(error) = &result {
-            warn!(
-                ?source_session_key,
-                ?source_transport_media_id,
-                ?packet_gate,
-                ?error,
-                "transport adapter failed to update source packet gate"
-            );
-        }
-        result
-    }
 }
 
 impl ObservabilityPort for RuntimeTransportAdapter {

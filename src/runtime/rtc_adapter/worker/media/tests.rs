@@ -17,7 +17,6 @@ use super::{
     respond_add_send_media, respond_remove_media, respond_request_consumer_keyframe,
     respond_request_remote_keyframe, respond_set_consumer_packet_gate,
     respond_set_consumer_packet_gates, respond_set_remote_source_packet_gate,
-    respond_set_source_packet_gate,
 };
 use crate::{
     config::MediaCodecFlags,
@@ -389,47 +388,6 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
             && rid == selected_rid
     ));
     assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
-}
-
-#[test]
-fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
-    let source_session = test_transport_session_key(121, 0, 122, SessionId::Integer(123));
-    let source_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
-    let source_transport_media_id =
-        prepare_source_session(&mut state, &source_session, source_mid, 88_888);
-
-    let (response_tx, response_rx) = oneshot::channel();
-    respond_set_source_packet_gate(
-        &mut state,
-        &source_session,
-        source_transport_media_id,
-        Some(PacketLayerGate::Rid("hi".into())),
-        response_tx,
-    );
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
-    assert_eq!(
-        state
-            .route_control
-            .effective_packet_gate(source_transport_media_id),
-        Some(PacketLayerGate::Rid("hi".into()))
-    );
-
-    let (response_tx, response_rx) = oneshot::channel();
-    respond_set_source_packet_gate(
-        &mut state,
-        &source_session,
-        source_transport_media_id,
-        None,
-        response_tx,
-    );
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
-    assert_eq!(
-        state
-            .route_control
-            .effective_packet_gate(source_transport_media_id),
-        None
-    );
 }
 
 #[test]

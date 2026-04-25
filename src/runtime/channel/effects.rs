@@ -23,7 +23,7 @@ use super::{
         ChannelState, ConsumerBootstrapOrigin, ConsumerPacketSelectionUpdate, ConsumerRouteUpdate,
         FeaturedSessionUpdate, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
         PlannedConsumerBootstrap, PlannedSubscriptionChange, PreparedConsumerBootstrap,
-        SourcePacketSelectionUpdate, TransportMediaRemoval,
+        TransportMediaRemoval,
     },
 };
 use crate::runtime::{
@@ -506,14 +506,13 @@ impl UnpublishEffectPlan {
 
 /// Executes room-owned source policy after pure channel planning.
 ///
-/// Source and consumer packet updates touch the transport before channel state
-/// records the new selector. That keeps stale transport failures local to one
-/// update instead of rolling back a room transition that may already have moved
-/// on. Featured-session projection is still part of this plan so outbound
-/// layout state is derived from the same active-speaker observation.
+/// Consumer packet updates touch the transport before channel state records the
+/// new selector. That keeps stale transport failures local to one update
+/// instead of rolling back a room transition that may already have moved on.
+/// Featured-session projection is still part of this plan so outbound layout
+/// state is derived from the same active-speaker observation.
 #[derive(Debug, Default)]
 pub(super) struct SourcePacketPolicyEffectPlan {
-    source_packets: Vec<SourcePacketSelectionUpdate>,
     consumer_packets: Vec<ConsumerPacketSelectionUpdate>,
     featured_sessions: Vec<FeaturedSessionUpdate>,
 }
@@ -529,7 +528,6 @@ impl SourcePacketPolicyEffectPlan {
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
         Self {
-            source_packets: state.source_packet_selection_updates(active_speaker_sources),
             consumer_packets: state.consumer_packet_selection_updates(
                 active_speaker_sources,
                 receiver_bandwidth_snapshot,
@@ -539,9 +537,7 @@ impl SourcePacketPolicyEffectPlan {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.source_packets.is_empty()
-            && self.consumer_packets.is_empty()
-            && self.featured_sessions.is_empty()
+        self.consumer_packets.is_empty() && self.featured_sessions.is_empty()
     }
 
     /// Applies transport-visible gates before committing selector state.
@@ -550,20 +546,14 @@ impl SourcePacketPolicyEffectPlan {
     /// transport adapter. Only updates accepted by the transport are committed
     /// back into `ChannelState`
     pub(super) async fn execute(self, channel: &Channel, media_port: &impl MediaPort) {
-        let applied_source_packet_updates =
-            Self::apply_source_packet_updates(channel, media_port, self.source_packets).await;
         let applied_consumer_packet_updates =
             Self::apply_consumer_packet_updates(channel, media_port, self.consumer_packets).await;
-        if applied_source_packet_updates.is_empty()
-            && applied_consumer_packet_updates.is_empty()
-            && self.featured_sessions.is_empty()
-        {
+        if applied_consumer_packet_updates.is_empty() && self.featured_sessions.is_empty() {
             return;
         }
         Self::record_source_selection_metrics(channel, &applied_consumer_packet_updates);
         let info_fanout = {
             let mut state = channel.state.write().await;
-            state.commit_source_packet_selection_updates(&applied_source_packet_updates);
             state.commit_consumer_packet_selection_updates(&applied_consumer_packet_updates);
             state.commit_featured_session_updates(&self.featured_sessions)
         };
@@ -583,38 +573,6 @@ impl SourcePacketPolicyEffectPlan {
                     .record_source_selection_update(update.selector());
             }
         }
-    }
-
-    async fn apply_source_packet_updates(
-        channel: &Channel,
-        media_port: &impl MediaPort,
-        updates: Vec<SourcePacketSelectionUpdate>,
-    ) -> Vec<SourcePacketSelectionUpdate> {
-        let mut applied_updates = Vec::with_capacity(updates.len());
-        for update in updates {
-            if media_port
-                .set_source_packet_gate(
-                    &channel.transport_session_key(
-                        update.owner_session_id(),
-                        update.owner_connection_id(),
-                    ),
-                    update.transport_media_id(),
-                    update.packet_gate().clone(),
-                )
-                .await
-                .is_err()
-            {
-                warn!(
-                    session_id = ?update.owner_session_id(),
-                    connection_id = ?update.owner_connection_id(),
-                    transport_media_id = ?update.transport_media_id(),
-                    "transport adapter rejected the room-owned source packet selection update"
-                );
-                continue;
-            }
-            applied_updates.push(update);
-        }
-        applied_updates
     }
 
     async fn apply_consumer_packet_updates(
