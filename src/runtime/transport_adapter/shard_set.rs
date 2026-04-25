@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     rtc_adapter::{RelayCleanup, RtcTransportAdapter},
     transport_adapter::{
         SourcePolicyUpdateSubscription,
@@ -78,7 +78,7 @@ impl RtcTransportAdapterShardSet {
         }
     }
 
-    pub(super) fn shard_for_session(
+    pub(super) fn shard_for_user(
         &self,
         session_key: &TransportSessionKey,
     ) -> Arc<RtcTransportAdapter> {
@@ -90,8 +90,8 @@ impl RtcTransportAdapterShardSet {
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
     ) -> Option<(Arc<RtcTransportAdapter>, Arc<RtcTransportAdapter>)> {
-        let consumer_shard = self.shard_for_session(consumer_session_key);
-        let source_shard = self.shard_for_session(source_session_key);
+        let consumer_shard = self.shard_for_user(consumer_session_key);
+        let source_shard = self.shard_for_user(source_session_key);
         if Arc::ptr_eq(&consumer_shard, &source_shard) {
             return None;
         }
@@ -104,7 +104,7 @@ impl RtcTransportAdapterShardSet {
         relay_cleanup: &[RelayCleanup],
     ) {
         for cleanup in relay_cleanup {
-            let source_shard = self.shard_for_session(cleanup.source_session_key());
+            let source_shard = self.shard_for_user(cleanup.source_session_key());
             if Arc::ptr_eq(&source_shard, target_shard) {
                 continue;
             }
@@ -121,7 +121,7 @@ impl RtcTransportAdapterShardSet {
         let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
             keys_by_shard
-                .entry(self.shard_index_for_session(session_key))
+                .entry(self.shard_index_for_user(session_key))
                 .or_default()
                 .push(session_key.clone());
         }
@@ -142,7 +142,7 @@ impl RtcTransportAdapterShardSet {
         let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
             keys_by_shard
-                .entry(self.shard_index_for_session(session_key))
+                .entry(self.shard_index_for_user(session_key))
                 .or_default()
                 .push(session_key.clone());
         }
@@ -162,8 +162,8 @@ impl RtcTransportAdapterShardSet {
         let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
         let mut batches = BTreeMap::<ConsumerPacketGateBatchKey, Vec<usize>>::new();
         for (index, update) in updates.iter().enumerate() {
-            if update.consumer_session_key().channel_instance_id()
-                != update.source_session_key().channel_instance_id()
+            if update.consumer_session_key().room_instance_id()
+                != update.source_session_key().room_instance_id()
             {
                 if let Some(result) = results.get_mut(index) {
                     *result = Err(TransportAdapterError::InvalidInput);
@@ -171,7 +171,7 @@ impl RtcTransportAdapterShardSet {
                 continue;
             }
             let key = ConsumerPacketGateBatchKey {
-                shard_index: self.shard_index_for_session(update.consumer_session_key()),
+                shard_index: self.shard_index_for_user(update.consumer_session_key()),
                 source_session_key: update.source_session_key().clone(),
                 source_transport_media_id: update.source_transport_media_id(),
             };
@@ -242,26 +242,25 @@ impl RtcTransportAdapterShardSet {
         next_deadline
     }
 
-    pub(super) async fn expired_active_speaker_channel_instance_ids(
+    pub(super) async fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelInstanceId> {
-        let mut channel_instance_ids = self
+    ) -> BTreeSet<RoomInstanceId> {
+        let mut room_instance_ids = self
             .primary_shard
-            .expired_active_speaker_channel_instance_ids(now)
+            .expired_active_speaker_room_instance_ids(now)
             .await;
         for shard in &self.extra_shards {
-            channel_instance_ids
-                .extend(shard.expired_active_speaker_channel_instance_ids(now).await);
+            room_instance_ids.extend(shard.expired_active_speaker_room_instance_ids(now).await);
         }
-        channel_instance_ids
+        room_instance_ids
     }
 
     pub(super) fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
         self.source_policy_signal.subscribe()
     }
 
-    fn shard_index_for_session(&self, session_key: &TransportSessionKey) -> usize {
+    fn shard_index_for_user(&self, session_key: &TransportSessionKey) -> usize {
         self.shard_index_for_media_worker_id(session_key.media_worker_id())
     }
 

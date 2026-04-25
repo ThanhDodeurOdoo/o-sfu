@@ -5,7 +5,7 @@ use super::{
     keyframe_requests::{CoalescedKeyframeRequest, PendingKeyframeRequest},
 };
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     transport_adapter::{SourcePolicySignal, TransportSessionKey},
 };
 
@@ -42,7 +42,7 @@ pub(super) struct PacketLoopBuffers {
     pub(super) relay_packets: Vec<Option<ForwardedPacket>>,
     pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     pub(super) coalesced_keyframe_requests: Vec<CoalescedKeyframeRequest>,
-    pub(super) dirty_source_policy_channel_ids: Vec<ChannelInstanceId>,
+    pub(super) dirty_source_policy_channel_ids: Vec<RoomInstanceId>,
     pub(super) forwards: Vec<PacketForward>,
 }
 
@@ -88,9 +88,8 @@ impl PacketLoopBuffers {
     }
 
     #[cfg(test)]
-    pub(super) fn mark_source_policy_dirty(&mut self, channel_instance_id: ChannelInstanceId) {
-        self.dirty_source_policy_channel_ids
-            .push(channel_instance_id);
+    pub(super) fn mark_source_policy_dirty(&mut self, room_instance_id: RoomInstanceId) {
+        self.dirty_source_policy_channel_ids.push(room_instance_id);
     }
 
     pub(super) fn flush_source_policy_dirty(&mut self, source_policy_signal: &SourcePolicySignal) {
@@ -99,8 +98,7 @@ impl PacketLoopBuffers {
         }
         self.dirty_source_policy_channel_ids.sort_unstable();
         self.dirty_source_policy_channel_ids.dedup();
-        source_policy_signal
-            .mark_dirty_channels(self.dirty_source_policy_channel_ids.iter().copied());
+        source_policy_signal.mark_dirty_rooms(self.dirty_source_policy_channel_ids.iter().copied());
         self.dirty_source_policy_channel_ids.clear();
     }
 }

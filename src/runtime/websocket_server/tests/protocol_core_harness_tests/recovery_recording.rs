@@ -15,15 +15,15 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-subscribe",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(61));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(62));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(61));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(62));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -49,11 +49,11 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
             .is_some()
     );
 
-    let producer_id = channel
+    let producer_id = room
         .test_api()
         .media()
         .publish_track(
-            &SessionId::Integer(61),
+            &UserId::Integer(61),
             StreamType::Camera,
             MediaKind::Video,
             sample_video_rtp_parameters("cam-1"),
@@ -82,11 +82,11 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
                 matches!(
                     event,
                     FakeWebRtcEvent::ConsumerActivityUpdated {
-                        consumer_session_id,
-                        source_session_id,
+                        consumer_user_id,
+                        source_user_id,
                         active: false,
-                    } if *consumer_session_id == SessionId::Integer(62)
-                        && *source_session_id == SessionId::Integer(61)
+                    } if *consumer_user_id == UserId::Integer(62)
+                        && *source_user_id == UserId::Integer(61)
                 )
             }) {
                 return true;
@@ -102,10 +102,10 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
 
 #[tokio::test]
 async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
-    let Some((server, channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+    let Some((server, room, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-subscribe",
-        SessionId::Integer(91),
-        SessionId::Integer(92),
+        UserId::Integer(91),
+        UserId::Integer(92),
         56_311,
         56_312,
     ))
@@ -133,7 +133,7 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
     let Some(published_track) = track_bindings.first() else {
         return;
     };
-    assert_eq!(published_track.session_id, ProtocolSessionId::Integer(91));
+    assert_eq!(published_track.user_id, ProtocolSessionId::Integer(91));
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
     assert!(
@@ -145,10 +145,10 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
         assert_real_rtc_subscribe_activity(
             &mut bob,
             &server,
-            &channel,
+            &room,
             published_track,
-            SessionId::Integer(91),
-            SessionId::Integer(92),
+            UserId::Integer(91),
+            UserId::Integer(92),
             false,
         )
         .await
@@ -159,10 +159,10 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
         assert_real_rtc_subscribe_activity(
             &mut bob,
             &server,
-            &channel,
+            &room,
             published_track,
-            SessionId::Integer(91),
-            SessionId::Integer(92),
+            UserId::Integer(91),
+            UserId::Integer(92),
             true,
         )
         .await
@@ -174,13 +174,13 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
 #[tokio::test]
 async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
-    let alice_session_id = SessionId::Integer(83);
-    let bob_session_id = SessionId::Integer(84);
+    let alice_user_id = UserId::Integer(83);
+    let bob_user_id = UserId::Integer(84);
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_fake_protocol_peers(
         Arc::clone(&adapter),
         "issuer-protocol-subscribe-recovery",
-        alice_session_id.clone(),
-        bob_session_id.clone(),
+        alice_user_id.clone(),
+        bob_user_id.clone(),
     ))
     .await
     else {
@@ -191,7 +191,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
         publish_camera_and_bootstrap_subscriber(
             &mut alice,
             &mut bob,
-            &alice_session_id,
+            &alice_user_id,
             "publisher should stage the initial protocol publish",
             "publisher should consume the initial publish renegotiation and answer it",
             "subscriber should receive the initial translated track snapshot",
@@ -202,7 +202,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
 
     assert!(
         bob.subscribe(
-            protocol_session_id(&alice_session_id),
+            protocol_user_id(&alice_user_id),
             ProtocolDownloadStates {
                 camera: Some(false),
                 ..ProtocolDownloadStates::default()
@@ -217,7 +217,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
         recover_subscriber_and_replay_track(
             &mut alice,
             &mut bob,
-            &alice_session_id,
+            &alice_user_id,
             "recovery timer should reconnect the subscriber",
             "subscriber should consume the recovery welcome frame",
             "subscriber should consume the recovery initial offer",
@@ -237,11 +237,11 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
                     matches!(
                         event,
                         FakeWebRtcEvent::ConsumerActivityUpdated {
-                            consumer_session_id,
-                            source_session_id,
+                            consumer_user_id,
+                            source_user_id,
                             active: false,
-                        } if *consumer_session_id == bob_session_id
-                            && *source_session_id == alice_session_id
+                        } if *consumer_user_id == bob_user_id
+                            && *source_user_id == alice_user_id
                     )
                 })
             {
@@ -261,12 +261,12 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
 
 #[tokio::test]
 async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery() {
-    let alice_session_id = SessionId::Integer(93);
-    let bob_session_id = SessionId::Integer(94);
-    let Some((server, channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+    let alice_user_id = UserId::Integer(93);
+    let bob_user_id = UserId::Integer(94);
+    let Some((server, room, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-subscribe-recovery",
-        alice_session_id.clone(),
-        bob_session_id.clone(),
+        alice_user_id.clone(),
+        bob_user_id.clone(),
         56_391,
         56_392,
     ))
@@ -278,7 +278,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     let Some(published_track) = publish_camera_and_bootstrap_subscriber(
         &mut alice,
         &mut bob,
-        &alice_session_id,
+        &alice_user_id,
         "publisher should stage the initial protocol publish on the real rtc path",
         "publisher should consume the initial real-rtc publish renegotiation and answer it",
         "subscriber should receive the initial translated track snapshot on the real rtc path",
@@ -291,10 +291,10 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
         assert_real_rtc_subscribe_activity(
             &mut bob,
             &server,
-            &channel,
+            &room,
             &published_track,
-            alice_session_id.clone(),
-            bob_session_id.clone(),
+            alice_user_id.clone(),
+            bob_user_id.clone(),
             false,
         )
         .await
@@ -305,7 +305,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     let Some(replayed_track) = recover_subscriber_and_replay_track(
         &mut alice,
         &mut bob,
-        &alice_session_id,
+        &alice_user_id,
         "recovery timer should reconnect the real-rtc subscriber",
         "subscriber should consume the recovery welcome frame on the real rtc path",
         "subscriber should consume the recovery initial offer on the real rtc path",
@@ -317,9 +317,9 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     };
     let Some(route_activity) = real_rtc_route_activity(
         &server,
-        &channel,
-        alice_session_id.clone(),
-        bob_session_id.clone(),
+        &room,
+        alice_user_id.clone(),
+        bob_user_id.clone(),
         &replayed_track.mid,
     )
     .await
@@ -355,17 +355,17 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-recording",
         None,
-        CreateChannelQuery {
+        CreateRoomQuery {
             recording_address: Some("https://record.example.com".to_owned()),
-            ..CreateChannelQuery::default()
+            ..CreateRoomQuery::default()
         },
     )
     .await;
-    let mut peer = connect_protocol_recording_peer(&server, &channel).await;
+    let mut peer = connect_protocol_recording_peer(&server, &room).await;
     assert!(peer.is_some());
     let Some(ref mut peer) = peer else {
         return;
@@ -418,8 +418,8 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
 #[tokio::test]
 async fn protocol_core_replays_latest_info_after_real_server_recovery() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
-        SessionId::Integer(71),
-        SessionId::Integer(72),
+        UserId::Integer(71),
+        UserId::Integer(72),
     ))
     .await
     else {
@@ -466,7 +466,7 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
 
     assert!(
         alice.read_server_frame().await.is_some(),
-        "alice should receive bob's replayed latest session info after recovery"
+        "alice should receive bob's replayed latest user info after recovery"
     );
     assert_eq!(
         alice.updates.last(),
@@ -484,10 +484,10 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() {
 }
 
 #[tokio::test]
-async fn protocol_core_propagates_raise_hand_info_over_real_server_session_flow() {
+async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
-        SessionId::Integer(91),
-        SessionId::Integer(92),
+        UserId::Integer(91),
+        UserId::Integer(92),
     ))
     .await
     else {
@@ -518,8 +518,8 @@ async fn protocol_core_propagates_raise_hand_info_over_real_server_session_flow(
 #[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
-        SessionId::Integer(81),
-        SessionId::Integer(82),
+        UserId::Integer(81),
+        UserId::Integer(82),
     ))
     .await
     else {
@@ -615,8 +615,8 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
 async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-recovery",
-        SessionId::Integer(91),
-        SessionId::Integer(92),
+        UserId::Integer(91),
+        UserId::Integer(92),
         55_091,
         55_092,
     ))

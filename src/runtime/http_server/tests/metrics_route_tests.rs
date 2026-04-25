@@ -20,16 +20,16 @@ fn assert_http_metrics_payload(payload: &str) {
     assert!(payload.contains("osfu_http_request_duration_seconds_count{route=\"noop\"} 1"));
     assert!(payload.contains("# TYPE osfu_ws_handshake_duration_seconds histogram"));
     assert!(payload.contains("osfu_ws_handshake_duration_seconds_count 0"));
-    assert!(payload.contains("osfu_channels_active 0"));
-    assert!(payload.contains("osfu_sessions_active 0"));
+    assert!(payload.contains("osfu_rooms_active 0"));
+    assert!(payload.contains("osfu_users_active 0"));
     assert!(payload.contains("osfu_publications_active 0"));
     assert!(payload.contains("osfu_subscriptions_active 0"));
-    assert!(payload.contains("osfu_recording_channels_active 0"));
+    assert!(payload.contains("osfu_recording_rooms_active 0"));
 }
 
 fn assert_transport_metrics_payload(payload: &str) {
-    assert!(payload.contains("osfu_transport_sessions_active 0"));
-    assert!(payload.contains("osfu_transport_health_sessions{state=\"connected\"} 0"));
+    assert!(payload.contains("osfu_transport_users_active 0"));
+    assert!(payload.contains("osfu_transport_health_users{state=\"connected\"} 0"));
     assert!(
         payload
             .contains("osfu_transport_health_transitions_total{from=\"unset\",to=\"connected\"} 0")
@@ -41,10 +41,10 @@ fn assert_transport_metrics_payload(payload: &str) {
     assert!(payload.contains("osfu_rtp_forwarded_packets_total{destination=\"local_rtc\"} 0"));
     assert!(payload.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 0"));
     assert!(payload.contains("osfu_transport_dtls_connected_total 0"));
-    assert!(payload.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"1\"} 0"));
-    assert!(payload.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"+Inf\"} 0"));
-    assert!(payload.contains("osfu_transport_session_lifetime_seconds_sum 0.0"));
-    assert!(payload.contains("osfu_transport_session_lifetime_seconds_count 0"));
+    assert!(payload.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"1\"} 0"));
+    assert!(payload.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"+Inf\"} 0"));
+    assert!(payload.contains("osfu_transport_user_lifetime_seconds_sum 0.0"));
+    assert!(payload.contains("osfu_transport_user_lifetime_seconds_count 0"));
     assert!(payload.contains("osfu_source_selection_updates_total{selector=\"encoding\"} 0"));
 }
 
@@ -57,17 +57,17 @@ fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.http_request_duration.noop.count, 1);
     assert_eq!(snapshot.http_request_duration.metrics.count, 1);
     assert_eq!(snapshot.ws_handshake_duration.count, 0);
-    assert_eq!(snapshot.active_channels, 0);
-    assert_eq!(snapshot.active_sessions, 0);
+    assert_eq!(snapshot.active_rooms, 0);
+    assert_eq!(snapshot.active_users, 0);
     assert_eq!(snapshot.active_publications, 0);
     assert_eq!(snapshot.active_subscriptions, 0);
-    assert_eq!(snapshot.active_recording_channels, 0);
-    assert_eq!(snapshot.active_transport_sessions, 0);
-    assert_eq!(snapshot.connected_transport_sessions, 0);
+    assert_eq!(snapshot.active_recording_rooms, 0);
+    assert_eq!(snapshot.active_transport_users, 0);
+    assert_eq!(snapshot.connected_transport_users, 0);
     assert_eq!(snapshot.transport_health_transitions_unset_to_connected, 0);
     assert_eq!(snapshot.transport_ice_state_changes_checking, 0);
     assert_eq!(snapshot.transport_dtls_connected, 0);
-    assert_eq!(snapshot.transport_session_lifetime_count, 0);
+    assert_eq!(snapshot.transport_user_lifetime_count, 0);
     assert_eq!(snapshot.recording_start_accepted, 0);
     assert_eq!(snapshot.rtp_forwarded_packets_local_rtc, 0);
 }

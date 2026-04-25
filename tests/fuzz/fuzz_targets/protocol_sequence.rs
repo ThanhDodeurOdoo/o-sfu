@@ -23,7 +23,7 @@ use libfuzzer_sys::{
 use o_sfu_protocol::{
     core::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
     shared::{
-        AvailableFeatures, RecordingState, RecordingStateUpdate, SessionId, SessionInfo, StopCode,
+        AvailableFeatures, RecordingState, RecordingStateUpdate, UserId, UserInfo, StopCode,
         StreamType,
     },
     signaling::{
@@ -70,7 +70,7 @@ impl<'a> Arbitrary<'a> for Scenario {
 struct ConnectInput {
     room: Label,
     jwt: Label,
-    channel: Option<Label>,
+    room: Option<Label>,
 }
 
 #[derive(Debug)]
@@ -162,7 +162,7 @@ enum CloseInput {
     AuthFailed,
     AuthTimeout,
     Kicked,
-    ChannelFull,
+    RoomFull,
 }
 
 #[derive(Debug, Clone, Arbitrary)]
@@ -204,7 +204,7 @@ struct FeatureFlagsInput {
 
 #[derive(Debug, Clone, Arbitrary)]
 struct PeerSnapshotInput {
-    session_id: SessionIdInput,
+    user_id: SessionIdInput,
     info: SessionInfoInput,
 }
 
@@ -224,14 +224,14 @@ impl<'a> Arbitrary<'a> for TrackBindingsInput {
 #[derive(Debug, Clone, Arbitrary)]
 struct TrackBindingInput {
     mid: Label,
-    session_id: SessionIdInput,
+    user_id: SessionIdInput,
     stream_type: StreamTypeInput,
     active: bool,
 }
 
 #[derive(Debug, Clone, Arbitrary)]
 struct PeerInfoInput {
-    session_id: SessionIdInput,
+    user_id: SessionIdInput,
     info: SessionInfoInput,
 }
 
@@ -409,9 +409,9 @@ fn connect_core(core: &mut ProtocolCore, connect: &ConnectInput) {
         ),
         connect.jwt.prefixed("jwt-"),
         connect
-            .channel
+            .room
             .as_ref()
-            .map(|channel| channel.prefixed("channel-")),
+            .map(|room| room.prefixed("room-")),
     );
     let _ = core.on_ws_open();
 }
@@ -476,7 +476,7 @@ impl ServerEventInput {
                     info.into_protocol(),
                 )))
             }
-            Self::PeerLeft(session_id)
+            Self::PeerLeft(user_id)
                 if matches!(
                     state,
                     ConnectionState::Connecting
@@ -487,7 +487,7 @@ impl ServerEventInput {
             {
                 Some(ServerEnvelope::Message(ServerMessage::PeerLeft(
                     PeerLeftPayload {
-                        session_id: session_id.into_protocol("peer-"),
+                        user_id: user_id.into_protocol("peer-"),
                     },
                 )))
             }
@@ -552,7 +552,7 @@ impl FeatureFlagsInput {
 impl PeerSnapshotInput {
     fn into_protocol(self) -> PeerSnapshot {
         PeerSnapshot {
-            session_id: self.session_id.into_protocol("peer-"),
+            user_id: self.user_id.into_protocol("peer-"),
             info: self.info.into_protocol(),
         }
     }
@@ -571,7 +571,7 @@ impl TrackBindingInput {
     fn into_protocol(self) -> TrackBinding {
         TrackBinding {
             mid: self.mid.prefixed("mid-"),
-            session_id: self.session_id.into_protocol("peer-"),
+            user_id: self.user_id.into_protocol("peer-"),
             stream_type: self.stream_type.into_protocol(),
             active: self.active,
             source: None,
@@ -582,7 +582,7 @@ impl TrackBindingInput {
 impl PeerInfoInput {
     fn into_protocol(self) -> PeerInfoPayload {
         PeerInfoPayload {
-            session_id: self.session_id.into_protocol("peer-"),
+            user_id: self.user_id.into_protocol("peer-"),
             info: self.info.into_protocol(),
         }
     }
@@ -635,10 +635,10 @@ impl ServerResponseInput {
 }
 
 impl SessionIdInput {
-    fn into_protocol(self, prefix: &str) -> SessionId {
+    fn into_protocol(self, prefix: &str) -> UserId {
         match self {
-            Self::Integer(value) => SessionId::Integer(i64::from(value)),
-            Self::String(value) => SessionId::String(value.prefixed(prefix)),
+            Self::Integer(value) => UserId::Integer(i64::from(value)),
+            Self::String(value) => UserId::String(value.prefixed(prefix)),
         }
     }
 }
@@ -654,8 +654,8 @@ impl StreamTypeInput {
 }
 
 impl SessionInfoInput {
-    fn into_protocol(self) -> SessionInfo {
-        SessionInfo {
+    fn into_protocol(self) -> UserInfo {
+        UserInfo {
             is_talking: self.is_talking,
             is_featured: self.is_featured,
             is_camera_on: self.is_camera_on,
@@ -745,7 +745,7 @@ impl CloseInput {
             Self::AuthFailed => u16::from(WebSocketCloseCode::AuthFailed),
             Self::AuthTimeout => u16::from(WebSocketCloseCode::AuthTimeout),
             Self::Kicked => u16::from(WebSocketCloseCode::Kicked),
-            Self::ChannelFull => u16::from(WebSocketCloseCode::ChannelFull),
+            Self::RoomFull => u16::from(WebSocketCloseCode::RoomFull),
         }
     }
 }

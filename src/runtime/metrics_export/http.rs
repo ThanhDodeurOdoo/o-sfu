@@ -26,20 +26,20 @@ fn append_http_request_counters(output: &mut String, snapshot: &RuntimeMetricsSn
     );
     append_counter(
         output,
-        "osfu_http_channel_requests_total",
-        "Total HTTP requests received by /v1/channel.",
-        snapshot.http_channel_requests,
+        "osfu_http_room_requests_total",
+        "Total HTTP requests received by /v1/room.",
+        snapshot.http_room_requests,
     );
     append_labeled_counter_family(
         output,
-        "osfu_http_channel_responses_total",
-        "Total HTTP /v1/channel responses by status.",
+        "osfu_http_room_responses_total",
+        "Total HTTP /v1/room responses by status.",
         "status",
         &[
-            LabeledValue::new("success", snapshot.http_channel_success),
-            LabeledValue::new("unauthorized", snapshot.http_channel_unauthorized),
-            LabeledValue::new("forbidden", snapshot.http_channel_forbidden),
-            LabeledValue::new("bad_request", snapshot.http_channel_bad_request),
+            LabeledValue::new("success", snapshot.http_room_success),
+            LabeledValue::new("unauthorized", snapshot.http_room_unauthorized),
+            LabeledValue::new("forbidden", snapshot.http_room_forbidden),
+            LabeledValue::new("bad_request", snapshot.http_room_bad_request),
         ],
     );
     append_counter(
@@ -80,7 +80,7 @@ fn append_http_latency_metrics(output: &mut String, snapshot: &RuntimeMetricsSna
     );
     let noop_duration = duration_histogram_buckets(&snapshot.http_request_duration.noop);
     let stats_duration = duration_histogram_buckets(&snapshot.http_request_duration.stats);
-    let channel_duration = duration_histogram_buckets(&snapshot.http_request_duration.channel);
+    let channel_duration = duration_histogram_buckets(&snapshot.http_request_duration.room);
     let disconnect_duration =
         duration_histogram_buckets(&snapshot.http_request_duration.disconnect);
     let metrics_duration = duration_histogram_buckets(&snapshot.http_request_duration.metrics);
@@ -103,10 +103,10 @@ fn append_http_latency_metrics(output: &mut String, snapshot: &RuntimeMetricsSna
                 snapshot.http_request_duration.stats.count,
             ),
             LabeledHistogramValue::new(
-                "channel",
+                "room",
                 &channel_duration,
-                snapshot.http_request_duration.channel.sum_micros,
-                snapshot.http_request_duration.channel.count,
+                snapshot.http_request_duration.room.sum_micros,
+                snapshot.http_request_duration.room.count,
             ),
             LabeledHistogramValue::new(
                 "disconnect",
@@ -128,7 +128,7 @@ fn http_inflight_values(snapshot: &HttpInflightSnapshot) -> [LabeledGaugeValue; 
     [
         LabeledGaugeValue::new("noop", snapshot.noop),
         LabeledGaugeValue::new("stats", snapshot.stats),
-        LabeledGaugeValue::new("channel", snapshot.channel),
+        LabeledGaugeValue::new("room", snapshot.room),
         LabeledGaugeValue::new("disconnect", snapshot.disconnect),
         LabeledGaugeValue::new("metrics", snapshot.metrics),
     ]

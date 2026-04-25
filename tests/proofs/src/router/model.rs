@@ -204,7 +204,7 @@ pub(crate) struct ProofRouterModel<
     const MAX_CONSUMERS: usize,
 > {
     pub(super) id: RouterId,
-    pub(super) sessions: [Option<Session>; MAX_SESSIONS],
+    pub(super) users: [Option<Session>; MAX_SESSIONS],
     pub(super) transports: [Option<Transport>; MAX_TRANSPORTS],
     pub(super) producers: [Option<Producer>; MAX_PRODUCERS],
     pub(super) consumers: [Option<Consumer>; MAX_CONSUMERS],
@@ -229,7 +229,7 @@ impl<
     pub(crate) fn new(id: RouterId) -> Self {
         Self {
             id,
-            sessions: [None; MAX_SESSIONS],
+            users: [None; MAX_SESSIONS],
             transports: [None; MAX_TRANSPORTS],
             producers: [None; MAX_PRODUCERS],
             consumers: [None; MAX_CONSUMERS],
@@ -242,33 +242,33 @@ impl<
 
     /// # Errors
     ///
-    /// Returns [`RouterError::DuplicateSession`] when the session already exists,
+    /// Returns [`RouterError::DuplicateSession`] when the user already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
-    pub(crate) fn join_session(&mut self, session: Session) -> Result<(), ProofRouterError> {
-        if self.contains_session(session.id()) {
-            return Err(RouterError::DuplicateSession(session.id()).into());
+    pub(crate) fn join_session(&mut self, user: Session) -> Result<(), ProofRouterError> {
+        if self.contains_session(user.id()) {
+            return Err(RouterError::DuplicateSession(user.id()).into());
         }
-        self.insert_session(session)
+        self.insert_session(user)
     }
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the session does not exist.
+    /// Returns [`RouterError::MissingSession`] when the user does not exist.
     pub(crate) fn update_session_permissions(
         &mut self,
-        session_id: SessionId,
+        user_id: SessionId,
         permissions: o_sfu_router::SessionPermissions,
     ) -> Result<(), ProofRouterError> {
-        let Some(session) = self.session_by_id_mut(session_id) else {
-            return Err(RouterError::MissingSession(session_id).into());
+        let Some(user) = self.session_by_id_mut(user_id) else {
+            return Err(RouterError::MissingSession(user_id).into());
         };
-        session.set_permissions(permissions);
+        user.set_permissions(permissions);
         Ok(())
     }
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the owning session does not exist,
+    /// Returns [`RouterError::MissingSession`] when the owning user does not exist,
     /// [`RouterError::DuplicateTransport`] when the transport already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
     pub(crate) fn open_transport(&mut self, transport: Transport) -> Result<(), ProofRouterError> {
@@ -450,14 +450,14 @@ impl<
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the session does not exist.
-    pub(crate) fn remove_session(&mut self, session_id: SessionId) -> Result<(), ProofRouterError> {
-        if !self.contains_session(session_id) {
-            return Err(RouterError::MissingSession(session_id).into());
+    /// Returns [`RouterError::MissingSession`] when the user does not exist.
+    pub(crate) fn remove_session(&mut self, user_id: SessionId) -> Result<(), ProofRouterError> {
+        if !self.contains_session(user_id) {
+            return Err(RouterError::MissingSession(user_id).into());
         }
 
-        self.clear_session(session_id);
-        let transport_ids = self.session_transports.take_members(session_id);
+        self.clear_session(user_id);
+        let transport_ids = self.session_transports.take_members(user_id);
         let mut transport_index = 0;
         while let Some(transport_id) = transport_ids.get(transport_index) {
             if let Some(transport_id) = *transport_id {
@@ -469,10 +469,10 @@ impl<
         Ok(())
     }
 
-    fn insert_session(&mut self, session: Session) -> Result<(), ProofRouterError> {
-        for slot in &mut self.sessions {
+    fn insert_session(&mut self, user: Session) -> Result<(), ProofRouterError> {
+        for slot in &mut self.users {
             if slot.is_none() {
-                *slot = Some(session);
+                *slot = Some(user);
                 return Ok(());
             }
         }
@@ -568,9 +568,9 @@ impl<
             .remove_member(consumer.producer_id(), consumer_id);
     }
 
-    fn clear_session(&mut self, session_id: SessionId) {
-        for slot in &mut self.sessions {
-            if slot.is_some_and(|session| session.id() == session_id) {
+    fn clear_session(&mut self, user_id: SessionId) {
+        for slot in &mut self.users {
+            if slot.is_some_and(|user| user.id() == user_id) {
                 *slot = None;
             }
         }
@@ -614,15 +614,15 @@ impl<
         })
     }
 
-    fn session_by_id_mut(&mut self, session_id: SessionId) -> Option<&mut Session> {
-        self.sessions
+    fn session_by_id_mut(&mut self, user_id: SessionId) -> Option<&mut Session> {
+        self.users
             .iter_mut()
-            .find_map(|slot| slot.as_mut().filter(|session| session.id() == session_id))
+            .find_map(|slot| slot.as_mut().filter(|user| user.id() == user_id))
     }
 
-    pub(super) fn contains_session(&self, session_id: SessionId) -> bool {
-        for session in &self.sessions {
-            if session.is_some_and(|session| session.id() == session_id) {
+    pub(super) fn contains_session(&self, user_id: SessionId) -> bool {
+        for user in &self.users {
+            if user.is_some_and(|user| user.id() == user_id) {
                 return true;
             }
         }

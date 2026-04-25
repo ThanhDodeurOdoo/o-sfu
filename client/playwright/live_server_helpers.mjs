@@ -23,7 +23,7 @@ export async function createChannel({
         }
     });
     if (!response.ok) {
-        throw new Error(`expected channel creation to succeed, got HTTP ${response.status}`);
+        throw new Error(`expected room creation to succeed, got HTTP ${response.status}`);
     }
     const payload = await response.json();
     return payload.uuid;

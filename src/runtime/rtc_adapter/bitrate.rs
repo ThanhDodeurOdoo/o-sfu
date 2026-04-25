@@ -204,7 +204,7 @@ impl RtcBootstrapState {
 mod tests {
     use std::sync::Mutex;
 
-    use o_sfu_protocol::shared::SessionId;
+    use o_sfu_protocol::shared::UserId;
 
     use super::*;
     use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
@@ -245,7 +245,7 @@ mod tests {
     fn removing_session_hides_registered_counters_from_snapshots() {
         let mut state = RtcBitrateState::default();
         let now = Instant::now();
-        let session_key = test_transport_session_key(1, 0, 2, SessionId::Integer(3));
+        let session_key = test_transport_session_key(1, 0, 2, UserId::Integer(3));
         let media_id = TransportMediaId::new(4);
         let counter = state.register_incoming_media(&session_key, media_id, now);
         counter.record(now, 16);
@@ -261,7 +261,7 @@ mod tests {
         let mut shared_state = RtcBitrateState::default();
         let mut bootstrap_state = RtcBootstrapState::default();
         let now = Instant::now();
-        let session_key = test_transport_session_key(1, 0, 2, SessionId::Integer(3));
+        let session_key = test_transport_session_key(1, 0, 2, UserId::Integer(3));
         let media_id = TransportMediaId::new(4);
         let counter = shared_state.register_incoming_media(&session_key, media_id, now);
         bootstrap_state.register_incoming_bitrate_counter(media_id, counter);

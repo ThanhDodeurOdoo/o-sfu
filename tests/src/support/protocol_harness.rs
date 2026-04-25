@@ -6,7 +6,7 @@ use std::{
 use futures_util::SinkExt;
 use o_sfu::{config::Config, testing::server::TestServer};
 use o_sfu_protocol::{
-    shared::{SessionId, SessionInfo},
+    shared::{UserId, UserInfo},
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientResponse,
         EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, WelcomePayload,
@@ -24,8 +24,8 @@ const RTC_NEGOTIATION_PORT_BASE: u16 = 56_000;
 static NEXT_RTC_NEGOTIATION_PORT: AtomicU16 = AtomicU16::new(RTC_NEGOTIATION_PORT_BASE);
 
 #[must_use]
-pub fn protocol_test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
-    test_config(authentication_timeout_ms, channel_size)
+pub fn protocol_test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
+    test_config(authentication_timeout_ms, room_size)
 }
 
 pub struct ProtocolWebSocketClient {
@@ -52,16 +52,16 @@ impl ProtocolWebSocketClient {
         .await
     }
 
-    pub async fn authenticate_with_channel(
+    pub async fn authenticate_with_room(
         server: &TestServer,
         token: &str,
-        channel_uuid: &str,
+        room_id: &str,
     ) -> Option<Self> {
         Self::authenticate(
             server,
             AuthPayload {
                 jwt: token.to_owned(),
-                channel: Some(channel_uuid.to_owned()),
+                channel: Some(room_id.to_owned()),
             },
         )
         .await
@@ -127,7 +127,7 @@ impl ProtocolWebSocketClient {
             .await
     }
 
-    pub async fn send_info(&mut self, info: SessionInfo) -> Option<()> {
+    pub async fn send_info(&mut self, info: UserInfo) -> Option<()> {
         self.send_message(ClientMessage::Info(info)).await
     }
 
@@ -238,7 +238,7 @@ pub async fn connect_protocol_pair(
     server: &TestServer,
     first_token: &str,
     second_token: &str,
-    second_session_id: SessionId,
+    second_user_id: UserId,
 ) -> Option<(ProtocolWebSocketClient, ProtocolWebSocketClient)> {
     let (mut first, _welcome) = Box::pin(ProtocolWebSocketClient::authenticate_and_negotiate(
         server,
@@ -254,7 +254,7 @@ pub async fn connect_protocol_pair(
         &mut first,
         Duration::from_secs(1),
         |message| {
-            matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == second_session_id)
+            matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == second_user_id)
         },
     ))
     .await?;

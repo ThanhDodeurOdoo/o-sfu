@@ -8,8 +8,8 @@
 //!   offers and applying answers.
 //! * [`RtcTransportMediaFacade`]: Handles media-level operations like adding/removing
 //!   send/recv tracks and controlling producer/consumer activity
-//! * [`RtcTransportSessionFacade`]: Handles session-level lifeccyle like closing
-//!   sessions and draining workers.
+//! * [`RtcTransportSessionFacade`]: Handles user-level lifeccyle like closing
+//!   users and draining workers.
 //! * [`RtcTransportObservabilityFacade`]: Provide read-only access to transport
 //!   health, bitrates, and active speaker information.
 
@@ -41,7 +41,7 @@ use crate::{
     runtime::{
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
-        packet_sink_registry::ChannelPacketSinkRegistry,
+        packet_sink_registry::RoomPacketSinkRegistry,
         transport_adapter::{
             AppliedSessionAnswer, ConsumerPacketGateUpdate, RtcTransportAdapterConfig,
             SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
@@ -82,7 +82,7 @@ pub(crate) struct RtcTransportAdapter {
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
-    pub(super) packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
+    pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(super) relay_registry: Arc<RelayRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
@@ -143,7 +143,7 @@ impl RtcTransportAdapter {
     }
 
     #[must_use]
-    pub(crate) const fn sessions(&self) -> RtcTransportSessionFacade<'_> {
+    pub(crate) const fn users(&self) -> RtcTransportSessionFacade<'_> {
         RtcTransportSessionFacade { adapter: self }
     }
 

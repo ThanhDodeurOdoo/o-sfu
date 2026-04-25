@@ -1,7 +1,7 @@
-//! Offer/answer ownership for worker-local RTC sessions.
+//! Offer/answer ownership for worker-local RTC users.
 //!
 //! This module keeps the one-outstanding-offer rule local to the worker that
-//! owns the session's `str0m::Rtc`. It is responsible for creating the initial
+//! owns the user's `str0m::Rtc`. It is responsible for creating the initial
 //! server-authored offer, handing out staged follow-up offers, accepting remote
 //! answers, and refreshing any worker-local state that answer application
 //! invalidates.
@@ -93,8 +93,8 @@ pub(super) fn respond_apply_session_answer(
     ));
 }
 
-/// Create the first local offer for a session after ensuring the worker has
-/// bootstrap state and the session still has no negotiated media.
+/// Create the first local offer for a user after ensuring the worker has
+/// bootstrap state and the user still has no negotiated media.
 ///
 /// The initial offer is reserved for the transport bootstrap and capability
 /// probe flow. Once media has been registered or an earlier initial offer is in
@@ -109,7 +109,7 @@ fn worker_create_initial_session_offer(
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
-    let Some(session_state) = state.sessions.get_mut(session_key) else {
+    let Some(session_state) = state.users.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     if session_state.sdp_negotiation.pending_offer.is_some() {
@@ -142,7 +142,7 @@ fn worker_create_session_renegotiation_offer(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    let Some(session_state) = state.sessions.get_mut(session_key) else {
+    let Some(session_state) = state.users.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     if !session_state.sdp_negotiation.initial_offer_applied {
@@ -191,7 +191,7 @@ fn worker_apply_session_answer(
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
-    let Some(session_state) = state.sessions.get_mut(session_key) else {
+    let Some(session_state) = state.users.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let Some(pending_offer) = session_state.sdp_negotiation.pending_offer.take() else {
@@ -220,7 +220,7 @@ fn worker_apply_session_answer(
         max_bitrate_in_bps,
     );
     let refreshed_by_mid = refreshed_parameters.into_iter().collect::<BTreeMap<_, _>>();
-    if let Some(session_state) = state.sessions.get_mut(session_key) {
+    if let Some(session_state) = state.users.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
     }
     state.mark_session_dirty(session_key);
@@ -231,12 +231,12 @@ fn worker_apply_session_answer(
             remote_candidate_addrs.iter().copied(),
         );
     debug!(
-        session_id = ?session_key.session_id(),
+        user_id = ?session_key.user_id(),
         media_worker_id = session_key.media_worker_id(),
         %local_ice_ufrag,
         remote_candidate_addr_count = remote_candidate_addrs.len(),
         remote_candidate_addrs = ?remote_candidate_addrs,
-        "registered answered remote candidate addresses for rtc session"
+        "registered answered remote candidate addresses for rtc user"
     );
     Ok(AppliedSessionAnswer::from_negotiated_producers(
         producer_handles
@@ -267,7 +267,7 @@ fn apply_pending_recv_streams(
     max_bitrate_in_bps: u64,
 ) {
     // Answer-time recv refresh can recreate `StreamRx` bindings, so REMB must
-    // be re-set here to keep the inbound session cap alive across renegotiation.
+    // be re-set here to keep the inbound user cap alive across renegotiation.
     if session_state
         .sdp_negotiation
         .pending_recv_streams
@@ -438,7 +438,7 @@ fn ensure_session_ready_for_offer(
         candidate_addr
     };
     let created_session = bootstrap::ensure_session_rtc_state(
-        &mut state.sessions,
+        &mut state.users,
         session_key,
         candidate_addr,
         config.max_bitrate_out_bps,
@@ -447,23 +447,23 @@ fn ensure_session_ready_for_offer(
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
     }
-    if let Some(session_state) = state.sessions.get(session_key) {
+    if let Some(session_state) = state.users.get(session_key) {
         let registered_local_ice_ufrag = state
             .remote_addr_demux
             .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);
         if created_session || registered_local_ice_ufrag {
             debug!(
-                session_id = ?session_key.session_id(),
+                user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id(),
                 %candidate_addr,
                 local_ice_ufrag = %session_state.local_ice_ufrag,
                 created_session,
-                "prepared rtc session for offer generation"
+                "prepared rtc user for offer generation"
             );
         }
     }
     if created_session {
-        config.metrics.add_active_transport_sessions(1);
+        config.metrics.add_active_transport_users(1);
     }
     Ok(())
 }

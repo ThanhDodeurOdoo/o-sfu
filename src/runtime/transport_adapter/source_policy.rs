@@ -1,11 +1,11 @@
 //! Transport-side source-policy wake coordination.
 //!
-//! The channel layer own the actual source-packet selection policy: it decides,
+//! The room layer own the actual source-packet selection policy: it decides,
 //! from room membership and publication state, which producer layers should stay
 //! routable. The transport layer in the other hand own observations such as active-speaker
 //! activity and expiry deadlines that can change wihtout any room mutation. That
 //! split means the runtime needs one narrow bridge from transport-side observation
-//! changes back into the channel-side policy sync task.
+//! changes back into the room-side policy sync task.
 //!
 //! This module is that bridge. It deliberatley does not store the policy itself,
 //! any room state, or any queued work items. Instead it exposes one coalescing
@@ -21,8 +21,8 @@
 //!   observed update cannot be lost if it races with the wait path
 //!
 //! The important property is coalescingL: Multiple RTP packets can arrive
-//! while the channel sync task is still busy, but those packets do not need
-//! an equal number of wakeups or replayed jobs. The channel task only needs to
+//! while the room sync task is still busy, but those packets do not need
+//! an equal number of wakeups or replayed jobs. The room task only needs to
 //! know which room instance ids changed and then re-read the current
 //! transport-owned observation state from the adapter. This keeps the signaling
 //! between packet-loop activity and policy recomputation bounded and avoids
@@ -41,7 +41,7 @@ use std::{
 
 use tokio::sync::Notify;
 
-use crate::runtime::ChannelInstanceId;
+use crate::runtime::RoomInstanceId;
 
 #[derive(Debug, Default)]
 pub(crate) struct SourcePolicyDirtyState {
@@ -63,65 +63,62 @@ impl SourcePolicyDirtyState {
 }
 
 #[derive(Debug, Default)]
-struct DirtyChannelRegistry {
-    channel_instance_ids: Mutex<BTreeSet<ChannelInstanceId>>,
+struct DirtyRoomRegistry {
+    room_instance_ids: Mutex<BTreeSet<RoomInstanceId>>,
 }
 
-impl DirtyChannelRegistry {
-    fn insert(&self, channel_instance_id: ChannelInstanceId) {
-        let mut dirty_channels = self
-            .channel_instance_ids
+impl DirtyRoomRegistry {
+    fn insert(&self, room_instance_id: RoomInstanceId) {
+        let mut dirty_rooms = self
+            .room_instance_ids
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        dirty_channels.insert(channel_instance_id);
+        dirty_rooms.insert(room_instance_id);
     }
 
-    fn insert_many(
-        &self,
-        channel_instance_ids: impl IntoIterator<Item = ChannelInstanceId>,
-    ) -> bool {
-        let mut dirty_channels = self
-            .channel_instance_ids
+    fn insert_many(&self, room_instance_ids: impl IntoIterator<Item = RoomInstanceId>) -> bool {
+        let mut dirty_rooms = self
+            .room_instance_ids
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let mut inserted_any = false;
-        for channel_instance_id in channel_instance_ids {
-            dirty_channels.insert(channel_instance_id);
+        for room_instance_id in room_instance_ids {
+            dirty_rooms.insert(room_instance_id);
             inserted_any = true;
         }
-        drop(dirty_channels);
+        drop(dirty_rooms);
         inserted_any
     }
 
-    fn drain(&self) -> BTreeSet<ChannelInstanceId> {
-        let mut dirty_channels = self
-            .channel_instance_ids
+    fn drain(&self) -> BTreeSet<RoomInstanceId> {
+        let mut dirty_rooms = self
+            .room_instance_ids
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        mem::take(&mut *dirty_channels)
+        mem::take(&mut *dirty_rooms)
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SourcePolicyUpdateSubscription {
     dirty: Arc<SourcePolicyDirtyState>,
-    dirty_channels: Arc<DirtyChannelRegistry>,
+    dirty_rooms: Arc<DirtyRoomRegistry>,
     notify: Arc<Notify>,
 }
 
 impl SourcePolicyUpdateSubscription {
-    pub(crate) async fn wait_for_update(&self) -> BTreeSet<ChannelInstanceId> {
+    pub(crate) async fn wait_for_update(&self) -> BTreeSet<RoomInstanceId> {
         loop {
             if self.dirty.take_dirty() {
-                return self.dirty_channels.drain();
+                return self.dirty_rooms.drain();
             }
             self.notify.notified().await;
         }
     }
 
-    pub(crate) fn take_pending_updates(&self) -> BTreeSet<ChannelInstanceId> {
+    pub(crate) fn take_pending_updates(&self) -> BTreeSet<RoomInstanceId> {
         if self.dirty.take_dirty() {
-            return self.dirty_channels.drain();
+            return self.dirty_rooms.drain();
         }
         BTreeSet::new()
     }
@@ -130,7 +127,7 @@ impl SourcePolicyUpdateSubscription {
 #[derive(Debug, Default)]
 pub(crate) struct SourcePolicySignal {
     dirty: Arc<SourcePolicyDirtyState>,
-    dirty_channels: Arc<DirtyChannelRegistry>,
+    dirty_rooms: Arc<DirtyRoomRegistry>,
     notify: Arc<Notify>,
 }
 
@@ -139,23 +136,23 @@ impl SourcePolicySignal {
     pub(crate) fn subscribe(&self) -> SourcePolicyUpdateSubscription {
         SourcePolicyUpdateSubscription {
             dirty: Arc::clone(&self.dirty),
-            dirty_channels: Arc::clone(&self.dirty_channels),
+            dirty_rooms: Arc::clone(&self.dirty_rooms),
             notify: Arc::clone(&self.notify),
         }
     }
 
-    pub(crate) fn mark_dirty(&self, channel_instance_id: ChannelInstanceId) {
-        self.dirty_channels.insert(channel_instance_id);
+    pub(crate) fn mark_dirty(&self, room_instance_id: RoomInstanceId) {
+        self.dirty_rooms.insert(room_instance_id);
         if self.dirty.mark_dirty() {
             self.notify.notify_one();
         }
     }
 
-    pub(crate) fn mark_dirty_channels(
+    pub(crate) fn mark_dirty_rooms(
         &self,
-        channel_instance_ids: impl IntoIterator<Item = ChannelInstanceId>,
+        room_instance_ids: impl IntoIterator<Item = RoomInstanceId>,
     ) {
-        if !self.dirty_channels.insert_many(channel_instance_ids) {
+        if !self.dirty_rooms.insert_many(room_instance_ids) {
             return;
         }
         if self.dirty.mark_dirty() {
@@ -171,18 +168,18 @@ mod tests {
     use tokio::{task::yield_now, time::timeout};
 
     use super::SourcePolicySignal;
-    use crate::runtime::ChannelInstanceId;
+    use crate::runtime::RoomInstanceId;
 
     #[tokio::test]
     async fn wait_for_update_observes_dirty_state_marked_before_wait() {
         let signal = SourcePolicySignal::default();
         let subscription = signal.subscribe();
-        signal.mark_dirty(ChannelInstanceId::from_raw(7));
+        signal.mark_dirty(RoomInstanceId::from_raw(7));
 
         let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
         assert_eq!(
             updates.ok(),
-            Some(BTreeSet::from([ChannelInstanceId::from_raw(7)]))
+            Some(BTreeSet::from([RoomInstanceId::from_raw(7)]))
         );
     }
 
@@ -198,30 +195,30 @@ mod tests {
         });
 
         yield_now().await;
-        signal.mark_dirty(ChannelInstanceId::from_raw(9));
+        signal.mark_dirty(RoomInstanceId::from_raw(9));
 
         let waiter_result = waiter.await;
         assert!(waiter_result.is_ok());
         let Ok(woke) = waiter_result else {
             return;
         };
-        assert_eq!(woke, Some(BTreeSet::from([ChannelInstanceId::from_raw(9)])));
+        assert_eq!(woke, Some(BTreeSet::from([RoomInstanceId::from_raw(9)])));
     }
 
     #[tokio::test]
     async fn wait_for_update_coalesces_multiple_dirty_marks_per_channel() {
         let signal = SourcePolicySignal::default();
         let subscription = signal.subscribe();
-        signal.mark_dirty(ChannelInstanceId::from_raw(4));
-        signal.mark_dirty(ChannelInstanceId::from_raw(4));
-        signal.mark_dirty(ChannelInstanceId::from_raw(6));
+        signal.mark_dirty(RoomInstanceId::from_raw(4));
+        signal.mark_dirty(RoomInstanceId::from_raw(4));
+        signal.mark_dirty(RoomInstanceId::from_raw(6));
 
         let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
         assert_eq!(
             updates.ok(),
             Some(BTreeSet::from([
-                ChannelInstanceId::from_raw(4),
-                ChannelInstanceId::from_raw(6),
+                RoomInstanceId::from_raw(4),
+                RoomInstanceId::from_raw(6),
             ]))
         );
     }
@@ -230,18 +227,18 @@ mod tests {
     async fn wait_for_update_observes_batch_dirty_marks() {
         let signal = SourcePolicySignal::default();
         let subscription = signal.subscribe();
-        signal.mark_dirty_channels([
-            ChannelInstanceId::from_raw(8),
-            ChannelInstanceId::from_raw(8),
-            ChannelInstanceId::from_raw(10),
+        signal.mark_dirty_rooms([
+            RoomInstanceId::from_raw(8),
+            RoomInstanceId::from_raw(8),
+            RoomInstanceId::from_raw(10),
         ]);
 
         let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
         assert_eq!(
             updates.ok(),
             Some(BTreeSet::from([
-                ChannelInstanceId::from_raw(8),
-                ChannelInstanceId::from_raw(10),
+                RoomInstanceId::from_raw(8),
+                RoomInstanceId::from_raw(10),
             ]))
         );
     }

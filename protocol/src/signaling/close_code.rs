@@ -8,7 +8,7 @@ pub enum WebSocketCloseCode {
     AuthFailed = 4001,
     AuthTimeout = 4002,
     Kicked = 4003,
-    ChannelFull = 4004,
+    RoomFull = 4004,
 }
 
 impl WebSocketCloseCode {
@@ -22,7 +22,7 @@ impl WebSocketCloseCode {
             4001 => Some(Self::AuthFailed),
             4002 => Some(Self::AuthTimeout),
             4003 => Some(Self::Kicked),
-            4004 => Some(Self::ChannelFull),
+            4004 => Some(Self::RoomFull),
             _ => None,
         }
     }
@@ -38,7 +38,7 @@ impl From<WebSocketCloseCode> for u16 {
             WebSocketCloseCode::AuthFailed => 4001,
             WebSocketCloseCode::AuthTimeout => 4002,
             WebSocketCloseCode::Kicked => 4003,
-            WebSocketCloseCode::ChannelFull => 4004,
+            WebSocketCloseCode::RoomFull => 4004,
         }
     }
 }

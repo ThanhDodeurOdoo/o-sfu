@@ -421,8 +421,8 @@ fn worker_set_consumer_active(
 
 /// Replaces the packet gate for exactly one consumer route.
 ///
-/// Source ownership is checked first because a stale channel effect may arrive
-/// after session replacement or route cleanup. The source aggregate is refreshed
+/// Source ownership is checked first because a stale room effect may arrive
+/// after user replacement or route cleanup. The source aggregate is refreshed
 /// only when the destination gate actually changed
 fn worker_set_consumer_packet_gate(
     state: &mut RtcBootstrapState,

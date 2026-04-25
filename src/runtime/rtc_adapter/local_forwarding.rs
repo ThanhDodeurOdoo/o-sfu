@@ -83,7 +83,7 @@ impl LocalPacketDestination {
         self.send_rtp(session_state, &mut rtp, is_last_destination)
     }
 
-    /// Write one routed RTP packet into the destination session's local
+    /// Write one routed RTP packet into the destination user's local
     /// `StreamTx`.
     ///
     /// Payload bytes, timestamps, and header extensions stay source-derived,
@@ -192,7 +192,7 @@ fn packet_rid(header: &RtpHeader) -> Option<Rid> {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::SessionId;
+    use o_sfu_protocol::shared::UserId;
 
     use super::*;
     use crate::runtime::rtc_adapter::test_support::{
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn local_send_contract_keeps_payload_inside_the_adapter_boundary() {
-        let session_key = test_transport_session_key(45, 0, 12, SessionId::Integer(9));
+        let session_key = test_transport_session_key(45, 0, 12, UserId::Integer(9));
         let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
         let rtp = packet.local_send_packet();
 

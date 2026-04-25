@@ -4,15 +4,15 @@ use crate::runtime::metrics::RuntimeMetricsSnapshot;
 pub(super) fn append_live_gauges(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_gauge(
         output,
-        "osfu_channels_active",
-        "Current number of live channels owned by this runtime.",
-        snapshot.active_channels,
+        "osfu_rooms_active",
+        "Current number of live rooms owned by this runtime.",
+        snapshot.active_rooms,
     );
     append_gauge(
         output,
-        "osfu_sessions_active",
-        "Current number of live channel sessions owned by this runtime.",
-        snapshot.active_sessions,
+        "osfu_users_active",
+        "Current number of live room users owned by this runtime.",
+        snapshot.active_users,
     );
     append_gauge(
         output,
@@ -28,9 +28,9 @@ pub(super) fn append_live_gauges(output: &mut String, snapshot: &RuntimeMetricsS
     );
     append_gauge(
         output,
-        "osfu_transport_sessions_active",
-        "Current number of live RTC transport sessions on this runtime.",
-        snapshot.active_transport_sessions,
+        "osfu_transport_users_active",
+        "Current number of live RTC transport users on this runtime.",
+        snapshot.active_transport_users,
     );
 }
 
@@ -49,9 +49,9 @@ pub(super) fn append_recording_metrics(output: &mut String, snapshot: &RuntimeMe
     );
     append_gauge(
         output,
-        "osfu_recording_channels_active",
-        "Current number of channels with an active recording session.",
-        snapshot.active_recording_channels,
+        "osfu_recording_rooms_active",
+        "Current number of rooms with an active recording user.",
+        snapshot.active_recording_rooms,
     );
     append_counter(
         output,

@@ -69,11 +69,10 @@ mod tests {
         assert!(rendered.contains("osfu_ws_handshake_duration_seconds_bucket{le=\"0.1\"} 1"));
         assert!(rendered.contains("osfu_ws_auth_duration_seconds_count 1"));
         assert!(
-            rendered.contains("osfu_ws_session_initialize_duration_seconds_bucket{le=\"0.25\"} 1")
+            rendered.contains("osfu_ws_user_initialize_duration_seconds_bucket{le=\"0.25\"} 1")
         );
         assert!(
-            rendered
-                .contains("osfu_ws_session_loop_exits_total{reason=\"transport_disconnected\"} 1")
+            rendered.contains("osfu_ws_user_loop_exits_total{reason=\"transport_disconnected\"} 1")
         );
         assert!(rendered.contains("osfu_ws_bus_batches_total{direction=\"received\"} 1"));
         assert!(rendered.contains("osfu_ws_bus_envelopes_total{direction=\"received\"} 2"));
@@ -81,13 +80,13 @@ mod tests {
     }
 
     fn assert_live_and_recording_metrics(rendered: &str) {
-        assert!(rendered.contains("# TYPE osfu_channels_active gauge"));
-        assert!(rendered.contains("osfu_sessions_active 2"));
+        assert!(rendered.contains("# TYPE osfu_rooms_active gauge"));
+        assert!(rendered.contains("osfu_users_active 2"));
         assert!(rendered.contains("osfu_publications_active 3"));
         assert!(rendered.contains("osfu_subscriptions_active 4"));
-        assert!(rendered.contains("osfu_recording_channels_active 1"));
-        assert!(rendered.contains("osfu_transport_sessions_active 1"));
-        assert!(rendered.contains("osfu_transport_health_sessions{state=\"connected\"} 1"));
+        assert!(rendered.contains("osfu_recording_rooms_active 1"));
+        assert!(rendered.contains("osfu_transport_users_active 1"));
+        assert!(rendered.contains("osfu_transport_health_users{state=\"connected\"} 1"));
         assert!(
             rendered
                 .contains("osfu_recording_actions_total{action=\"start\",outcome=\"accepted\"} 1")
@@ -117,11 +116,11 @@ mod tests {
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
         assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
-        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"1\"} 0"));
-        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"10\"} 1"));
-        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"+Inf\"} 1"));
-        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_sum 1.5"));
-        assert!(rendered.contains("osfu_transport_session_lifetime_seconds_count 1"));
+        assert!(rendered.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"1\"} 0"));
+        assert!(rendered.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"10\"} 1"));
+        assert!(rendered.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"+Inf\"} 1"));
+        assert!(rendered.contains("osfu_transport_user_lifetime_seconds_sum 1.5"));
+        assert!(rendered.contains("osfu_transport_user_lifetime_seconds_count 1"));
     }
 
     fn sample_metrics() -> RuntimeMetrics {
@@ -132,18 +131,18 @@ mod tests {
         metrics.record_http_request_duration(HttpRoute::Noop, Duration::from_millis(25));
         metrics.record_ws_connection_accepted();
         metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::ProtocolError));
-        metrics.record_ws_session_loop_exit(WsSessionLoopExitReason::TransportDisconnected);
+        metrics.record_ws_user_loop_exit(WsSessionLoopExitReason::TransportDisconnected);
         metrics.record_ws_bus_batch_received(2);
         metrics.record_ws_bus_send_failure();
         metrics.record_ws_handshake_duration(Duration::from_millis(80));
         metrics.record_ws_auth_duration(Duration::from_millis(8));
-        metrics.record_ws_session_initialize_duration(Duration::from_millis(120));
-        metrics.add_active_channels(1);
-        metrics.add_active_sessions(2);
+        metrics.record_ws_user_initialize_duration(Duration::from_millis(120));
+        metrics.add_active_rooms(1);
+        metrics.add_active_users(2);
         metrics.add_active_publications(3);
         metrics.add_active_subscriptions(4);
-        metrics.add_active_recording_channels(1);
-        metrics.add_active_transport_sessions(1);
+        metrics.add_active_recording_rooms(1);
+        metrics.add_active_transport_users(1);
         metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
         metrics.record_recording_start_accepted();
         metrics.record_recording_stop_rejected();
@@ -158,7 +157,7 @@ mod tests {
         metrics.record_transport_ice_state_change(TransportIceState::Checking);
         metrics.record_transport_ice_state_change(TransportIceState::Connected);
         metrics.record_transport_dtls_connected();
-        metrics.record_transport_session_lifetime(Duration::from_millis(1500));
+        metrics.record_transport_user_lifetime(Duration::from_millis(1500));
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
@@ -195,7 +194,7 @@ mod tests {
         assert!(rendered.contains("osfu_rtc_datagram_routes_total{path=\"scan\"} 1"));
         assert!(rendered.contains("osfu_rtc_datagram_drops_total{reason=\"malformed\"} 1"));
         assert!(rendered.contains("osfu_rtc_datagram_fallback_scans_total 1"));
-        assert!(rendered.contains("osfu_rtc_datagram_scan_sessions_total 4"));
+        assert!(rendered.contains("osfu_rtc_datagram_scan_users_total 4"));
         assert!(
             rendered.contains("osfu_rtc_route_control_total{outcome=\"route_gated_relay_drop\"} 1")
         );

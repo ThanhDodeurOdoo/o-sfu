@@ -8,8 +8,8 @@ async fn websocket_rejects_unknown_protocol_envelope_tag() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(12));
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(12));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -55,14 +55,14 @@ async fn websocket_rejects_invalid_json_payload() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-invalid-json",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(14));
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(14));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -138,14 +138,14 @@ async fn websocket_rejects_batches_over_protocol_envelope_limit() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-batch-limit",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(18));
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(18));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -187,20 +187,20 @@ async fn websocket_rejects_batches_over_protocol_envelope_limit() {
 }
 
 #[tokio::test]
-async fn invalid_protocol_initial_answer_closes_before_session_negotiates() {
+async fn invalid_protocol_initial_answer_closes_before_user_negotiates() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-invalid-publish-answer",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(91));
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(91));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -256,9 +256,9 @@ async fn invalid_protocol_initial_answer_closes_before_session_negotiates() {
         Some(CloseCode::Protocol),
     );
     assert!(
-        !channel
-            .is_stream_published(&SessionId::Integer(91), StreamType::Camera)
+        !room
+            .is_stream_published(&UserId::Integer(91), StreamType::Camera)
             .await,
-        "invalid initial answer must not let queued publish state commit through a fallback-ready session"
+        "invalid initial answer must not let queued publish state commit through a fallback-ready user"
     );
 }

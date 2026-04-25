@@ -64,7 +64,7 @@ impl RtcTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        self.sessions().close_session(session_key).await
+        self.users().close_session(session_key).await
     }
 
     pub(crate) async fn remove_media(

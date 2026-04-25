@@ -27,8 +27,8 @@ flowchart TD
     HTTP
     WS[WebSocket]
     RT[Runtime]
-    CM[Channel Manager]
-    CH[Channel]
+    RM[Room Manager]
+    Room
     R[Pure Router Core]
     TRA[Transport Adapter]
     RTCS[RTC Adapter Shards]
@@ -42,13 +42,13 @@ flowchart TD
   Odoo --> HTTP
   HTTP --> RT
   WS --> RT
-  RT --> CM
-  CM --> CH
-  CH --> R
-  CH --> TRA
+  RT --> RM
+  RM --> Room
+  Room --> R
+  Room --> TRA
   TRA --> RTCS
   RTCS --> WRTC
-  CH --> REC
+  Room --> REC
   RT --> MET
   RT --> TEL
   Client --> CB
@@ -74,10 +74,10 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `RTC_MIN_PORT`                     | `40000`         |      ✅      | Lower bound for the range of ports used by the RTC server (UDP).                                                                                                  |
 | `RTC_MAX_PORT`                     | `49999`         |      ✅      | Upper bound for the range of ports used by the RTC server (UDP).                                                                                                  |
 | `RTC_MEDIA_WORKER_COUNT`           | `1`             |      ✅      | Number of RTC media workers to spawn.                                                                                                                             |
-| `AUTHENTICATION_TIMEOUT_MS`        | `10000`         |      ✅      | Timeout for session authentication in milliseconds.                                                                                                               |
-| `SESSION_TIMEOUT_MS`               | `10000`         |      ✅      | Timeout for idle sessions in milliseconds.                                                                                                                        |
+| `AUTHENTICATION_TIMEOUT_MS`        | `10000`         |      ✅      | Timeout for user authentication in milliseconds.                                                                                                                  |
+| `USER_TIMEOUT_MS`                  | `10000`         |      ✅      | Timeout for idle users in milliseconds.                                                                                                                           |
 | `PING_INTERVAL_MS`                 | `60000`         |      ✅      | Interval for signaling pings in milliseconds.                                                                                                                     |
-| `CHANNEL_SIZE`                     | `100`           |      ✅      | Maximum amount of concurrent users per channel.                                                                                                                   |
+| `ROOM_SIZE`                        | `100`           |      ✅      | Maximum amount of concurrent users per room.                                                                                                                      |
 | `RUST_LOG`                         | `info`          |      ✅      | SFU log level and filtering (standard `tracing-subscriber` env filter).                                                                                           |
 | `TELEMETRY_LOG_FORMAT`             | `compact`       |      ✅      | Runtime log output mode (`compact` or `json`).                                                                                                                    |
 | `TELEMETRY_SERVICE_NAME`           | `o-sfu`         |      ✅      | Service name attached to runtime telemetry metadata.                                                                                                              |
@@ -95,8 +95,8 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `CODEC_H265`                       | `false`         |      ✅      | Enable H.265 video codec.                                                                                                                                         |
 | `CODEC_VP9`                        | `false`         |      ✅      | Enable VP9 video codec.                                                                                                                                           |
 | `CODEC_AV1`                        | `false`         |      ✅      | Enable AV1 video codec.                                                                                                                                           |
-| `MAX_BITRATE_IN`                   | `8000000`       |      ✅      | Maximum incoming bitrate in bps per session (upload).                                                                                                             |
-| `MAX_BITRATE_OUT`                  | `10000000`      |      ✅      | Maximum outgoing bitrate in bps per session (download).                                                                                                           |
+| `MAX_BITRATE_IN`                   | `8000000`       |      ✅      | Maximum incoming bitrate in bps per user (upload).                                                                                                                |
+| `MAX_BITRATE_OUT`                  | `10000000`      |      ✅      | Maximum outgoing bitrate in bps per user (download).                                                                                                              |
 | `MAX_VIDEO_BITRATE`                | `4000000`       |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                                                                                                     |
 | `DATA_PATH`/`MEDIA_DIR`            | `/tmp/odoo_sfu` |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders).                                                                                  |
 
@@ -118,7 +118,7 @@ will adapt accordingly.
 
 ### scalability (sharding)
 
-channels will have multiple routers and the load will be sharded across them. In the long term an optional controller server will
+rooms will have multiple routers and the load will be sharded across them. In the long term an optional controller server will
 allow the SFUs to share shards between them.
 
 ### Simulcast/SVC

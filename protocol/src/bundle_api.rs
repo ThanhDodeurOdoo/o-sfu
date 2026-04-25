@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::shared::{
     AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
-    SessionId, SessionInfo, StreamType,
+    StreamType, UserId, UserInfo,
 };
 
 pub const FIRST_BUNDLE_PROTOCOL_VERSION: u16 = 1;
@@ -54,7 +54,7 @@ pub struct BundleConnectCall {
 #[serde(rename_all = "camelCase")]
 pub struct BundleConnectOptions {
     #[serde(rename = "channelUUID", skip_serializing_if = "Option::is_none")]
-    pub channel_uuid: Option<String>,
+    pub room_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ice_servers: Option<Vec<BundleIceServer>>,
 }
@@ -62,7 +62,7 @@ pub struct BundleConnectOptions {
 impl BundleConnectOptions {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.channel_uuid.is_none() && self.ice_servers.is_none()
+        self.room_id.is_none() && self.ice_servers.is_none()
     }
 }
 
@@ -73,7 +73,7 @@ pub struct BundleBroadcastCall {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BundleUpdateInfoCall {
-    pub info: SessionInfo,
+    pub info: UserInfo,
 }
 
 impl<'de> Deserialize<'de> for BundleUpdateInfoCall {
@@ -83,7 +83,7 @@ impl<'de> Deserialize<'de> for BundleUpdateInfoCall {
     {
         #[derive(Deserialize)]
         struct LegacyBundleUpdateInfoCall {
-            pub info: SessionInfo,
+            pub info: UserInfo,
             #[serde(default, rename = "options")]
             pub _options: Option<serde_json::Value>,
         }
@@ -96,7 +96,8 @@ impl<'de> Deserialize<'de> for BundleUpdateInfoCall {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BundleSubscribeCall {
-    pub session_id: SessionId,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
     pub states: DownloadStates,
 }
 
@@ -191,33 +192,33 @@ pub struct BundleSessionSnapshot {
 }
 
 /// odoo/sfu `info_change` bundle payloads are string-keyed objects, so this
-/// snapshot shape cannot distinguish `SessionId::Integer(7)` from
-/// `SessionId::String("7")`. Mixed ID kinds remain accepted by the public API,
-/// but if two sessions in the same channel stringify to the same key then the
+/// snapshot shape cannot distinguish `UserId::Integer(7)` from
+/// `UserId::String("7")`. Mixed ID kinds remain accepted by the public API,
+/// but if two users in the same channel stringify to the same key then the
 /// later entry overwrites the earlier one in this snapshot view.
-/// we just assume that the API user will not mix integer and string session
+/// we just assume that the API user will not mix integer and string user
 /// IDs in the same channel.
-pub type BundleSessionInfoSnapshotById = BTreeMap<String, SessionInfo>;
+pub type BundleSessionInfoSnapshotById = BTreeMap<String, UserInfo>;
 
 #[must_use]
-pub fn bundle_session_info_key(session_id: &SessionId) -> String {
-    match session_id {
-        SessionId::Integer(value) => value.to_string(),
-        SessionId::String(value) => value.clone(),
+pub fn bundle_session_info_key(user_id: &UserId) -> String {
+    match user_id {
+        UserId::Integer(value) => value.to_string(),
+        UserId::String(value) => value.clone(),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleBroadcastUpdate {
     #[serde(rename = "senderId")]
-    pub sender_id: SessionId,
+    pub sender_id: UserId,
     pub message: JsonPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleDisconnectUpdate {
     #[serde(rename = "sessionId")]
-    pub session_id: SessionId,
+    pub user_id: UserId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +226,7 @@ pub struct BundleTrackUpdate {
     #[serde(rename = "type")]
     pub stream_type: StreamType,
     #[serde(rename = "sessionId")]
-    pub session_id: SessionId,
+    pub user_id: UserId,
     pub track: BundleMediaTrack,
     pub active: bool,
 }
@@ -273,8 +274,8 @@ mod tests {
         FIRST_BUNDLE_PROTOCOL_VERSION, bundle_session_info_key,
     };
     use crate::shared::{
-        DownloadStates, RecordingState, RecordingStateUpdate, SessionId, SessionInfo, StopCode,
-        StreamType,
+        DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId,
+        UserInfo,
     };
 
     fn assert_round_trip<T>(value: &T, expected_json: Value) -> serde_json::Result<()>
@@ -333,7 +334,7 @@ mod tests {
             url: "https://sfu.example.com".to_owned(),
             json_web_token: "signed-token".to_owned(),
             options: Some(BundleConnectOptions {
-                channel_uuid: Some("31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned()),
+                room_id: Some("31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned()),
                 ice_servers: Some(vec![json!({
                     "urls": "stun:stun.example.com"
                 })]),
@@ -373,7 +374,7 @@ mod tests {
     #[test]
     fn bundle_state_mutation_calls_round_trip() -> serde_json::Result<()> {
         let update_info = BundleMethodCall::UpdateInfo(BundleUpdateInfoCall {
-            info: SessionInfo {
+            info: UserInfo {
                 is_talking: Some(true),
                 is_featured: None,
                 is_camera_on: Some(false),
@@ -413,7 +414,7 @@ mod tests {
         assert_eq!(legacy_update_info, update_info);
 
         let subscribe_call = BundleMethodCall::Subscribe(BundleSubscribeCall {
-            session_id: SessionId::Integer(7),
+            user_id: UserId::Integer(7),
             states: DownloadStates {
                 audio: Some(false),
                 camera: None,
@@ -471,7 +472,7 @@ mod tests {
         assert_eq!(
             subscribe,
             BundleMethodCall::Subscribe(BundleSubscribeCall {
-                session_id: SessionId::Integer(7),
+                user_id: UserId::Integer(7),
                 states: DownloadStates {
                     audio: Some(false),
                     camera: None,
@@ -536,7 +537,7 @@ mod tests {
     fn bundle_updates_round_trip() -> serde_json::Result<()> {
         let track_update = BundleUpdate::Track(super::BundleTrackUpdate {
             stream_type: StreamType::Camera,
-            session_id: SessionId::Integer(9),
+            user_id: UserId::Integer(9),
             track: json!({
                 "id": "camera-track",
                 "kind": "video"
@@ -561,7 +562,7 @@ mod tests {
         )?;
 
         let broadcast = BundleUpdate::Broadcast(BundleBroadcastUpdate {
-            sender_id: SessionId::String("guest-7".to_owned()),
+            sender_id: UserId::String("guest-7".to_owned()),
             message: json!("hello"),
         });
         assert_eq!(broadcast.kind(), BundleUpdateKind::Broadcast);
@@ -577,8 +578,8 @@ mod tests {
         )?;
 
         let session_info = BundleUpdate::SessionInfoChange(BTreeMap::from([(
-            bundle_session_info_key(&SessionId::Integer(5)),
-            SessionInfo {
+            bundle_session_info_key(&UserId::Integer(5)),
+            UserInfo {
                 is_talking: Some(false),
                 is_featured: None,
                 is_camera_on: Some(true),

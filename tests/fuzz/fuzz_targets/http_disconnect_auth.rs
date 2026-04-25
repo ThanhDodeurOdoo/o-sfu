@@ -2,8 +2,8 @@
 
 //! Fuzz target for the HTTP auth and forwarded-header boundary.
 //!
-//! The `/v1/channel` and `/v1/disconnect` routes both verify route-specific JWT
-//! claims, and the channel route also derives base URL and remote address from
+//! The `/v1/room` and `/v1/disconnect` routes both verify route-specific JWT
+//! claims, and the room route also derives base URL and remote address from
 //! proxy-aware forwarding headers.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -14,7 +14,7 @@ use libfuzzer_sys::{
     fuzz_target,
 };
 use o_sfu::testing::{
-    auth::{HttpChannelClaims, HttpDisconnectClaims, verify},
+    auth::{HttpRoomClaims, HttpDisconnectClaims, verify},
     http::resolve_request_origin,
 };
 
@@ -44,7 +44,7 @@ impl SocketAddrInput {
 }
 
 fuzz_target!(|input: HttpRouteInput| {
-    let _ = verify::<HttpChannelClaims>(&input.token, TEST_AUTH_KEY);
+    let _ = verify::<HttpRoomClaims>(&input.token, TEST_AUTH_KEY);
     let _ = verify::<HttpDisconnectClaims>(&input.token, TEST_AUTH_KEY);
     let _ = resolve_request_origin(
         input.host.as_deref(),

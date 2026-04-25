@@ -12,7 +12,7 @@ use std::{
 #[cfg(test)]
 use super::rtc_adapter::ForwardedPacket;
 use super::{
-    ChannelInstanceId,
+    RoomInstanceId,
     metrics::RtpForwardDestinationKind,
     transport_adapter::{TransportMediaId, TransportSessionKey},
 };
@@ -35,47 +35,47 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct ActiveChannelRegistry<K, V> {
-    channels: HashMap<K, V>,
+pub struct ActiveRoomRegistry<K, V> {
+    rooms: HashMap<K, V>,
 }
 
-impl<K, V> Default for ActiveChannelRegistry<K, V> {
+impl<K, V> Default for ActiveRoomRegistry<K, V> {
     fn default() -> Self {
         Self {
-            channels: HashMap::new(),
+            rooms: HashMap::new(),
         }
     }
 }
 
-impl<K, V> ActiveChannelRegistry<K, V>
+impl<K, V> ActiveRoomRegistry<K, V>
 where
     K: Eq + Hash,
     V: Clone,
 {
-    pub fn insert(&mut self, channel_instance_id: K, sink: V) {
-        self.channels.insert(channel_instance_id, sink);
+    pub fn insert(&mut self, room_instance_id: K, sink: V) {
+        self.rooms.insert(room_instance_id, sink);
     }
 
-    pub fn remove(&mut self, channel_instance_id: &K) -> bool {
-        self.channels.remove(channel_instance_id).is_some()
+    pub fn remove(&mut self, room_instance_id: &K) -> bool {
+        self.rooms.remove(room_instance_id).is_some()
     }
 
-    pub fn get(&self, channel_instance_id: &K) -> Option<V> {
-        self.channels.get(channel_instance_id).cloned()
+    pub fn get(&self, room_instance_id: &K) -> Option<V> {
+        self.rooms.get(room_instance_id).cloned()
     }
 
-    pub fn contains_key(&self, channel_instance_id: &K) -> bool {
-        self.channels.contains_key(channel_instance_id)
+    pub fn contains_key(&self, room_instance_id: &K) -> bool {
+        self.rooms.contains_key(room_instance_id)
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.channels.is_empty()
+        self.rooms.is_empty()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.channels.len()
+        self.rooms.len()
     }
 }
 
@@ -122,58 +122,58 @@ impl fmt::Debug for RegisteredPacketSink {
     }
 }
 
-pub(crate) struct ChannelPacketSinkRegistry {
+pub(crate) struct RoomPacketSinkRegistry {
     any_active: AtomicBool,
-    active_channels: RwLock<ActiveChannelRegistry<ChannelInstanceId, RegisteredPacketSink>>,
+    active_rooms: RwLock<ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>>,
 }
 
-impl Default for ChannelPacketSinkRegistry {
+impl Default for RoomPacketSinkRegistry {
     fn default() -> Self {
         Self {
             any_active: AtomicBool::new(false),
-            active_channels: RwLock::new(ActiveChannelRegistry::default()),
+            active_rooms: RwLock::new(ActiveRoomRegistry::default()),
         }
     }
 }
 
-impl ChannelPacketSinkRegistry {
-    pub(crate) fn sink_for_channel(
+impl RoomPacketSinkRegistry {
+    pub(crate) fn sink_for_room(
         &self,
-        channel_instance_id: ChannelInstanceId,
+        room_instance_id: RoomInstanceId,
     ) -> Option<RegisteredPacketSink> {
         if !self.any_active.load(Ordering::Acquire) {
             return None;
         }
-        self.active_channels
+        self.active_rooms
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&channel_instance_id)
+            .get(&room_instance_id)
     }
 
-    pub(crate) fn register_channel(
+    pub(crate) fn register_room(
         &self,
-        channel_instance_id: ChannelInstanceId,
+        room_instance_id: RoomInstanceId,
         sink: Arc<dyn PacketSink>,
         forward_destination_kind: RtpForwardDestinationKind,
     ) {
-        self.active_channels
+        self.active_rooms
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(
-                channel_instance_id,
+                room_instance_id,
                 RegisteredPacketSink::new(sink, forward_destination_kind),
             );
         self.any_active.store(true, Ordering::Release);
     }
 
-    pub(crate) fn unregister_channel(&self, channel_instance_id: ChannelInstanceId) {
-        let mut active_channels = self
-            .active_channels
+    pub(crate) fn unregister_room(&self, room_instance_id: RoomInstanceId) {
+        let mut active_rooms = self
+            .active_rooms
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        active_channels.remove(&channel_instance_id);
+        active_rooms.remove(&room_instance_id);
         self.any_active
-            .store(!active_channels.is_empty(), Ordering::Release);
+            .store(!active_rooms.is_empty(), Ordering::Release);
     }
 
     #[cfg(test)]
@@ -182,8 +182,7 @@ impl ChannelPacketSinkRegistry {
         packet: &ForwardedPacket,
         transport_media_id: TransportMediaId,
     ) {
-        let Some(sink) = self.sink_for_channel(packet.source_session_key().channel_instance_id())
-        else {
+        let Some(sink) = self.sink_for_room(packet.source_session_key().room_instance_id()) else {
             return;
         };
         sink.record_packet(
@@ -195,27 +194,27 @@ impl ChannelPacketSinkRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn has_active_channel(&self, channel_instance_id: ChannelInstanceId) -> bool {
-        self.active_channels
+    pub(crate) fn has_active_room(&self, room_instance_id: RoomInstanceId) -> bool {
+        self.active_rooms
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains_key(&channel_instance_id)
+            .contains_key(&room_instance_id)
     }
 
-    fn active_channel_count(&self) -> usize {
-        self.active_channels
+    fn active_room_count(&self) -> usize {
+        self.active_rooms
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .len()
     }
 }
 
-impl fmt::Debug for ChannelPacketSinkRegistry {
+impl fmt::Debug for RoomPacketSinkRegistry {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ChannelPacketSinkRegistry")
+            .debug_struct("RoomPacketSinkRegistry")
             .field("any_active", &self.any_active.load(Ordering::Relaxed))
-            .field("active_channel_count", &self.active_channel_count())
+            .field("active_room_count", &self.active_room_count())
             .finish_non_exhaustive()
     }
 }

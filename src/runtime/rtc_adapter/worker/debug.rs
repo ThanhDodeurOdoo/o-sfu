@@ -180,15 +180,12 @@ fn respond_debug_session_stream_rx_ssrc(
     mid: Mid,
     response: oneshot::Sender<Option<u32>>,
 ) {
-    let value = state
-        .sessions
-        .get_mut(session_key)
-        .and_then(|session_state| {
-            let mut direct_api = session_state.rtc.direct_api();
-            direct_api
-                .stream_rx_by_mid(mid, None)
-                .map(|stream_rx| *stream_rx.ssrc())
-        });
+    let value = state.users.get_mut(session_key).and_then(|session_state| {
+        let mut direct_api = session_state.rtc.direct_api();
+        direct_api
+            .stream_rx_by_mid(mid, None)
+            .map(|stream_rx| *stream_rx.ssrc())
+    });
     let _ = response.send(value);
 }
 
@@ -198,15 +195,12 @@ fn respond_debug_session_stream_tx_ssrc(
     mid: Mid,
     response: oneshot::Sender<Option<u32>>,
 ) {
-    let value = state
-        .sessions
-        .get_mut(session_key)
-        .and_then(|session_state| {
-            let mut direct_api = session_state.rtc.direct_api();
-            direct_api
-                .stream_tx_by_mid(mid, None)
-                .map(|stream_tx| *stream_tx.ssrc())
-        });
+    let value = state.users.get_mut(session_key).and_then(|session_state| {
+        let mut direct_api = session_state.rtc.direct_api();
+        direct_api
+            .stream_tx_by_mid(mid, None)
+            .map(|stream_tx| *stream_tx.ssrc())
+    });
     let _ = response.send(value);
 }
 
@@ -216,7 +210,7 @@ fn respond_debug_session_max_bitrate_in(
     response: oneshot::Sender<Option<u64>>,
 ) {
     let value = state
-        .sessions
+        .users
         .get(session_key)
         .and_then(|session_state| session_state.max_bitrate_in_bps);
     let _ = response.send(value);
@@ -228,7 +222,7 @@ fn respond_debug_session_max_bitrate_out(
     response: oneshot::Sender<Option<u64>>,
 ) {
     let value = state
-        .sessions
+        .users
         .get(session_key)
         .and_then(|session_state| session_state.max_bitrate_out_bps);
     let _ = response.send(value);

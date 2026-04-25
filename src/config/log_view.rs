@@ -78,15 +78,15 @@ impl ConfigLogView<'_> {
         )?;
         writeln!(
             formatter,
-            "    - session_timeout_ms={}",
-            config.session_timeout_ms
+            "    - user_timeout_ms={}",
+            config.user_timeout_ms
         )?;
         writeln!(
             formatter,
             "    - ping_interval_ms={}",
             config.ping_interval_ms
         )?;
-        writeln!(formatter, "    - channel_size={}", config.channel_size)?;
+        writeln!(formatter, "    - room_size={}", config.room_size)?;
         writeln!(
             formatter,
             "    - trust_proxy_headers={}",
@@ -204,9 +204,9 @@ mod tests {
             auth_key: "test-key".to_owned(),
             bind_address,
             authentication_timeout_ms: 10_000,
-            channel_size: 100,
+            room_size: 100,
             diagnostics: DiagnosticsConfig::default(),
-            session_timeout_ms: 10_000,
+            user_timeout_ms: 10_000,
             ping_interval_ms: 60_000,
             trust_proxy_headers: false,
             feature_flags: RuntimeFeatureFlags::default(),

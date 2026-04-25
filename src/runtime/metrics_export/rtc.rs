@@ -15,7 +15,7 @@ pub(super) fn append_rtc_datagram_metrics(output: &mut String, snapshot: &Runtim
     append_labeled_counter_family(
         output,
         "osfu_rtc_datagram_drops_total",
-        "Total RTC UDP datagrams dropped before reaching a live session.",
+        "Total RTC UDP datagrams dropped before reaching a live user.",
         "reason",
         &[
             LabeledValue::new(
@@ -26,21 +26,21 @@ pub(super) fn append_rtc_datagram_metrics(output: &mut String, snapshot: &Runtim
                 "source_rate_limited",
                 snapshot.rtc_datagram_drops_source_rate_limited,
             ),
-            LabeledValue::new("no_session", snapshot.rtc_datagram_drops_no_session),
+            LabeledValue::new("no_user", snapshot.rtc_datagram_drops_no_user),
             LabeledValue::new("malformed", snapshot.rtc_datagram_drops_malformed),
         ],
     );
     append_counter(
         output,
         "osfu_rtc_datagram_fallback_scans_total",
-        "Total fallback scans across RTC sessions for UDP datagram routing.",
+        "Total fallback scans across RTC users for UDP datagram routing.",
         snapshot.rtc_datagram_fallback_scans,
     );
     append_counter(
         output,
-        "osfu_rtc_datagram_scan_sessions_total",
-        "Total RTC sessions examined by UDP fallback scans.",
-        snapshot.rtc_datagram_scan_sessions,
+        "osfu_rtc_datagram_scan_users_total",
+        "Total RTC users examined by UDP fallback scans.",
+        snapshot.rtc_datagram_scan_users,
     );
 }
 

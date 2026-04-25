@@ -9,7 +9,7 @@ pub(super) use axum::{
     http::{Request, StatusCode, header, request::Builder as HttpRequestBuilder},
     response::Response as AxumResponse,
 };
-pub(super) use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+pub(super) use o_sfu_protocol::shared::{UserId, UserPermissions};
 pub(super) use serde::de::DeserializeOwned;
 pub(super) use tokio::sync::mpsc;
 pub(super) use tower::util::ServiceExt;
@@ -22,26 +22,25 @@ pub(super) use crate::{
     },
     runtime::{
         ConnectionId, RuntimeState,
-        auth::{self, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims},
-        channel::{
-            ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
-            ChannelRuntimePolicy, rtp_capabilities,
-        },
+        auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
         diagnostics::{
             DiagnosticsStore,
             types::{
-                DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
-                DiagnosticsSessionLookupConflict, DiagnosticsSourceSelectionReason,
-                DiagnosticsSummaryResponse,
+                DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
+                DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
             },
         },
         http_server::contract::{
-            CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DIAGNOSTICS_CHANNELS_PATH,
-            DIAGNOSTICS_SUMMARY_PATH, DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse,
-            STATS_PATH, StatsResponse,
+            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+            DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse, RoomResponse, STATS_PATH,
+            StatsResponse,
         },
         metrics::RuntimeMetrics,
         recording::MediaTap,
+        room::{
+            RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
+            rtp_capabilities,
+        },
         transport_adapter::RuntimeTransportAdapter,
     },
 };
@@ -53,9 +52,9 @@ pub(super) fn test_config() -> Config {
         auth_key: TEST_AUTH_KEY.to_owned(),
         bind_address: SocketAddr::from(([127, 0, 0, 1], 8070)),
         authentication_timeout_ms: 10_000,
-        channel_size: 100,
+        room_size: 100,
         diagnostics: DiagnosticsConfig::default(),
-        session_timeout_ms: 10_000,
+        user_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
         trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
@@ -74,11 +73,11 @@ pub(super) fn test_state() -> RuntimeState {
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     RuntimeState {
-        channel_manager: Arc::new(ChannelManager::new(
-            ChannelManagerConfig::new(
+        room_manager: Arc::new(RoomManager::new(
+            RoomManagerConfig::new(
                 1,
-                ChannelRuntimePolicy::new(
-                    ChannelAdmissionPolicy::new(config.channel_size),
+                RoomRuntimePolicy::new(
+                    RoomAdmissionPolicy::new(config.room_size),
                     config.feature_flags,
                     rtp_capabilities::router_rtp_capabilities(config.codec_flags),
                 ),
@@ -94,9 +93,9 @@ pub(super) fn test_state() -> RuntimeState {
     }
 }
 
-pub(super) fn signed_channel_claims(issuer: Option<&str>, key: Option<&str>) -> Option<String> {
+pub(super) fn signed_room_claims(issuer: Option<&str>, key: Option<&str>) -> Option<String> {
     auth::sign(
-        &HttpChannelClaims {
+        &HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 iss: issuer.map(str::to_owned),
                 ..RegisteredJwtClaims::default()
@@ -109,12 +108,12 @@ pub(super) fn signed_channel_claims(issuer: Option<&str>, key: Option<&str>) -> 
 }
 
 pub(super) fn signed_disconnect_claims(
-    session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
+    user_ids_by_room: BTreeMap<String, Vec<UserId>>,
 ) -> Option<String> {
     auth::sign(
         &HttpDisconnectClaims {
             registered: RegisteredJwtClaims::default(),
-            session_ids_by_channel,
+            user_ids_by_room,
         },
         TEST_AUTH_KEY,
     )

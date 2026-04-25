@@ -1,6 +1,6 @@
 //! a "port" is a trait to expose e transport concern:
 //!
-//! SDP negotiation, session teardown, media wiring, observability, or
+//! SDP negotiation, user teardown, media wiring, observability, or
 //! source-policy updates
 //!
 //! exemple:
@@ -31,7 +31,7 @@ use std::{collections::BTreeSet, time::Instant};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     rtc_adapter::TransportSessionHealth,
     transport_adapter::{
         SourcePolicyUpdateSubscription,
@@ -43,7 +43,7 @@ use crate::runtime::{
     },
 };
 
-/// Handles the SDP negotiation lifecycle for a transport session
+/// Handles the SDP negotiation lifecycle for a transport user
 pub(crate) trait NegotiationPort {
     async fn create_initial_session_offer(
         &self,
@@ -75,7 +75,7 @@ pub(crate) trait SessionPort {
     ) -> Result<(), TransportAdapterError>;
 }
 
-/// Handles transport media state for established transport session
+/// Handles transport media state for established transport user
 pub(crate) trait MediaPort {
     async fn remove_media(
         &self,
@@ -177,10 +177,10 @@ pub(crate) trait ObservabilityPort {
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant>;
 
-    async fn expired_active_speaker_channel_instance_ids(
+    async fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelInstanceId>;
+    ) -> BTreeSet<RoomInstanceId>;
 
     fn session_transport_health(
         &self,

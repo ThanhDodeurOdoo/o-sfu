@@ -2,7 +2,7 @@ use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use o_sfu_protocol::{
-    shared::{SessionId, StreamType},
+    shared::{StreamType, UserId},
     signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload},
 };
 use tokio::{
@@ -13,14 +13,14 @@ use tokio::{
 
 use super::{
     RuntimeState, build_transport_adapter,
-    channel::{
-        ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig, ChannelRuntimePolicy,
-        ConsumerRouteState, rtp_capabilities::router_rtp_capabilities,
-    },
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
-    packet_sink_registry::ChannelPacketSinkRegistry,
+    packet_sink_registry::RoomPacketSinkRegistry,
+    room::{
+        ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
+        rtp_capabilities::router_rtp_capabilities,
+    },
 };
 use crate::config::Config;
 
@@ -42,7 +42,7 @@ impl SourcePolicyDirtyState {
 }
 
 pub use super::{
-    packet_sink_registry::ActiveChannelRegistry,
+    packet_sink_registry::ActiveRoomRegistry,
     rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot},
 };
 
@@ -50,7 +50,7 @@ pub use super::{
 #[derive(Debug)]
 pub struct TestServer {
     addr: SocketAddr,
-    channel_manager: Arc<ChannelManager>,
+    room_manager: Arc<RoomManager>,
     handle: JoinHandle<()>,
 }
 
@@ -67,29 +67,24 @@ impl TestServer {
         format!("http://{}", self.addr)
     }
 
-    pub async fn wait_for_channel_absence(&self, channel_uuid: &str) -> bool {
+    pub async fn wait_for_room_absence(&self, room_id: &str) -> bool {
         wait_for_test_predicate(|| async {
-            (self
-                .channel_manager
-                .get_by_uuid(channel_uuid)
-                .await
-                .is_none())
-            .then_some(())
+            (self.room_manager.get_by_uuid(room_id).await.is_none()).then_some(())
         })
         .await
     }
 
     pub async fn wait_for_consumer_route_active(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
         self.wait_for_consumer_route_state(
-            channel_uuid,
-            consumer_session_id,
-            producer_session_id,
+            room_id,
+            consumer_user_id,
+            producer_user_id,
             stream_type,
             true,
         )
@@ -98,15 +93,15 @@ impl TestServer {
 
     pub async fn wait_for_consumer_route_inactive(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
         self.wait_for_consumer_route_state(
-            channel_uuid,
-            consumer_session_id,
-            producer_session_id,
+            room_id,
+            consumer_user_id,
+            producer_user_id,
             stream_type,
             false,
         )
@@ -115,16 +110,15 @@ impl TestServer {
 
     pub async fn wait_for_consumer_route_absence(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
         wait_for_test_predicate(|| async {
-            let channel = self.channel_manager.get_by_uuid(channel_uuid).await?;
+            let room = self.room_manager.get_by_uuid(room_id).await?;
             matches!(
-                channel
-                    .consumer_route_state(consumer_session_id, producer_session_id, stream_type)
+                room.consumer_route_state(consumer_user_id, producer_user_id, stream_type)
                     .await,
                 Some(ConsumerRouteState::Absent)
             )
@@ -135,22 +129,22 @@ impl TestServer {
 
     async fn wait_for_consumer_route_state(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
         expected_active: bool,
     ) -> bool {
         wait_for_test_predicate(|| async {
-            let channel = self.channel_manager.get_by_uuid(channel_uuid).await?;
+            let room = self.room_manager.get_by_uuid(room_id).await?;
             let expected_state = if expected_active {
                 ConsumerRouteState::Active
             } else {
                 ConsumerRouteState::Inactive
             };
             matches!(
-                channel
-                    .consumer_route_state(consumer_session_id, producer_session_id, stream_type)
+                room
+                    .consumer_route_state(consumer_user_id, producer_user_id, stream_type)
                     .await,
                 Some(state) if state == expected_state
             )
@@ -174,12 +168,12 @@ impl Drop for TestServer {
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
-    let recording_media_tap = Arc::new(ChannelPacketSinkRegistry::default());
-    let channel_manager = Arc::new(ChannelManager::new(
-        ChannelManagerConfig::new(
+    let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
+    let room_manager = Arc::new(RoomManager::new(
+        RoomManagerConfig::new(
             config.rtc_media_worker_count,
-            ChannelRuntimePolicy::new(
-                ChannelAdmissionPolicy::new(config.channel_size),
+            RoomRuntimePolicy::new(
+                RoomAdmissionPolicy::new(config.room_size),
                 config.feature_flags,
                 router_rtp_capabilities(config.codec_flags),
             ),
@@ -196,7 +190,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     );
     let state = RuntimeState {
         config,
-        channel_manager: Arc::clone(&channel_manager),
+        room_manager: Arc::clone(&room_manager),
         diagnostics,
         metrics,
         transport_adapter,
@@ -214,7 +208,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     });
     Ok(TestServer {
         addr,
-        channel_manager,
+        room_manager,
         handle,
     })
 }

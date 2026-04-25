@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_protocol::shared::SessionId;
+use o_sfu_protocol::shared::UserId;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
@@ -56,7 +56,7 @@ fn prepare_source_session_with_rid(
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
     assert!(
         bootstrap::ensure_session_rtc_state(
-            &mut state.sessions,
+            &mut state.users,
             source_session,
             candidate_addr,
             10_000_000,
@@ -64,7 +64,7 @@ fn prepare_source_session_with_rid(
         )
         .is_ok()
     );
-    let Some(source_session_state) = state.sessions.get_mut(source_session) else {
+    let Some(source_session_state) = state.users.get_mut(source_session) else {
         return TransportMediaId::default();
     };
     let mut direct_api = source_session_state.rtc.direct_api();
@@ -78,7 +78,7 @@ fn prepare_source_session_with_rid(
 
 #[test]
 fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
-    let source_session = test_transport_session_key(101, 0, 102, SessionId::Integer(103));
+    let source_session = test_transport_session_key(101, 0, 102, UserId::Integer(103));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
@@ -109,7 +109,7 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
 
 #[test]
 fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
-    let source_session = test_transport_session_key(111, 0, 112, SessionId::Integer(113));
+    let source_session = test_transport_session_key(111, 0, 112, UserId::Integer(113));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
@@ -160,8 +160,8 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
 
 #[test]
 fn consumer_keyframe_request_marks_local_video_source_dirty() {
-    let source_session = test_transport_session_key(115, 0, 116, SessionId::Integer(117));
-    let consumer_session = test_transport_session_key(115, 0, 118, SessionId::Integer(119));
+    let source_session = test_transport_session_key(115, 0, 116, UserId::Integer(117));
+    let consumer_session = test_transport_session_key(115, 0, 118, UserId::Integer(119));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let mut state = RtcBootstrapState::default();
@@ -206,8 +206,8 @@ fn consumer_keyframe_request_marks_local_video_source_dirty() {
 
 #[test]
 fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
-    let source_session = test_transport_session_key(215, 0, 216, SessionId::Integer(217));
-    let consumer_session = test_transport_session_key(215, 0, 218, SessionId::Integer(219));
+    let source_session = test_transport_session_key(215, 0, 216, UserId::Integer(217));
+    let consumer_session = test_transport_session_key(215, 0, 218, UserId::Integer(219));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
@@ -258,8 +258,8 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
 
 #[test]
 fn consumer_keyframe_request_forwards_remote_video_refresh() {
-    let source_session = test_transport_session_key(125, 0, 126, SessionId::Integer(127));
-    let consumer_session = test_transport_session_key(125, 1, 128, SessionId::Integer(129));
+    let source_session = test_transport_session_key(125, 0, 126, UserId::Integer(127));
+    let consumer_session = test_transport_session_key(125, 1, 128, UserId::Integer(129));
     let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(131);
     let mut state = RtcBootstrapState::default();
@@ -324,8 +324,8 @@ fn consumer_keyframe_request_forwards_remote_video_refresh() {
 
 #[test]
 fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
-    let source_session = test_transport_session_key(225, 0, 226, SessionId::Integer(227));
-    let consumer_session = test_transport_session_key(225, 1, 228, SessionId::Integer(229));
+    let source_session = test_transport_session_key(225, 0, 226, UserId::Integer(227));
+    let consumer_session = test_transport_session_key(225, 1, 228, UserId::Integer(229));
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
     let source_transport_media_id = TransportMediaId::new(231);
@@ -392,9 +392,9 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
 
 #[test]
 fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate() {
-    let source_session = test_transport_session_key(131, 0, 132, SessionId::Integer(133));
-    let first_consumer_session = test_transport_session_key(131, 0, 134, SessionId::Integer(135));
-    let second_consumer_session = test_transport_session_key(131, 0, 136, SessionId::Integer(137));
+    let source_session = test_transport_session_key(131, 0, 132, UserId::Integer(133));
+    let first_consumer_session = test_transport_session_key(131, 0, 134, UserId::Integer(135));
+    let second_consumer_session = test_transport_session_key(131, 0, 136, UserId::Integer(137));
     let source_mid = Mid::from("cam-up");
     let first_consumer_mid = Mid::from("cam-down-a");
     let second_consumer_mid = Mid::from("cam-down-b");
@@ -472,9 +472,9 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
 
 #[test]
 fn batched_consumer_packet_gates_refresh_remote_source_once() {
-    let source_session = test_transport_session_key(141, 0, 142, SessionId::Integer(143));
-    let first_consumer_session = test_transport_session_key(141, 1, 144, SessionId::Integer(145));
-    let second_consumer_session = test_transport_session_key(141, 1, 146, SessionId::Integer(147));
+    let source_session = test_transport_session_key(141, 0, 142, UserId::Integer(143));
+    let first_consumer_session = test_transport_session_key(141, 1, 144, UserId::Integer(145));
+    let second_consumer_session = test_transport_session_key(141, 1, 146, UserId::Integer(147));
     let first_consumer_mid = Mid::from("cam-down-a");
     let second_consumer_mid = Mid::from("cam-down-b");
     let mut state = RtcBootstrapState::default();
@@ -561,8 +561,8 @@ fn batched_consumer_packet_gates_refresh_remote_source_once() {
 
 #[test]
 fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is_missing() {
-    let source_session = test_transport_session_key(151, 0, 152, SessionId::Integer(153));
-    let consumer_session = test_transport_session_key(151, 1, 154, SessionId::Integer(155));
+    let source_session = test_transport_session_key(151, 0, 152, UserId::Integer(153));
+    let consumer_session = test_transport_session_key(151, 1, 154, UserId::Integer(155));
     let mut state = RtcBootstrapState::default();
     let source_transport_media_id = TransportMediaId::new(33);
     let (command_tx, _command_rx) = mpsc::channel(1);
@@ -596,14 +596,14 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
 
 #[test]
 fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
-    let session_key = test_transport_session_key(161, 0, 162, SessionId::Integer(163));
+    let session_key = test_transport_session_key(161, 0, 162, UserId::Integer(163));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_100));
     let producer_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
 
     assert!(
         bootstrap::ensure_session_rtc_state(
-            &mut state.sessions,
+            &mut state.users,
             &session_key,
             candidate_addr,
             10_000_000,
@@ -611,7 +611,7 @@ fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
         )
         .is_ok()
     );
-    let session_state = state.sessions.get_mut(&session_key);
+    let session_state = state.users.get_mut(&session_key);
     assert!(session_state.is_some());
     let Some(session_state) = session_state else {
         return;
@@ -651,8 +651,8 @@ fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
 
 #[test]
 fn request_keyframe_ignores_wrong_source_owner() {
-    let source_session = test_transport_session_key(131, 0, 132, SessionId::Integer(133));
-    let wrong_session = test_transport_session_key(131, 0, 134, SessionId::Integer(135));
+    let source_session = test_transport_session_key(131, 0, 132, UserId::Integer(133));
+    let wrong_session = test_transport_session_key(131, 0, 134, UserId::Integer(135));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
@@ -677,8 +677,8 @@ fn request_keyframe_ignores_wrong_source_owner() {
 
 #[test]
 fn remote_source_packet_gate_ignores_wrong_source_owner() {
-    let source_session = test_transport_session_key(141, 0, 142, SessionId::Integer(143));
-    let wrong_session = test_transport_session_key(141, 0, 144, SessionId::Integer(145));
+    let source_session = test_transport_session_key(141, 0, 142, UserId::Integer(143));
+    let wrong_session = test_transport_session_key(141, 0, 144, UserId::Integer(145));
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let source_transport_media_id =

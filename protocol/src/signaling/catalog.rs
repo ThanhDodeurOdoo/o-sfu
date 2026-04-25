@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::shared::{
-    AvailableFeatures, DownloadStates, JsonPayload, RecordingState, SessionId, SessionInfo,
-    StreamType,
+    AvailableFeatures, DownloadStates, JsonPayload, RecordingState, StreamType, UserId, UserInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,9 +14,10 @@ pub struct AuthPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerSnapshot {
-    pub session_id: SessionId,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
     #[serde(default)]
-    pub info: SessionInfo,
+    pub info: UserInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +71,8 @@ pub struct StreamIntentPayload {
 pub struct SubscribePayload {
     /// Wire shape is intentionally flat: `{ sessionId, audio?, camera?, screen? }`.
     /// Adding fields to `DownloadStates` implicitly changes the subscribe payload shape.
-    pub session_id: SessionId,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
     #[serde(flatten)]
     pub states: DownloadStates,
 }
@@ -80,7 +81,8 @@ pub struct SubscribePayload {
 #[serde(rename_all = "camelCase")]
 pub struct TrackBinding {
     pub mid: String,
-    pub session_id: SessionId,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
     #[serde(rename = "type")]
     pub stream_type: StreamType,
     pub active: bool,
@@ -92,7 +94,8 @@ pub struct TrackBinding {
 #[serde(rename_all = "camelCase")]
 pub struct SourceDescriptor {
     pub source_id: String,
-    pub session_id: SessionId,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
     #[serde(rename = "type")]
     pub stream_type: StreamType,
     pub active: bool,
@@ -116,14 +119,16 @@ pub struct SourceEncodingDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerInfoPayload {
-    pub session_id: SessionId,
-    pub info: SessionInfo,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
+    pub info: UserInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerLeftPayload {
-    pub session_id: SessionId,
+    #[serde(rename = "sessionId")]
+    pub user_id: UserId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,7 +139,7 @@ pub struct ClientBroadcastPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerBroadcastPayload {
-    pub sender_id: SessionId,
+    pub sender_id: UserId,
     pub message: JsonPayload,
 }
 

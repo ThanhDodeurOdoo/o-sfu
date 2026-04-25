@@ -297,7 +297,7 @@ test("default browser runtime negotiates and emits remote track updates", async 
                 {
                     id: "sfu_client",
                     level: "info",
-                    message: "connect requested for channel channel-a"
+                    message: "connect requested for room channel-a"
                 },
                 {
                     id: "browser_runtime",

@@ -12,8 +12,8 @@ impl Config {
     /// # Errors
     ///
     /// Returns an error when `AUTH_KEY` is missing, `BIND_ADDRESS` is invalid,
-    /// `AUTHENTICATION_TIMEOUT_MS` is invalid, `CHANNEL_SIZE` is zero,
-    /// `SESSION_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid, `PROXY`
+    /// `AUTHENTICATION_TIMEOUT_MS` is invalid, `ROOM_SIZE` is zero,
+    /// `USER_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid, `PROXY`
     /// is invalid, `PUBLIC_IP` is missing or invalid, or
     /// `RTC_MIN_PORT`/`RTC_MAX_PORT` are invalid.
     pub fn from_env() -> Result<Self> {
@@ -37,16 +37,13 @@ impl Config {
             "AUTHENTICATION_TIMEOUT_MS must be a valid u64",
         )?
         .unwrap_or(10_000);
-        let channel_size = parse_optional_env(
+        let room_size =
+            parse_optional_env(&mut get_var, "ROOM_SIZE", "ROOM_SIZE must be a valid usize")?
+                .unwrap_or(100);
+        let user_timeout_ms = parse_optional_env(
             &mut get_var,
-            "CHANNEL_SIZE",
-            "CHANNEL_SIZE must be a valid usize",
-        )?
-        .unwrap_or(100);
-        let session_timeout_ms = parse_optional_env(
-            &mut get_var,
-            "SESSION_TIMEOUT_MS",
-            "SESSION_TIMEOUT_MS must be a valid u64",
+            "USER_TIMEOUT_MS",
+            "USER_TIMEOUT_MS must be a valid u64",
         )?
         .unwrap_or(10_000);
         let ping_interval_ms = parse_optional_env(
@@ -66,10 +63,10 @@ impl Config {
         let diagnostics = load_diagnostics_config(&mut get_var)?;
         let telemetry = load_telemetry_config(&mut get_var)?;
         let transport = load_transport_config(&mut get_var)?;
-        ensure!(channel_size > 0, "CHANNEL_SIZE must be greater than zero");
+        ensure!(room_size > 0, "ROOM_SIZE must be greater than zero");
         ensure!(
-            session_timeout_ms > 0,
-            "SESSION_TIMEOUT_MS must be greater than zero"
+            user_timeout_ms > 0,
+            "USER_TIMEOUT_MS must be greater than zero"
         );
         ensure!(
             ping_interval_ms > 0,
@@ -79,9 +76,9 @@ impl Config {
             auth_key,
             bind_address,
             authentication_timeout_ms,
-            channel_size,
+            room_size,
             diagnostics,
-            session_timeout_ms,
+            user_timeout_ms,
             ping_interval_ms,
             trust_proxy_headers,
             feature_flags,
@@ -127,8 +124,8 @@ mod tests {
         assert_eq!(config.bind_address.to_string(), "0.0.0.0:8070");
         assert_eq!(config.auth_key, "dGVzdC1rZXk=");
         assert_eq!(config.authentication_timeout_ms, 10_000);
-        assert_eq!(config.channel_size, 100);
-        assert_eq!(config.session_timeout_ms, 10_000);
+        assert_eq!(config.room_size, 100);
+        assert_eq!(config.user_timeout_ms, 10_000);
         assert_eq!(config.ping_interval_ms, 60_000);
         assert!(!config.trust_proxy_headers);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
@@ -158,22 +155,22 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_zero_channel_size() {
+    fn config_rejects_zero_room_size() {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
-            "CHANNEL_SIZE" => Some("0".to_owned()),
+            "ROOM_SIZE" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());
     }
 
     #[test]
-    fn config_rejects_zero_session_timeout() {
+    fn config_rejects_zero_user_timeout() {
         let config = Config::from_var_lookup(|key| match key {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
-            "SESSION_TIMEOUT_MS" => Some("0".to_owned()),
+            "USER_TIMEOUT_MS" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

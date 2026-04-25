@@ -9,14 +9,14 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
     let first_tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
         TrackBinding {
             mid: String::from("0"),
-            session_id: String::from("peer-1").into(),
+            user_id: String::from("peer-1").into(),
             stream_type: StreamType::Audio,
             active: true,
             source: None,
         },
         TrackBinding {
             mid: String::from("1"),
-            session_id: String::from("peer-2").into(),
+            user_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: true,
             source: None,
@@ -25,7 +25,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
     let second_tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
         TrackBinding {
             mid: String::from("2"),
-            session_id: String::from("peer-2").into(),
+            user_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: false,
             source: None,
@@ -39,14 +39,14 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
                 bindings: vec![
                     TrackBinding {
                         mid: String::from("0"),
-                        session_id: String::from("peer-1").into(),
+                        user_id: String::from("peer-1").into(),
                         stream_type: StreamType::Audio,
                         active: true,
                         source: None,
                     },
                     TrackBinding {
                         mid: String::from("1"),
-                        session_id: String::from("peer-2").into(),
+                        user_id: String::from("peer-2").into(),
                         stream_type: StreamType::Camera,
                         active: true,
                         source: None,
@@ -59,7 +59,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
         core.track_binding("0"),
         Some(&TrackBinding {
             mid: String::from("0"),
-            session_id: String::from("peer-1").into(),
+            user_id: String::from("peer-1").into(),
             stream_type: StreamType::Audio,
             active: true,
             source: None,
@@ -69,7 +69,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
         core.track_binding("1"),
         Some(&TrackBinding {
             mid: String::from("1"),
-            session_id: String::from("peer-2").into(),
+            user_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: true,
             source: None,
@@ -82,7 +82,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
             event: ProtocolEvent::TrackSnapshot {
                 bindings: vec![TrackBinding {
                     mid: String::from("2"),
-                    session_id: String::from("peer-2").into(),
+                    user_id: String::from("peer-2").into(),
                     stream_type: StreamType::Camera,
                     active: false,
                     source: None,
@@ -96,7 +96,7 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
         core.track_binding("2"),
         Some(&TrackBinding {
             mid: String::from("2"),
-            session_id: String::from("peer-2").into(),
+            user_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: false,
             source: None,
@@ -113,14 +113,14 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
     let tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
         TrackBinding {
             mid: String::from("0"),
-            session_id: String::from("peer-1").into(),
+            user_id: String::from("peer-1").into(),
             stream_type: StreamType::Audio,
             active: true,
             source: None,
         },
         TrackBinding {
             mid: String::from("1"),
-            session_id: String::from("peer-2").into(),
+            user_id: String::from("peer-2").into(),
             stream_type: StreamType::Camera,
             active: true,
             source: None,
@@ -130,7 +130,7 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
 
     let peer_left = encode_server_batch(ServerEnvelope::Message(ServerMessage::PeerLeft(
         PeerLeftPayload {
-            session_id: String::from("peer-1").into(),
+            user_id: String::from("peer-1").into(),
         },
     )));
 
@@ -138,7 +138,7 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
         core.on_ws_message(&peer_left),
         vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
-                session_id: String::from("peer-1").into(),
+                user_id: String::from("peer-1").into(),
             },
         }]
     );
@@ -154,7 +154,7 @@ fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
 
     let source = SourceDescriptor {
         source_id: String::from("source-7"),
-        session_id: String::from("peer-1").into(),
+        user_id: String::from("peer-1").into(),
         stream_type: StreamType::Camera,
         active: true,
         mid: Some(String::from("cam-0")),
@@ -176,7 +176,7 @@ fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
     let tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
         TrackBinding {
             mid: String::from("cam-0"),
-            session_id: String::from("peer-1").into(),
+            user_id: String::from("peer-1").into(),
             stream_type: StreamType::Camera,
             active: true,
             source: Some(source.clone()),
@@ -190,7 +190,7 @@ fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: vec![TrackBinding {
                         mid: String::from("cam-0"),
-                        session_id: String::from("peer-1").into(),
+                        user_id: String::from("peer-1").into(),
                         stream_type: StreamType::Camera,
                         active: true,
                         source: Some(source.clone()),
@@ -214,16 +214,16 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
 
     let peer_info_frame = encode_server_batch(ServerEnvelope::Message(ServerMessage::PeerInfo(
         PeerInfoPayload {
-            session_id: String::from("peer-1").into(),
-            info: SessionInfo {
+            user_id: String::from("peer-1").into(),
+            info: UserInfo {
                 is_camera_on: Some(true),
-                ..SessionInfo::default()
+                ..UserInfo::default()
             },
         },
     )));
     let peer_left_frame = encode_server_batch(ServerEnvelope::Message(ServerMessage::PeerLeft(
         PeerLeftPayload {
-            session_id: String::from("peer-1").into(),
+            user_id: String::from("peer-1").into(),
         },
     )));
     let recording_frame = encode_server_batch(ServerEnvelope::Message(
@@ -248,10 +248,10 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
         core.on_ws_message(&peer_info_frame),
         vec![Command::EmitEvent {
             event: ProtocolEvent::PeerInfo {
-                session_id: String::from("peer-1").into(),
-                info: SessionInfo {
+                user_id: String::from("peer-1").into(),
+                info: UserInfo {
                     is_camera_on: Some(true),
-                    ..SessionInfo::default()
+                    ..UserInfo::default()
                 },
             },
         }]
@@ -260,7 +260,7 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
         core.on_ws_message(&peer_left_frame),
         vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
-                session_id: String::from("peer-1").into(),
+                user_id: String::from("peer-1").into(),
             },
         }]
     );

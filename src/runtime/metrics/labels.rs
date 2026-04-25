@@ -38,13 +38,13 @@ pub(crate) enum WsSessionLoopExitReason {
 pub(crate) enum HttpRoute {
     Noop,
     Stats,
-    Channel,
+    Room,
     Disconnect,
     Metrics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HttpChannelResponseStatus {
+pub(super) enum HttpRoomResponseStatus {
     Success,
     Unauthorized,
     Forbidden,
@@ -131,7 +131,7 @@ pub(crate) enum RtcDatagramRoutePath {
 pub(crate) enum RtcDatagramDropReason {
     RecentMissCache,
     SourceRateLimited,
-    NoSession,
+    NoUser,
     Malformed,
 }
 
@@ -173,7 +173,7 @@ pub(super) enum TransportHealthTransition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TransportSessionLifetimeBucket {
+pub(super) enum TransportUserLifetimeBucket {
     Le1Second,
     Le10Seconds,
     Le60Seconds,
@@ -191,12 +191,12 @@ pub(super) enum RecordingActionOutcome {
 impl_metric_label!(HttpRoute {
     Noop => 0,
     Stats => 1,
-    Channel => 2,
+    Room => 2,
     Disconnect => 3,
     Metrics => 4,
 });
 
-impl_metric_label!(HttpChannelResponseStatus {
+impl_metric_label!(HttpRoomResponseStatus {
     Success => 0,
     Unauthorized => 1,
     Forbidden => 2,
@@ -259,7 +259,7 @@ impl_metric_label!(WebSocketCloseCode {
     AuthTimeout => 0,
     AuthFailed => 1,
     ProtocolError => 2,
-    ChannelFull => 3,
+    RoomFull => 3,
     Error => 4,
     Clean => 5,
     Leaving => 6,
@@ -323,7 +323,7 @@ impl_metric_label!(RtcDatagramRoutePath {
 impl_metric_label!(RtcDatagramDropReason {
     RecentMissCache => 0,
     SourceRateLimited => 1,
-    NoSession => 2,
+    NoUser => 2,
     Malformed => 3,
 });
 
@@ -360,7 +360,7 @@ impl_metric_label!(TransportHealthTransition {
     DisconnectedToUnset => 5,
 });
 
-impl_metric_label!(TransportSessionLifetimeBucket {
+impl_metric_label!(TransportUserLifetimeBucket {
     Le1Second => 0,
     Le10Seconds => 1,
     Le60Seconds => 2,

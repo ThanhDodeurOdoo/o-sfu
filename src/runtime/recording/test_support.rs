@@ -6,14 +6,11 @@ pub(crate) use super::{
     service::RecordingLifecycleState,
     stream_writer::StreamWriter,
 };
-use crate::runtime::ChannelInstanceId;
+use crate::runtime::RoomInstanceId;
 
 #[must_use]
-pub(crate) fn is_channel_active(
-    media_tap: &MediaTap,
-    channel_instance_id: ChannelInstanceId,
-) -> bool {
-    media_tap.has_active_channel(channel_instance_id)
+pub(crate) fn is_room_active(media_tap: &MediaTap, room_instance_id: RoomInstanceId) -> bool {
+    media_tap.has_active_room(room_instance_id)
 }
 
 #[must_use]

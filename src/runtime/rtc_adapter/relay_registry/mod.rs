@@ -375,7 +375,7 @@ impl fmt::Debug for RelayRegistry {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::SessionId;
+    use o_sfu_protocol::shared::UserId;
 
     use super::*;
     use crate::runtime::rtc_adapter::{
@@ -411,7 +411,7 @@ mod tests {
         let registry = RelayRegistry::default();
         let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
         let source_transport_media_id = TransportMediaId::new(9);
-        let session_key = test_transport_session_key(13, 0, 14, SessionId::Integer(15));
+        let session_key = test_transport_session_key(13, 0, 14, UserId::Integer(15));
         let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
         let relay_target = RelayTargetId::new(1);
 
@@ -444,7 +444,7 @@ mod tests {
         let (first_mailbox, mut first_rx) = RelayPacketMailbox::channel_for_test();
         let (second_mailbox, mut second_rx) = RelayPacketMailbox::channel_for_test();
         let source_transport_media_id = TransportMediaId::new(11);
-        let session_key = test_transport_session_key(18, 0, 19, SessionId::Integer(20));
+        let session_key = test_transport_session_key(18, 0, 19, UserId::Integer(20));
         let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
         registry.activate_source_target(
@@ -616,7 +616,7 @@ mod tests {
         let registry = RelayRegistry::default();
         let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
         let source_transport_media_id = TransportMediaId::new(41);
-        let session_key = test_transport_session_key(33, 0, 34, SessionId::Integer(35));
+        let session_key = test_transport_session_key(33, 0, 34, UserId::Integer(35));
         let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
         let relay_target = RelayTargetId::new(7);
 
@@ -650,7 +650,7 @@ mod tests {
     fn relay_registry_reports_overload_when_a_bounded_mailbox_is_full() {
         let (mailbox, _rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
         let source_transport_media_id = TransportMediaId::new(42);
-        let session_key = test_transport_session_key(36, 0, 37, SessionId::Integer(38));
+        let session_key = test_transport_session_key(36, 0, 37, UserId::Integer(38));
         let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
         assert_eq!(

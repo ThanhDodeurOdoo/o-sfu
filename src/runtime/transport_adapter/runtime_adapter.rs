@@ -16,7 +16,7 @@ use super::{
     },
 };
 use crate::runtime::{
-    ChannelInstanceId, rtc_adapter::TransportSessionHealth,
+    RoomInstanceId, rtc_adapter::TransportSessionHealth,
     transport_adapter::SourcePolicyUpdateSubscription,
 };
 
@@ -30,7 +30,7 @@ macro_rules! dispatch_transport_backend {
     }};
 }
 
-/// Runtime boundary between signaling/session orchestration and transport-specific behavior.
+/// Runtime boundary between signaling/user orchestration and transport-specific behavior.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeTransportAdapter {
     Rtc(Arc<RtcTransportAdapterShardSet>),
@@ -53,7 +53,7 @@ impl RuntimeTransportAdapter {
         match self {
             Self::Rtc(shards) => {
                 shards
-                    .shard_for_session(session_key)
+                    .shard_for_user(session_key)
                     .media()
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
@@ -78,7 +78,7 @@ impl NegotiationPort for RuntimeTransportAdapter {
             warn!(
                 ?session_key,
                 ?error,
-                "transport adapter failed to create initial session offer"
+                "transport adapter failed to create initial user offer"
             );
         }
         result
@@ -116,7 +116,7 @@ impl NegotiationPort for RuntimeTransportAdapter {
                 ?session_key,
                 answer_len = answer_sdp.len(),
                 ?error,
-                "transport adapter failed to apply session answer"
+                "transport adapter failed to apply user answer"
             );
         }
         result
@@ -153,7 +153,7 @@ impl SessionPort for RuntimeTransportAdapter {
             warn!(
                 ?session_key,
                 ?error,
-                "transport adapter failed to close session"
+                "transport adapter failed to close user"
             );
         }
         result
@@ -428,14 +428,12 @@ impl ObservabilityPort for RuntimeTransportAdapter {
         })
     }
 
-    async fn expired_active_speaker_channel_instance_ids(
+    async fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelInstanceId> {
+    ) -> BTreeSet<RoomInstanceId> {
         dispatch_transport_backend!(self, |backend| {
-            backend
-                .expired_active_speaker_channel_instance_ids(now)
-                .await
+            backend.expired_active_speaker_room_instance_ids(now).await
         })
     }
 

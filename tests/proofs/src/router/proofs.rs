@@ -9,7 +9,7 @@ type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
 type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;
 type TeardownProofRouter = ProofRouterModel<2, 3, 1, 2>;
 
-fn session(id: SessionId) -> Session {
+fn user(id: SessionId) -> Session {
     Session::new(id, SessionPermissions::default())
 }
 
@@ -34,9 +34,9 @@ fn all_consumers_shadow_pause<
     true
 }
 
-// Proves session teardown is transitive and exact: removing one session must
+// Proves user teardown is transitive and exact: removing one user must
 // clear its transports, producers, and consumers, and also remove dependent
-// routes that point at those producers, while leaving unrelated session state
+// routes that point at those producers, while leaving unrelated user state
 // consistent. This is high value because stale reverse-index entries here would
 // poison later routing decisions long after the teardown.
 #[kani::proof]
@@ -52,8 +52,8 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
     let removed_consumer_id = ConsumerId(40);
     let surviving_consumer_id = ConsumerId(41);
 
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
+    let _ = router.join_session(user(session_a));
+    let _ = router.join_session(user(session_b));
     let _ = router.open_transport(Transport::new(
         receive_transport,
         session_a,
@@ -130,7 +130,7 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
 }
 
 // Proves producer removal only tears down the routes that depend on that
-// producer and does not over-delete still-live transports or sessions. This is
+// producer and does not over-delete still-live transports or users. This is
 // worth proving because producer teardown is a fan-out operation where stale
 // dependents and accidental collateral cleanup are both easy regression risks.
 #[kani::proof]
@@ -146,8 +146,8 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     let same_session_consumer = ConsumerId(40);
     let remote_consumer = ConsumerId(41);
 
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
+    let _ = router.join_session(user(session_a));
+    let _ = router.join_session(user(session_b));
     let _ = router.open_transport(Transport::new(
         receive_transport,
         session_a,
@@ -232,8 +232,8 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
     let removed_consumer_id = ConsumerId(40);
     let surviving_consumer_id = ConsumerId(41);
 
-    let _ = router.join_session(session(session_a));
-    let _ = router.join_session(session(session_b));
+    let _ = router.join_session(user(session_a));
+    let _ = router.join_session(user(session_b));
     let _ = router.open_transport(Transport::new(
         receive_transport,
         session_a,
@@ -315,8 +315,8 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
 fn new_consumers_inherit_their_producer_pause_shadow() {
     let mut router = ProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(session(SessionId(1)));
-    let _ = router.join_session(session(SessionId(2)));
+    let _ = router.join_session(user(SessionId(1)));
+    let _ = router.join_session(user(SessionId(2)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),
@@ -357,9 +357,9 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = PauseProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(session(SessionId(1)));
-    let _ = router.join_session(session(SessionId(2)));
-    let _ = router.join_session(session(SessionId(3)));
+    let _ = router.join_session(user(SessionId(1)));
+    let _ = router.join_session(user(SessionId(2)));
+    let _ = router.join_session(user(SessionId(3)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),
@@ -416,9 +416,9 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let mut router = PauseProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(session(SessionId(1)));
-    let _ = router.join_session(session(SessionId(2)));
-    let _ = router.join_session(session(SessionId(3)));
+    let _ = router.join_session(user(SessionId(1)));
+    let _ = router.join_session(user(SessionId(2)));
+    let _ = router.join_session(user(SessionId(3)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),
@@ -476,8 +476,8 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
 fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     let mut router = PauseProofRouter::new(RouterId(0));
 
-    let _ = router.join_session(session(SessionId(1)));
-    let _ = router.join_session(session(SessionId(2)));
+    let _ = router.join_session(user(SessionId(1)));
+    let _ = router.join_session(user(SessionId(2)));
     let _ = router.open_transport(Transport::new(
         TransportId(10),
         SessionId(1),

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use axum::extract::ws::Message;
-use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
+use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
 
 use super::{super::WsWriter, post_auth::PostAuthSessionProtocol};
 use crate::runtime::{
     ConnectionId,
-    channel::{Channel, SessionCloseReason, SessionOutbound},
     metrics::RuntimeMetrics,
+    room::{Room, UserCloseReason, UserOutbound},
     transport_adapter::RuntimeTransportAdapter,
 };
 
@@ -18,27 +18,27 @@ pub(in crate::runtime::websocket_server) enum SessionProtocolOutcome {
     Close(WebSocketCloseCode),
 }
 
-/// Stateful manager for a single authenticated signaling session.
+/// Stateful manager for a single authenticated signaling user.
 ///
-/// It acts as the facade between the raw WebSocket stream (handled by the session loop)
+/// It acts as the facade between the raw WebSocket stream (handled by the user loop)
 /// and the business logic below.
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) struct SessionProtocol(PostAuthSessionProtocol);
 
 impl SessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
-        session_id: SessionId,
+        user_id: UserId,
         connection_id: ConnectionId,
         remote_address: Arc<str>,
-        channel: Arc<Channel>,
+        room: Arc<Room>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self(PostAuthSessionProtocol::new(
-            session_id,
+            user_id,
             connection_id,
             remote_address,
-            channel,
+            room,
             transport_adapter,
             metrics,
         ))
@@ -68,27 +68,21 @@ impl SessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_outbound(
         &mut self,
         writer: &mut WsWriter,
-        outbound: SessionOutbound,
+        outbound: UserOutbound,
     ) -> Result<usize, WebSocketCloseCode> {
         match outbound {
-            SessionOutbound::Close(reason) => Err(map_session_close_reason(reason)),
-            SessionOutbound::Message(message) => {
-                self.0.send_outbound_message(writer, message).await
-            }
-            SessionOutbound::Request(request) => {
-                self.0.send_outbound_request(writer, *request).await
-            }
-            SessionOutbound::TrackBindingUpdate(update) => {
+            UserOutbound::Close(reason) => Err(map_session_close_reason(reason)),
+            UserOutbound::Message(message) => self.0.send_outbound_message(writer, message).await,
+            UserOutbound::Request(request) => self.0.send_outbound_request(writer, *request).await,
+            UserOutbound::TrackBindingUpdate(update) => {
                 self.0.send_track_binding_update(writer, update).await
             }
         }
     }
 }
 
-fn map_session_close_reason(reason: SessionCloseReason) -> WebSocketCloseCode {
+fn map_session_close_reason(reason: UserCloseReason) -> WebSocketCloseCode {
     match reason {
-        SessionCloseReason::Replaced | SessionCloseReason::RemovedByRuntime => {
-            WebSocketCloseCode::Kicked
-        }
+        UserCloseReason::Replaced | UserCloseReason::RemovedByRuntime => WebSocketCloseCode::Kicked,
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! # Boundary role
 //!
-//! This module defines the room-domain source identity that channel state,
+//! This module defines the room-domain source identity that room state,
 //! transport projection, diagnostics and recording metadata are expected to
 //! share. It is the vocabulary above SDP, browser APIs and worker-local media
 //! handles: those layers may attach facts to a source, but they must not define
@@ -32,7 +32,7 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use o_sfu_protocol::shared::{SessionId, StreamType};
+use o_sfu_protocol::shared::{StreamType, UserId};
 use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{MediaFormat, MediaKind, Mid, Rid, Ssrc};
 use thiserror::Error;
@@ -41,7 +41,7 @@ use thiserror::Error;
 ///
 /// A source id identifies the publication itself, not the SDP media section,
 /// negotiated RID, RTP SSRC or transport media handle currently realizing it.
-/// Channel state should allocate it when a publish becomes a room-domain source
+/// Room state should allocate it when a publish becomes a room-domain source
 /// and keep using it across renegotiation or transport reattachment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct PublishedSourceId(u64);
@@ -183,31 +183,31 @@ impl SourceOperatingPoint {
     }
 }
 
-/// Publishing session authority attached to a source descriptor.
+/// Publishing user authority attached to a source descriptor.
 ///
-/// The session identifies the logical owner visible to room policy. Connection
+/// The user identifies the logical owner visible to room policy. Connection
 /// freshness is tracked by producer and transport indexes, because source
 /// descriptors are room-domain metadata rather than async commit guards.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PublishedSourceOwner {
-    session_id: SessionId,
+    user_id: UserId,
 }
 
 impl PublishedSourceOwner {
     #[must_use]
-    pub(crate) fn new(session_id: SessionId) -> Self {
-        Self { session_id }
+    pub(crate) fn new(user_id: UserId) -> Self {
+        Self { user_id }
     }
 
     #[must_use]
-    pub(crate) fn session_id(&self) -> &SessionId {
-        &self.session_id
+    pub(crate) fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 }
 
 /// Consumer-side routing intent for a source.
 ///
-/// Selectors live above packet gates. Channel policy can express whether a
+/// Selectors live above packet gates. Room policy can express whether a
 /// consumer wants the source open, pinned to a concrete source encoding or left
 /// to a room policy bucket. Transport code should receive a projected
 /// transport-native gate after this intent is resolved
@@ -253,7 +253,7 @@ impl SourceSelector {
 
 /// Room policy bucket used before policy resolves to a concrete encoding.
 ///
-/// This keeps layout intent out of the transport layer. The channel can decide
+/// This keeps layout intent out of the transport layer. The room can decide
 /// later that a thumbnail should map to a lower simulcast encoding while a
 /// featured source stays unconstrained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -493,7 +493,7 @@ impl PublishedSourceDescriptor {
     ///
     /// Missing values are normal for best-effort callers such as diagnostics or
     /// selector resolution after a source changed. Mutation paths should treat a
-    /// miss as stale work and re-read authoritative channel state.
+    /// miss as stale work and re-read authoritative room state.
     #[must_use]
     pub(crate) fn encoding(
         &self,
@@ -514,7 +514,7 @@ impl PublishedSourceDescriptor {
 pub(crate) struct PublishedSourceDescriptorParts {
     /// Stable source id allocated by the room-domain registry.
     pub(crate) source_id: PublishedSourceId,
-    /// Publishing session authority for stale-work checks.
+    /// Publishing user authority for stale-work checks.
     pub(crate) owner: PublishedSourceOwner,
     /// Compatibility label used by the existing Odoo-facing API.
     pub(crate) stream_type: StreamType,
@@ -617,7 +617,7 @@ impl SourceEncodingDescriptor {
 ///
 /// The fields are optional where negotiation may not have learned the fact yet.
 /// The source and encoding ids must still be stable before the descriptor is
-/// stored in channel state
+/// stored in room state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceEncodingDescriptorParts {
     /// Stable encoding id allocated by the room-domain registry.
@@ -643,7 +643,7 @@ pub(crate) struct SourceEncodingDescriptorParts {
 /// # Error handling guidance
 ///
 /// These are construction-time domain errors. They should be handled before a
-/// publish becomes authoritative in channel state. They are not transport
+/// publish becomes authoritative in room state. They are not transport
 /// failures and should not be retried without rebuilding the source descriptor
 /// from valid runtime facts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -706,7 +706,7 @@ mod tests {
         let source_id = PublishedSourceId::from_raw(7);
         let low_encoding_id = SourceEncodingId::from_raw(1);
         let high_encoding_id = SourceEncodingId::from_raw(2);
-        let owner = PublishedSourceOwner::new(SessionId::Integer(42));
+        let owner = PublishedSourceOwner::new(UserId::Integer(42));
         let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
             owner,
@@ -721,7 +721,7 @@ mod tests {
         .expect("source descriptor should be valid");
 
         assert_eq!(descriptor.source_id(), source_id);
-        assert_eq!(descriptor.owner().session_id(), &SessionId::Integer(42));
+        assert_eq!(descriptor.owner().user_id(), &UserId::Integer(42));
         assert_eq!(descriptor.stream_type(), StreamType::Camera);
         assert_eq!(descriptor.media_kind(), MediaKind::Video);
         assert_eq!(
@@ -760,7 +760,7 @@ mod tests {
         let encoding_id = SourceEncodingId::from_raw(1);
         let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(SessionId::Integer(42)),
+            owner: PublishedSourceOwner::new(UserId::Integer(42)),
             stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: None,

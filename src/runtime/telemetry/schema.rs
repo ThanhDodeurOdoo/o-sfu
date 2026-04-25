@@ -8,17 +8,17 @@ pub(crate) mod event {
     pub(crate) const RUNTIME_BOOT: &str = "runtime.boot";
     pub(crate) const RUNTIME_SHUTDOWN: &str = "runtime.shutdown";
     pub(crate) const RUNTIME_TELEMETRY_INITIALIZED: &str = "runtime.telemetry_initialized";
-    pub(crate) const CHANNEL_CREATED: &str = "channel.created";
-    pub(crate) const SESSION_JOINED: &str = "session.joined";
-    pub(crate) const SESSION_CLOSED: &str = "session.closed";
-    pub(crate) const SESSION_DISCONNECTED: &str = "session.disconnected";
+    pub(crate) const ROOM_CREATED: &str = "room.created";
+    pub(crate) const USER_JOINED: &str = "user.joined";
+    pub(crate) const USER_CLOSED: &str = "user.closed";
+    pub(crate) const USER_DISCONNECTED: &str = "user.disconnected";
     pub(crate) const WS_CONNECTION_ACCEPTED: &str = "ws.accepted";
     pub(crate) const WS_CONNECTION_CLOSED: &str = "ws.closed";
     pub(crate) const WS_AUTH_REJECTED: &str = "ws.auth_rejected";
     pub(crate) const WS_HANDSHAKE_REJECTED: &str = "ws.handshake_rejected";
     pub(crate) const WS_JOIN_FAILED: &str = "ws.join_failed";
     pub(crate) const WS_JOIN_SUCCEEDED: &str = "ws.join_succeeded";
-    pub(crate) const WS_SESSION_ESTABLISHED: &str = "ws.session.established";
+    pub(crate) const WS_USER_ESTABLISHED: &str = "ws.user.established";
     pub(crate) const NEGOTIATION_STARTED: &str = "negotiation.started";
     pub(crate) const NEGOTIATION_SUCCEEDED: &str = "negotiation.succeeded";
     pub(crate) const NEGOTIATION_FAILED: &str = "negotiation.failed";
@@ -43,7 +43,7 @@ pub(crate) mod event {
     reason = "The field catalog intentionally grows ahead of broad JSON-log and trace rollout so correlation names stay centralized."
 )]
 pub(crate) mod field {
-    pub(crate) const CHANNEL_UUID: &str = "channel_uuid";
+    pub(crate) const ROOM_ID: &str = "room_id";
     pub(crate) const CLOSE_CODE: &str = "close_code";
     pub(crate) const CONNECTION_ID: &str = "connection_id";
     pub(crate) const DEPLOYMENT_ENVIRONMENT: &str = "deployment.environment";
@@ -60,7 +60,7 @@ pub(crate) mod field {
     pub(crate) const SERVICE_INSTANCE_ID: &str = "service.instance.id";
     pub(crate) const SERVICE_NAME: &str = "service.name";
     pub(crate) const SERVICE_VERSION: &str = "service.version";
-    pub(crate) const SESSION_ID: &str = "session_id";
+    pub(crate) const USER_ID: &str = "user_id";
     pub(crate) const TARGET: &str = "target";
     pub(crate) const TIMESTAMP: &str = "timestamp";
     pub(crate) const TRACE_ID: &str = "trace_id";
@@ -80,8 +80,8 @@ pub(crate) const COMMON_FIELD_NAMES: &[&str] = &[
 ];
 
 pub(crate) const CORRELATION_FIELD_NAMES: &[&str] = &[
-    field::CHANNEL_UUID,
-    field::SESSION_ID,
+    field::ROOM_ID,
+    field::USER_ID,
     field::CONNECTION_ID,
     field::REMOTE_ADDRESS,
     field::TRANSPORT_MEDIA_ID,

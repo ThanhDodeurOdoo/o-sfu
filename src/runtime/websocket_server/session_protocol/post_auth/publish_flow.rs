@@ -2,7 +2,7 @@
 //!
 //! This file owns the control-flow decisions around queued publish intents,
 //! staged publish transactions and when renegotiation must happen. The
-//! staged publish lifecycle is in `channel/media_transaction.rs`.
+//! staged publish lifecycle is in `room/media_transaction.rs`.
 
 use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
 use tracing::{info, instrument};
@@ -18,8 +18,8 @@ impl PostAuthSessionProtocol {
         name = "publish.intent",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id,
             stream_type = ?stream_type
         )
@@ -30,27 +30,27 @@ impl PostAuthSessionProtocol {
         stream_type: StreamType,
     ) -> SessionProtocolOutcome {
         // If the same stream is already queued or staged, treat the new intent
-        // as idempotent. The channel transaction layer is strict about one
-        // staged publish per `(session, connection, stream_type)`
+        // as idempotent. The room transaction layer is strict about one
+        // staged publish per `(user, connection, stream_type)`
         if self.flow_state.has_queued_publish(stream_type)
             || self
-                .channel
-                .has_staged_publish(&self.session_id, self.connection_id, stream_type)
+                .room
+                .has_staged_publish(&self.user_id, self.connection_id, stream_type)
                 .await
         {
             return SessionProtocolOutcome::Continue;
         }
         if self
-            .channel
-            .is_stream_published(&self.session_id, stream_type)
+            .room
+            .is_stream_published(&self.user_id, stream_type)
             .await
         {
             // Once a stream is already live publish intent is just a resume of
             // producer activity. No new transport media or renegotiation is
             // needed here
-            self.channel
+            self.room
                 .set_publication_active_runtime(
-                    &self.session_id,
+                    &self.user_id,
                     self.connection_id,
                     stream_type,
                     true,
@@ -62,7 +62,7 @@ impl PostAuthSessionProtocol {
         if self.flow_state.awaiting_answer() {
             // A publish intent that arrive while another answer is in flight
             // cannot stage transport media yet. Queue it so the follow-up
-            // renegotiation stages it against the latest session state.
+            // renegotiation stages it against the latest user state.
             self.flow_state.queue_publish_stream(stream_type);
             let _disposition = self.flow_state.request_renegotiation();
             return SessionProtocolOutcome::Continue;
@@ -89,9 +89,9 @@ impl PostAuthSessionProtocol {
         // If a publish was staged but not committed yet, unpublish becomes a
         // pure rollback of the staged transaction.
         if self
-            .channel
+            .room
             .rollback_staged_publish(
-                &self.session_id,
+                &self.user_id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
@@ -102,9 +102,9 @@ impl PostAuthSessionProtocol {
             return SessionProtocolOutcome::Continue;
         }
         if !self
-            .channel
+            .room
             .unpublish_track(
-                &self.session_id,
+                &self.user_id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
@@ -121,9 +121,9 @@ impl PostAuthSessionProtocol {
 
     async fn stage_publish_stream(&self, stream_type: StreamType) -> bool {
         let staged = self
-            .channel
+            .room
             .stage_negotiated_publish(
-                &self.session_id,
+                &self.user_id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
@@ -166,18 +166,18 @@ impl PostAuthSessionProtocol {
         name = "publish.commit",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id
         )
     )]
     pub(super) async fn commit_staged_publishes(&self, applied_answer: &AppliedSessionAnswer) {
         // Answer handling already proved that the transport layer accepted the
-        // negotiated session update. The channel-side transaction now finishes
+        // negotiated user update. The room-side transaction now finishes
         // every staged publish that belongs to this connection.
-        self.channel
+        self.room
             .commit_staged_publishes(
-                &self.session_id,
+                &self.user_id,
                 self.connection_id,
                 applied_answer,
                 &self.transport_adapter,

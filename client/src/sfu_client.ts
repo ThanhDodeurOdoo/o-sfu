@@ -89,7 +89,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._iceServers = cloneIceServers(options.iceServers);
         this._emitLog(
             CLIENT_LOG_LEVEL.INFO,
-            `connect requested for ${options.channelUUID ? `channel ${options.channelUUID}` : "implicit channel"}`
+            `connect requested for ${options.channelUUID ? `room ${options.channelUUID}` : "implicit room"}`
         );
         this._runtime.enqueueProtocolCommands(
             () =>
@@ -159,7 +159,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         validateDownloadStates(states);
         this._emitLog(
             CLIENT_LOG_LEVEL.INFO,
-            `updating download states for session ${sessionId}: ${JSON.stringify(states)}`
+            `updating download states for user ${sessionId}: ${JSON.stringify(states)}`
         );
         this._runtime.enqueueLocalOperation(async () => {
             this._remoteTracks.updateSubscriptionStates(sessionId, states, (update) => {
@@ -187,7 +187,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
-        this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating session info: ${JSON.stringify(info)}`);
+        this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating user info: ${JSON.stringify(info)}`);
         this._runtime.enqueueProtocolCommands(
             () => this._protocolCore.updateInfo(info),
             this._runtimeHooks()
@@ -352,13 +352,13 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             case CLIENT_UPDATE.INFO_CHANGE:
                 this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
-                    `received remote session info update: ${JSON.stringify(update.payload)}`
+                    `received remote user info update: ${JSON.stringify(update.payload)}`
                 );
                 break;
             case CLIENT_UPDATE.BROADCAST:
                 this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
-                    `received broadcast from session ${update.payload.senderId}`
+                    `received broadcast from user ${update.payload.senderId}`
                 );
                 break;
             case CLIENT_UPDATE.CHANNEL_INFO_CHANGE:

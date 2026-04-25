@@ -18,7 +18,7 @@ pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &Runti
                 "credentials_received",
                 snapshot.ws_handshake_credentials_received,
             ),
-            LabeledValue::new("joined", snapshot.ws_sessions_joined),
+            LabeledValue::new("joined", snapshot.ws_users_joined),
         ],
     );
     append_labeled_counter_family(
@@ -40,8 +40,8 @@ pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &Runti
                 snapshot.ws_handshake_rejected_protocol_error,
             ),
             LabeledValue::new(
-                close_code_label(WebSocketCloseCode::ChannelFull),
-                snapshot.ws_handshake_rejected_channel_full,
+                close_code_label(WebSocketCloseCode::RoomFull),
+                snapshot.ws_handshake_rejected_room_full,
             ),
             LabeledValue::new("error", snapshot.ws_handshake_rejected_error),
         ],
@@ -49,20 +49,17 @@ pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &Runti
     append_labeled_counter_family(
         output,
         "osfu_ws_startup_failures_total",
-        "Total websocket startup failures before the steady-state session loop.",
+        "Total websocket startup failures before the steady-state user loop.",
         "kind",
         &[
             LabeledValue::new("startup_send", snapshot.ws_startup_send_failures),
-            LabeledValue::new(
-                "session_initialize",
-                snapshot.ws_session_initialize_failures,
-            ),
+            LabeledValue::new("user_initialize", snapshot.ws_user_initialize_failures),
         ],
     );
     append_histogram(
         output,
         "osfu_ws_handshake_duration_seconds",
-        "Websocket handshake duration from upgrade to session readiness or rejection.",
+        "Websocket handshake duration from upgrade to user readiness or rejection.",
         &duration_histogram_buckets(&snapshot.ws_handshake_duration),
         snapshot.ws_handshake_duration.sum_micros,
         snapshot.ws_handshake_duration.count,
@@ -77,46 +74,46 @@ pub(super) fn append_ws_connection_metrics(output: &mut String, snapshot: &Runti
     );
     append_histogram(
         output,
-        "osfu_ws_session_initialize_duration_seconds",
-        "Websocket session initialization duration after channel admission.",
-        &duration_histogram_buckets(&snapshot.ws_session_initialize_duration),
-        snapshot.ws_session_initialize_duration.sum_micros,
-        snapshot.ws_session_initialize_duration.count,
+        "osfu_ws_user_initialize_duration_seconds",
+        "Websocket user initialization duration after room admission.",
+        &duration_histogram_buckets(&snapshot.ws_user_initialize_duration),
+        snapshot.ws_user_initialize_duration.sum_micros,
+        snapshot.ws_user_initialize_duration.count,
     );
 }
 
 pub(super) fn append_ws_loop_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_counter(
         output,
-        "osfu_ws_session_loops_started_total",
-        "Total websocket session loops started after a successful join.",
-        snapshot.ws_session_loops_started,
+        "osfu_ws_user_loops_started_total",
+        "Total websocket user loops started after a successful join.",
+        snapshot.ws_user_loops_started,
     );
     append_labeled_counter_family(
         output,
-        "osfu_ws_session_loop_exits_total",
-        "Total websocket session loop exits by reason.",
+        "osfu_ws_user_loop_exits_total",
+        "Total websocket user loop exits by reason.",
         "reason",
         &[
-            LabeledValue::new("peer_closed", snapshot.ws_session_loop_exits_peer_closed),
-            LabeledValue::new("reader_error", snapshot.ws_session_loop_exits_reader_error),
-            LabeledValue::new("bus_break", snapshot.ws_session_loop_exits_bus_break),
-            LabeledValue::new("ping_timeout", snapshot.ws_session_loop_exits_ping_timeout),
+            LabeledValue::new("peer_closed", snapshot.ws_user_loop_exits_peer_closed),
+            LabeledValue::new("reader_error", snapshot.ws_user_loop_exits_reader_error),
+            LabeledValue::new("bus_break", snapshot.ws_user_loop_exits_bus_break),
+            LabeledValue::new("ping_timeout", snapshot.ws_user_loop_exits_ping_timeout),
             LabeledValue::new(
                 "transport_disconnected",
-                snapshot.ws_session_loop_exits_transport_disconnected,
+                snapshot.ws_user_loop_exits_transport_disconnected,
             ),
             LabeledValue::new(
-                "outbound_channel_closed",
-                snapshot.ws_session_loop_exits_outbound_channel_closed,
+                "outbound_room_closed",
+                snapshot.ws_user_loop_exits_outbound_room_closed,
             ),
             LabeledValue::new(
                 "outbound_close_signal",
-                snapshot.ws_session_loop_exits_outbound_close_signal,
+                snapshot.ws_user_loop_exits_outbound_close_signal,
             ),
             LabeledValue::new(
                 "outbound_message_send_failure",
-                snapshot.ws_session_loop_exits_outbound_message_send_failure,
+                snapshot.ws_user_loop_exits_outbound_message_send_failure,
             ),
         ],
     );

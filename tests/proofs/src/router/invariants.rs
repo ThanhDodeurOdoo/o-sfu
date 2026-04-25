@@ -23,9 +23,9 @@ impl<
 
     fn live_sessions_are_active(&self) -> bool {
         let mut session_index = 0;
-        while let Some(session_slot) = self.sessions.get(session_index) {
-            if let Some(session) = session_slot
-                && session.state() != o_sfu_router::SessionState::Active
+        while let Some(session_slot) = self.users.get(session_index) {
+            if let Some(user) = session_slot
+                && user.state() != o_sfu_router::SessionState::Active
             {
                 return false;
             }
@@ -36,10 +36,10 @@ impl<
 
     fn session_ids_are_unique(&self) -> bool {
         let mut left_index = 0;
-        while let Some(left_slot) = self.sessions.get(left_index) {
+        while let Some(left_slot) = self.users.get(left_index) {
             if let Some(left) = *left_slot {
                 let mut right_index = left_index + 1;
-                while let Some(right_slot) = self.sessions.get(right_index) {
+                while let Some(right_slot) = self.users.get(right_index) {
                     if right_slot.is_some_and(|right| left.id() == right.id()) {
                         return false;
                     }

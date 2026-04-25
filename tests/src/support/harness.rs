@@ -16,14 +16,13 @@ use o_sfu::{
     },
     testing::{
         auth::{
-            HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims, WebSocketConnectClaims,
-            sign,
+            HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
         },
-        http::{CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, METRICS_PATH},
+        http::{CHANNEL_PATH, CreateRoomQuery, DISCONNECT_PATH, METRICS_PATH, RoomResponse},
         server::TestServer,
     },
 };
-use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+use o_sfu_protocol::shared::{UserId, UserPermissions};
 use reqwest::StatusCode;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -35,16 +34,16 @@ pub type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 
 pub const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
-pub const TEST_CHANNEL_KEY: &str = "Y2hhbm5lbC1rZXk=";
+pub const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 
 #[must_use]
-pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Config {
+pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
     Config {
         auth_key: TEST_AUTH_KEY.to_owned(),
         bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         authentication_timeout_ms,
-        channel_size,
-        session_timeout_ms: 10_000,
+        room_size,
+        user_timeout_ms: 10_000,
         ping_interval_ms: 60_000,
         trust_proxy_headers: true,
         feature_flags: RuntimeFeatureFlags::default(),
@@ -60,27 +59,23 @@ pub fn test_config(authentication_timeout_ms: u64, channel_size: usize) -> Confi
 }
 
 #[must_use]
-pub fn signed_connect_claims(
-    key: &str,
-    channel_uuid: &str,
-    session_id: SessionId,
-) -> Option<String> {
+pub fn signed_connect_claims(key: &str, room_id: &str, user_id: UserId) -> Option<String> {
     sign(
         &WebSocketConnectClaims {
             registered: RegisteredJwtClaims::default(),
-            sfu_channel_uuid: channel_uuid.to_owned(),
-            session_id,
+            room_id: room_id.to_owned(),
+            user_id,
             label: Some("Alice".to_owned()),
-            permissions: Some(SessionPermissions::default()),
+            permissions: Some(UserPermissions::default()),
         },
         key,
     )
     .ok()
 }
 
-pub fn signed_channel_claims(issuer: &str, key: Option<&str>) -> Option<String> {
+pub fn signed_room_claims(issuer: &str, key: Option<&str>) -> Option<String> {
     sign(
-        &HttpChannelClaims {
+        &HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 iss: Some(issuer.to_owned()),
                 ..RegisteredJwtClaims::default()
@@ -93,45 +88,39 @@ pub fn signed_channel_claims(issuer: &str, key: Option<&str>) -> Option<String> 
 }
 
 #[must_use]
-pub fn signed_disconnect_claims(
-    session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
-) -> Option<String> {
+pub fn signed_disconnect_claims(user_ids_by_room: BTreeMap<String, Vec<UserId>>) -> Option<String> {
     sign(
         &HttpDisconnectClaims {
             registered: RegisteredJwtClaims::default(),
-            session_ids_by_channel,
+            user_ids_by_room,
         },
         TEST_AUTH_KEY,
     )
     .ok()
 }
 
-pub async fn create_channel(
-    server: &TestServer,
-    issuer: &str,
-    key: Option<&str>,
-) -> Option<String> {
-    let token = signed_channel_claims(issuer, key)?;
+pub async fn create_room(server: &TestServer, issuer: &str, key: Option<&str>) -> Option<String> {
+    let token = signed_room_claims(issuer, key)?;
     let response = reqwest::Client::new()
         .get(format!("{}{CHANNEL_PATH}", server.http_base_url()))
         .bearer_auth(token)
         .header("x-forwarded-for", "127.0.0.1")
-        .query(&CreateChannelQuery::default())
+        .query(&CreateRoomQuery::default())
         .send()
         .await
         .ok()?;
     if !response.status().is_success() {
         return None;
     }
-    let payload = response.json::<ChannelResponse>().await.ok()?;
+    let payload = response.json::<RoomResponse>().await.ok()?;
     Some(payload.uuid)
 }
 
 pub async fn disconnect_sessions_via_http(
     server: &TestServer,
-    session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
+    user_ids_by_room: BTreeMap<String, Vec<UserId>>,
 ) -> Option<StatusCode> {
-    let token = signed_disconnect_claims(session_ids_by_channel)?;
+    let token = signed_disconnect_claims(user_ids_by_room)?;
     let response = reqwest::Client::new()
         .post(format!("{}{DISCONNECT_PATH}", server.http_base_url()))
         .body(token)

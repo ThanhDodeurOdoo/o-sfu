@@ -29,14 +29,14 @@ impl Display for ConnectionId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ChannelInstanceId(u64);
+pub(crate) struct RoomInstanceId(u64);
 
-impl ChannelInstanceId {
+impl RoomInstanceId {
     #[must_use]
-    pub(crate) fn allocate(next_channel_instance_id: &mut u64) -> Self {
-        let channel_instance_id = Self(*next_channel_instance_id);
-        *next_channel_instance_id = next_channel_instance_id.saturating_add(1);
-        channel_instance_id
+    pub(crate) fn allocate(next_room_instance_id: &mut u64) -> Self {
+        let room_instance_id = Self(*next_room_instance_id);
+        *next_room_instance_id = next_room_instance_id.saturating_add(1);
+        room_instance_id
     }
 
     #[must_use]
@@ -50,7 +50,7 @@ impl ChannelInstanceId {
     }
 }
 
-impl Display for ChannelInstanceId {
+impl Display for RoomInstanceId {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }

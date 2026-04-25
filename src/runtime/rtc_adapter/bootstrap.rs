@@ -1,8 +1,8 @@
-//! Production RTC session and socket bootstrap primitives.
+//! Production RTC user and socket bootstrap primitives.
 //!
 //! This module owns the real cold-path setup that production worker logic
 //! reuses: bind the shard-local UDP socket, construct `str0m::Rtc`, seed local
-//! candidates, and create the worker-owned session state.
+//! candidates, and create the worker-owned user state.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -61,13 +61,13 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
 }
 
 pub(super) fn ensure_session_rtc_state(
-    sessions: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
+    users: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
     max_bitrate_out_bps: u64,
     codec_flags: MediaCodecFlags,
 ) -> Result<bool, TransportAdapterError> {
-    if sessions.contains_key(session_key) {
+    if users.contains_key(session_key) {
         return Ok(false);
     }
     let started_at = Instant::now();
@@ -83,7 +83,7 @@ pub(super) fn ensure_session_rtc_state(
         return Err(TransportAdapterError::TransportUnavailable);
     }
     let local_ice_ufrag = rtc.direct_api().local_ice_credentials().ufrag;
-    sessions.insert(
+    users.insert(
         session_key.clone(),
         RtcSessionState {
             rtc,

@@ -1,5 +1,5 @@
 use o_sfu_protocol::{
-    shared::{DownloadStates, SessionId, SessionInfo},
+    shared::{DownloadStates, UserId, UserInfo},
     signaling::{
         ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
         RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
@@ -19,24 +19,24 @@ use crate::runtime::{telemetry::schema::event as telemetry_event, websocket_serv
 impl PostAuthSessionProtocol {
     async fn reject_stale_connection(&self) -> bool {
         if self
-            .channel
-            .has_connection(&self.session_id, self.connection_id)
+            .room
+            .has_connection(&self.user_id, self.connection_id)
             .await
         {
             return false;
         }
         debug!(
-            session_id = ?self.session_id,
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id,
             "rejecting client envelope from a stale websocket connection"
         );
         true
     }
 
-    async fn handle_info_message(&self, info: SessionInfo) {
-        self.channel
-            .update_session_info_runtime_for_connection(
-                &self.session_id,
+    async fn handle_info_message(&self, info: UserInfo) {
+        self.room
+            .update_user_info_runtime_for_connection(
+                &self.user_id,
                 self.connection_id,
                 info,
                 false,
@@ -49,26 +49,22 @@ impl PostAuthSessionProtocol {
         name = "subscribe.intent",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id,
             target_session_id = ?target_session_id
         )
     )]
-    async fn handle_subscribe_intent(
-        &self,
-        target_session_id: &SessionId,
-        states: &DownloadStates,
-    ) {
+    async fn handle_subscribe_intent(&self, target_session_id: &UserId, states: &DownloadStates) {
         info!(
             event = telemetry_event::SUBSCRIBE_PREPARED,
             operation = "consume_prepare",
             outcome = "request_received",
             "received subscribe intent"
         );
-        self.channel
+        self.room
             .update_subscription_runtime(
-                &self.session_id,
+                &self.user_id,
                 self.connection_id,
                 target_session_id,
                 states,
@@ -87,8 +83,8 @@ impl PostAuthSessionProtocol {
         name = "recording.start",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id,
             request_id = ?request_id
         )
@@ -100,8 +96,8 @@ impl PostAuthSessionProtocol {
         payload: RecordingOptions,
     ) -> SessionProtocolOutcome {
         let ok = self
-            .channel
-            .start_recording_runtime(&self.session_id, self.connection_id, payload)
+            .room
+            .start_recording_runtime(&self.user_id, self.connection_id, payload)
             .await;
         info!(
             event = telemetry_event::RECORDING_STARTED,
@@ -125,8 +121,8 @@ impl PostAuthSessionProtocol {
         name = "recording.stop",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id,
             request_id = ?request_id
         )
@@ -137,8 +133,8 @@ impl PostAuthSessionProtocol {
         request_id: RequestId,
     ) -> SessionProtocolOutcome {
         let ok = self
-            .channel
-            .stop_recording_runtime(&self.session_id, self.connection_id)
+            .room
+            .stop_recording_runtime(&self.user_id, self.connection_id)
             .await;
         info!(
             event = telemetry_event::RECORDING_STOPPED,
@@ -198,8 +194,8 @@ impl PostAuthSessionProtocol {
             ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload {
                 message,
             })) => {
-                self.channel
-                    .broadcast_runtime(&self.session_id, self.connection_id, message)
+                self.room
+                    .broadcast_runtime(&self.user_id, self.connection_id, message)
                     .await;
                 SessionProtocolOutcome::Continue
             }
@@ -207,7 +203,7 @@ impl PostAuthSessionProtocol {
                 self.dispatch_flow_change(
                     writer,
                     FlowChange::Subscribe {
-                        target_session_id: payload.session_id,
+                        target_session_id: payload.user_id,
                         states: payload.states,
                     },
                 )

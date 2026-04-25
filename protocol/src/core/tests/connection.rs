@@ -82,10 +82,10 @@ fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() 
             Command::EmitEvent {
                 event: ProtocolEvent::PeerSnapshot {
                     peers: vec![PeerSnapshot {
-                        session_id: 7_i64.into(),
-                        info: SessionInfo {
+                        user_id: 7_i64.into(),
+                        info: UserInfo {
                             is_talking: Some(true),
-                            ..SessionInfo::default()
+                            ..UserInfo::default()
                         },
                     }],
                 },

@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{relay_registry::RelayTargetId, route_control::PacketLayerGate};
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     transport_adapter::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, SessionOffer,
         TransportMediaId, TransportResult, TransportSessionKey,
@@ -209,9 +209,9 @@ pub(super) enum RtcWorkerCommand {
     NextActiveSpeakerDeadline {
         response: RtcWorkerResponse<Option<Instant>>,
     },
-    ExpiredActiveSpeakerChannelInstanceIds {
+    ExpiredActiveSpeakerRoomInstanceIds {
         now: Instant,
-        response: RtcWorkerResponse<BTreeSet<ChannelInstanceId>>,
+        response: RtcWorkerResponse<BTreeSet<RoomInstanceId>>,
     },
     ApplySessionAnswer {
         session_key: TransportSessionKey,

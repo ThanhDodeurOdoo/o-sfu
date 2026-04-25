@@ -128,7 +128,7 @@ impl RemoteAddrDemux {
     ) where
         I: IntoIterator<Item = SocketAddr>,
     {
-        self.forget_session_remote_candidate_addrs(session_key);
+        self.forget_user_remote_candidate_addrs(session_key);
         let session_candidate_addrs = self
             .remote_candidate_addrs_by_session
             .entry(session_key.clone())
@@ -155,7 +155,7 @@ impl RemoteAddrDemux {
         self.remove_remote_addr_from_session(&session_key, source_addr);
     }
 
-    pub(super) fn forget_session_remote_addrs(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn forget_user_remote_addrs(&mut self, session_key: &TransportSessionKey) {
         let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
             return;
         };
@@ -164,17 +164,14 @@ impl RemoteAddrDemux {
         }
     }
 
-    pub(super) fn forget_session_local_ice_ufrag(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn forget_user_local_ice_ufrag(&mut self, session_key: &TransportSessionKey) {
         let Some(local_ice_ufrag) = self.local_ice_ufrag_by_session.remove(session_key) else {
             return;
         };
         self.local_ice_ufrag_index.remove(&local_ice_ufrag);
     }
 
-    pub(super) fn forget_session_remote_candidate_addrs(
-        &mut self,
-        session_key: &TransportSessionKey,
-    ) {
+    pub(super) fn forget_user_remote_candidate_addrs(&mut self, session_key: &TransportSessionKey) {
         let Some(candidate_addrs) = self.remote_candidate_addrs_by_session.remove(session_key)
         else {
             return;
@@ -257,7 +254,7 @@ impl RemoteAddrDemux {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use o_sfu_protocol::shared::SessionId;
+    use o_sfu_protocol::shared::UserId;
 
     use super::RemoteAddrDemux;
     use crate::runtime::{
@@ -265,13 +262,8 @@ mod tests {
         transport_adapter::TransportSessionKey,
     };
 
-    fn session_key(channel_instance_id: u64, session_numeric_id: i64) -> TransportSessionKey {
-        test_transport_session_key(
-            0,
-            0,
-            channel_instance_id,
-            SessionId::Integer(session_numeric_id),
-        )
+    fn session_key(room_instance_id: u64, session_numeric_id: i64) -> TransportSessionKey {
+        test_transport_session_key(0, 0, room_instance_id, UserId::Integer(session_numeric_id))
     }
 
     #[test]

@@ -82,7 +82,7 @@ async fn disconnect_accepts_valid_jwt() {
 }
 
 #[tokio::test]
-async fn channel_route_updates_metrics_for_unauthorized_and_success_paths() {
+async fn room_route_updates_metrics_for_unauthorized_and_success_paths() {
     let state = test_state();
     let unauthorized = build_request(
         Request::get(CHANNEL_PATH).header(header::HOST, "sfu.example.com"),
@@ -99,7 +99,7 @@ async fn channel_route_updates_metrics_for_unauthorized_and_success_paths() {
     };
     assert_eq!(unauthorized_response.status(), StatusCode::UNAUTHORIZED);
 
-    let token = signed_channel_claims(Some("issuer-a"), None);
+    let token = signed_room_claims(Some("issuer-a"), None);
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -122,9 +122,9 @@ async fn channel_route_updates_metrics_for_unauthorized_and_success_paths() {
     assert_eq!(authorized_response.status(), StatusCode::OK);
 
     let metrics = state.metrics.snapshot();
-    assert_eq!(metrics.http_channel_requests, 2);
-    assert_eq!(metrics.http_channel_unauthorized, 1);
-    assert_eq!(metrics.http_channel_success, 1);
+    assert_eq!(metrics.http_room_requests, 2);
+    assert_eq!(metrics.http_room_unauthorized, 1);
+    assert_eq!(metrics.http_room_success, 1);
 }
 
 #[tokio::test]

@@ -15,7 +15,7 @@ fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
 #[tokio::test]
 async fn rtc_initial_session_offer_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 15, SessionId::Integer(15));
+    let session_key = transport_key(1, 15, UserId::Integer(15));
 
     assert!(!adapter.packet_loop_started());
     assert!(
@@ -30,7 +30,7 @@ async fn rtc_initial_session_offer_starts_packet_loop() {
 #[tokio::test]
 async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 13, SessionId::Integer(13));
+    let session_key = transport_key(1, 13, UserId::Integer(13));
 
     let offer_sdp = prepare_transport_session(&adapter, &session_key)
         .await
@@ -103,7 +103,7 @@ fn rtc_transport_ice_state_metric_maps_all_supported_states() {
 #[tokio::test]
 async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 14, SessionId::Integer(14));
+    let session_key = transport_key(1, 14, UserId::Integer(14));
 
     assert!(
         prepare_transport_session(&adapter, &session_key)
@@ -121,7 +121,7 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 143, SessionId::Integer(143));
+    let session_key = transport_key(1, 143, UserId::Integer(143));
     assert!(
         prepare_transport_session(&adapter, &session_key)
             .await
@@ -134,8 +134,8 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
         super::super::state::TransportSessionHealth::Disconnected,
     );
     let metrics_snapshot = adapter.metrics.snapshot();
-    assert_eq!(metrics_snapshot.connected_transport_sessions, 0);
-    assert_eq!(metrics_snapshot.disconnected_transport_sessions, 1);
+    assert_eq!(metrics_snapshot.connected_transport_users, 0);
+    assert_eq!(metrics_snapshot.disconnected_transport_users, 1);
     assert_eq!(
         adapter.session_transport_health(&session_key),
         Some(super::super::state::TransportSessionHealth::Disconnected)
@@ -144,14 +144,14 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
     assert_eq!(adapter.close_session(&session_key).await, Ok(()));
     assert_eq!(adapter.session_transport_health(&session_key), None);
     let metrics_snapshot = adapter.metrics.snapshot();
-    assert_eq!(metrics_snapshot.connected_transport_sessions, 0);
-    assert_eq!(metrics_snapshot.disconnected_transport_sessions, 0);
+    assert_eq!(metrics_snapshot.connected_transport_users, 0);
+    assert_eq!(metrics_snapshot.disconnected_transport_users, 0);
 }
 
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 140, SessionId::Integer(140));
+    let session_key = transport_key(1, 140, UserId::Integer(140));
     assert!(
         prepare_transport_session(&adapter, &session_key)
             .await
@@ -174,7 +174,7 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
 #[tokio::test]
 async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     let adapter = RtcTransportAdapter::default();
-    let first_session_key = transport_key(1, 141, SessionId::Integer(141));
+    let first_session_key = transport_key(1, 141, UserId::Integer(141));
     assert!(
         prepare_transport_session(&adapter, &first_session_key)
             .await
@@ -187,7 +187,7 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     assert!(!adapter.packet_loop_started());
     assert!(matches!(adapter.worker_handle(), Ok(None)));
 
-    let second_session_key = transport_key(1, 142, SessionId::Integer(142));
+    let second_session_key = transport_key(1, 142, UserId::Integer(142));
     assert!(
         prepare_transport_session(&adapter, &second_session_key)
             .await
@@ -200,8 +200,8 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
 #[tokio::test]
 async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     let adapter = RtcTransportAdapter::default();
-    let first_session_key = transport_key_on_worker(1, 0, 30, SessionId::Integer(30));
-    let second_session_key = transport_key_on_worker(2, 1, 30, SessionId::Integer(30));
+    let first_session_key = transport_key_on_worker(1, 0, 30, UserId::Integer(30));
+    let second_session_key = transport_key_on_worker(2, 1, 30, UserId::Integer(30));
 
     assert!(
         prepare_transport_session(&adapter, &first_session_key)
@@ -235,7 +235,7 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
             transport_key(
                 3,
                 200_u64 + u64::from(offset),
-                SessionId::Integer(200_i64 + i64::from(offset)),
+                UserId::Integer(200_i64 + i64::from(offset)),
             )
         })
         .collect();
@@ -264,8 +264,8 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
 #[tokio::test]
 async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() {
     let adapter = Arc::new(RtcTransportAdapter::default());
-    let first_session_key = transport_key(4, 301, SessionId::Integer(301));
-    let second_session_key = transport_key(4, 302, SessionId::Integer(302));
+    let first_session_key = transport_key(4, 301, UserId::Integer(301));
+    let second_session_key = transport_key(4, 302, UserId::Integer(302));
 
     assert!(
         prepare_transport_session(&adapter, &first_session_key)
@@ -298,7 +298,7 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
     assert!(!adapter.packet_loop_started());
     assert!(matches!(adapter.worker_handle(), Ok(None)));
 
-    let next_session_key = transport_key(4, 303, SessionId::Integer(303));
+    let next_session_key = transport_key(4, 303, UserId::Integer(303));
     assert!(
         prepare_transport_session(&adapter, &next_session_key)
             .await

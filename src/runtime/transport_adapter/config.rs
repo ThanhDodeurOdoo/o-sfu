@@ -4,11 +4,11 @@ use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::ChannelPacketSinkRegistry,
+        packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 
-/// transport bitrate limit per session
+/// transport bitrate limit per user
 ///
 /// `MAX_BITRATE_IN` is enforced by requesting REMB on inbound recieve streams so
 /// the remote sender sees a capped receive budget while `MAX_BITRATE_OUT` is
@@ -48,7 +48,7 @@ pub(crate) struct RtcTransportAdapterConfig {
     rtc_port_range: RtcPortRange,
     codec_flags: MediaCodecFlags,
     diagnostics: Arc<DiagnosticsStore>,
-    packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
+    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     metrics: Arc<RuntimeMetrics>,
 }
 
@@ -60,7 +60,7 @@ impl RtcTransportAdapterConfig {
         rtc_port_range: RtcPortRange,
         codec_flags: MediaCodecFlags,
         diagnostics: Arc<DiagnosticsStore>,
-        packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
+        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
@@ -112,7 +112,7 @@ impl RtcTransportAdapterConfig {
     }
 
     #[must_use]
-    pub(crate) fn packet_sink_registry(&self) -> Arc<ChannelPacketSinkRegistry> {
+    pub(crate) fn packet_sink_registry(&self) -> Arc<RoomPacketSinkRegistry> {
         Arc::clone(&self.packet_sink_registry)
     }
 
@@ -146,7 +146,7 @@ impl RtcTransportAdapterShardSetConfig {
         worker_count: usize,
         codec_flags: MediaCodecFlags,
         diagnostics: Arc<DiagnosticsStore>,
-        packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
+        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {

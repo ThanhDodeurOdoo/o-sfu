@@ -87,7 +87,7 @@ export interface ProtocolCoreBindings {
     readonly features: AvailableFeatures;
     readonly recordingState: RecordingState;
 
-    connect(url: string, jwt: string, channel?: string | null): HostCommand[];
+    connect(url: string, jwt: string, room?: string | null): HostCommand[];
     onWsOpen(): HostCommand[];
     onWsMessage(frame: string): HostCommand[];
     onTransportReady(): HostCommand[];
@@ -137,9 +137,9 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
         get recordingState(): RecordingState {
             return validateRecordingState(bindings.recordingState, "protocol core recordingState");
         },
-        connect(url: string, jwt: string, channel?: string | null): HostCommand[] {
+        connect(url: string, jwt: string, room?: string | null): HostCommand[] {
             return validateHostCommands(
-                bindings.connect(url, jwt, channel),
+                bindings.connect(url, jwt, room),
                 "protocol core connect()"
             );
         },

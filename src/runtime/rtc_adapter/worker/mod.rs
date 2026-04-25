@@ -3,7 +3,7 @@
 //! The packet loop owns the mutable [`RtcBootstrapState`](super::state::RtcBootstrapState)
 //! for a shard and calls into this module whenever a control-plane command needs
 //! to mutate it. That keeps async facade code out of the state-transition layer
-//! while preserving one serialized owner for session, negotiation, media, and
+//! while preserving one serialized owner for user, negotiation, media, and
 //! teardown state.
 //!
 //! What it does:

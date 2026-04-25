@@ -3,11 +3,11 @@ use o_sfu_protocol::signaling::WebSocketCloseCode;
 use super::{
     catalog::RuntimeMetrics,
     labels::{
-        ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus,
+        ControlPlaneDurationBucket, HttpDisconnectResponseStatus, HttpRoomResponseStatus,
         HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
         SourceSelectionKind, TransportHealthTransition, TransportIceState,
-        TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+        TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
         WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
@@ -29,7 +29,7 @@ pub(crate) struct DurationHistogramSnapshot {
 pub(crate) struct HttpInflightSnapshot {
     pub noop: i64,
     pub stats: i64,
-    pub channel: i64,
+    pub room: i64,
     pub disconnect: i64,
     pub metrics: i64,
 }
@@ -38,7 +38,7 @@ pub(crate) struct HttpInflightSnapshot {
 pub(crate) struct HttpRequestDurationSnapshot {
     pub noop: DurationHistogramSnapshot,
     pub stats: DurationHistogramSnapshot,
-    pub channel: DurationHistogramSnapshot,
+    pub room: DurationHistogramSnapshot,
     pub disconnect: DurationHistogramSnapshot,
     pub metrics: DurationHistogramSnapshot,
 }
@@ -52,11 +52,11 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub http_noop_requests: u64,
     pub http_stats_requests: u64,
     pub http_metrics_requests: u64,
-    pub http_channel_requests: u64,
-    pub http_channel_success: u64,
-    pub http_channel_unauthorized: u64,
-    pub http_channel_forbidden: u64,
-    pub http_channel_bad_request: u64,
+    pub http_room_requests: u64,
+    pub http_room_success: u64,
+    pub http_room_unauthorized: u64,
+    pub http_room_forbidden: u64,
+    pub http_room_bad_request: u64,
     pub http_disconnect_requests: u64,
     pub http_disconnect_success: u64,
     pub http_disconnect_bad_request: u64,
@@ -68,20 +68,20 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub ws_handshake_rejected_timeout: u64,
     pub ws_handshake_rejected_authentication_failed: u64,
     pub ws_handshake_rejected_protocol_error: u64,
-    pub ws_handshake_rejected_channel_full: u64,
+    pub ws_handshake_rejected_room_full: u64,
     pub ws_handshake_rejected_error: u64,
-    pub ws_sessions_joined: u64,
+    pub ws_users_joined: u64,
     pub ws_startup_send_failures: u64,
-    pub ws_session_initialize_failures: u64,
-    pub ws_session_loops_started: u64,
-    pub ws_session_loop_exits_peer_closed: u64,
-    pub ws_session_loop_exits_reader_error: u64,
-    pub ws_session_loop_exits_bus_break: u64,
-    pub ws_session_loop_exits_ping_timeout: u64,
-    pub ws_session_loop_exits_transport_disconnected: u64,
-    pub ws_session_loop_exits_outbound_channel_closed: u64,
-    pub ws_session_loop_exits_outbound_close_signal: u64,
-    pub ws_session_loop_exits_outbound_message_send_failure: u64,
+    pub ws_user_initialize_failures: u64,
+    pub ws_user_loops_started: u64,
+    pub ws_user_loop_exits_peer_closed: u64,
+    pub ws_user_loop_exits_reader_error: u64,
+    pub ws_user_loop_exits_bus_break: u64,
+    pub ws_user_loop_exits_ping_timeout: u64,
+    pub ws_user_loop_exits_transport_disconnected: u64,
+    pub ws_user_loop_exits_outbound_room_closed: u64,
+    pub ws_user_loop_exits_outbound_close_signal: u64,
+    pub ws_user_loop_exits_outbound_message_send_failure: u64,
     pub ws_bus_batches_received: u64,
     pub ws_bus_envelopes_received: u64,
     pub ws_bus_parse_failures: u64,
@@ -94,15 +94,15 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub ws_bus_send_failures: u64,
     pub ws_handshake_duration: DurationHistogramSnapshot,
     pub ws_auth_duration: DurationHistogramSnapshot,
-    pub ws_session_initialize_duration: DurationHistogramSnapshot,
-    pub active_channels: i64,
-    pub active_sessions: i64,
+    pub ws_user_initialize_duration: DurationHistogramSnapshot,
+    pub active_rooms: i64,
+    pub active_users: i64,
     pub active_publications: i64,
     pub active_subscriptions: i64,
-    pub active_recording_channels: i64,
-    pub active_transport_sessions: i64,
-    pub connected_transport_sessions: i64,
-    pub disconnected_transport_sessions: i64,
+    pub active_recording_rooms: i64,
+    pub active_transport_users: i64,
+    pub connected_transport_users: i64,
+    pub disconnected_transport_users: i64,
     pub recording_start_accepted: u64,
     pub recording_start_rejected: u64,
     pub recording_stop_accepted: u64,
@@ -135,20 +135,20 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub transport_ice_state_changes_completed: u64,
     pub transport_ice_state_changes_disconnected: u64,
     pub transport_dtls_connected: u64,
-    pub transport_session_lifetime_le_1_second: u64,
-    pub transport_session_lifetime_le_10_seconds: u64,
-    pub transport_session_lifetime_le_60_seconds: u64,
-    pub transport_session_lifetime_le_300_seconds: u64,
-    pub transport_session_lifetime_count: u64,
-    pub transport_session_lifetime_sum_micros: u64,
+    pub transport_user_lifetime_le_1_second: u64,
+    pub transport_user_lifetime_le_10_seconds: u64,
+    pub transport_user_lifetime_le_60_seconds: u64,
+    pub transport_user_lifetime_le_300_seconds: u64,
+    pub transport_user_lifetime_count: u64,
+    pub transport_user_lifetime_sum_micros: u64,
     pub rtc_datagram_routes_indexed: u64,
     pub rtc_datagram_routes_scan: u64,
     pub rtc_datagram_drops_recent_miss_cache: u64,
     pub rtc_datagram_drops_source_rate_limited: u64,
-    pub rtc_datagram_drops_no_session: u64,
+    pub rtc_datagram_drops_no_user: u64,
     pub rtc_datagram_drops_malformed: u64,
     pub rtc_datagram_fallback_scans: u64,
-    pub rtc_datagram_scan_sessions: u64,
+    pub rtc_datagram_scan_users: u64,
     pub rtc_route_control_absorbed: u64,
     pub rtc_route_control_forwarded: u64,
     pub rtc_route_control_route_gated_relay_drops: u64,
@@ -165,11 +165,11 @@ struct HttpSnapshot {
     noop_requests: u64,
     stats_requests: u64,
     metrics_requests: u64,
-    channel_requests: u64,
-    channel_success: u64,
-    channel_unauthorized: u64,
-    channel_forbidden: u64,
-    channel_bad_request: u64,
+    room_requests: u64,
+    room_success: u64,
+    room_unauthorized: u64,
+    room_forbidden: u64,
+    room_bad_request: u64,
     disconnect_requests: u64,
     disconnect_success: u64,
     disconnect_bad_request: u64,
@@ -182,20 +182,20 @@ struct WebSocketSnapshot {
     handshake_rejected_timeout: u64,
     handshake_rejected_authentication_failed: u64,
     handshake_rejected_protocol_error: u64,
-    handshake_rejected_channel_full: u64,
+    handshake_rejected_room_full: u64,
     handshake_rejected_error: u64,
-    sessions_joined: u64,
+    users_joined: u64,
     startup_send_failures: u64,
-    session_initialize_failures: u64,
-    session_loops_started: u64,
-    session_loop_exits_peer_closed: u64,
-    session_loop_exits_reader_error: u64,
-    session_loop_exits_bus_break: u64,
-    session_loop_exits_ping_timeout: u64,
-    session_loop_exits_transport_disconnected: u64,
-    session_loop_exits_outbound_channel_closed: u64,
-    session_loop_exits_outbound_close_signal: u64,
-    session_loop_exits_outbound_message_send_failure: u64,
+    user_initialize_failures: u64,
+    user_loops_started: u64,
+    user_loop_exits_peer_closed: u64,
+    user_loop_exits_reader_error: u64,
+    user_loop_exits_bus_break: u64,
+    user_loop_exits_ping_timeout: u64,
+    user_loop_exits_transport_disconnected: u64,
+    user_loop_exits_outbound_room_closed: u64,
+    user_loop_exits_outbound_close_signal: u64,
+    user_loop_exits_outbound_message_send_failure: u64,
     bus_batches_received: u64,
     bus_envelopes_received: u64,
     bus_parse_failures: u64,
@@ -209,14 +209,14 @@ struct WebSocketSnapshot {
 }
 
 struct LiveSnapshot {
-    channels: i64,
-    sessions: i64,
+    rooms: i64,
+    users: i64,
     publications: i64,
     subscriptions: i64,
-    recording_channels: i64,
-    transport_sessions: i64,
-    connected_transport_sessions: i64,
-    disconnected_transport_sessions: i64,
+    recording_rooms: i64,
+    transport_users: i64,
+    connected_transport_users: i64,
+    disconnected_transport_users: i64,
 }
 
 struct RecordingSnapshot {
@@ -258,12 +258,12 @@ struct TransportLifecycleSnapshot {
     ice_state_changes_completed: u64,
     ice_state_changes_disconnected: u64,
     dtls_connected: u64,
-    session_lifetime_le_1_second: u64,
-    session_lifetime_le_10_seconds: u64,
-    session_lifetime_le_60_seconds: u64,
-    session_lifetime_le_300_seconds: u64,
-    session_lifetime_count: u64,
-    session_lifetime_sum_micros: u64,
+    user_lifetime_le_1_second: u64,
+    user_lifetime_le_10_seconds: u64,
+    user_lifetime_le_60_seconds: u64,
+    user_lifetime_le_300_seconds: u64,
+    user_lifetime_count: u64,
+    user_lifetime_sum_micros: u64,
 }
 
 struct RtcDatagramSnapshot {
@@ -271,10 +271,10 @@ struct RtcDatagramSnapshot {
     routes_scan: u64,
     drops_recent_miss_cache: u64,
     drops_source_rate_limited: u64,
-    drops_no_session: u64,
+    drops_no_user: u64,
     drops_malformed: u64,
     fallback_scans: u64,
-    scan_sessions: u64,
+    scan_users: u64,
 }
 
 struct RtcRouteControlSnapshot {
@@ -309,8 +309,8 @@ impl RuntimeMetrics {
         let websocket = self.snapshot_websocket();
         let ws_handshake_duration = snapshot_duration_histogram(&self.ws_handshake_duration);
         let ws_auth_duration = snapshot_duration_histogram(&self.ws_auth_duration);
-        let ws_session_initialize_duration =
-            snapshot_duration_histogram(&self.ws_session_initialize_duration);
+        let ws_user_initialize_duration =
+            snapshot_duration_histogram(&self.ws_user_initialize_duration);
         let live = self.snapshot_live();
         let recording = self.snapshot_recording();
         let rtp = self.snapshot_rtp();
@@ -322,11 +322,11 @@ impl RuntimeMetrics {
             http_noop_requests: http.noop_requests,
             http_stats_requests: http.stats_requests,
             http_metrics_requests: http.metrics_requests,
-            http_channel_requests: http.channel_requests,
-            http_channel_success: http.channel_success,
-            http_channel_unauthorized: http.channel_unauthorized,
-            http_channel_forbidden: http.channel_forbidden,
-            http_channel_bad_request: http.channel_bad_request,
+            http_room_requests: http.room_requests,
+            http_room_success: http.room_success,
+            http_room_unauthorized: http.room_unauthorized,
+            http_room_forbidden: http.room_forbidden,
+            http_room_bad_request: http.room_bad_request,
             http_disconnect_requests: http.disconnect_requests,
             http_disconnect_success: http.disconnect_success,
             http_disconnect_bad_request: http.disconnect_bad_request,
@@ -339,24 +339,23 @@ impl RuntimeMetrics {
             ws_handshake_rejected_authentication_failed: websocket
                 .handshake_rejected_authentication_failed,
             ws_handshake_rejected_protocol_error: websocket.handshake_rejected_protocol_error,
-            ws_handshake_rejected_channel_full: websocket.handshake_rejected_channel_full,
+            ws_handshake_rejected_room_full: websocket.handshake_rejected_room_full,
             ws_handshake_rejected_error: websocket.handshake_rejected_error,
-            ws_sessions_joined: websocket.sessions_joined,
+            ws_users_joined: websocket.users_joined,
             ws_startup_send_failures: websocket.startup_send_failures,
-            ws_session_initialize_failures: websocket.session_initialize_failures,
-            ws_session_loops_started: websocket.session_loops_started,
-            ws_session_loop_exits_peer_closed: websocket.session_loop_exits_peer_closed,
-            ws_session_loop_exits_reader_error: websocket.session_loop_exits_reader_error,
-            ws_session_loop_exits_bus_break: websocket.session_loop_exits_bus_break,
-            ws_session_loop_exits_ping_timeout: websocket.session_loop_exits_ping_timeout,
-            ws_session_loop_exits_transport_disconnected: websocket
-                .session_loop_exits_transport_disconnected,
-            ws_session_loop_exits_outbound_channel_closed: websocket
-                .session_loop_exits_outbound_channel_closed,
-            ws_session_loop_exits_outbound_close_signal: websocket
-                .session_loop_exits_outbound_close_signal,
-            ws_session_loop_exits_outbound_message_send_failure: websocket
-                .session_loop_exits_outbound_message_send_failure,
+            ws_user_initialize_failures: websocket.user_initialize_failures,
+            ws_user_loops_started: websocket.user_loops_started,
+            ws_user_loop_exits_peer_closed: websocket.user_loop_exits_peer_closed,
+            ws_user_loop_exits_reader_error: websocket.user_loop_exits_reader_error,
+            ws_user_loop_exits_bus_break: websocket.user_loop_exits_bus_break,
+            ws_user_loop_exits_ping_timeout: websocket.user_loop_exits_ping_timeout,
+            ws_user_loop_exits_transport_disconnected: websocket
+                .user_loop_exits_transport_disconnected,
+            ws_user_loop_exits_outbound_room_closed: websocket.user_loop_exits_outbound_room_closed,
+            ws_user_loop_exits_outbound_close_signal: websocket
+                .user_loop_exits_outbound_close_signal,
+            ws_user_loop_exits_outbound_message_send_failure: websocket
+                .user_loop_exits_outbound_message_send_failure,
             ws_bus_batches_received: websocket.bus_batches_received,
             ws_bus_envelopes_received: websocket.bus_envelopes_received,
             ws_bus_parse_failures: websocket.bus_parse_failures,
@@ -369,15 +368,15 @@ impl RuntimeMetrics {
             ws_bus_send_failures: websocket.bus_send_failures,
             ws_handshake_duration,
             ws_auth_duration,
-            ws_session_initialize_duration,
-            active_channels: live.channels,
-            active_sessions: live.sessions,
+            ws_user_initialize_duration,
+            active_rooms: live.rooms,
+            active_users: live.users,
             active_publications: live.publications,
             active_subscriptions: live.subscriptions,
-            active_recording_channels: live.recording_channels,
-            active_transport_sessions: live.transport_sessions,
-            connected_transport_sessions: live.connected_transport_sessions,
-            disconnected_transport_sessions: live.disconnected_transport_sessions,
+            active_recording_rooms: live.recording_rooms,
+            active_transport_users: live.transport_users,
+            connected_transport_users: live.connected_transport_users,
+            disconnected_transport_users: live.disconnected_transport_users,
             recording_start_accepted: recording.start_accepted,
             recording_start_rejected: recording.start_rejected,
             recording_stop_accepted: recording.stop_accepted,
@@ -419,24 +418,21 @@ impl RuntimeMetrics {
             transport_ice_state_changes_disconnected: transport_lifecycle
                 .ice_state_changes_disconnected,
             transport_dtls_connected: transport_lifecycle.dtls_connected,
-            transport_session_lifetime_le_1_second: transport_lifecycle
-                .session_lifetime_le_1_second,
-            transport_session_lifetime_le_10_seconds: transport_lifecycle
-                .session_lifetime_le_10_seconds,
-            transport_session_lifetime_le_60_seconds: transport_lifecycle
-                .session_lifetime_le_60_seconds,
-            transport_session_lifetime_le_300_seconds: transport_lifecycle
-                .session_lifetime_le_300_seconds,
-            transport_session_lifetime_count: transport_lifecycle.session_lifetime_count,
-            transport_session_lifetime_sum_micros: transport_lifecycle.session_lifetime_sum_micros,
+            transport_user_lifetime_le_1_second: transport_lifecycle.user_lifetime_le_1_second,
+            transport_user_lifetime_le_10_seconds: transport_lifecycle.user_lifetime_le_10_seconds,
+            transport_user_lifetime_le_60_seconds: transport_lifecycle.user_lifetime_le_60_seconds,
+            transport_user_lifetime_le_300_seconds: transport_lifecycle
+                .user_lifetime_le_300_seconds,
+            transport_user_lifetime_count: transport_lifecycle.user_lifetime_count,
+            transport_user_lifetime_sum_micros: transport_lifecycle.user_lifetime_sum_micros,
             rtc_datagram_routes_indexed: rtc_datagram.routes_indexed,
             rtc_datagram_routes_scan: rtc_datagram.routes_scan,
             rtc_datagram_drops_recent_miss_cache: rtc_datagram.drops_recent_miss_cache,
             rtc_datagram_drops_source_rate_limited: rtc_datagram.drops_source_rate_limited,
-            rtc_datagram_drops_no_session: rtc_datagram.drops_no_session,
+            rtc_datagram_drops_no_user: rtc_datagram.drops_no_user,
             rtc_datagram_drops_malformed: rtc_datagram.drops_malformed,
             rtc_datagram_fallback_scans: rtc_datagram.fallback_scans,
-            rtc_datagram_scan_sessions: rtc_datagram.scan_sessions,
+            rtc_datagram_scan_users: rtc_datagram.scan_users,
             rtc_route_control_absorbed: rtc_route_control.absorbed,
             rtc_route_control_forwarded: rtc_route_control.forwarded,
             rtc_route_control_route_gated_relay_drops: rtc_route_control.route_gated_relay_drops,
@@ -455,19 +451,19 @@ impl RuntimeMetrics {
             noop_requests: self.http_requests.load(HttpRoute::Noop),
             stats_requests: self.http_requests.load(HttpRoute::Stats),
             metrics_requests: self.http_requests.load(HttpRoute::Metrics),
-            channel_requests: self.http_requests.load(HttpRoute::Channel),
-            channel_success: self
-                .http_channel_responses
-                .load(HttpChannelResponseStatus::Success),
-            channel_unauthorized: self
-                .http_channel_responses
-                .load(HttpChannelResponseStatus::Unauthorized),
-            channel_forbidden: self
-                .http_channel_responses
-                .load(HttpChannelResponseStatus::Forbidden),
-            channel_bad_request: self
-                .http_channel_responses
-                .load(HttpChannelResponseStatus::BadRequest),
+            room_requests: self.http_requests.load(HttpRoute::Room),
+            room_success: self
+                .http_room_responses
+                .load(HttpRoomResponseStatus::Success),
+            room_unauthorized: self
+                .http_room_responses
+                .load(HttpRoomResponseStatus::Unauthorized),
+            room_forbidden: self
+                .http_room_responses
+                .load(HttpRoomResponseStatus::Forbidden),
+            room_bad_request: self
+                .http_room_responses
+                .load(HttpRoomResponseStatus::BadRequest),
             disconnect_requests: self.http_requests.load(HttpRoute::Disconnect),
             disconnect_success: self
                 .http_disconnect_responses
@@ -485,7 +481,7 @@ impl RuntimeMetrics {
         HttpInflightSnapshot {
             noop: self.http_inflight_requests.load(HttpRoute::Noop),
             stats: self.http_inflight_requests.load(HttpRoute::Stats),
-            channel: self.http_inflight_requests.load(HttpRoute::Channel),
+            room: self.http_inflight_requests.load(HttpRoute::Room),
             disconnect: self.http_inflight_requests.load(HttpRoute::Disconnect),
             metrics: self.http_inflight_requests.load(HttpRoute::Metrics),
         }
@@ -501,9 +497,9 @@ impl RuntimeMetrics {
                 &self.http_request_duration,
                 HttpRoute::Stats,
             ),
-            channel: snapshot_duration_histogram_for_route(
+            room: snapshot_duration_histogram_for_route(
                 &self.http_request_duration,
-                HttpRoute::Channel,
+                HttpRoute::Room,
             ),
             disconnect: snapshot_duration_histogram_for_route(
                 &self.http_request_duration,
@@ -531,41 +527,41 @@ impl RuntimeMetrics {
             handshake_rejected_protocol_error: self
                 .ws_handshake_rejections
                 .load(WebSocketCloseCode::ProtocolError),
-            handshake_rejected_channel_full: self
+            handshake_rejected_room_full: self
                 .ws_handshake_rejections
-                .load(WebSocketCloseCode::ChannelFull),
+                .load(WebSocketCloseCode::RoomFull),
             handshake_rejected_error: self.ws_handshake_rejections_other.load(),
-            sessions_joined: self.ws_connections.load(WsConnectionStage::Joined),
+            users_joined: self.ws_connections.load(WsConnectionStage::Joined),
             startup_send_failures: self
                 .ws_startup_failures
                 .load(WsStartupFailureKind::StartupSend),
-            session_initialize_failures: self
+            user_initialize_failures: self
                 .ws_startup_failures
                 .load(WsStartupFailureKind::SessionInitialize),
-            session_loops_started: self.ws_session_loops_started.load(),
-            session_loop_exits_peer_closed: self
-                .ws_session_loop_exits
+            user_loops_started: self.ws_user_loops_started.load(),
+            user_loop_exits_peer_closed: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::PeerClosed),
-            session_loop_exits_reader_error: self
-                .ws_session_loop_exits
+            user_loop_exits_reader_error: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::ReaderError),
-            session_loop_exits_bus_break: self
-                .ws_session_loop_exits
+            user_loop_exits_bus_break: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::BusBreak),
-            session_loop_exits_ping_timeout: self
-                .ws_session_loop_exits
+            user_loop_exits_ping_timeout: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::PingTimeout),
-            session_loop_exits_transport_disconnected: self
-                .ws_session_loop_exits
+            user_loop_exits_transport_disconnected: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::TransportDisconnected),
-            session_loop_exits_outbound_channel_closed: self
-                .ws_session_loop_exits
+            user_loop_exits_outbound_room_closed: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::OutboundChannelClosed),
-            session_loop_exits_outbound_close_signal: self
-                .ws_session_loop_exits
+            user_loop_exits_outbound_close_signal: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::OutboundCloseSignal),
-            session_loop_exits_outbound_message_send_failure: self
-                .ws_session_loop_exits
+            user_loop_exits_outbound_message_send_failure: self
+                .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::OutboundMessageSendFailure),
             bus_batches_received: self.ws_bus_batches.load(WsBusDirection::Received),
             bus_envelopes_received: self.ws_bus_envelopes.load(WsBusDirection::Received),
@@ -588,14 +584,14 @@ impl RuntimeMetrics {
 
     fn snapshot_live(&self) -> LiveSnapshot {
         LiveSnapshot {
-            channels: self.active_channels.load(),
-            sessions: self.active_sessions.load(),
+            rooms: self.active_rooms.load(),
+            users: self.active_users.load(),
             publications: self.active_publications.load(),
             subscriptions: self.active_subscriptions.load(),
-            recording_channels: self.active_recording_channels.load(),
-            transport_sessions: self.active_transport_sessions.load(),
-            connected_transport_sessions: self.connected_transport_sessions.load(),
-            disconnected_transport_sessions: self.disconnected_transport_sessions.load(),
+            recording_rooms: self.active_recording_rooms.load(),
+            transport_users: self.active_transport_users.load(),
+            connected_transport_users: self.connected_transport_users.load(),
+            disconnected_transport_users: self.disconnected_transport_users.load(),
         }
     }
 
@@ -693,20 +689,20 @@ impl RuntimeMetrics {
                 .transport_ice_state_changes
                 .load(TransportIceState::Disconnected),
             dtls_connected: self.transport_dtls_connected.load(),
-            session_lifetime_le_1_second: self
-                .transport_session_lifetime_buckets
-                .load(TransportSessionLifetimeBucket::Le1Second),
-            session_lifetime_le_10_seconds: self
-                .transport_session_lifetime_buckets
-                .load(TransportSessionLifetimeBucket::Le10Seconds),
-            session_lifetime_le_60_seconds: self
-                .transport_session_lifetime_buckets
-                .load(TransportSessionLifetimeBucket::Le60Seconds),
-            session_lifetime_le_300_seconds: self
-                .transport_session_lifetime_buckets
-                .load(TransportSessionLifetimeBucket::Le300Seconds),
-            session_lifetime_count: self.transport_session_lifetime_count.load(),
-            session_lifetime_sum_micros: self.transport_session_lifetime_sum_micros.load(),
+            user_lifetime_le_1_second: self
+                .transport_user_lifetime_buckets
+                .load(TransportUserLifetimeBucket::Le1Second),
+            user_lifetime_le_10_seconds: self
+                .transport_user_lifetime_buckets
+                .load(TransportUserLifetimeBucket::Le10Seconds),
+            user_lifetime_le_60_seconds: self
+                .transport_user_lifetime_buckets
+                .load(TransportUserLifetimeBucket::Le60Seconds),
+            user_lifetime_le_300_seconds: self
+                .transport_user_lifetime_buckets
+                .load(TransportUserLifetimeBucket::Le300Seconds),
+            user_lifetime_count: self.transport_user_lifetime_count.load(),
+            user_lifetime_sum_micros: self.transport_user_lifetime_sum_micros.load(),
         }
     }
 
@@ -720,14 +716,12 @@ impl RuntimeMetrics {
             drops_source_rate_limited: self
                 .rtc_datagram_drops
                 .load(RtcDatagramDropReason::SourceRateLimited),
-            drops_no_session: self
-                .rtc_datagram_drops
-                .load(RtcDatagramDropReason::NoSession),
+            drops_no_user: self.rtc_datagram_drops.load(RtcDatagramDropReason::NoUser),
             drops_malformed: self
                 .rtc_datagram_drops
                 .load(RtcDatagramDropReason::Malformed),
             fallback_scans: self.rtc_datagram_fallback_scans.load(),
-            scan_sessions: self.rtc_datagram_scan_sessions.load(),
+            scan_users: self.rtc_datagram_scan_users.load(),
         }
     }
 

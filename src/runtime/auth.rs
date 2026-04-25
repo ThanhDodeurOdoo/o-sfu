@@ -5,7 +5,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE},
 };
 use hmac::{Hmac, KeyInit, Mac};
-use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+use o_sfu_protocol::shared::{UserId, UserPermissions};
 pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
 use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -44,7 +44,7 @@ pub enum AuthenticationError {
 const MAX_IAT_FUTURE_SKEW_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HttpChannelClaims {
+pub struct HttpRoomClaims {
     #[serde(flatten)]
     pub registered: RegisteredJwtClaims,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,22 +55,22 @@ pub struct HttpChannelClaims {
 pub struct HttpDisconnectClaims {
     #[serde(flatten)]
     pub registered: RegisteredJwtClaims,
-    #[serde(rename = "sessionIdsByChannel")]
-    pub session_ids_by_channel: BTreeMap<String, Vec<SessionId>>,
+    #[serde(rename = "userIdsByRoom", alias = "sessionIdsByChannel")]
+    pub user_ids_by_room: BTreeMap<String, Vec<UserId>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebSocketConnectClaims {
     #[serde(flatten)]
     pub registered: RegisteredJwtClaims,
-    #[serde(rename = "sfu_channel_uuid")]
-    pub sfu_channel_uuid: String,
-    #[serde(rename = "session_id")]
-    pub session_id: SessionId,
+    #[serde(rename = "room_id", alias = "sfu_channel_uuid")]
+    pub room_id: String,
+    #[serde(rename = "user_id", alias = "session_id")]
+    pub user_id: UserId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<SessionPermissions>,
+    pub permissions: Option<UserPermissions>,
 }
 
 /// # Errors
@@ -203,13 +203,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use base64::Engine as _;
-    use o_sfu_protocol::shared::{SessionId, SessionPermissions};
+    use o_sfu_protocol::shared::{UserId, UserPermissions};
     use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtAudience, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
     use serde::Serialize;
     use serde_json::json;
 
     use super::{
-        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
+        AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims,
         WebSocketConnectClaims, decode_base64, secs_since_epoch, sign, sign_hs256, verify,
     };
 
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn jwt_claims_round_trip() -> serde_json::Result<()> {
-        let channel_claims = HttpChannelClaims {
+        let room_claims = HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 iss: Some("https://odoo.example.com".to_owned()),
                 aud: Some(JwtAudience::Multiple(vec![
@@ -229,33 +229,27 @@ mod tests {
             },
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
         };
-        let expected_channel_claims = json!({
+        let expected_room_claims = json!({
             "iss": "https://odoo.example.com",
             "aud": ["urn:odoo:sfu", "urn:odoo:recording"],
             "exp": 1_744_000_000,
             "key": "Y2hhbm5lbC1rZXk="
         });
+        assert_eq!(serde_json::to_value(&room_claims)?, expected_room_claims);
         assert_eq!(
-            serde_json::to_value(&channel_claims)?,
-            expected_channel_claims
-        );
-        assert_eq!(
-            serde_json::from_value::<HttpChannelClaims>(expected_channel_claims)?,
-            channel_claims
+            serde_json::from_value::<HttpRoomClaims>(expected_room_claims)?,
+            room_claims
         );
 
         let disconnect_claims = HttpDisconnectClaims {
             registered: RegisteredJwtClaims::default(),
-            session_ids_by_channel: BTreeMap::from([(
+            user_ids_by_room: BTreeMap::from([(
                 "31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned(),
-                vec![
-                    SessionId::Integer(7),
-                    SessionId::String("guest-3".to_owned()),
-                ],
+                vec![UserId::Integer(7), UserId::String("guest-3".to_owned())],
             )]),
         };
         let expected_disconnect_claims = json!({
-            "sessionIdsByChannel": {
+            "userIdsByRoom": {
                 "31dcc5dc-4d26-453e-9bca-ab1f5d268303": [7, "guest-3"]
             }
         });
@@ -267,21 +261,29 @@ mod tests {
             serde_json::from_value::<HttpDisconnectClaims>(expected_disconnect_claims)?,
             disconnect_claims
         );
+        assert_eq!(
+            serde_json::from_value::<HttpDisconnectClaims>(json!({
+                "sessionIdsByChannel": {
+                    "31dcc5dc-4d26-453e-9bca-ab1f5d268303": [7, "guest-3"]
+                }
+            }))?,
+            disconnect_claims
+        );
 
         let websocket_claims = WebSocketConnectClaims {
             registered: RegisteredJwtClaims::default(),
-            sfu_channel_uuid: "31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned(),
-            session_id: SessionId::Integer(42),
+            room_id: "31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned(),
+            user_id: UserId::Integer(42),
             label: Some("Alice".to_owned()),
-            permissions: Some(SessionPermissions {
+            permissions: Some(UserPermissions {
                 transcription: Some(false),
                 audio_recording: Some(true),
                 video_recording: Some(false),
             }),
         };
         let expected_websocket_claims = json!({
-            "sfu_channel_uuid": "31dcc5dc-4d26-453e-9bca-ab1f5d268303",
-            "session_id": 42,
+            "room_id": "31dcc5dc-4d26-453e-9bca-ab1f5d268303",
+            "user_id": 42,
             "label": "Alice",
             "permissions": {
                 "transcription": false,
@@ -297,13 +299,26 @@ mod tests {
             serde_json::from_value::<WebSocketConnectClaims>(expected_websocket_claims)?,
             websocket_claims
         );
+        assert_eq!(
+            serde_json::from_value::<WebSocketConnectClaims>(json!({
+                "sfu_channel_uuid": "31dcc5dc-4d26-453e-9bca-ab1f5d268303",
+                "session_id": 42,
+                "label": "Alice",
+                "permissions": {
+                    "transcription": false,
+                    "audioRecording": true,
+                    "videoRecording": false
+                }
+            }))?,
+            websocket_claims
+        );
 
         Ok(())
     }
 
     #[test]
     fn sign_and_verify_round_trip() {
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 iss: Some("https://odoo.example.com".to_owned()),
                 ..RegisteredJwtClaims::default()
@@ -315,7 +330,7 @@ mod tests {
         let Some(token) = token.ok() else {
             return;
         };
-        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        let verified = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY);
         assert!(verified.is_ok());
         let Some(verified) = verified.ok() else {
             return;
@@ -325,7 +340,7 @@ mod tests {
 
     #[test]
     fn sign_and_verify_round_trip_with_uuid_like_channel_key() {
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 iss: Some("https://odoo.example.com".to_owned()),
                 ..RegisteredJwtClaims::default()
@@ -337,7 +352,7 @@ mod tests {
         let Some(token) = token.ok() else {
             return;
         };
-        let verified = verify::<HttpChannelClaims>(&token, "123e4567-e89b-12d3-a456-426614174000");
+        let verified = verify::<HttpRoomClaims>(&token, "123e4567-e89b-12d3-a456-426614174000");
         assert!(verified.is_ok());
         let Some(verified) = verified.ok() else {
             return;
@@ -360,7 +375,7 @@ mod tests {
     #[test]
     fn verify_rejects_expired_token() {
         let now = secs_since_epoch();
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 exp: Some(now.saturating_sub(1)),
                 ..RegisteredJwtClaims::default()
@@ -372,7 +387,7 @@ mod tests {
         let Some(token) = token.ok() else {
             return;
         };
-        let error = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY).err();
+        let error = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY).err();
         assert!(error.is_some());
         let Some(error) = error else {
             return;
@@ -383,7 +398,7 @@ mod tests {
     #[test]
     fn verify_rejects_token_when_exp_matches_current_second() {
         let now = secs_since_epoch();
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 exp: Some(now),
                 ..RegisteredJwtClaims::default()
@@ -395,13 +410,13 @@ mod tests {
         let Some(token) = token.ok() else {
             return;
         };
-        let error = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY).err();
+        let error = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY).err();
         assert_eq!(error, Some(AuthenticationError::TokenExpired));
     }
 
     #[test]
     fn sign_emits_jose_base64url_segments() {
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims::default(),
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
         };
@@ -422,7 +437,7 @@ mod tests {
 
     #[test]
     fn verify_accepts_jose_base64url_token_without_typ_header() {
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims::default(),
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
         };
@@ -433,13 +448,13 @@ mod tests {
             return;
         };
 
-        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        let verified = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY);
         assert_eq!(verified.ok(), Some(claims));
     }
 
     #[test]
     fn verify_accepts_jose_base64url_token_with_typ_header() {
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims::default(),
             key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
         };
@@ -450,7 +465,7 @@ mod tests {
             return;
         };
 
-        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        let verified = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY);
         assert_eq!(verified.ok(), Some(claims));
     }
 
@@ -465,7 +480,7 @@ mod tests {
             "header.claims.",
             "a.b.c.d",
         ] {
-            let error = verify::<HttpChannelClaims>(token, TEST_AUTH_KEY).err();
+            let error = verify::<HttpRoomClaims>(token, TEST_AUTH_KEY).err();
             assert_eq!(error, Some(AuthenticationError::InvalidJwtFormat));
         }
     }
@@ -504,7 +519,7 @@ mod tests {
 
     #[test]
     fn sign_uses_rfc_header_constants() {
-        let claims = HttpChannelClaims {
+        let claims = HttpRoomClaims {
             registered: RegisteredJwtClaims::default(),
             key: None,
         };
@@ -519,7 +534,7 @@ mod tests {
         let Some(token) = token else {
             return;
         };
-        let verified = verify::<HttpChannelClaims>(&token, TEST_AUTH_KEY);
+        let verified = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY);
         assert_eq!(verified.ok(), Some(claims));
     }
 }

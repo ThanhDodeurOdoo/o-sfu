@@ -41,7 +41,7 @@ use crate::{
     bundle_api::BundleConnectionState,
     shared::{
         AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
-        SessionId, SessionInfo, StreamType,
+        StreamType, UserId, UserInfo,
     },
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
@@ -146,14 +146,14 @@ pub enum ProtocolEvent {
         sources: Vec<SourceDescriptor>,
     },
     PeerInfo {
-        session_id: SessionId,
-        info: SessionInfo,
+        user_id: UserId,
+        info: UserInfo,
     },
     PeerLeft {
-        session_id: SessionId,
+        user_id: UserId,
     },
     Broadcast {
-        sender_id: SessionId,
+        sender_id: UserId,
         message: JsonPayload,
     },
     RecordingStateChanged {
@@ -177,7 +177,7 @@ pub enum PendingRequestKind {
 struct ConnectContext {
     url: String,
     jwt: String,
-    channel: Option<String>,
+    room: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,7 +208,7 @@ impl Default for ProtocolCore {
 }
 
 impl ProtocolCore {
-    /// Builds a fresh protocol state machine with no remembered session intent.
+    /// Builds a fresh protocol state machine with no remembered user intent.
     ///
     /// Reconnect replay is opt-in through the mutating APIs below, so a new
     /// core starts from a fully fresh state instead of assuming any previous room,
@@ -249,23 +249,23 @@ impl ProtocolCore {
         self.track_bindings.get(mid)
     }
 
-    /// Starts a fresh connection attempt and replaces any earlier session context.
+    /// Starts a fresh connection attempt and replaces any earlier user context.
     ///
     /// This is intentionally stricter than a reconnect path: it clears sticky
     /// replay and runtime state so a caller switching rooms or credentials cannot
-    /// accidentally leak the previous session intent into the new connection.
+    /// accidentally leak the previous user intent into the new connection.
     pub fn connect(
         &mut self,
         url: impl Into<String>,
         jwt: impl Into<String>,
-        channel: Option<String>,
+        room: Option<String>,
     ) -> Commands {
-        connection_lifecycle::connect(self, url.into(), jwt.into(), channel)
+        connection_lifecycle::connect(self, url.into(), jwt.into(), room)
     }
 
     /// Authenticates a newly opened socket with the stored connect context.
     ///
-    /// Recovery reuses the same JWT and optional channel that `connect` captured,
+    /// Recovery reuses the same JWT and optional room that `connect` captured,
     /// which keeps every socket attempt tied to one explicit admission context.
     pub fn on_ws_open(&mut self) -> Commands {
         if !matches!(
@@ -279,7 +279,7 @@ impl ProtocolCore {
         };
         let Some(envelope) = ClientEnvelope::Message(ClientMessage::Auth(AuthPayload {
             jwt: connect_context.jwt.clone(),
-            channel: connect_context.channel.clone(),
+            channel: connect_context.room.clone(),
         }))
         .into_envelope()
         .ok() else {
@@ -311,7 +311,7 @@ impl ProtocolCore {
     ///
     /// The welcome payload is the point where feature flags and recording state
     /// become authoritative again after a reconnect. Only after that snapshot is
-    /// accepted do we replay remembered uploads, downloads, and session info.
+    /// accepted do we replay remembered uploads, downloads, and user info.
     pub fn on_welcome(&mut self, payload: WelcomePayload) -> Commands {
         if !matches!(
             self.state,
@@ -343,7 +343,7 @@ impl ProtocolCore {
     ///
     /// The host should call this only once the peer connection is usable for
     /// media, because it is what upgrades the core from authenticated signaling
-    /// state to a fully connected session.
+    /// state to a fully connected user.
     pub fn on_transport_ready(&mut self) -> Commands {
         connection_lifecycle::on_transport_ready(self)
     }
@@ -374,14 +374,14 @@ impl ProtocolCore {
     /// Repeated updates merge at the sticky layer, so callers can send partial
     /// audio/camera/screen adjustments without rebuilding the full preference set
     /// on every change or after recovery.
-    pub fn subscribe(&mut self, session_id: SessionId, states: DownloadStates) -> Commands {
+    pub fn subscribe(&mut self, user_id: UserId, states: DownloadStates) -> Commands {
         self.sticky_replay
-            .remember_subscription_states(&session_id, &states);
+            .remember_subscription_states(&user_id, &states);
         if !self.can_send_client_messages() {
             return Vec::new();
         }
         let Some(envelope) = ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-            session_id,
+            user_id,
             states,
         }))
         .into_envelope()
@@ -391,12 +391,12 @@ impl ProtocolCore {
         self.enqueue_envelope(envelope, FlushMode::Batched)
     }
 
-    /// Persists the laetst local session metadata patch for the current room.
+    /// Persists the laetst local user metadata patch for the current room.
     ///
-    /// Session info is replayed after reconnect so transient transport failures do
+    /// User info is replayed after reconnect so transient transport failures do
     /// not silently reset presence indicators such as mute, hand raise, or camera
     /// state back to server defaults.
-    pub fn update_info(&mut self, info: SessionInfo) -> Commands {
+    pub fn update_info(&mut self, info: UserInfo) -> Commands {
         self.sticky_replay.remember_info(&info);
         if !self.can_send_client_messages() {
             return Vec::new();

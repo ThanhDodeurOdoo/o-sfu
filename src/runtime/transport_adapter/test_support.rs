@@ -22,7 +22,7 @@ use super::{
     runtime_adapter::RuntimeTransportAdapter,
 };
 #[cfg(any(test, feature = "testing-transport"))]
-use crate::runtime::ChannelInstanceId;
+use crate::runtime::RoomInstanceId;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 #[cfg(test)]
@@ -212,10 +212,10 @@ impl ObservabilityPort for FakeWebRtcAdapter {
         None
     }
 
-    async fn expired_active_speaker_channel_instance_ids(
+    async fn expired_active_speaker_room_instance_ids(
         &self,
         _now: Instant,
-    ) -> BTreeSet<ChannelInstanceId> {
+    ) -> BTreeSet<RoomInstanceId> {
         BTreeSet::new()
     }
 
@@ -271,7 +271,7 @@ impl RuntimeTransportAdapter {
     ) {
         if let Self::Rtc(adapter) = self {
             adapter
-                .shard_for_session(session_key)
+                .shard_for_user(session_key)
                 .debug_set_session_transport_health(session_key, health);
         }
     }
@@ -342,7 +342,7 @@ impl RtcTransportAdapterShardSet {
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.shard_for_session(source_session_key)
+        self.shard_for_user(source_session_key)
             .debug_route_entry(source_session_key, source_mid)
             .await
     }

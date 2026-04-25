@@ -1,35 +1,23 @@
 use std::sync::Arc;
 
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     metrics::RtpForwardDestinationKind,
-    packet_sink_registry::{ChannelPacketSinkRegistry, PacketSink as MediaPacketSink},
+    packet_sink_registry::{PacketSink as MediaPacketSink, RoomPacketSinkRegistry},
 };
 
 pub(crate) trait MediaSource: Send + Sync {
-    fn activate_channel(
-        &self,
-        channel_instance_id: ChannelInstanceId,
-        sink: Arc<dyn MediaPacketSink>,
-    );
-    fn deactivate_channel(&self, channel_instance_id: ChannelInstanceId);
+    fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>);
+    fn deactivate_room(&self, room_instance_id: RoomInstanceId);
 }
 
-impl MediaSource for ChannelPacketSinkRegistry {
-    fn activate_channel(
-        &self,
-        channel_instance_id: ChannelInstanceId,
-        sink: Arc<dyn MediaPacketSink>,
-    ) {
-        self.register_channel(
-            channel_instance_id,
-            sink,
-            RtpForwardDestinationKind::Recording,
-        );
+impl MediaSource for RoomPacketSinkRegistry {
+    fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>) {
+        self.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
     }
 
-    fn deactivate_channel(&self, channel_instance_id: ChannelInstanceId) {
-        self.unregister_channel(channel_instance_id);
+    fn deactivate_room(&self, room_instance_id: RoomInstanceId) {
+        self.unregister_room(room_instance_id);
     }
 }
 

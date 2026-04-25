@@ -1,24 +1,24 @@
-//! WebSocket Handshake and Session Establishment
+//! WebSocket Handshake and User Establishment
 //!
 //! This module handles the transition from a raw, newly-upgraded WebSocket
-//! into an authenticated and fully established RTC session.
+//! into an authenticated and fully established RTC user.
 //! (very similar flow that the odoo/sfu way)
 //!
 //! 1. **Receive Authentication**: Waits for the very first frame from the client, which
 //!    must be a valid `auth` message.
 //!
 //! 2. **Authentication**: Validates the JWT against either
-//!    the global key or a channel-specific key (like the old SFU),
-//!    to validate the  client's identity and permissions for the target channel.
-//!    (the JWT is signed by the Odoo server that owns the channel)
+//!    the global key or a room-specific key (like the old SFU),
+//!    to validate the  client's identity and permissions for the target room.
+//!    (the JWT is signed by the Odoo server that owns the room)
 //!
-//! 3. **Channel Admission**: Requests the `ChannelManager` to admit the client into
-//!    the `Channel`. This allocates a unique connection ID and sets up the
+//! 3. **Room Admission**: Requests the `RoomManager` to admit the client into
+//!    the `Room`. This allocates a unique connection ID and sets up the
 //!    outbound message routing queues.
 //!
-//! 4. **Session Initialization**: the server send a complete state snapshot
+//! 4. **User Initialization**: the server send a complete state snapshot
 //!    (the `Welcome` message) back to the client, including the current peers and
-//!    channel features. It also initializes the `SessionProtocol`, wich coordinates
+//!    room features. It also initializes the `SessionProtocol`, wich coordinates
 //!    with the `TransportAdapter` to prepare the backend WebRTC transport.
 
 use std::{sync::Arc, time::Duration};
@@ -26,7 +26,7 @@ use std::{sync::Arc, time::Duration};
 use axum::extract::ws::Message;
 use futures_util::{SinkExt, StreamExt};
 use o_sfu_protocol::{
-    shared::{SessionId, SessionPermissions},
+    shared::{UserId, UserPermissions},
     signaling::{
         AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
         WelcomePayload,
@@ -44,35 +44,35 @@ use super::{
 use crate::runtime::{
     ConnectionId, RuntimeState,
     auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
-    channel::{Channel, ChannelManagerJoinError, JoinSessionRequest, SessionOutbound},
+    room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
     telemetry,
     websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
 };
 
 #[derive(Deserialize)]
-struct LegacyChannelScopedConnectClaims {
+struct RoomScopedConnectClaims {
     #[serde(flatten)]
     registered: RegisteredJwtClaims,
-    #[serde(rename = "session_id")]
-    session_id: SessionId,
+    #[serde(rename = "user_id", alias = "session_id")]
+    user_id: UserId,
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
-    permissions: Option<SessionPermissions>,
+    permissions: Option<UserPermissions>,
 }
 
-enum HandshakeChannelResolution {
-    ExplicitChannel(Arc<Channel>),
+enum HandshakeRoomResolution {
+    ExplicitRoom(Arc<Room>),
     GlobalClaims {
-        channel: Arc<Channel>,
+        room: Arc<Room>,
         claims: Box<WebSocketConnectClaims>,
     },
 }
 
-/// Admit one upgraded socket into an authenticated channel session.
+/// Admit one upgraded socket into an authenticated room user.
 ///
 /// The first client frame must be exactly one `auth` envelope. On success this function
-/// authenticates the JWT, joins the target channel, sends the initial welcome snapshot,
+/// authenticates the JWT, joins the target room, sends the initial welcome snapshot,
 /// and initializes the post-auth protocol state that will drive the first offer/answer
 /// exchange
 ///
@@ -89,45 +89,40 @@ pub(super) async fn establish_session(
     reader: &mut WsReader,
     remote_address: Arc<str>,
 ) -> Option<ConnectedSession> {
-    let (channel, claims) =
+    let (room, claims) =
         authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
-    let (session_id, outbound_rx, channel, connection_id) =
-        join_session(state, writer, channel, claims, remote_address.as_ref()).await?;
-    state.metrics.record_ws_session_joined();
-    record_session_span(
-        &channel,
-        &session_id,
-        connection_id,
-        remote_address.as_ref(),
-    );
+    let (user_id, outbound_rx, room, connection_id) =
+        join_user(state, writer, room, claims, remote_address.as_ref()).await?;
+    state.metrics.record_ws_user_joined();
+    record_session_span(&room, &user_id, connection_id, remote_address.as_ref());
     let mut session_protocol = SessionProtocol::new(
-        session_id.clone(),
+        user_id.clone(),
         connection_id,
         Arc::clone(&remote_address),
-        Arc::clone(&channel),
+        Arc::clone(&room),
         state.transport_adapter.clone(),
         Arc::clone(&state.metrics),
     );
     initialize_session(
         state,
         writer,
-        &channel,
-        &session_id,
+        &room,
+        &user_id,
         connection_id,
         &mut session_protocol,
         remote_address.as_ref(),
     )
     .instrument(telemetry::activated_span(tracing::info_span!(
-        "session.initialize",
-        channel_uuid = %channel.uuid(),
-        session_id = ?session_id,
+        "user.initialize",
+        room_id = %room.uuid(),
+        user_id = ?user_id,
         connection_id = ?connection_id,
         remote_address = %remote_address
     )))
     .await?;
     Some(ConnectedSession {
-        channel,
-        session_id,
+        room,
+        user_id,
         connection_id,
         remote_address,
         outbound_rx,
@@ -189,7 +184,7 @@ async fn authenticate_handshake_session(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
-) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
+) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
     authenticate_session(state, writer, &auth_payload, remote_address).await
 }
@@ -249,28 +244,28 @@ async fn authenticate(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Result<(Arc<Channel>, WebSocketConnectClaims), WebSocketCloseCode> {
-    match resolve_handshake_channel(state, auth_payload, remote_address).await? {
-        HandshakeChannelResolution::ExplicitChannel(channel) => {
-            let channel_uuid = channel.uuid();
-            let claims = authenticate_channel_scoped_claims(
+) -> Result<(Arc<Room>, WebSocketConnectClaims), WebSocketCloseCode> {
+    match resolve_handshake_room(state, auth_payload, remote_address).await? {
+        HandshakeRoomResolution::ExplicitRoom(room) => {
+            let room_id = room.uuid();
+            let claims = authenticate_room_scoped_claims(
                 &auth_payload.jwt,
-                channel.key().unwrap_or(&state.config.auth_key),
-                channel_uuid,
+                room.key().unwrap_or(&state.config.auth_key),
+                room_id,
                 remote_address,
             )?;
-            Ok((channel, claims))
+            Ok((room, claims))
         }
-        HandshakeChannelResolution::GlobalClaims { channel, claims } => Ok((channel, *claims)),
+        HandshakeRoomResolution::GlobalClaims { room, claims } => Ok((room, *claims)),
     }
 }
 
-async fn resolve_handshake_channel(
+async fn resolve_handshake_room(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Result<HandshakeChannelResolution, WebSocketCloseCode> {
-    let Some(explicit_channel_uuid) = auth_payload.channel.as_deref() else {
+) -> Result<HandshakeRoomResolution, WebSocketCloseCode> {
+    let Some(explicit_room_id) = auth_payload.channel.as_deref() else {
         let claims =
             auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth_key)
                 .map_err(|_error| {
@@ -280,89 +275,84 @@ async fn resolve_handshake_channel(
                     );
                     WebSocketCloseCode::AuthFailed
                 })?;
-        let channel = resolve_global_claims_channel(state, &claims, remote_address).await?;
-        return Ok(HandshakeChannelResolution::GlobalClaims {
-            channel,
+        let room = resolve_global_claims_room(state, &claims, remote_address).await?;
+        return Ok(HandshakeRoomResolution::GlobalClaims {
+            room,
             claims: Box::new(claims),
         });
     };
-    let channel = resolve_explicit_channel(state, explicit_channel_uuid).await?;
-    Ok(HandshakeChannelResolution::ExplicitChannel(channel))
+    let room = resolve_explicit_room(state, explicit_room_id).await?;
+    Ok(HandshakeRoomResolution::ExplicitRoom(room))
 }
 
-async fn resolve_explicit_channel(
+async fn resolve_explicit_room(
     state: &RuntimeState,
-    channel_uuid: &str,
-) -> Result<Arc<Channel>, WebSocketCloseCode> {
+    room_id: &str,
+) -> Result<Arc<Room>, WebSocketCloseCode> {
     state
-        .channel_manager
-        .get_by_uuid(channel_uuid)
+        .room_manager
+        .get_by_uuid(room_id)
         .await
         .ok_or_else(|| {
             debug!(
-                channel_uuid,
-                "authentication referenced an unknown explicit channel"
+                room_id,
+                "authentication referenced an unknown explicit room"
             );
             WebSocketCloseCode::AuthFailed
         })
 }
 
-async fn resolve_global_claims_channel(
+async fn resolve_global_claims_room(
     state: &RuntimeState,
     claims: &WebSocketConnectClaims,
     _remote_address: &str,
-) -> Result<Arc<Channel>, WebSocketCloseCode> {
-    let Some(channel) = state
-        .channel_manager
-        .get_by_uuid(&claims.sfu_channel_uuid)
-        .await
-    else {
+) -> Result<Arc<Room>, WebSocketCloseCode> {
+    let Some(room) = state.room_manager.get_by_uuid(&claims.room_id).await else {
         debug!(
-            channel_uuid = claims.sfu_channel_uuid,
-            "verified websocket token referenced a missing channel"
+            room_id = claims.room_id,
+            "verified websocket token referenced a missing room"
         );
         return Err(WebSocketCloseCode::AuthFailed);
     };
-    if channel.key().is_some() {
+    if room.key().is_some() {
         debug!(
-            channel_uuid = claims.sfu_channel_uuid,
-            "global-key websocket token targeted a channel that requires a scoped key"
+            room_id = claims.room_id,
+            "global-key websocket token targeted a room that requires a scoped key"
         );
         return Err(WebSocketCloseCode::AuthFailed);
     }
-    Ok(channel)
+    Ok(room)
 }
 
-fn authenticate_channel_scoped_claims(
+fn authenticate_room_scoped_claims(
     token: &str,
     key: &str,
-    channel_uuid: &str,
+    room_id: &str,
     remote_address: &str,
 ) -> Result<WebSocketConnectClaims, WebSocketCloseCode> {
     if let Ok(claims) = auth::verify::<WebSocketConnectClaims>(token, key) {
-        if claims.sfu_channel_uuid != channel_uuid {
+        if claims.room_id != room_id {
             debug!(
-                expected_channel_uuid = channel_uuid,
-                claimed_channel_uuid = claims.sfu_channel_uuid,
-                "channel-scoped websocket token targeted the wrong channel"
+                expected_room_id = room_id,
+                claimed_room_id = claims.room_id,
+                "room-scoped websocket token targeted the wrong room"
             );
             return Err(WebSocketCloseCode::AuthFailed);
         }
         return Ok(claims);
     }
 
-    let claims =
-        auth::verify::<LegacyChannelScopedConnectClaims>(token, key).map_err(|_error| {
-            warn!(
-                remote_address,
-                "failed to verify websocket auth token against the channel-scoped key"
-            );
-            WebSocketCloseCode::AuthFailed
-        })?;
+    let claims = auth::verify::<RoomScopedConnectClaims>(token, key).map_err(|_error| {
+        warn!(
+            remote_address,
+            "failed to verify websocket auth token against the room-scoped key"
+        );
+        WebSocketCloseCode::AuthFailed
+    })?;
     Ok(WebSocketConnectClaims {
         registered: claims.registered,
-        sfu_channel_uuid: channel_uuid.to_owned(),
-        session_id: claims.session_id,
+        room_id: room_id.to_owned(),
+        user_id: claims.user_id,
         label: claims.label,
         permissions: claims.permissions,
     })
@@ -373,7 +363,7 @@ async fn authenticate_session(
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Option<(Arc<Channel>, WebSocketConnectClaims)> {
+) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
     match authenticate(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
@@ -396,30 +386,30 @@ async fn authenticate_session(
 }
 
 #[instrument(
-    name = "channel.join",
+    name = "room.join",
     skip_all,
-    fields(channel_uuid = %channel.uuid(), session_id = ?claims.session_id)
+    fields(room_id = %room.uuid(), user_id = ?claims.user_id)
 )]
-async fn join_session(
+async fn join_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    channel: Arc<Channel>,
+    room: Arc<Room>,
     claims: WebSocketConnectClaims,
     remote_address: &str,
 ) -> Option<(
-    SessionId,
-    mpsc::UnboundedReceiver<SessionOutbound>,
-    Arc<Channel>,
+    UserId,
+    mpsc::UnboundedReceiver<UserOutbound>,
+    Arc<Room>,
     ConnectionId,
 )> {
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-    let session_id = claims.session_id.clone();
+    let user_id = claims.user_id.clone();
     let join_result = state
-        .channel_manager
-        .join_session(
-            channel.uuid(),
-            JoinSessionRequest {
-                session_id: session_id.clone(),
+        .room_manager
+        .join_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id: user_id.clone(),
                 label: claims.label,
                 permissions: claims.permissions.unwrap_or_default(),
                 sender: outbound_tx,
@@ -428,35 +418,35 @@ async fn join_session(
         )
         .await;
     match join_result {
-        Ok((channel, connection_id)) => {
+        Ok((room, connection_id)) => {
             info!(
                 event = telemetry::schema::event::WS_JOIN_SUCCEEDED,
                 connection_id = ?connection_id,
-                "joined websocket session"
+                "joined websocket user"
             );
-            Some((session_id, outbound_rx, channel, connection_id))
+            Some((user_id, outbound_rx, room, connection_id))
         }
         Err(error) => {
             let close_code = match error {
-                ChannelManagerJoinError::ChannelFull => WebSocketCloseCode::ChannelFull,
-                ChannelManagerJoinError::MissingChannel | ChannelManagerJoinError::RouterState => {
+                RoomManagerJoinError::RoomFull => WebSocketCloseCode::RoomFull,
+                RoomManagerJoinError::MissingRoom | RoomManagerJoinError::RouterState => {
                     WebSocketCloseCode::AuthFailed
                 }
             };
             warn!(
                 event = telemetry::schema::event::WS_JOIN_FAILED,
-                ?session_id,
+                ?user_id,
                 remote_address,
                 ?error,
                 close_code = u16::from(close_code),
-                "rejecting websocket because the authenticated session could not join the channel"
+                "rejecting websocket because the authenticated user could not join the room"
             );
             reject_handshake(
                 state,
                 Some(writer),
                 Some(close_code),
                 remote_address,
-                "rejecting websocket during session join",
+                "rejecting websocket during user join",
             )
             .await
         }
@@ -464,69 +454,69 @@ async fn join_session(
 }
 
 fn record_session_span(
-    channel: &Channel,
-    session_id: &SessionId,
+    room: &Room,
+    user_id: &UserId,
     connection_id: ConnectionId,
     remote_address: &str,
 ) {
     let current_span = Span::current();
-    current_span.record("channel_uuid", field::display(channel.uuid()));
-    current_span.record("session_id", field::debug(session_id));
+    current_span.record("room_id", field::display(room.uuid()));
+    current_span.record("user_id", field::debug(user_id));
     current_span.record("connection_id", field::debug(connection_id));
     current_span.record(
         telemetry::schema::field::REMOTE_ADDRESS,
         field::display(remote_address),
     );
     info!(
-        event = telemetry::schema::event::WS_SESSION_ESTABLISHED,
+        event = telemetry::schema::event::WS_USER_ESTABLISHED,
         connection_id = ?connection_id,
         remote_address,
-        "websocket session established"
+        "websocket user established"
     );
 }
 
 #[o_sfu_telemetry::measure_duration(
     metrics = "state.metrics",
-    record = "record_ws_session_initialize_duration"
+    record = "record_ws_user_initialize_duration"
 )]
 async fn initialize_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    channel: &Arc<Channel>,
-    session_id: &SessionId,
+    room: &Arc<Room>,
+    user_id: &UserId,
     connection_id: ConnectionId,
     session_protocol: &mut SessionProtocol,
     remote_address: &str,
 ) -> Option<()> {
-    if send_welcome(channel, session_id, writer).await.is_err() {
+    if send_welcome(room, user_id, writer).await.is_err() {
         debug!(
-            ?session_id,
+            ?user_id,
             connection_id = ?connection_id,
             "failed to send welcome payload"
         );
         state.metrics.record_ws_startup_send_failure();
         warn!(
             event = telemetry::schema::event::WS_JOIN_FAILED,
-            session_id = ?session_id,
+            user_id = ?user_id,
             connection_id = ?connection_id,
             remote_address,
             outcome = "welcome_send_failed",
             "failed to send websocket welcome payload"
         );
-        cleanup_failed_session(state, channel, session_id, connection_id).await;
+        cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }
     if session_protocol.initialize(writer).await.is_err() {
         warn!(
             event = telemetry::schema::event::WS_JOIN_FAILED,
-            ?session_id,
+            ?user_id,
             connection_id = ?connection_id,
             remote_address,
-            outcome = "session_initialize_failed",
-            "failed to initialize websocket session protocol"
+            outcome = "user_initialize_failed",
+            "failed to initialize websocket user protocol"
         );
-        state.metrics.record_ws_session_initialize_failure();
-        cleanup_failed_session(state, channel, session_id, connection_id).await;
+        state.metrics.record_ws_user_initialize_failure();
+        cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }
     Some(())
@@ -534,15 +524,15 @@ async fn initialize_session(
 
 async fn cleanup_failed_session(
     state: &RuntimeState,
-    channel: &Channel,
-    session_id: &SessionId,
+    room: &Room,
+    user_id: &UserId,
     connection_id: ConnectionId,
 ) {
     let _ = state
-        .channel_manager
+        .room_manager
         .close_session(
-            channel.uuid(),
-            session_id,
+            room.uuid(),
+            user_id,
             connection_id,
             &state.transport_adapter,
         )
@@ -571,15 +561,11 @@ async fn reject_handshake<T>(
     None
 }
 
-async fn send_welcome(
-    channel: &Channel,
-    session_id: &SessionId,
-    writer: &mut WsWriter,
-) -> Result<(), ()> {
+async fn send_welcome(room: &Room, user_id: &UserId, writer: &mut WsWriter) -> Result<(), ()> {
     let welcome_payload = ServerMessage::Welcome(WelcomePayload {
-        features: channel.available_features(),
-        recording: channel.recording_state().await,
-        peers: channel.peer_snapshots_except(session_id).await,
+        features: room.available_features(),
+        recording: room.recording_state().await,
+        peers: room.peer_snapshots_except(user_id).await,
     });
     let welcome_envelope = welcome_payload.into_envelope().map_err(|_error| ())?;
     let welcome_json = serde_json::to_string(&vec![welcome_envelope]).map_err(|_error| ())?;
@@ -604,7 +590,7 @@ mod tests {
                 "t": "auth",
                 "p": {
                     "jwt": "token",
-                    "channel": "channel-1",
+                    "channel": "room-1",
                 },
             })])
             .unwrap_or_default()
@@ -617,7 +603,7 @@ mod tests {
             return;
         };
         assert_eq!(payload.jwt, "token");
-        assert_eq!(payload.channel.as_deref(), Some("channel-1"));
+        assert_eq!(payload.channel.as_deref(), Some("room-1"));
     }
 
     #[test]

@@ -28,13 +28,13 @@ pub(super) fn drain_ready_sessions(
     now: Instant,
 ) {
     let ready_sessions = state.take_ready_sessions(now);
-    for session_id in ready_sessions {
+    for user_id in ready_sessions {
         let session_timeout = {
-            let Some(session_state) = state.sessions.get_mut(&session_id) else {
+            let Some(session_state) = state.users.get_mut(&user_id) else {
                 continue;
             };
             drain_single_session(
-                &session_id,
+                &user_id,
                 session_state,
                 snapshot_state,
                 diagnostics,
@@ -43,13 +43,13 @@ pub(super) fn drain_ready_sessions(
                 buffers,
             )
         };
-        state.update_session_timeout(&session_id, session_timeout);
+        state.update_session_timeout(&user_id, session_timeout);
     }
 }
 
-/// Drain all ready outputs from a single session's `Rtc` instance.
+/// Drain all ready outputs from a single user's `Rtc` instance.
 ///
-/// Returns the next timeout requested by the session, if any.
+/// Returns the next timeout requested by the user, if any.
 fn drain_single_session(
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
@@ -78,7 +78,7 @@ fn drain_single_session(
                     .pending_keyframe_requests
                     .push((session_key.clone(), PendingKeyframeRequest::new(request)));
                 trace!(
-                    session_id = ?session_key.session_id(),
+                    user_id = ?session_key.user_id(),
                     media_worker_id = session_key.media_worker_id(),
                     mid = %request.mid,
                     rid = ?request.rid,
@@ -101,7 +101,7 @@ fn drain_single_session(
                 if timeout_at <= now {
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(
-                            session_id = ?session_key.session_id(),
+                            user_id = ?session_key.user_id(),
                             media_worker_id = session_key.media_worker_id(),
                             "failed to apply immediate rtc packet-loop timeout input"
                         );
@@ -113,7 +113,7 @@ fn drain_single_session(
             }
             Err(error) => {
                 warn!(
-                    session_id = ?session_key.session_id(),
+                    user_id = ?session_key.user_id(),
                     media_worker_id = session_key.media_worker_id(),
                     ?error,
                     "rtc packet loop failed while polling output"

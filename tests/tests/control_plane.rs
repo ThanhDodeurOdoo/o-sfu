@@ -13,11 +13,11 @@ use o_sfu::{
     },
 };
 use o_sfu_protocol::{
-    shared::{SessionId, SessionInfo, StreamType},
+    shared::{StreamType, UserId, UserInfo},
     signaling::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
 };
 use o_sfu_tests::support::{
-    TEST_AUTH_KEY, TEST_CHANNEL_KEY, create_channel, disconnect_sessions_via_http, metrics_text,
+    TEST_AUTH_KEY, TEST_ROOM_KEY, create_room, disconnect_sessions_via_http, metrics_text,
     protocol_harness::{
         ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config,
         read_until_server_message,
@@ -35,19 +35,18 @@ async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", Some(TEST_CHANNEL_KEY)).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-a", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel, SessionId::Integer(7));
+    let token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(7));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
 
-    let client =
-        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    let client = ProtocolWebSocketClient::authenticate_with_room(&server, &token, &room).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -76,19 +75,18 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", Some(TEST_CHANNEL_KEY)).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-a", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel, SessionId::Integer(701));
+    let token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(701));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
 
-    let client =
-        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    let client = ProtocolWebSocketClient::authenticate_with_room(&server, &token, &room).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -144,19 +142,18 @@ async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-public-ip", Some(TEST_CHANNEL_KEY)).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-public-ip", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let token = signed_connect_claims(TEST_CHANNEL_KEY, &channel, SessionId::Integer(702));
+    let token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(702));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
 
-    let client =
-        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &channel).await;
+    let client = ProtocolWebSocketClient::authenticate_with_room(&server, &token, &room).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;
@@ -225,16 +222,16 @@ async fn invalid_jwt_is_rejected_from_integration_test() {
 }
 
 #[tokio::test]
-async fn channel_creation_is_idempotent_by_issuer_from_integration_test() {
+async fn room_creation_is_idempotent_by_issuer_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
 
-    let first = create_channel(&server, "issuer-a", None).await;
-    let second = create_channel(&server, "issuer-a", Some(TEST_CHANNEL_KEY)).await;
-    let third = create_channel(&server, "issuer-b", None).await;
+    let first = create_room(&server, "issuer-a", None).await;
+    let second = create_room(&server, "issuer-a", Some(TEST_ROOM_KEY)).await;
+    let third = create_room(&server, "issuer-b", None).await;
     assert!(first.is_some());
     assert!(second.is_some());
     assert!(third.is_some());
@@ -282,27 +279,26 @@ async fn oversized_disconnect_body_is_rejected_before_handler_metrics_from_integ
 }
 
 #[tokio::test]
-async fn broadcast_reaches_other_session_from_integration_test() {
+async fn broadcast_reaches_other_user_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-a", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -321,7 +317,7 @@ async fn broadcast_reaches_other_session_from_integration_test() {
         .await;
     assert!(message.is_some());
     if let Some(ServerMessage::Broadcast(payload)) = message {
-        assert_eq!(payload.sender_id, SessionId::Integer(1));
+        assert_eq!(payload.sender_id, UserId::Integer(1));
         assert_eq!(
             payload.message,
             serde_json::json!({
@@ -335,89 +331,87 @@ async fn broadcast_reaches_other_session_from_integration_test() {
 }
 
 #[tokio::test]
-async fn session_info_change_reaches_other_session_from_integration_test() {
+async fn user_info_change_reaches_other_user_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-a", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
     };
 
     let sent = alice
-        .send_info(SessionInfo {
+        .send_info(UserInfo {
             is_talking: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         })
         .await;
     assert!(sent.is_some());
 
     let message = read_until_server_message(&mut bob, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerInfo(payload) if payload.session_id == SessionId::Integer(1))
+        matches!(message, ServerMessage::PeerInfo(payload) if payload.user_id == UserId::Integer(1))
     })
     .await;
     assert!(message.is_some());
     if let Some(ServerMessage::PeerInfo(payload)) = message {
         assert_eq!(payload.info.is_talking, Some(true));
     } else {
-        panic!("expected session info update");
+        panic!("expected user info update");
     }
 }
 
 #[tokio::test]
-async fn stats_reports_live_session_aggregates_from_integration_test() {
+async fn stats_reports_live_user_aggregates_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-a", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
     };
 
     let bob_sent = bob
-        .send_info(SessionInfo {
+        .send_info(UserInfo {
             is_talking: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         })
         .await;
     assert!(bob_sent.is_some());
 
     let peer_info = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerInfo(payload) if payload.session_id == SessionId::Integer(2))
+        matches!(message, ServerMessage::PeerInfo(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
     assert!(peer_info.is_some());
@@ -441,29 +435,29 @@ async fn stats_reports_live_session_aggregates_from_integration_test() {
     let Some(first) = first else {
         return;
     };
-    assert_eq!(first.uuid, channel);
-    assert_eq!(first.sessions_stats.count, 2);
-    assert_eq!(first.sessions_stats.camera_count, 0);
-    assert_eq!(first.sessions_stats.screen_count, 0);
-    assert_eq!(first.sessions_stats.incoming_bit_rate.total, 0);
+    assert_eq!(first.uuid, room);
+    assert_eq!(first.users_stats.count, 2);
+    assert_eq!(first.users_stats.camera_count, 0);
+    assert_eq!(first.users_stats.screen_count, 0);
+    assert_eq!(first.users_stats.incoming_bit_rate.total, 0);
     assert!(first.web_rtc_enabled);
     assert_eq!(first.remote_address, "127.0.0.1");
 }
 
 #[tokio::test]
-async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integration_test() {
+async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 1)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
-    let first_channel = create_channel(&server, "issuer-a", None).await;
-    assert!(first_channel.is_some());
-    let Some(first_channel) = first_channel else {
+    let first_room = create_room(&server, "issuer-a", None).await;
+    assert!(first_room.is_some());
+    let Some(first_room) = first_room else {
         return;
     };
-    let first_token = signed_connect_claims(TEST_AUTH_KEY, &first_channel, SessionId::Integer(1));
-    let second_token = signed_connect_claims(TEST_AUTH_KEY, &first_channel, SessionId::Integer(2));
+    let first_token = signed_connect_claims(TEST_AUTH_KEY, &first_room, UserId::Integer(1));
+    let second_token = signed_connect_claims(TEST_AUTH_KEY, &first_room, UserId::Integer(2));
     assert!(first_token.is_some());
     assert!(second_token.is_some());
     let (Some(first_token), Some(second_token)) = (first_token, second_token) else {
@@ -489,16 +483,16 @@ async fn channel_full_and_last_disconnect_cleanup_are_observable_from_integratio
     );
 
     assert!(first_client.close().await.is_some());
-    assert!(server.wait_for_channel_absence(&first_channel).await);
+    assert!(server.wait_for_room_absence(&first_room).await);
 
-    let second_channel = create_channel(&server, "issuer-a", None).await;
-    assert!(second_channel.is_some());
-    let Some(second_channel) = second_channel else {
+    let second_room = create_room(&server, "issuer-a", None).await;
+    assert!(second_room.is_some());
+    let Some(second_room) = second_room else {
         return;
     };
-    assert_ne!(first_channel, second_channel);
+    assert_ne!(first_room, second_room);
 
-    let third_token = signed_connect_claims(TEST_AUTH_KEY, &second_channel, SessionId::Integer(3));
+    let third_token = signed_connect_claims(TEST_AUTH_KEY, &second_room, UserId::Integer(3));
     assert!(third_token.is_some());
     let Some(third_token) = third_token else {
         return;
@@ -515,21 +509,20 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-a", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -537,7 +530,7 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
 
     let status = disconnect_sessions_via_http(
         &server,
-        BTreeMap::from([(channel.clone(), vec![SessionId::Integer(2)])]),
+        BTreeMap::from([(room.clone(), vec![UserId::Integer(2)])]),
     )
     .await;
     assert_eq!(status, Some(StatusCode::OK));
@@ -545,14 +538,14 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
 
     let message = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(2))
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
     assert!(message.is_some());
     if let Some(ServerMessage::PeerLeft(payload)) = message {
-        assert_eq!(payload.session_id, SessionId::Integer(2));
+        assert_eq!(payload.user_id, UserId::Integer(2));
     } else {
-        panic!("expected session departure notification");
+        panic!("expected user departure notification");
     }
 }
 
@@ -563,21 +556,20 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-replacement-guard", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-replacement-guard", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(2)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -590,12 +582,12 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
     };
 
     let departed = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(2))
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
     assert!(departed.is_some());
     let rejoined = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == SessionId::Integer(2))
+        matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
     assert!(rejoined.is_some());
@@ -612,9 +604,9 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
     );
 
     let _ = bob
-        .send_info(SessionInfo {
+        .send_info(UserInfo {
             is_talking: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         })
         .await;
     assert_eq!(
@@ -635,21 +627,20 @@ async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integra
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-replacement-queued-publish", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-replacement-queued-publish", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(11));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(12));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(11));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(12));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(12)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(12)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -680,12 +671,12 @@ async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integra
     };
 
     let departed = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(12))
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(12))
     })
     .await;
     assert!(departed.is_some());
     let rejoined = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerJoined(payload) if payload.session_id == SessionId::Integer(12))
+        matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == UserId::Integer(12))
     })
     .await;
     assert!(rejoined.is_some());
@@ -713,21 +704,20 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
     let Some(server) = server.ok() else {
         return;
     };
-    let channel = create_channel(&server, "issuer-disconnect-guard", None).await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = create_room(&server, "issuer-disconnect-guard", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(21));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &channel, SessionId::Integer(22));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(21));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(22));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
         return;
     };
 
-    let peers =
-        connect_protocol_pair(&server, &alice_token, &bob_token, SessionId::Integer(22)).await;
+    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(22)).await;
     assert!(peers.is_some());
     let Some((mut alice, mut bob)) = peers else {
         return;
@@ -735,7 +725,7 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
 
     let status = disconnect_sessions_via_http(
         &server,
-        BTreeMap::from([(channel.clone(), vec![SessionId::Integer(22)])]),
+        BTreeMap::from([(room.clone(), vec![UserId::Integer(22)])]),
     )
     .await;
     assert_eq!(status, Some(StatusCode::OK));
@@ -748,7 +738,7 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
         .await;
     assert!(message.is_some());
     if let Some(ServerMessage::PeerLeft(payload)) = message {
-        assert_eq!(payload.session_id, SessionId::Integer(22));
+        assert_eq!(payload.user_id, UserId::Integer(22));
     } else {
         panic!("expected bulk disconnect to surface peerleft before any stale broadcast");
     }
@@ -763,24 +753,24 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
 }
 
 #[tokio::test]
-async fn bulk_disconnect_scopes_each_channel_independently_from_integration_test() {
+async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
-    let channel_a = create_channel(&server, "issuer-a", None).await;
-    let channel_b = create_channel(&server, "issuer-b", None).await;
-    assert!(channel_a.is_some());
-    assert!(channel_b.is_some());
-    let (Some(channel_a), Some(channel_b)) = (channel_a, channel_b) else {
+    let room_a = create_room(&server, "issuer-a", None).await;
+    let room_b = create_room(&server, "issuer-b", None).await;
+    assert!(room_a.is_some());
+    assert!(room_b.is_some());
+    let (Some(room_a), Some(room_b)) = (room_a, room_b) else {
         return;
     };
 
-    let a_keep_token = signed_connect_claims(TEST_AUTH_KEY, &channel_a, SessionId::Integer(1));
-    let a_drop_token = signed_connect_claims(TEST_AUTH_KEY, &channel_a, SessionId::Integer(2));
-    let b_drop_token = signed_connect_claims(TEST_AUTH_KEY, &channel_b, SessionId::Integer(1));
-    let b_keep_token = signed_connect_claims(TEST_AUTH_KEY, &channel_b, SessionId::Integer(2));
+    let a_keep_token = signed_connect_claims(TEST_AUTH_KEY, &room_a, UserId::Integer(1));
+    let a_drop_token = signed_connect_claims(TEST_AUTH_KEY, &room_a, UserId::Integer(2));
+    let b_drop_token = signed_connect_claims(TEST_AUTH_KEY, &room_b, UserId::Integer(1));
+    let b_keep_token = signed_connect_claims(TEST_AUTH_KEY, &room_b, UserId::Integer(2));
     assert!(a_keep_token.is_some());
     assert!(a_drop_token.is_some());
     assert!(b_drop_token.is_some());
@@ -791,25 +781,25 @@ async fn bulk_disconnect_scopes_each_channel_independently_from_integration_test
         return;
     };
 
-    let peers_in_channel_a =
-        connect_protocol_pair(&server, &a_keep_token, &a_drop_token, SessionId::Integer(2)).await;
-    assert!(peers_in_channel_a.is_some());
-    let Some((mut a_keep, mut a_drop)) = peers_in_channel_a else {
+    let peers_in_room_a =
+        connect_protocol_pair(&server, &a_keep_token, &a_drop_token, UserId::Integer(2)).await;
+    assert!(peers_in_room_a.is_some());
+    let Some((mut a_keep, mut a_drop)) = peers_in_room_a else {
         return;
     };
 
-    let peers_in_channel_b =
-        connect_protocol_pair(&server, &b_drop_token, &b_keep_token, SessionId::Integer(2)).await;
-    assert!(peers_in_channel_b.is_some());
-    let Some((mut b_drop, mut b_keep)) = peers_in_channel_b else {
+    let peers_in_room_b =
+        connect_protocol_pair(&server, &b_drop_token, &b_keep_token, UserId::Integer(2)).await;
+    assert!(peers_in_room_b.is_some());
+    let Some((mut b_drop, mut b_keep)) = peers_in_room_b else {
         return;
     };
 
     let status = disconnect_sessions_via_http(
         &server,
         BTreeMap::from([
-            (channel_a.clone(), vec![SessionId::Integer(2)]),
-            (channel_b.clone(), vec![SessionId::Integer(1)]),
+            (room_a.clone(), vec![UserId::Integer(2)]),
+            (room_b.clone(), vec![UserId::Integer(1)]),
         ]),
     )
     .await;
@@ -825,25 +815,25 @@ async fn bulk_disconnect_scopes_each_channel_independently_from_integration_test
     );
 
     let a_departure = read_until_server_message(&mut a_keep, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(2))
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
     assert!(a_departure.is_some());
     if let Some(ServerMessage::PeerLeft(payload)) = a_departure {
-        assert_eq!(payload.session_id, SessionId::Integer(2));
+        assert_eq!(payload.user_id, UserId::Integer(2));
     } else {
-        panic!("expected channel A to receive the disconnected peerleft notification");
+        panic!("expected room A to receive the disconnected peerleft notification");
     }
 
     let b_departure = read_until_server_message(&mut b_keep, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.session_id == SessionId::Integer(1))
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(1))
     })
     .await;
     assert!(b_departure.is_some());
     if let Some(ServerMessage::PeerLeft(payload)) = b_departure {
-        assert_eq!(payload.session_id, SessionId::Integer(1));
+        assert_eq!(payload.user_id, UserId::Integer(1));
     } else {
-        panic!("expected channel B to receive the disconnected peerleft notification");
+        panic!("expected room B to receive the disconnected peerleft notification");
     }
 
     assert_eq!(
@@ -851,39 +841,39 @@ async fn bulk_disconnect_scopes_each_channel_independently_from_integration_test
             .read_server_message_with_timeout(Duration::from_millis(150))
             .await,
         None,
-        "channel A survivor must not receive cross-room traffic after the bulk disconnect"
+        "room A survivor must not receive cross-room traffic after the bulk disconnect"
     );
     assert_eq!(
         b_keep
             .read_server_message_with_timeout(Duration::from_millis(150))
             .await,
         None,
-        "channel B survivor must not receive cross-room traffic after the bulk disconnect"
+        "room B survivor must not receive cross-room traffic after the bulk disconnect"
     );
 }
 
 #[tokio::test]
-async fn mismatched_explicit_channel_uuid_is_rejected_from_integration_test() {
+async fn mismatched_explicit_room_id_is_rejected_from_integration_test() {
     let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
     assert!(server.is_ok());
     let Some(server) = server.ok() else {
         return;
     };
-    let first_channel = create_channel(&server, "issuer-a", None).await;
-    let second_channel = create_channel(&server, "issuer-b", None).await;
-    assert!(first_channel.is_some());
-    assert!(second_channel.is_some());
-    let (Some(first_channel), Some(second_channel)) = (first_channel, second_channel) else {
+    let first_room = create_room(&server, "issuer-a", None).await;
+    let second_room = create_room(&server, "issuer-b", None).await;
+    assert!(first_room.is_some());
+    assert!(second_room.is_some());
+    let (Some(first_room), Some(second_room)) = (first_room, second_room) else {
         return;
     };
-    let token = signed_connect_claims(TEST_AUTH_KEY, &first_channel, SessionId::Integer(3));
+    let token = signed_connect_claims(TEST_AUTH_KEY, &first_room, UserId::Integer(3));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
 
     let client =
-        ProtocolWebSocketClient::authenticate_with_channel(&server, &token, &second_channel).await;
+        ProtocolWebSocketClient::authenticate_with_room(&server, &token, &second_room).await;
     assert!(client.is_some());
     let Some(mut client) = client else {
         return;

@@ -17,8 +17,8 @@ async fn websocket_sends_ping_frames_and_accepts_pongs() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-ping", None, CreateChannelQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(410));
+    let room = create_room(&server, "issuer-ping", None, CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(410));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -51,7 +51,7 @@ async fn websocket_sends_ping_frames_and_accepts_pongs() {
     let no_close = timeout(Duration::from_millis(80), read_close_code(&mut websocket)).await;
     assert!(
         no_close.is_err(),
-        "session should remain open after answering ping"
+        "user should remain open after answering ping"
     );
 }
 
@@ -69,15 +69,15 @@ async fn websocket_closes_when_pong_times_out() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-ping-timeout",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let session_id = SessionId::Integer(411);
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+    let user_id = UserId::Integer(411);
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -108,12 +108,12 @@ async fn websocket_closes_when_pong_times_out() {
 
     sleep(Duration::from_millis(20)).await;
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_session_loop_exits_ping_timeout, 1);
+    assert_eq!(metrics.ws_user_loop_exits_ping_timeout, 1);
     assert!(
         !server
-            .channel_manager
+            .room_manager
             .test_api()
-            .has_session(channel.uuid(), &session_id)
+            .has_session(room.uuid(), &user_id)
             .await
     );
 }
@@ -127,15 +127,15 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-rtc-disconnect",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let session_id = SessionId::Integer(412);
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+    let user_id = UserId::Integer(412);
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -147,7 +147,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     };
     assert!(read_welcome(&mut websocket).await.is_some());
     let Some(offer_batch) = read_protocol_server_batch(&mut websocket).await else {
-        panic!("protocol session should receive an initial offer");
+        panic!("protocol user should receive an initial offer");
     };
     let Some((request_id, request)) = first_protocol_server_request(&offer_batch) else {
         panic!("initial protocol frame should be an offer request");
@@ -163,11 +163,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         .is_some()
     );
 
-    let connection_id = channel
-        .test_api()
-        .inspect()
-        .session_connection_id(&session_id)
-        .await;
+    let connection_id = room.test_api().inspect().user_connection_id(&user_id).await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;
@@ -176,7 +172,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         .state
         .transport_adapter
         .debug_set_session_transport_health(
-            &channel.transport_session_key(&session_id, connection_id),
+            &room.transport_user_key(&user_id, connection_id),
             TransportSessionHealth::Disconnected,
         );
 
@@ -197,15 +193,15 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-rtc-disconnect-negotiating",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let session_id = SessionId::Integer(413);
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id.clone());
+    let user_id = UserId::Integer(413);
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -218,14 +214,10 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     assert!(read_welcome(&mut websocket).await.is_some());
     assert!(
         read_protocol_server_batch(&mut websocket).await.is_some(),
-        "session should receive the initial offer before the transport disconnect is injected"
+        "user should receive the initial offer before the transport disconnect is injected"
     );
 
-    let connection_id = channel
-        .test_api()
-        .inspect()
-        .session_connection_id(&session_id)
-        .await;
+    let connection_id = room.test_api().inspect().user_connection_id(&user_id).await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;
@@ -234,7 +226,7 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
         .state
         .transport_adapter
         .debug_set_session_transport_health(
-            &channel.transport_session_key(&session_id, connection_id),
+            &room.transport_user_key(&user_id, connection_id),
             TransportSessionHealth::Disconnected,
         );
 
@@ -247,7 +239,7 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
 }
 
 #[tokio::test]
-async fn websocket_closure_emits_fake_webrtc_session_closed_event() {
+async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
@@ -256,9 +248,9 @@ async fn websocket_closure_emits_fake_webrtc_session_closed_event() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let session_id = SessionId::Integer(213);
-    let websocket = setup_negotiated_session(&server, &channel, session_id.clone()).await;
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let user_id = UserId::Integer(213);
+    let websocket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(websocket.is_some());
     let Some(mut websocket) = websocket else {
         return;
@@ -273,12 +265,12 @@ async fn websocket_closure_emits_fake_webrtc_session_closed_event() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed { session_id })
+        Some(&FakeWebRtcEvent::SessionClosed { user_id })
     );
 }
 
 #[tokio::test]
-async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
+async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
@@ -287,14 +279,14 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let session_id = SessionId::Integer(260);
-    let first_socket = setup_negotiated_session(&server, &channel, session_id.clone()).await;
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let user_id = UserId::Integer(260);
+    let first_socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(first_socket.is_some());
     let Some(mut first_socket) = first_socket else {
         return;
     };
-    let second_socket = setup_negotiated_session(&server, &channel, session_id.clone()).await;
+    let second_socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(second_socket.is_some());
     let Some(mut second_socket) = second_socket else {
         return;
@@ -313,7 +305,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
     assert_eq!(
         events.last(),
         Some(&FakeWebRtcEvent::SessionClosed {
-            session_id: session_id.clone(),
+            user_id: user_id.clone(),
         })
     );
 
@@ -326,12 +318,12 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_session() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed { session_id })
+        Some(&FakeWebRtcEvent::SessionClosed { user_id })
     );
 }
 
 #[tokio::test]
-async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
+async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
@@ -340,10 +332,10 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
 
-    let mut alice = setup_negotiated_session(&server, &channel, SessionId::Integer(1)).await;
-    let mut bob = setup_negotiated_session(&server, &channel, SessionId::Integer(2)).await;
+    let mut alice = setup_negotiated_session(&server, &room, UserId::Integer(1)).await;
+    let mut bob = setup_negotiated_session(&server, &room, UserId::Integer(2)).await;
     assert!(alice.is_some());
     assert!(bob.is_some());
     let Some(ref mut alice) = alice else {
@@ -354,10 +346,10 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
     };
 
     server
-        .channel_manager
-        .disconnect_sessions(
-            channel.uuid(),
-            &[SessionId::Integer(1)],
+        .room_manager
+        .disconnect_users(
+            room.uuid(),
+            &[UserId::Integer(1)],
             &server.state.transport_adapter,
         )
         .await;
@@ -368,7 +360,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
     });
     assert!(
         matches!(peer_message, Some(ServerMessage::PeerLeft(_))),
-        "remaining peer should receive session departure after disconnect: {peer_message:?}"
+        "remaining peer should receive user departure after disconnect: {peer_message:?}"
     );
 
     let events = wait_for_fake_webrtc_events(&adapter, 1).await;
@@ -379,13 +371,13 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
     assert_eq!(
         events.last(),
         Some(&FakeWebRtcEvent::SessionClosed {
-            session_id: SessionId::Integer(1)
+            user_id: UserId::Integer(1)
         })
     );
 }
 
 #[tokio::test]
-async fn disconnect_cleanup_closes_transport_session_before_empty_channel_removal() {
+async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =
         RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
@@ -394,31 +386,25 @@ async fn disconnect_cleanup_closes_transport_session_before_empty_channel_remova
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let session_id = SessionId::Integer(1);
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let user_id = UserId::Integer(1);
 
-    let socket = setup_negotiated_session(&server, &channel, session_id.clone()).await;
+    let socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(socket.is_some());
     let Some(mut socket) = socket else {
         return;
     };
 
     server
-        .channel_manager
-        .disconnect_sessions(
-            channel.uuid(),
-            slice::from_ref(&session_id),
+        .room_manager
+        .disconnect_users(
+            room.uuid(),
+            slice::from_ref(&user_id),
             &server.state.transport_adapter,
         )
         .await;
 
-    assert!(
-        server
-            .channel_manager
-            .get_by_uuid(channel.uuid())
-            .await
-            .is_none()
-    );
+    assert!(server.room_manager.get_by_uuid(room.uuid()).await.is_none());
     assert_eq!(
         read_close_code(&mut socket).await,
         Some(CloseCode::Library(4003))
@@ -431,6 +417,6 @@ async fn disconnect_cleanup_closes_transport_session_before_empty_channel_remova
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed { session_id })
+        Some(&FakeWebRtcEvent::SessionClosed { user_id })
     );
 }

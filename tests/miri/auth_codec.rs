@@ -12,7 +12,7 @@ use o_sfu::testing::{
     },
 };
 use o_sfu_protocol::{
-    shared::{DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType},
+    shared::{DownloadStates, StreamType, UserId, UserInfo, UserPermissions},
     signaling::{
         ClientEnvelope, ClientMessage, ClientResponse, Envelope, EnvelopeDecodeError,
         PeerInfoPayload, RecordingActionResult, RequestId, ServerEnvelope, ServerMessage,
@@ -25,10 +25,10 @@ const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 fn sample_websocket_claims() -> WebSocketConnectClaims {
     WebSocketConnectClaims {
         registered: RegisteredJwtClaims::default(),
-        sfu_channel_uuid: "channel-1".to_owned(),
-        session_id: SessionId::String("peer-7".to_owned()),
+        room_id: "room-1".to_owned(),
+        user_id: UserId::String("peer-7".to_owned()),
         label: Some("Peer 7".to_owned()),
-        permissions: Some(SessionPermissions::default()),
+        permissions: Some(UserPermissions::default()),
     }
 }
 
@@ -248,7 +248,7 @@ fn signaling_codecs_round_trip_publish_subscribe_and_responses() {
         stream_type: StreamType::Camera,
     }));
     let subscribe = ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-        session_id: SessionId::String("peer-2".to_owned()),
+        user_id: UserId::String("peer-2".to_owned()),
         states: DownloadStates {
             audio: Some(true),
             camera: Some(false),
@@ -287,11 +287,11 @@ fn signaling_codecs_round_trip_publish_subscribe_and_responses() {
 
 #[test]
 fn signaling_codecs_round_trip_info_messages_with_structured_json() {
-    let session_info = SessionInfo {
+    let session_info = UserInfo {
         is_camera_on: Some(true),
         is_screen_sharing_on: Some(false),
         is_raising_hand: Some(true),
-        ..SessionInfo::default()
+        ..UserInfo::default()
     };
     let client_info = ClientEnvelope::Message(ClientMessage::Info(session_info.clone()));
     let encoded = client_info.clone().into_envelope();
@@ -302,7 +302,7 @@ fn signaling_codecs_round_trip_info_messages_with_structured_json() {
     assert_eq!(ClientEnvelope::decode(encoded), Ok(client_info));
 
     let server_info = ServerEnvelope::Message(ServerMessage::PeerInfo(PeerInfoPayload {
-        session_id: SessionId::String("peer-3".to_owned()),
+        user_id: UserId::String("peer-3".to_owned()),
         info: session_info,
     }));
     let encoded = server_info.clone().into_envelope();

@@ -10,7 +10,7 @@ use str0m::{media::Mid, rtp::Ssrc};
 
 use super::{commands::RemoteSourceControl, state::RtcBootstrapState};
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     transport_adapter::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError,
         TransportMediaId, TransportSessionKey,
@@ -273,15 +273,15 @@ impl RtcBootstrapState {
         self.route_control.active_speaker_diagnostics(now)
     }
 
-    pub(super) fn expired_active_speaker_channel_instance_ids(
+    pub(super) fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelInstanceId> {
+    ) -> BTreeSet<RoomInstanceId> {
         self.route_control
             .expired_active_speaker_source_ids(now)
             .into_iter()
             .filter_map(|source_transport_media_id| {
-                self.source_channel_instance_id(source_transport_media_id)
+                self.source_room_instance_id(source_transport_media_id)
             })
             .collect()
     }
@@ -325,15 +325,15 @@ impl RtcBootstrapState {
             .copied()
     }
 
-    fn source_channel_instance_id(
+    fn source_room_instance_id(
         &self,
         source_transport_media_id: TransportMediaId,
-    ) -> Option<ChannelInstanceId> {
+    ) -> Option<RoomInstanceId> {
         self.media_handle(source_transport_media_id)
-            .map(|handle| handle.session_key().channel_instance_id())
+            .map(|handle| handle.session_key().room_instance_id())
             .or_else(|| {
                 self.remote_source_registration(source_transport_media_id)
-                    .map(|registration| registration.source_session_key().channel_instance_id())
+                    .map(|registration| registration.source_session_key().room_instance_id())
             })
     }
 
@@ -427,7 +427,7 @@ impl RtcBootstrapState {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use o_sfu_protocol::shared::SessionId;
+    use o_sfu_protocol::shared::UserId;
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 
     use super::*;
@@ -437,7 +437,7 @@ mod tests {
     fn consumer_media_lookup_uses_the_reverse_index() {
         let mut state = RtcBootstrapState::default();
         let source_transport_media_id = TransportMediaId::new(8);
-        let consumer_session = test_transport_session_key(12, 0, 13, SessionId::Integer(14));
+        let consumer_session = test_transport_session_key(12, 0, 13, UserId::Integer(14));
         let consumer_mid = Mid::from("aud-down");
 
         let _consumer_transport_media_id =
@@ -457,7 +457,7 @@ mod tests {
     fn consumer_media_lookup_clears_when_the_handle_is_removed() {
         let mut state = RtcBootstrapState::default();
         let source_transport_media_id = TransportMediaId::new(9);
-        let consumer_session = test_transport_session_key(15, 0, 16, SessionId::Integer(17));
+        let consumer_session = test_transport_session_key(15, 0, 16, UserId::Integer(17));
         let consumer_mid = Mid::from("cam-down");
 
         let consumer_transport_media_id =
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
-        let producer_session = test_transport_session_key(18, 0, 19, SessionId::Integer(20));
+        let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 55_555_u32;
         let mut state = RtcBootstrapState::default();
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn producer_ssrc_lookup_refresh_replaces_stale_bindings() {
-        let producer_session = test_transport_session_key(21, 0, 22, SessionId::Integer(23));
+        let producer_session = test_transport_session_key(21, 0, 22, UserId::Integer(23));
         let producer_mid = Mid::from("cam-up");
         let first_ssrc = 77_777_u32;
         let second_ssrc = 88_888_u32;
@@ -567,8 +567,8 @@ mod tests {
     #[test]
     fn expired_active_speaker_channels_are_resolved_from_source_owners() {
         let mut state = RtcBootstrapState::default();
-        let first_session = test_transport_session_key(31, 0, 32, SessionId::Integer(33));
-        let second_session = test_transport_session_key(34, 0, 35, SessionId::Integer(36));
+        let first_session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
+        let second_session = test_transport_session_key(34, 0, 35, UserId::Integer(36));
         let first_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: first_session.clone(),
             mid: Mid::from("cam-up-a"),
@@ -590,8 +590,8 @@ mod tests {
         );
 
         assert_eq!(
-            state.expired_active_speaker_channel_instance_ids(start + Duration::from_millis(251)),
-            BTreeSet::from([first_session.channel_instance_id()])
+            state.expired_active_speaker_room_instance_ids(start + Duration::from_millis(251)),
+            BTreeSet::from([first_session.room_instance_id()])
         );
     }
 }

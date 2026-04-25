@@ -11,12 +11,12 @@ pub(super) fn append_transport_health_gauges(
 ) {
     append_labeled_gauge_family(
         output,
-        "osfu_transport_health_sessions",
-        "Current number of transport sessions by observed health state.",
+        "osfu_transport_health_users",
+        "Current number of transport users by observed health state.",
         "state",
         &[
-            LabeledGaugeValue::new("connected", snapshot.connected_transport_sessions),
-            LabeledGaugeValue::new("disconnected", snapshot.disconnected_transport_sessions),
+            LabeledGaugeValue::new("connected", snapshot.connected_transport_users),
+            LabeledGaugeValue::new("disconnected", snapshot.disconnected_transport_users),
         ],
     );
 }
@@ -168,15 +168,15 @@ pub(super) fn append_transport_lifecycle_metrics(
     );
     append_histogram(
         output,
-        "osfu_transport_session_lifetime_seconds",
-        "Lifetime of closed RTC transport sessions observed at cold-path teardown.",
+        "osfu_transport_user_lifetime_seconds",
+        "Lifetime of closed RTC transport users observed at cold-path teardown.",
         &[
-            HistogramBucketValue::new("1", snapshot.transport_session_lifetime_le_1_second),
-            HistogramBucketValue::new("10", snapshot.transport_session_lifetime_le_10_seconds),
-            HistogramBucketValue::new("60", snapshot.transport_session_lifetime_le_60_seconds),
-            HistogramBucketValue::new("300", snapshot.transport_session_lifetime_le_300_seconds),
+            HistogramBucketValue::new("1", snapshot.transport_user_lifetime_le_1_second),
+            HistogramBucketValue::new("10", snapshot.transport_user_lifetime_le_10_seconds),
+            HistogramBucketValue::new("60", snapshot.transport_user_lifetime_le_60_seconds),
+            HistogramBucketValue::new("300", snapshot.transport_user_lifetime_le_300_seconds),
         ],
-        snapshot.transport_session_lifetime_sum_micros,
-        snapshot.transport_session_lifetime_count,
+        snapshot.transport_user_lifetime_sum_micros,
+        snapshot.transport_user_lifetime_count,
     );
 }

@@ -5,24 +5,24 @@ pub type JsonPayload = Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum SessionId {
+pub enum UserId {
     Integer(i64),
     String(String),
 }
 
-impl From<i64> for SessionId {
+impl From<i64> for UserId {
     fn from(value: i64) -> Self {
         Self::Integer(value)
     }
 }
 
-impl From<&str> for SessionId {
+impl From<&str> for UserId {
     fn from(value: &str) -> Self {
         Self::String(value.to_owned())
     }
 }
 
-impl From<String> for SessionId {
+impl From<String> for UserId {
     fn from(value: String) -> Self {
         Self::String(value)
     }
@@ -77,7 +77,7 @@ pub struct RecordingStateUpdate {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionPermissions {
+pub struct UserPermissions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcription: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,7 +88,7 @@ pub struct SessionPermissions {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionInfo {
+pub struct UserInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_talking: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,7 +105,7 @@ pub struct SessionInfo {
     pub is_raising_hand: Option<bool>,
 }
 
-impl SessionInfo {
+impl UserInfo {
     #[must_use]
     pub fn snapshot_defaults() -> Self {
         Self::default().snapshot_complete()

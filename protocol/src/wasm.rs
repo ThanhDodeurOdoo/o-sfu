@@ -50,9 +50,9 @@ impl WasmProtocolCore {
         &mut self,
         url: String,
         jwt: String,
-        channel: Option<String>,
+        room: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.connect(url, jwt, channel)))
+        to_js(&host_commands(self.inner.connect(url, jwt, room)))
     }
 
     #[wasm_bindgen(js_name = onWsOpen)]
@@ -85,10 +85,10 @@ impl WasmProtocolCore {
         to_js(&host_commands(self.inner.publish(stream_type, active)))
     }
 
-    pub fn subscribe(&mut self, session_id: JsValue, states: JsValue) -> Result<JsValue, JsValue> {
-        let session_id = from_js(session_id)?;
+    pub fn subscribe(&mut self, user_id: JsValue, states: JsValue) -> Result<JsValue, JsValue> {
+        let user_id = from_js(user_id)?;
         let states = from_js(states)?;
-        to_js(&host_commands(self.inner.subscribe(session_id, states)))
+        to_js(&host_commands(self.inner.subscribe(user_id, states)))
     }
 
     #[wasm_bindgen(js_name = updateInfo)]

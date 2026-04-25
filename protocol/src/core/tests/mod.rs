@@ -6,8 +6,8 @@ pub(super) use super::{
 };
 pub(super) use crate::{
     shared::{
-        AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionInfo,
-        StopCode, StreamType,
+        AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode,
+        StreamType, UserInfo,
     },
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
@@ -41,10 +41,10 @@ pub(super) fn sample_welcome_payload() -> WelcomePayload {
             video: Some(false),
         },
         peers: vec![PeerSnapshot {
-            session_id: 7_i64.into(),
-            info: SessionInfo {
+            user_id: 7_i64.into(),
+            info: UserInfo {
                 is_talking: Some(true),
-                ..SessionInfo::default()
+                ..UserInfo::default()
             },
         }],
     }

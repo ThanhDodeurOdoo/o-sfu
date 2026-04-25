@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use o_sfu_protocol::shared::{RecordingState, SessionId, SessionInfo, StreamType};
+use o_sfu_protocol::shared::{RecordingState, StreamType, UserId, UserInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -167,7 +167,7 @@ pub(crate) struct DiagnosticsQualitySummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DiagnosticsSessionTransport {
+pub(crate) struct DiagnosticsUserTransport {
     pub(crate) connection_id: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) health: Option<DiagnosticsTransportHealth>,
@@ -219,7 +219,7 @@ pub(crate) struct DiagnosticsSource {
     pub(crate) media_kind: DiagnosticsMediaKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) mid: Option<String>,
-    pub(crate) owner_session_id: SessionId,
+    pub(crate) owner_user_id: UserId,
     pub(crate) source_id: u64,
     pub(crate) stream_type: StreamType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,7 +252,7 @@ pub(crate) struct DiagnosticsSubscription {
     pub(crate) layout_priority: Option<DiagnosticsVideoRoutePriority>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) layout_role: Option<DiagnosticsVideoLayoutRole>,
-    pub(crate) producer_session_id: SessionId,
+    pub(crate) producer_user_id: UserId,
     pub(crate) selection: DiagnosticsSourceSelection,
     pub(crate) source_id: u64,
     pub(crate) state: DiagnosticsRouteState,
@@ -263,36 +263,36 @@ pub(crate) struct DiagnosticsSubscription {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DiagnosticsSessionView {
+pub(crate) struct DiagnosticsUserView {
     pub(crate) publications: Vec<DiagnosticsPublication>,
-    pub(crate) session_id: SessionId,
-    pub(crate) session_info: SessionInfo,
+    pub(crate) user_id: UserId,
+    pub(crate) user_info: UserInfo,
     pub(crate) subscriptions: Vec<DiagnosticsSubscription>,
-    pub(crate) transport: DiagnosticsSessionTransport,
+    pub(crate) transport: DiagnosticsUserTransport,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiagnosticsTransportCounts {
-    #[serde(rename = "connectedSessions")]
+    #[serde(rename = "connectedUsers")]
     pub(crate) connected: usize,
-    #[serde(rename = "disconnectedSessions")]
+    #[serde(rename = "disconnectedUsers")]
     pub(crate) disconnected: usize,
-    #[serde(rename = "totalSessions")]
+    #[serde(rename = "totalUsers")]
     pub(crate) total: usize,
-    #[serde(rename = "unknownSessions")]
+    #[serde(rename = "unknownUsers")]
     pub(crate) unknown: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DiagnosticsChannelSummary {
+pub(crate) struct DiagnosticsRoomSummary {
     pub(crate) create_date: String,
     pub(crate) media_worker_id: usize,
     pub(crate) publication_count: usize,
     pub(crate) recording_state: RecordingState,
     pub(crate) remote_address: String,
-    pub(crate) session_count: usize,
+    pub(crate) user_count: usize,
     pub(crate) subscription_count: usize,
     pub(crate) transport: DiagnosticsTransportCounts,
     pub(crate) uuid: String,
@@ -301,45 +301,45 @@ pub(crate) struct DiagnosticsChannelSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DiagnosticsChannelDetail {
+pub(crate) struct DiagnosticsRoomDetail {
     pub(crate) recent_events: Vec<DiagnosticsEvent>,
-    pub(crate) sessions: Vec<DiagnosticsSessionView>,
+    pub(crate) users: Vec<DiagnosticsUserView>,
     pub(crate) sources: Vec<DiagnosticsSource>,
-    pub(crate) summary: DiagnosticsChannelSummary,
+    pub(crate) summary: DiagnosticsRoomSummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DiagnosticsSessionDetail {
-    pub(crate) channel_uuid: String,
+pub(crate) struct DiagnosticsUserDetail {
+    pub(crate) room_id: String,
     pub(crate) recent_events: Vec<DiagnosticsEvent>,
     pub(crate) recording_state: RecordingState,
-    pub(crate) session: DiagnosticsSessionView,
+    pub(crate) user: DiagnosticsUserView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiagnosticsSummaryResponse {
-    pub(crate) channels_active: usize,
+    pub(crate) rooms_active: usize,
     pub(crate) publications_active: usize,
     pub(crate) recent_events: Vec<DiagnosticsEvent>,
-    pub(crate) recording_channels_active: usize,
-    pub(crate) sessions_active: usize,
+    pub(crate) recording_rooms_active: usize,
+    pub(crate) users_active: usize,
     pub(crate) subscriptions_active: usize,
     pub(crate) transport: DiagnosticsTransportCounts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DiagnosticsSessionLookupConflict {
-    pub(crate) matching_channel_uuids: Vec<String>,
-    pub(crate) requested_session_id: String,
+pub(crate) struct DiagnosticsUserLookupConflict {
+    pub(crate) matching_room_ids: Vec<String>,
+    pub(crate) requested_user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiagnosticsEvent {
-    pub(crate) channel_uuid: String,
+    pub(crate) room_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) connection_id: Option<u64>,
     pub(crate) event: String,
@@ -348,17 +348,17 @@ pub(crate) struct DiagnosticsEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) media_worker_id: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) session_id: Option<SessionId>,
+    pub(crate) user_id: Option<UserId>,
     pub(crate) timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) transport_media_id: Option<u64>,
 }
 
 #[derive(Debug)]
-pub(crate) enum DiagnosticsSessionLookup {
+pub(crate) enum DiagnosticsUserLookup {
     Missing,
-    Found(DiagnosticsSessionDetail),
-    Conflict(DiagnosticsSessionLookupConflict),
+    Found(DiagnosticsUserDetail),
+    Conflict(DiagnosticsUserLookupConflict),
 }
 
 impl From<TransportSessionHealth> for DiagnosticsTransportHealth {

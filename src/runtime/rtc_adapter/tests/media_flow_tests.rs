@@ -5,7 +5,7 @@ use crate::runtime::transport_adapter::SourcePacketGate;
 async fn rtc_transport_bootstrap_starts_packet_loop() {
     let adapter = RtcTransportAdapter::default();
     assert!(!adapter.packet_loop_started());
-    let session_key = transport_key(1, 15, SessionId::Integer(15));
+    let session_key = transport_key(1, 15, UserId::Integer(15));
     let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
     sleep(Duration::from_millis(5)).await;
@@ -13,35 +13,35 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
 }
 
 #[tokio::test]
-async fn rtc_metrics_track_live_transport_sessions_without_double_counting() {
+async fn rtc_metrics_track_live_transport_users_without_double_counting() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 16, SessionId::Integer(16));
+    let session_key = transport_key(1, 16, UserId::Integer(16));
 
-    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 0);
+    assert_eq!(adapter.metrics.snapshot().active_transport_users, 0);
     assert!(
         prepare_transport_session(&adapter, &session_key)
             .await
             .is_ok()
     );
-    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
+    assert_eq!(adapter.metrics.snapshot().active_transport_users, 1);
 
     assert!(matches!(
         adapter.create_initial_session_offer(&session_key).await,
         Err(TransportAdapterError::InvalidInput)
     ));
-    assert_eq!(adapter.metrics.snapshot().active_transport_sessions, 1);
+    assert_eq!(adapter.metrics.snapshot().active_transport_users, 1);
 
     assert!(adapter.close_session(&session_key).await.is_ok());
     let snapshot = adapter.metrics.snapshot();
-    assert_eq!(snapshot.active_transport_sessions, 0);
-    assert_eq!(snapshot.transport_session_lifetime_le_1_second, 1);
-    assert_eq!(snapshot.transport_session_lifetime_count, 1);
+    assert_eq!(snapshot.active_transport_users, 0);
+    assert_eq!(snapshot.transport_user_lifetime_le_1_second, 1);
+    assert_eq!(snapshot.transport_user_lifetime_count, 1);
 }
 
 #[tokio::test]
 async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 18, SessionId::Integer(18));
+    let session_key = transport_key(1, 18, UserId::Integer(18));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
     let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
     assert!(bootstrap_result.is_ok());
@@ -68,7 +68,7 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
 #[tokio::test]
 async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
     let adapter = rtc_adapter_with_bitrate_limits(1_500_000, 2_500_000);
-    let session_key = transport_key(1, 181, SessionId::Integer(181));
+    let session_key = transport_key(1, 181, UserId::Integer(181));
 
     assert!(
         adapter
@@ -85,7 +85,7 @@ async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
 #[tokio::test]
 async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
     let adapter = rtc_adapter_with_bitrate_limits(1_234_567, 7_654_321);
-    let session_key = transport_key(1, 182, SessionId::Integer(182));
+    let session_key = transport_key(1, 182, UserId::Integer(182));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 52_525);
 
     assert!(
@@ -108,8 +108,8 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
 #[tokio::test]
 async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_key = transport_key(1, 19, SessionId::Integer(19));
-    let consumer_session_key = transport_key(1, 20, SessionId::Integer(20));
+    let producer_session_key = transport_key(1, 19, UserId::Integer(19));
+    let consumer_session_key = transport_key(1, 20, UserId::Integer(20));
     let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_000);
 
@@ -174,9 +174,9 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 #[tokio::test]
 async fn rtc_consumer_rid_policy_drives_the_aggregate_packet_gate() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_key = transport_key(1, 21, SessionId::Integer(21));
-    let first_consumer_session_key = transport_key(1, 22, SessionId::Integer(22));
-    let second_consumer_session_key = transport_key(1, 23, SessionId::Integer(23));
+    let producer_session_key = transport_key(1, 21, UserId::Integer(21));
+    let first_consumer_session_key = transport_key(1, 22, UserId::Integer(22));
+    let second_consumer_session_key = transport_key(1, 23, UserId::Integer(23));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 71_000);
     let selected_consumer_rtp_parameters =
         sample_router_rtp_parameters_with_rid("vid-down-1", 72_000, "hi");
@@ -244,8 +244,8 @@ async fn rtc_consumer_rid_policy_drives_the_aggregate_packet_gate() {
 #[tokio::test]
 async fn rtc_consumer_packet_gate_updates_the_aggregate_packet_gate() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_key = transport_key(1, 123, SessionId::Integer(123));
-    let consumer_session_key = transport_key(1, 124, SessionId::Integer(124));
+    let producer_session_key = transport_key(1, 123, UserId::Integer(123));
+    let consumer_session_key = transport_key(1, 124, UserId::Integer(124));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 81_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
 
@@ -331,9 +331,9 @@ async fn rtc_consumer_packet_gate_updates_the_aggregate_packet_gate() {
 #[tokio::test]
 async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_key = transport_key(1, 125, SessionId::Integer(125));
-    let stale_producer_session_key = transport_key(1, 126, SessionId::Integer(125));
-    let consumer_session_key = transport_key(1, 127, SessionId::Integer(127));
+    let producer_session_key = transport_key(1, 125, UserId::Integer(125));
+    let stale_producer_session_key = transport_key(1, 126, UserId::Integer(125));
+    let consumer_session_key = transport_key(1, 127, UserId::Integer(127));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 83_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 84_000);
 
@@ -384,8 +384,8 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
 #[tokio::test]
 async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let adapter = RtcTransportAdapter::default();
-    let producer_session_key = transport_key(1, 23, SessionId::Integer(23));
-    let consumer_session_key = transport_key(1, 24, SessionId::Integer(24));
+    let producer_session_key = transport_key(1, 23, UserId::Integer(23));
+    let consumer_session_key = transport_key(1, 24, UserId::Integer(24));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 91_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 92_000);
 
@@ -464,7 +464,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 21, SessionId::Integer(21));
+    let session_key = transport_key(1, 21, UserId::Integer(21));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 77_777);
 
     assert!(
@@ -501,7 +501,7 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 22, SessionId::Integer(22));
+    let session_key = transport_key(1, 22, UserId::Integer(22));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 88_888);
 
     assert!(
@@ -535,7 +535,7 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(1, 23, SessionId::Integer(23));
+    let session_key = transport_key(1, 23, UserId::Integer(23));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 99_999);
 
     assert!(
@@ -573,8 +573,8 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
 #[tokio::test]
 async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
     let adapter = RtcTransportAdapter::default();
-    let first_session_key = transport_key(9, 31, SessionId::Integer(31));
-    let second_session_key = transport_key(9, 32, SessionId::Integer(32));
+    let first_session_key = transport_key(9, 31, UserId::Integer(31));
+    let second_session_key = transport_key(9, 32, UserId::Integer(32));
     let first_rtp_parameters = sample_router_rtp_parameters("aud-up-1", 93_001);
     let second_rtp_parameters = sample_router_rtp_parameters("aud-up-2", 93_002);
 
@@ -627,7 +627,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
 #[tokio::test]
 async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
     let adapter = RtcTransportAdapter::default();
-    let session_key = transport_key(9, 41, SessionId::Integer(41));
+    let session_key = transport_key(9, 41, UserId::Integer(41));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 94_001);
 
     assert!(

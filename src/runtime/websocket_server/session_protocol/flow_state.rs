@@ -1,6 +1,6 @@
-//! Session-scoped control state for the post-auth websocket protocol.
+//! User-scoped control state for the post-auth websocket protocol.
 //!
-//! This module exist to keep one websocket session's negotiation and queued
+//! This module exist to keep one websocket user's negotiation and queued
 //! client-intent lifecycle at a single place
 //!
 //! The important invariant is that at most one `offer` or `renegotiate` request may be
@@ -10,7 +10,7 @@
 use std::{collections::BTreeSet, mem::take};
 
 use o_sfu_protocol::{
-    shared::{DownloadStates, SessionId, StreamType},
+    shared::{DownloadStates, StreamType, UserId},
     signaling::{RequestId, ServerRequest},
 };
 use o_sfu_router::MediaCapabilities;
@@ -29,23 +29,23 @@ pub(super) enum PendingFlowAction {
 }
 
 /// captures the single negotiation request that is currently allowed to be in
-/// flight for a websocket session
+/// flight for a websocket user
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PendingFlowRequest {
-    /// Only the matching response may advance the session back to `Stable`.
+    /// Only the matching response may advance the user back to `Stable`.
     pub(super) request_id: RequestId,
     pub(super) request: ServerRequest,
     pub(super) action: PendingFlowAction,
 }
 
-/// Represents one websocket-originated session change before it is translated
-/// into channel or transport work.
+/// Represents one websocket-originated user change before it is translated
+/// into room or transport work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FlowChange {
     Publish(StreamType),
     Unpublish(StreamType),
     Subscribe {
-        target_session_id: SessionId,
+        target_session_id: UserId,
         states: DownloadStates,
     },
 }
@@ -68,7 +68,7 @@ pub(super) struct ResolvedFlowState {
     pub(super) queued_renegotiation: bool,
 }
 
-/// The complete session-level negotiation and queued-publish state machine.
+/// The complete user-level negotiation and queued-publish state machine.
 ///
 /// It answers the lifecycle questions:
 ///
@@ -96,7 +96,7 @@ pub(super) enum SessionFlowState {
         /// flight so the follow-up staging pass can replay each stream once.
         queued_publish_streams: BTreeSet<StreamType>,
         /// This keeps topology-triggered refresh demand visible without
-        /// allowing overlapping SDP exchanges on the same websocket session.
+        /// allowing overlapping SDP exchanges on the same websocket user.
         queued_renegotiation: bool,
     },
 }
@@ -110,7 +110,7 @@ impl Default for SessionFlowState {
 }
 
 impl SessionFlowState {
-    /// Returns whether the websocket session is currently blocked on an answer
+    /// Returns whether the websocket user is currently blocked on an answer
     /// to an earlier server request.
     pub(super) const fn awaiting_answer(&self) -> bool {
         matches!(self, Self::Negotiating { .. })
@@ -134,14 +134,14 @@ impl SessionFlowState {
     }
 
     /// Drains the queued publish set for the next staging pass after an answer
-    /// returns the session to a stable state.
+    /// returns the user to a stable state.
     pub(super) fn take_queued_publish_streams(&mut self) -> Vec<StreamType> {
         let queued_publish_streams = self.queued_publish_streams().iter().copied().collect();
         self.queued_publish_streams_mut().clear();
         queued_publish_streams
     }
 
-    /// Moves the session into the single allowed in-flight negotiation state.
+    /// Moves the user into the single allowed in-flight negotiation state.
     ///
     /// Callers must use this only after the request has been sent
     /// successfully, because the stored `request_id` becomes the sole answer
@@ -187,7 +187,7 @@ impl SessionFlowState {
     /// matches the stored request id.
     ///
     /// Stale answers are intentionally ignored without mutating the state
-    /// machine, because same-session replacement and delayed network delivery
+    /// machine, because same-user replacement and delayed network delivery
     /// can still surface old responses after ownership has moved on.
     pub(super) fn resolve_answer(&mut self, response_to: &RequestId) -> Option<ResolvedFlowState> {
         let previous = take(self);

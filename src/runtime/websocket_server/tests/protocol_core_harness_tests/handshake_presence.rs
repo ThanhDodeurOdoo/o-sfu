@@ -7,11 +7,9 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let existing_token =
-        signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(31));
-    let joining_token =
-        signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(32));
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let existing_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(31));
+    let joining_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(32));
     assert!(existing_token.is_some());
     assert!(joining_token.is_some());
     let Some(existing_token) = existing_token else {
@@ -94,14 +92,14 @@ async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
 
     let mut peer = ProtocolHarnessPeer::default();
     let connected = peer
         .connect(
             &format!("ws://{}/", server.addr),
             "invalid.jwt.payload",
-            Some(channel.uuid().to_owned()),
+            Some(room.uuid().to_owned()),
         )
         .await;
     assert!(connected.is_some(), "protocol core should open websocket");
@@ -143,14 +141,8 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
-        &server,
-        "issuer-protocol",
-        None,
-        CreateChannelQuery::default(),
-    )
-    .await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(33));
+    let room = create_room(&server, "issuer-protocol", None, CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(33));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -189,15 +181,15 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-events",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(41));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(42));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(41));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(42));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -221,7 +213,7 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
         consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(42))
             .await
             .is_some(),
-        "existing peers should consume the protocol peer-joined update after a new session joins"
+        "existing peers should consume the protocol peer-joined update after a new user joins"
     );
     bob.updates.clear();
 
@@ -281,27 +273,27 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
     assert_eq!(
         alice.updates.last(),
         Some(&BundleUpdate::Disconnect(BundleDisconnectUpdate {
-            session_id: ProtocolSessionId::Integer(42),
+            user_id: ProtocolSessionId::Integer(42),
         }))
     );
 }
 
 #[tokio::test]
-async fn protocol_session_emits_peerjoined_message_for_existing_peers() {
+async fn protocol_user_emits_peerjoined_message_for_existing_peers() {
     let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-peerjoined",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(43));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(44));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(43));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(44));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -356,21 +348,21 @@ async fn protocol_session_emits_peerjoined_message_for_existing_peers() {
 }
 
 #[tokio::test]
-async fn protocol_session_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
+async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
     let server = spawn_protocol_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-peer-replacement",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(45));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(46));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(45));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(46));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -422,7 +414,7 @@ async fn protocol_session_replacement_emits_peerleft_then_peerjoined_for_existin
     assert_eq!(
         alice.updates.last(),
         Some(&BundleUpdate::Disconnect(BundleDisconnectUpdate {
-            session_id: ProtocolSessionId::Integer(46),
+            user_id: ProtocolSessionId::Integer(46),
         }))
     );
 

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
+    shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{
         ClientEnvelope, ClientMessage, EnvelopeBatch, StreamIntentPayload, SubscribePayload,
     },
@@ -10,8 +10,8 @@ use crate::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct StickyReplayState {
     active_publications: BTreeSet<StreamType>,
-    desired_subscriptions: BTreeMap<SessionId, DownloadStates>,
-    desired_info: Option<SessionInfo>,
+    desired_subscriptions: BTreeMap<UserId, DownloadStates>,
+    desired_info: Option<UserInfo>,
 }
 
 impl StickyReplayState {
@@ -35,21 +35,21 @@ impl StickyReplayState {
 
     pub(super) fn remember_subscription_states(
         &mut self,
-        session_id: &SessionId,
+        user_id: &UserId,
         states: &DownloadStates,
     ) {
         let existing_states = self
             .desired_subscriptions
-            .entry(session_id.clone())
+            .entry(user_id.clone())
             .or_default();
         merge_download_states(existing_states, states);
         if download_states_are_empty(existing_states) {
-            self.desired_subscriptions.remove(session_id);
+            self.desired_subscriptions.remove(user_id);
         }
     }
 
-    pub(super) fn remember_info(&mut self, info: &SessionInfo) {
-        let existing_info = self.desired_info.get_or_insert_with(SessionInfo::default);
+    pub(super) fn remember_info(&mut self, info: &UserInfo) {
+        let existing_info = self.desired_info.get_or_insert_with(UserInfo::default);
         merge_session_info(existing_info, info);
     }
 
@@ -69,10 +69,10 @@ impl StickyReplayState {
             replay_batch.push(envelope);
         }
 
-        for (session_id, states) in &self.desired_subscriptions {
+        for (user_id, states) in &self.desired_subscriptions {
             let Some(envelope) =
                 ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-                    session_id: session_id.clone(),
+                    user_id: user_id.clone(),
                     states: states.clone(),
                 }))
                 .into_envelope()
@@ -124,7 +124,7 @@ fn download_states_are_empty(states: &DownloadStates) -> bool {
         && states.screen_layout.is_none()
 }
 
-fn merge_session_info(target: &mut SessionInfo, update: &SessionInfo) {
+fn merge_session_info(target: &mut UserInfo, update: &UserInfo) {
     if let Some(is_talking) = update.is_talking {
         target.is_talking = Some(is_talking);
     }

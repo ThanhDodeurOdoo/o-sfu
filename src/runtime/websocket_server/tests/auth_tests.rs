@@ -27,25 +27,25 @@ async fn websocket_times_out_when_client_never_authenticates() {
 }
 
 #[tokio::test]
-async fn websocket_authenticates_with_channel_key_and_sends_welcome_payload() {
+async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-a",
-        Some(TEST_CHANNEL_KEY),
-        CreateChannelQuery::default(),
+        Some(TEST_ROOM_KEY),
+        CreateRoomQuery::default(),
     )
     .await;
-    let token = signed_connect_claims(TEST_CHANNEL_KEY, channel.uuid(), SessionId::Integer(7));
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(7));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_with_channel(&server, &token, Some(channel.uuid())).await;
+    let authenticated = authenticate_with_room(&server, &token, Some(room.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;
@@ -81,31 +81,31 @@ async fn websocket_authenticates_with_channel_key_and_sends_welcome_payload() {
     let metrics = server.state.metrics.snapshot();
     assert_eq!(metrics.ws_connections_accepted, 1);
     assert_eq!(metrics.ws_handshake_credentials_received, 1);
-    assert_eq!(metrics.ws_sessions_joined, 1);
-    assert_eq!(metrics.ws_session_loops_started, 1);
+    assert_eq!(metrics.ws_users_joined, 1);
+    assert_eq!(metrics.ws_user_loops_started, 1);
 }
 
 #[tokio::test]
-async fn websocket_authenticates_legacy_channel_scoped_token_with_explicit_channel_uuid() {
+async fn websocket_authenticates_legacy_room_scoped_token_with_explicit_room_id() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-a",
-        Some(TEST_CHANNEL_KEY),
-        CreateChannelQuery::default(),
+        Some(TEST_ROOM_KEY),
+        CreateRoomQuery::default(),
     )
     .await;
     let token =
-        signed_legacy_channel_scoped_connect_claims(TEST_CHANNEL_KEY, SessionId::Integer(17), None);
+        signed_legacy_channel_scoped_connect_claims(TEST_ROOM_KEY, UserId::Integer(17), None);
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_with_channel(&server, &token, Some(channel.uuid())).await;
+    let authenticated = authenticate_with_room(&server, &token, Some(room.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;
@@ -116,23 +116,20 @@ async fn websocket_authenticates_legacy_channel_scoped_token_with_explicit_chann
 }
 
 #[tokio::test]
-async fn websocket_rejects_explicit_channel_uuid_that_disagrees_with_claims() {
+async fn websocket_rejects_explicit_room_id_that_disagrees_with_claims() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let first_channel =
-        create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let second_channel =
-        create_channel(&server, "issuer-b", None, CreateChannelQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, first_channel.uuid(), SessionId::Integer(8));
+    let first_room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let second_room = create_room(&server, "issuer-b", None, CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, first_room.uuid(), UserId::Integer(8));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
-    let authenticated =
-        authenticate_with_channel(&server, &token, Some(second_channel.uuid())).await;
+    let authenticated = authenticate_with_room(&server, &token, Some(second_room.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;
@@ -145,14 +142,14 @@ async fn websocket_rejects_explicit_channel_uuid_that_disagrees_with_claims() {
 }
 
 #[tokio::test]
-async fn websocket_accepts_global_key_without_explicit_channel_uuid() {
+async fn websocket_accepts_global_key_without_explicit_room_id() {
     let server = spawn_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(9));
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(9));
     assert!(token.is_some());
     let Some(token) = token else {
         return;

@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use o_sfu_protocol::shared::SessionId as SignalingSessionId;
+use o_sfu_protocol::shared::UserId as SignalingSessionId;
 use o_sfu_router::{
     MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, StreamType, TransportId,
 };
 
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     metrics::RuntimeMetrics,
     recording::{
         MediaSource, MediaTap, RecordingService,
         test_support::{
-            RecordingLifecycleState, into_media_source, is_channel_active, transition_error_state,
+            RecordingLifecycleState, into_media_source, is_room_active, transition_error_state,
         },
     },
     rtc_adapter::test_support::{sample_forwarded_packet, test_transport_session_key},
@@ -24,7 +24,7 @@ fn recording_service_counts_packets_without_recounting_streams() {
     let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
     let metrics = Arc::new(RuntimeMetrics::default());
     let service = RecordingService::new(
-        ChannelInstanceId::from_raw(30),
+        RoomInstanceId::from_raw(30),
         media_source,
         Arc::clone(&metrics),
     );
@@ -58,7 +58,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
     let media_tap = Arc::new(MediaTap::default());
     let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
     let service = RecordingService::new(
-        ChannelInstanceId::from_raw(17),
+        RoomInstanceId::from_raw(17),
         media_source,
         Arc::new(RuntimeMetrics::default()),
     );
@@ -69,10 +69,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
         service.snapshot().lifecycle,
         RecordingLifecycleState::Recording
     );
-    assert!(is_channel_active(
-        &media_tap,
-        ChannelInstanceId::from_raw(17)
-    ));
+    assert!(is_room_active(&media_tap, RoomInstanceId::from_raw(17)));
 
     let invalid_start = service.start();
     assert!(invalid_start.is_err());
@@ -83,25 +80,24 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
 
     assert!(service.stop().is_ok());
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
-    assert!(!is_channel_active(
-        &media_tap,
-        ChannelInstanceId::from_raw(17)
-    ));
+    assert!(!is_room_active(&media_tap, RoomInstanceId::from_raw(17)));
 }
 
 #[test]
 fn recording_service_tracks_router_observer_inventory() {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
     let service = RecordingService::new(
-        ChannelInstanceId::from_raw(22),
+        RoomInstanceId::from_raw(22),
         media_source,
         Arc::new(RuntimeMetrics::default()),
     );
-    let session_id = RouterSessionId(9);
+    let user_id = RouterSessionId(9);
 
-    service.handle_router_event(RouterEvent::SessionJoined { session_id });
+    service.handle_router_event(RouterEvent::SessionJoined {
+        session_id: user_id,
+    });
     service.handle_router_event(RouterEvent::ProducerAdded {
-        session_id,
+        session_id: user_id,
         transport_id: TransportId(3),
         producer_id: ProducerId(4),
         media_kind: MediaKind::Video,
@@ -109,19 +105,21 @@ fn recording_service_tracks_router_observer_inventory() {
     });
 
     let snapshot = service.snapshot();
-    assert_eq!(snapshot.session_count, 1);
+    assert_eq!(snapshot.user_count, 1);
     assert_eq!(snapshot.producer_count, 1);
 
     service.handle_router_event(RouterEvent::ProducerRemoved {
-        session_id,
+        session_id: user_id,
         transport_id: TransportId(3),
         producer_id: ProducerId(4),
         media_kind: MediaKind::Video,
         stream_type: StreamType::Camera,
     });
-    service.handle_router_event(RouterEvent::SessionLeft { session_id });
+    service.handle_router_event(RouterEvent::SessionLeft {
+        session_id: user_id,
+    });
 
     let snapshot = service.snapshot();
-    assert_eq!(snapshot.session_count, 0);
+    assert_eq!(snapshot.user_count, 0);
     assert_eq!(snapshot.producer_count, 0);
 }

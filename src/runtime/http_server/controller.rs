@@ -17,22 +17,21 @@ use crate::{
     config::Config,
     runtime::{
         RuntimeState,
-        channel::RuntimeChannelStatsSnapshot,
-        diagnostics::{self, DiagnosticsSessionLookup},
+        diagnostics::{self, DiagnosticsUserLookup},
         http_server::{
             contract::{
-                CHANNEL_PATH, ChannelResponse, ChannelStats, CreateChannelQuery,
-                DIAGNOSTICS_CHANNELS_PATH, DIAGNOSTICS_SUMMARY_PATH, DISCONNECT_PATH,
-                IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse, STATS_PATH,
-                SessionsStats,
+                CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+                DISCONNECT_PATH, IncomingBitRateStats, METRICS_PATH, NOOP_PATH, NoopResponse,
+                RoomResponse, RoomStats, STATS_PATH, UsersStats,
             },
             services::{
-                CreateChannelContext, CreateChannelError, DisconnectError, authorization_token,
-                disconnect_sessions, verify_and_get_channel,
+                CreateRoomContext, CreateRoomError, DisconnectError, authorization_token,
+                disconnect_users, verify_and_get_room,
             },
         },
         metrics::HttpRoute,
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+        room::RuntimeRoomStatsSnapshot,
         telemetry, websocket_server,
     },
 };
@@ -64,16 +63,16 @@ pub(crate) fn app(state: RuntimeState) -> Router {
         .route(METRICS_PATH, get(metrics))
         .route(NOOP_PATH, get(noop))
         .route(STATS_PATH, get(stats))
-        .route(CHANNEL_PATH, get(channel))
+        .route(CHANNEL_PATH, get(room))
         .route(DIAGNOSTICS_SUMMARY_PATH, get(diagnostics_summary))
-        .route(DIAGNOSTICS_CHANNELS_PATH, get(diagnostics_channels))
+        .route(DIAGNOSTICS_ROOMS_PATH, get(diagnostics_rooms))
         .route(
-            "/internal/diagnostics/channels/{uuid}",
-            get(diagnostics_channel_detail),
+            "/internal/diagnostics/rooms/{uuid}",
+            get(diagnostics_room_detail),
         )
         .route(
-            "/internal/diagnostics/sessions/{id}",
-            get(diagnostics_session_detail),
+            "/internal/diagnostics/users/{id}",
+            get(diagnostics_user_detail),
         )
         .route(
             DISCONNECT_PATH,
@@ -102,11 +101,11 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     async {
         axum::Json(
             state
-                .channel_manager
+                .room_manager
                 .stats_snapshots(&state.transport_adapter)
                 .await
                 .into_iter()
-                .map(http_channel_stats)
+                .map(http_room_stats)
                 .collect::<Vec<_>>(),
         )
     }
@@ -130,28 +129,28 @@ async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
     .await
 }
 
-/// This is the entry point for the Odoo server to request a channel.
+/// This is the entry point for the Odoo server to request a room.
 ///
 /// The bearer token is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
 ///
-/// Query parameters (defined in [`CreateChannelQuery`]) specify whether the channel
+/// Query parameters (defined in [`CreateRoomQuery`]) specify whether the room
 /// should have WebRTC enabled and optional webhook endpoints for recordings.
 #[o_sfu_telemetry::measure_http_request(
     metrics = "state.metrics",
-    request = "record_http_channel_request",
-    route = "HttpRoute::Channel"
+    request = "record_http_room_request",
+    route = "HttpRoute::Room"
 )]
-async fn channel(
+async fn room(
     State(state): State<RuntimeState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
-    Query(query): Query<CreateChannelQuery>,
+    Query(query): Query<CreateRoomQuery>,
 ) -> Response {
     async {
-        match verify_and_get_channel(
+        match verify_and_get_room(
             &state,
-            CreateChannelContext {
+            CreateRoomContext {
                 headers: &headers,
                 connect_address: connect_info.map(|Extension(ConnectInfo(addr))| addr),
                 query: &query,
@@ -159,39 +158,39 @@ async fn channel(
         )
         .await
         {
-            Ok(channel) => {
-                state.metrics.record_http_channel_success();
+            Ok(room) => {
+                state.metrics.record_http_room_success();
                 (
                     StatusCode::OK,
-                    axum::Json(ChannelResponse {
-                        uuid: channel.uuid,
-                        url: channel.base_url,
+                    axum::Json(RoomResponse {
+                        uuid: room.uuid,
+                        url: room.base_url,
                     }),
                 )
                     .into_response()
             }
-            Err(CreateChannelError::Unauthorized) => {
-                state.metrics.record_http_channel_unauthorized();
+            Err(CreateRoomError::Unauthorized) => {
+                state.metrics.record_http_room_unauthorized();
                 StatusCode::UNAUTHORIZED.into_response()
             }
-            Err(CreateChannelError::Forbidden) => {
-                state.metrics.record_http_channel_forbidden();
+            Err(CreateRoomError::Forbidden) => {
+                state.metrics.record_http_room_forbidden();
                 StatusCode::FORBIDDEN.into_response()
             }
-            Err(CreateChannelError::BadRequest) => {
-                state.metrics.record_http_channel_bad_request();
+            Err(CreateRoomError::BadRequest) => {
+                state.metrics.record_http_room_bad_request();
                 StatusCode::BAD_REQUEST.into_response()
             }
         }
     }
-    .instrument(telemetry::http_request_span("channel"))
+    .instrument(telemetry::http_request_span("room"))
     .await
 }
 
 /// Authorized bulk-disconnect route.
 ///
-/// Disconnects multiple users from a channel. This is used by the Odoo server to
-/// forcefully kick users out or clean up abandoned sessions.
+/// Disconnects multiple users from a room. This is used by the Odoo server to
+/// forcefully kick users out or clean up abandoned users.
 ///
 /// The request body is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
@@ -202,7 +201,7 @@ async fn channel(
 )]
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
     async {
-        match disconnect_sessions(&state, &body).await {
+        match disconnect_users(&state, &body).await {
             Ok(()) => {
                 state.metrics.record_http_disconnect_success();
                 StatusCode::OK.into_response()
@@ -230,7 +229,7 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
         }
         axum::Json(
             diagnostics::summary_response(
-                &state.channel_manager,
+                &state.room_manager,
                 &state.transport_adapter,
                 &state.diagnostics,
             )
@@ -241,7 +240,7 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
     .await
 }
 
-async fn diagnostics_channels(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
+async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
     async {
         match ensure_diagnostics_access(&headers, &state.config) {
             DiagnosticsAccess::Allowed => {}
@@ -249,8 +248,8 @@ async fn diagnostics_channels(State(state): State<RuntimeState>, headers: Header
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
         axum::Json(
-            diagnostics::channels_response(
-                &state.channel_manager,
+            diagnostics::rooms_response(
+                &state.room_manager,
                 &state.transport_adapter,
                 &state.diagnostics,
             )
@@ -261,10 +260,10 @@ async fn diagnostics_channels(State(state): State<RuntimeState>, headers: Header
     .await
 }
 
-async fn diagnostics_channel_detail(
+async fn diagnostics_room_detail(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Path(channel_uuid): Path<String>,
+    Path(room_id): Path<String>,
 ) -> Response {
     async {
         match ensure_diagnostics_access(&headers, &state.config) {
@@ -272,11 +271,11 @@ async fn diagnostics_channel_detail(
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        let Some(payload) = diagnostics::channel_detail_response(
-            &state.channel_manager,
+        let Some(payload) = diagnostics::room_detail_response(
+            &state.room_manager,
             &state.transport_adapter,
             &state.diagnostics,
-            &channel_uuid,
+            &room_id,
         )
         .await
         else {
@@ -287,10 +286,10 @@ async fn diagnostics_channel_detail(
     .await
 }
 
-async fn diagnostics_session_detail(
+async fn diagnostics_user_detail(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
-    Path(session_id): Path<String>,
+    Path(user_id): Path<String>,
 ) -> Response {
     async {
         match ensure_diagnostics_access(&headers, &state.config) {
@@ -298,17 +297,17 @@ async fn diagnostics_session_detail(
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        match diagnostics::session_detail_response(
-            &state.channel_manager,
+        match diagnostics::user_detail_response(
+            &state.room_manager,
             &state.transport_adapter,
             &state.diagnostics,
-            &session_id,
+            &user_id,
         )
         .await
         {
-            DiagnosticsSessionLookup::Missing => StatusCode::NOT_FOUND.into_response(),
-            DiagnosticsSessionLookup::Found(payload) => axum::Json(payload).into_response(),
-            DiagnosticsSessionLookup::Conflict(payload) => {
+            DiagnosticsUserLookup::Missing => StatusCode::NOT_FOUND.into_response(),
+            DiagnosticsUserLookup::Found(payload) => axum::Json(payload).into_response(),
+            DiagnosticsUserLookup::Conflict(payload) => {
                 (StatusCode::CONFLICT, axum::Json(payload)).into_response()
             }
         }
@@ -346,21 +345,21 @@ fn ensure_diagnostics_access(headers: &HeaderMap, config: &Config) -> Diagnostic
     }
 }
 
-fn http_channel_stats(snapshot: RuntimeChannelStatsSnapshot) -> ChannelStats {
-    ChannelStats {
+fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStats {
+    RoomStats {
         create_date: snapshot.create_date,
         uuid: snapshot.uuid,
         remote_address: snapshot.remote_address,
-        sessions_stats: SessionsStats {
+        users_stats: UsersStats {
             incoming_bit_rate: IncomingBitRateStats {
-                total: snapshot.sessions_stats.incoming_bitrate.total,
-                audio: snapshot.sessions_stats.incoming_bitrate.audio,
-                camera: snapshot.sessions_stats.incoming_bitrate.camera,
-                screen: snapshot.sessions_stats.incoming_bitrate.screen,
+                total: snapshot.users_stats.incoming_bitrate.total,
+                audio: snapshot.users_stats.incoming_bitrate.audio,
+                camera: snapshot.users_stats.incoming_bitrate.camera,
+                screen: snapshot.users_stats.incoming_bitrate.screen,
             },
-            count: snapshot.sessions_stats.count,
-            camera_count: snapshot.sessions_stats.camera_count,
-            screen_count: snapshot.sessions_stats.screen_count,
+            count: snapshot.users_stats.count,
+            camera_count: snapshot.users_stats.camera_count,
+            screen_count: snapshot.users_stats.screen_count,
         },
         web_rtc_enabled: snapshot.web_rtc_enabled,
     }

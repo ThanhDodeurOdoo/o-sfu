@@ -14,7 +14,7 @@ use o_sfu::{
     },
 };
 use o_sfu_protocol::{
-    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
+    shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
         ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
@@ -25,7 +25,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use super::{
-    TestWebSocket, connect_websocket, create_channel,
+    TestWebSocket, connect_websocket, create_room,
     fake_media::{FakeClock, FakeMediaSource},
     fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
     read_close_code, read_text_message, signed_connect_claims,
@@ -42,8 +42,8 @@ impl ProtocolLocalNetwork {
         })
     }
 
-    pub async fn create_channel(&self, issuer: &str, key: Option<&str>) -> Option<String> {
-        create_channel(&self.server, issuer, key).await
+    pub async fn create_room(&self, issuer: &str, key: Option<&str>) -> Option<String> {
+        create_room(&self.server, issuer, key).await
     }
 
     pub async fn stats(&self) -> Option<StatsResponse> {
@@ -70,18 +70,18 @@ impl ProtocolLocalNetwork {
 
     pub async fn connect_fake_peer(
         &self,
-        channel_uuid: &str,
-        session_id: SessionId,
+        room_id: &str,
+        user_id: UserId,
         key: &str,
     ) -> Option<ProtocolFakePeer> {
-        let token = signed_connect_claims(key, channel_uuid, session_id.clone())?;
+        let token = signed_connect_claims(key, room_id, user_id.clone())?;
         let mut websocket = connect_websocket(&self.server).await?;
         websocket
             .send(tungstenite::Message::Text(
                 encode_client_batch(vec![ClientEnvelope::Message(ClientMessage::Auth(
                     AuthPayload {
                         jwt: token,
-                        channel: Some(channel_uuid.to_owned()),
+                        channel: Some(room_id.to_owned()),
                     },
                 ))])?
                 .into(),
@@ -94,7 +94,7 @@ impl ProtocolLocalNetwork {
         answer_next_server_request(&mut websocket, &mut rtc_peer).await?;
 
         Some(ProtocolFakePeer {
-            session_id,
+            user_id,
             websocket,
             welcome,
             rtc_peer,
@@ -108,16 +108,16 @@ impl ProtocolLocalNetwork {
 
     pub async fn wait_for_consumer_route_active(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
         self.server
             .wait_for_consumer_route_active(
-                channel_uuid,
-                consumer_session_id,
-                producer_session_id,
+                room_id,
+                consumer_user_id,
+                producer_user_id,
                 stream_type,
             )
             .await
@@ -125,16 +125,16 @@ impl ProtocolLocalNetwork {
 
     pub async fn wait_for_consumer_route_inactive(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
         self.server
             .wait_for_consumer_route_inactive(
-                channel_uuid,
-                consumer_session_id,
-                producer_session_id,
+                room_id,
+                consumer_user_id,
+                producer_user_id,
                 stream_type,
             )
             .await
@@ -142,28 +142,28 @@ impl ProtocolLocalNetwork {
 
     pub async fn wait_for_consumer_route_absence(
         &self,
-        channel_uuid: &str,
-        consumer_session_id: &SessionId,
-        producer_session_id: &SessionId,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
         self.server
             .wait_for_consumer_route_absence(
-                channel_uuid,
-                consumer_session_id,
-                producer_session_id,
+                room_id,
+                consumer_user_id,
+                producer_user_id,
                 stream_type,
             )
             .await
     }
 
-    pub async fn wait_for_channel_absence(&self, channel_uuid: &str) -> bool {
-        self.server.wait_for_channel_absence(channel_uuid).await
+    pub async fn wait_for_room_absence(&self, room_id: &str) -> bool {
+        self.server.wait_for_room_absence(room_id).await
     }
 }
 
 pub struct ProtocolFakePeer {
-    session_id: SessionId,
+    user_id: UserId,
     websocket: TestWebSocket,
     welcome: WelcomePayload,
     rtc_peer: FakeRtcPeer,
@@ -171,8 +171,8 @@ pub struct ProtocolFakePeer {
 
 impl ProtocolFakePeer {
     #[must_use]
-    pub fn session_id(&self) -> &SessionId {
-        &self.session_id
+    pub fn user_id(&self) -> &UserId {
+        &self.user_id
     }
 
     #[must_use]
@@ -202,17 +202,17 @@ impl ProtocolFakePeer {
 
     pub async fn update_subscription(
         &mut self,
-        target_session_id: SessionId,
+        target_user_id: UserId,
         states: DownloadStates,
     ) -> Option<()> {
         self.send_message(ClientMessage::Subscribe(SubscribePayload {
-            session_id: target_session_id,
+            user_id: target_user_id,
             states,
         }))
         .await
     }
 
-    pub async fn send_info(&mut self, info: SessionInfo) -> Option<()> {
+    pub async fn send_info(&mut self, info: UserInfo) -> Option<()> {
         self.send_message(ClientMessage::Info(info)).await
     }
 

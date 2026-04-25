@@ -54,7 +54,7 @@ fn protocol_core_non_terminal_close_with_context_recovers_once() {
 // Proves the recovery timer is only live in the recovering state. Any other
 // lifecycle state must ignore that timer id, while recovering must emit one
 // reconnect back to `Connecting`. This keeps timer delivery idempotent and
-// stops stale timers from resurrecting dead sessions.
+// stops stale timers from resurrecting dead users.
 #[kani::proof]
 fn protocol_core_recovery_timer_reconnects_only_from_recovering() {
     let stage = kani::any::<u8>() % 6;
@@ -94,7 +94,7 @@ fn protocol_core_welcome_resets_recovery_backoff() {
 }
 
 // Proves explicit disconnect is a real terminal cleanup step for the current
-// session: it clears reconnect context, suppresses any later recovery timer and
+// user: it clears reconnect context, suppresses any later recovery timer and
 // allows a fresh connect attempt to start from a clean state. This is valuable
 // because disconnect and involuntary close share a lot of machinery but must
 // have very different recovery semantics.
@@ -153,7 +153,7 @@ fn lifecycle_at_lifecycle_state(stage: u8) -> VerificationConnectionLifecycle {
         }
         _ => {
             core = lifecycle_at_stage(1);
-            let _ = core.on_ws_close(u16::from(WebSocketCloseCode::ChannelFull));
+            let _ = core.on_ws_close(u16::from(WebSocketCloseCode::RoomFull));
         }
     }
     core
@@ -163,7 +163,7 @@ fn terminal_close_code(selector: u8) -> u16 {
     match selector {
         0 => u16::from(WebSocketCloseCode::AuthFailed),
         1 => u16::from(WebSocketCloseCode::Kicked),
-        _ => u16::from(WebSocketCloseCode::ChannelFull),
+        _ => u16::from(WebSocketCloseCode::RoomFull),
     }
 }
 

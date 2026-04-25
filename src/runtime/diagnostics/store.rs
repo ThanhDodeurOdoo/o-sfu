@@ -1,8 +1,8 @@
 //! in-memory event storage for the diagnostics
 //!
 //! This module owns the part of diagnostics that must preserve history across
-//! asynchronous runtime parts: recent global events, recent per-channel
-//! events, recent per-session events, etc...
+//! asynchronous runtime parts: recent global events, recent per-room
+//! events, recent per-user events, etc...
 //!
 //! Runtime code records events here as they happen, and the query layer later
 //! reads those bounded histories when building operator responses.
@@ -12,28 +12,28 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
-use o_sfu_protocol::shared::SessionId;
+use o_sfu_protocol::shared::UserId;
 use serde_json::{Map, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::types::DiagnosticsEvent;
-use crate::runtime::ChannelInstanceId;
+use crate::runtime::RoomInstanceId;
 
 const GLOBAL_RECENT_EVENT_LIMIT: usize = 64;
 const SCOPE_RECENT_EVENT_LIMIT: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct SessionScopeKey {
-    channel_uuid: String,
-    session_id: SessionId,
+struct UserScopeKey {
+    room_id: String,
+    user_id: UserId,
 }
 
 #[derive(Debug, Default)]
 struct DiagnosticsStoreState {
-    channel_uuid_by_instance_id: BTreeMap<ChannelInstanceId, String>,
+    room_uuid_by_instance_id: BTreeMap<RoomInstanceId, String>,
     global_recent_events: VecDeque<DiagnosticsEvent>,
-    channel_recent_events: BTreeMap<String, VecDeque<DiagnosticsEvent>>,
-    session_recent_events: BTreeMap<SessionScopeKey, VecDeque<DiagnosticsEvent>>,
+    room_recent_events: BTreeMap<String, VecDeque<DiagnosticsEvent>>,
+    user_recent_events: BTreeMap<UserScopeKey, VecDeque<DiagnosticsEvent>>,
 }
 
 #[derive(Debug, Default)]
@@ -44,34 +44,30 @@ pub(crate) struct DiagnosticsStore {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DiagnosticsEventData {
     fields: Map<String, Value>,
-    pub(crate) channel_uuid: String,
+    pub(crate) room_id: String,
     pub(crate) connection_id: Option<u64>,
     pub(crate) event: &'static str,
     pub(crate) media_worker_id: Option<usize>,
-    pub(crate) session_id: Option<SessionId>,
+    pub(crate) user_id: Option<UserId>,
     pub(crate) transport_media_id: Option<u64>,
 }
 
 impl DiagnosticsEventData {
     #[must_use]
-    pub(crate) fn for_channel(channel_uuid: &str, event: &'static str) -> Self {
+    pub(crate) fn for_room(room_id: &str, event: &'static str) -> Self {
         Self {
-            channel_uuid: channel_uuid.to_owned(),
+            room_id: room_id.to_owned(),
             event,
             ..Self::default()
         }
     }
 
     #[must_use]
-    pub(crate) fn for_session(
-        channel_uuid: &str,
-        session_id: &SessionId,
-        event: &'static str,
-    ) -> Self {
+    pub(crate) fn for_user(room_id: &str, user_id: &UserId, event: &'static str) -> Self {
         Self {
-            channel_uuid: channel_uuid.to_owned(),
+            room_id: room_id.to_owned(),
             event,
-            session_id: Some(session_id.clone()),
+            user_id: Some(user_id.clone()),
             ..Self::default()
         }
     }
@@ -106,25 +102,21 @@ impl DiagnosticsEventData {
 }
 
 impl DiagnosticsStore {
-    pub(crate) fn register_channel_instance(
-        &self,
-        channel_instance_id: ChannelInstanceId,
-        channel_uuid: &str,
-    ) {
+    pub(crate) fn register_room_instance(&self, room_instance_id: RoomInstanceId, room_id: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
-            .channel_uuid_by_instance_id
-            .insert(channel_instance_id, channel_uuid.to_owned());
+            .room_uuid_by_instance_id
+            .insert(room_instance_id, room_id.to_owned());
     }
 
     pub(crate) fn record(&self, data: DiagnosticsEventData) {
         let event = DiagnosticsEvent {
-            channel_uuid: data.channel_uuid.clone(),
+            room_id: data.room_id.clone(),
             connection_id: data.connection_id,
             event: data.event.to_owned(),
             fields: data.fields,
             media_worker_id: data.media_worker_id,
-            session_id: data.session_id.clone(),
+            user_id: data.user_id.clone(),
             timestamp: diagnostics_timestamp_now(),
             transport_media_id: data.transport_media_id,
         };
@@ -135,20 +127,17 @@ impl DiagnosticsStore {
             GLOBAL_RECENT_EVENT_LIMIT,
         );
         push_bounded_event(
-            state
-                .channel_recent_events
-                .entry(data.channel_uuid)
-                .or_default(),
+            state.room_recent_events.entry(data.room_id).or_default(),
             event.clone(),
             SCOPE_RECENT_EVENT_LIMIT,
         );
-        if let Some(session_id) = data.session_id {
+        if let Some(user_id) = data.user_id {
             push_bounded_event(
                 state
-                    .session_recent_events
-                    .entry(SessionScopeKey {
-                        channel_uuid: event.channel_uuid.clone(),
-                        session_id,
+                    .user_recent_events
+                    .entry(UserScopeKey {
+                        room_id: event.room_id.clone(),
+                        user_id,
                     })
                     .or_default(),
                 event,
@@ -157,22 +146,22 @@ impl DiagnosticsStore {
         }
     }
 
-    pub(crate) fn forget_channel(&self, channel_uuid: &str) {
+    pub(crate) fn forget_room(&self, room_id: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
-            .channel_uuid_by_instance_id
-            .retain(|_, known_channel_uuid| known_channel_uuid != channel_uuid);
-        state.channel_recent_events.remove(channel_uuid);
+            .room_uuid_by_instance_id
+            .retain(|_, known_room_id| known_room_id != room_id);
+        state.room_recent_events.remove(room_id);
         state
-            .session_recent_events
-            .retain(|scope, _| scope.channel_uuid != channel_uuid);
+            .user_recent_events
+            .retain(|scope, _| scope.room_id != room_id);
     }
 
-    pub(crate) fn forget_session(&self, channel_uuid: &str, session_id: &SessionId) {
+    pub(crate) fn forget_user(&self, room_id: &str, user_id: &UserId) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.session_recent_events.remove(&SessionScopeKey {
-            channel_uuid: channel_uuid.to_owned(),
-            session_id: session_id.clone(),
+        state.user_recent_events.remove(&UserScopeKey {
+            room_id: room_id.to_owned(),
+            user_id: user_id.clone(),
         });
     }
 
@@ -181,49 +170,49 @@ impl DiagnosticsStore {
         reversed_events(&state.global_recent_events)
     }
 
-    pub(crate) fn channel_recent_events(&self, channel_uuid: &str) -> Vec<DiagnosticsEvent> {
+    pub(crate) fn room_recent_events(&self, room_id: &str) -> Vec<DiagnosticsEvent> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
-            .channel_recent_events
-            .get(channel_uuid)
+            .room_recent_events
+            .get(room_id)
             .map_or_else(Vec::new, reversed_events)
     }
 
-    pub(crate) fn session_recent_events(
+    pub(crate) fn user_recent_events(
         &self,
-        channel_uuid: &str,
-        session_id: &SessionId,
+        room_id: &str,
+        user_id: &UserId,
     ) -> Vec<DiagnosticsEvent> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
-            .session_recent_events
-            .get(&SessionScopeKey {
-                channel_uuid: channel_uuid.to_owned(),
-                session_id: session_id.clone(),
+            .user_recent_events
+            .get(&UserScopeKey {
+                room_id: room_id.to_owned(),
+                user_id: user_id.clone(),
             })
             .map_or_else(Vec::new, reversed_events)
     }
 
-    pub(crate) fn record_transport_session_event(
+    pub(crate) fn record_transport_user_event(
         &self,
-        channel_instance_id: ChannelInstanceId,
-        session_id: &SessionId,
+        room_instance_id: RoomInstanceId,
+        user_id: &UserId,
         event: &'static str,
         media_worker_id: usize,
         fields: Map<String, Value>,
     ) {
-        let channel_uuid = {
+        let room_id = {
             let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state
-                .channel_uuid_by_instance_id
-                .get(&channel_instance_id)
+                .room_uuid_by_instance_id
+                .get(&room_instance_id)
                 .cloned()
         };
-        let Some(channel_uuid) = channel_uuid else {
+        let Some(room_id) = room_id else {
             return;
         };
         self.record(
-            DiagnosticsEventData::for_session(&channel_uuid, session_id, event)
+            DiagnosticsEventData::for_user(&room_id, user_id, event)
                 .with_media_worker_id(media_worker_id)
                 .insert_fields(fields),
         );
@@ -253,11 +242,11 @@ fn reversed_events(events: &VecDeque<DiagnosticsEvent>) -> Vec<DiagnosticsEvent>
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::SessionId;
+    use o_sfu_protocol::shared::UserId;
     use serde_json::{Map, Value};
 
     use super::{DiagnosticsEventData, DiagnosticsStore, GLOBAL_RECENT_EVENT_LIMIT};
-    use crate::runtime::ChannelInstanceId;
+    use crate::runtime::RoomInstanceId;
 
     #[test]
     fn global_events_keep_the_newest_entries_in_reverse_chronological_order() {
@@ -265,7 +254,7 @@ mod tests {
 
         for index in 0..(GLOBAL_RECENT_EVENT_LIMIT + 3) {
             store.record(
-                DiagnosticsEventData::for_channel("channel-a", "event")
+                DiagnosticsEventData::for_room("room-a", "event")
                     .insert_field("index", Value::from(index.to_string())),
             );
         }
@@ -283,67 +272,57 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_a_channel_clears_channel_and_session_scoped_history() {
+    fn forgetting_a_room_clears_room_and_user_scoped_history() {
         let store = DiagnosticsStore::default();
-        let session_id = SessionId::Integer(7);
-        store.record(DiagnosticsEventData::for_channel(
-            "channel-a",
-            "channel.event",
+        let user_id = UserId::Integer(7);
+        store.record(DiagnosticsEventData::for_room("room-a", "room.event"));
+        store.record(DiagnosticsEventData::for_user(
+            "room-a",
+            &user_id,
+            "user.event",
         ));
-        store.record(DiagnosticsEventData::for_session(
-            "channel-a",
-            &session_id,
-            "session.event",
-        ));
-        store.record(DiagnosticsEventData::for_channel(
-            "channel-b",
-            "other.event",
-        ));
+        store.record(DiagnosticsEventData::for_room("room-b", "other.event"));
 
-        store.forget_channel("channel-a");
+        store.forget_room("room-a");
 
-        assert!(store.channel_recent_events("channel-a").is_empty());
-        assert!(
-            store
-                .session_recent_events("channel-a", &session_id)
-                .is_empty()
-        );
-        assert_eq!(store.channel_recent_events("channel-b").len(), 1);
+        assert!(store.room_recent_events("room-a").is_empty());
+        assert!(store.user_recent_events("room-a", &user_id).is_empty());
+        assert_eq!(store.room_recent_events("room-b").len(), 1);
         assert_eq!(store.global_recent_events().len(), 3);
     }
 
     #[test]
-    fn transport_session_events_use_registered_runtime_to_find_channel_scope() {
+    fn transport_user_events_use_registered_runtime_to_find_room_scope() {
         let store = DiagnosticsStore::default();
-        let session_id = SessionId::Integer(9);
+        let user_id = UserId::Integer(9);
         let mut fields = Map::new();
         fields.insert(String::from("state"), Value::from("connected"));
 
-        store.record_transport_session_event(
-            ChannelInstanceId::from_raw(12),
-            &session_id,
+        store.record_transport_user_event(
+            RoomInstanceId::from_raw(12),
+            &user_id,
             "transport.health_changed",
             2,
             fields,
         );
         assert!(store.global_recent_events().is_empty());
 
-        store.register_channel_instance(ChannelInstanceId::from_raw(12), "channel-a");
+        store.register_room_instance(RoomInstanceId::from_raw(12), "room-a");
         let mut fields = Map::new();
         fields.insert(String::from("state"), Value::from("connected"));
-        store.record_transport_session_event(
-            ChannelInstanceId::from_raw(12),
-            &session_id,
+        store.record_transport_user_event(
+            RoomInstanceId::from_raw(12),
+            &user_id,
             "transport.health_changed",
             2,
             fields,
         );
 
-        let events = store.session_recent_events("channel-a", &session_id);
+        let events = store.user_recent_events("room-a", &user_id);
         assert_eq!(events.len(), 1);
         assert_eq!(
-            events.first().map(|event| event.channel_uuid.as_str()),
-            Some("channel-a")
+            events.first().map(|event| event.room_id.as_str()),
+            Some("room-a")
         );
         assert_eq!(
             events.first().and_then(|event| event.media_worker_id),

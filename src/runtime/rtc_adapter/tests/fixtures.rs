@@ -12,7 +12,7 @@ pub(super) use std::{
     time::{Duration, Instant},
 };
 
-pub(super) use o_sfu_protocol::shared::SessionId;
+pub(super) use o_sfu_protocol::shared::UserId;
 pub(super) use o_sfu_router::{
     MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding,
 };
@@ -40,25 +40,20 @@ pub(super) use crate::{
 };
 
 pub(super) fn transport_key(
-    channel_instance_id: u64,
+    room_instance_id: u64,
     connection_id: u64,
-    session_id: SessionId,
+    user_id: UserId,
 ) -> TransportSessionKey {
-    transport_key_on_worker(channel_instance_id, 0, connection_id, session_id)
+    transport_key_on_worker(room_instance_id, 0, connection_id, user_id)
 }
 
 pub(super) fn transport_key_on_worker(
-    channel_instance_id: u64,
+    room_instance_id: u64,
     media_worker_id: usize,
     connection_id: u64,
-    session_id: SessionId,
+    user_id: UserId,
 ) -> TransportSessionKey {
-    test_transport_session_key(
-        channel_instance_id,
-        media_worker_id,
-        connection_id,
-        session_id,
-    )
+    test_transport_session_key(room_instance_id, media_worker_id, connection_id, user_id)
 }
 
 pub(super) fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {

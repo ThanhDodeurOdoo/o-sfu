@@ -6,9 +6,9 @@
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! |  `- session_protocol  -> authenticated signaling flow for one connected session
-//! |- channel              -> room allocation, membership, negotiation, and recording policy
-//! |- packet_sink_registry -> channel-scoped side-effect sinks shared by transport and recording
+//! |  `- session_protocol  -> authenticated signaling flow for one connected user
+//! |- room              -> room allocation, membership, negotiation, and recording policy
+//! |- packet_sink_registry -> room-scoped side-effect sinks shared by transport and recording
 //! |- telemetry            -> runtime-owned tracing config and event-name conventions
 //! |- transport_adapter    -> runtime-facing transport service boundary
 //! |  `- rtc_adapter       -> WebRTC worker and packet execution engine
@@ -29,7 +29,6 @@ use tracing::info;
 use crate::config::Config;
 
 pub(crate) mod auth;
-pub(crate) mod channel;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
 mod ids;
@@ -38,6 +37,7 @@ mod metrics_export;
 mod packet_sink_registry;
 mod recording;
 mod request_origin;
+pub(crate) mod room;
 mod rtc_adapter;
 pub(crate) mod source_model;
 pub(crate) mod telemetry;
@@ -48,14 +48,14 @@ pub mod testing;
 mod transport_adapter;
 pub(crate) mod websocket_server;
 
-use channel::{ChannelAdmissionPolicy, ChannelManager, ChannelManagerConfig, ChannelRuntimePolicy};
 use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
-pub(crate) use ids::{ChannelInstanceId, ConnectionId};
+pub(crate) use ids::{ConnectionId, RoomInstanceId};
 use metrics::RuntimeMetrics;
-use packet_sink_registry::ChannelPacketSinkRegistry;
+use packet_sink_registry::RoomPacketSinkRegistry;
 use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
+use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy};
 pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
 pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
 use telemetry::init_tracing;
@@ -68,12 +68,12 @@ use transport_adapter::{
 /// Process-global application shell for the server process.
 ///
 /// `Runtime` owns the long-lived subsystems that every request shares: configuration,
-/// channel allocation, metrics,and the transport backend. Per-requets entrypoints take
+/// room allocation, metrics,and the transport backend. Per-requets entrypoints take
 /// cheap clones of these dependencies through [`RuntimeState`].
 #[derive(Debug)]
 pub struct Runtime {
     pub config: Config,
-    channel_manager: Arc<ChannelManager>,
+    room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
@@ -82,7 +82,7 @@ pub struct Runtime {
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: Config,
-    channel_manager: Arc<ChannelManager>,
+    room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
@@ -93,7 +93,7 @@ impl Runtime {
     pub fn new(config: Config) -> Self {
         let diagnostics = Arc::new(DiagnosticsStore::default());
         let metrics = Arc::new(RuntimeMetrics::default());
-        let recording_media_tap = Arc::new(ChannelPacketSinkRegistry::default());
+        let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
         let transport_adapter = build_transport_adapter(
             &config,
             Arc::clone(&diagnostics),
@@ -101,10 +101,10 @@ impl Runtime {
             Arc::clone(&metrics),
         );
         let rtc_media_worker_count = config.rtc_media_worker_count;
-        let channel_runtime_policy = ChannelRuntimePolicy::new(
-            ChannelAdmissionPolicy::new(config.channel_size),
+        let room_runtime_policy = RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(config.room_size),
             config.feature_flags,
-            channel::rtp_capabilities::router_rtp_capabilities(config.codec_flags),
+            room::rtp_capabilities::router_rtp_capabilities(config.codec_flags),
         );
         info!("{}", config.log_view(process::id()));
         info!(
@@ -113,8 +113,8 @@ impl Runtime {
         );
         Self {
             config,
-            channel_manager: Arc::new(ChannelManager::new(
-                ChannelManagerConfig::new(rtc_media_worker_count, channel_runtime_policy),
+            room_manager: Arc::new(RoomManager::new(
+                RoomManagerConfig::new(rtc_media_worker_count, room_runtime_policy),
                 recording_media_tap,
                 Arc::clone(&diagnostics),
                 Arc::clone(&metrics),
@@ -127,14 +127,14 @@ impl Runtime {
 
     async fn run_until_stopped(self) -> Result<()> {
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
-            Arc::clone(&self.channel_manager),
+            Arc::clone(&self.room_manager),
             self.transport_adapter.clone(),
             subscribe_source_policy_updates(&self.transport_adapter),
             self.transport_adapter.clone(),
         );
         let result = serve_http(RuntimeState {
             config: self.config,
-            channel_manager: self.channel_manager,
+            room_manager: self.room_manager,
             diagnostics: self.diagnostics,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,
@@ -146,13 +146,13 @@ impl Runtime {
     }
 }
 
-/// Channel state decides which producer layers should remain routable from room-level
+/// Room state decides which producer layers should remain routable from room-level
 /// facts like membership and publication state, while the transport layer owns the
 /// active-speaker observations that can change without any room mutation. This task
 /// waits on explicit transport-side updates plus the current active-speaker expiry
 /// deadline instead of polling the whole process on a fixed interval.
 fn spawn_source_packet_policy_update_task(
-    channels: Arc<ChannelManager>,
+    rooms: Arc<RoomManager>,
     observability_port: RuntimeTransportAdapter,
     updates: transport_adapter::SourcePolicyUpdateSubscription,
     media_port: RuntimeTransportAdapter,
@@ -161,12 +161,12 @@ fn spawn_source_packet_policy_update_task(
     tokio::spawn(async move {
         loop {
             let next_deadline = next_active_speaker_deadline(&observability_port).await;
-            let mut dirty_channel_instance_ids = match next_deadline {
+            let mut dirty_room_instance_ids = match next_deadline {
                 Some(next_deadline) => {
                     tokio::select! {
-                        dirty_channel_instance_ids = updates.wait_for_update() => dirty_channel_instance_ids,
+                        dirty_room_instance_ids = updates.wait_for_update() => dirty_room_instance_ids,
                         () = time::sleep_until(Instant::from_std(next_deadline)) => {
-                            expired_active_speaker_channel_instance_ids(
+                            expired_active_speaker_room_instance_ids(
                                 &observability_port,
                                 StdInstant::now(),
                             )
@@ -176,13 +176,13 @@ fn spawn_source_packet_policy_update_task(
                 }
                 None => updates.wait_for_update().await,
             };
-            dirty_channel_instance_ids.extend(updates.take_pending_updates());
-            if dirty_channel_instance_ids.is_empty() {
+            dirty_room_instance_ids.extend(updates.take_pending_updates());
+            if dirty_room_instance_ids.is_empty() {
                 continue;
             }
             sync_source_packet_selection_policies(
-                &channels,
-                &dirty_channel_instance_ids,
+                &rooms,
+                &dirty_room_instance_ids,
                 &observability_port,
                 &media_port,
             )
@@ -203,24 +203,24 @@ async fn next_active_speaker_deadline(
     observability_port.next_active_speaker_deadline().await
 }
 
-async fn expired_active_speaker_channel_instance_ids(
+async fn expired_active_speaker_room_instance_ids(
     observability_port: &impl ObservabilityPort,
     now: StdInstant,
-) -> BTreeSet<ChannelInstanceId> {
+) -> BTreeSet<RoomInstanceId> {
     observability_port
-        .expired_active_speaker_channel_instance_ids(now)
+        .expired_active_speaker_room_instance_ids(now)
         .await
 }
 
 async fn sync_source_packet_selection_policies(
-    channels: &ChannelManager,
-    channel_instance_ids: &BTreeSet<ChannelInstanceId>,
+    rooms: &RoomManager,
+    room_instance_ids: &BTreeSet<RoomInstanceId>,
     observability_port: &impl ObservabilityPort,
     media_port: &impl MediaPort,
 ) {
-    channels
+    rooms
         .sync_source_packet_selection_policies_for_runtime_ids(
-            channel_instance_ids,
+            room_instance_ids,
             observability_port,
             media_port,
         )

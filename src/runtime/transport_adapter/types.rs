@@ -4,45 +4,45 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_protocol::shared::SessionId;
+use o_sfu_protocol::shared::UserId;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
-use crate::runtime::{ChannelInstanceId, ConnectionId};
+use crate::runtime::{ConnectionId, RoomInstanceId};
 
-/// Channel-scoped transport-adapter session identity.
+/// Room-scoped transport-adapter user identity.
 ///
-/// A `SessionId` alone is not unique across the server: the same id can appear
-/// in different channels simultaneously. This composite key allows one session
-/// to be uniquely identified by the owning channel instance, media worker,
-/// signaling connection, and session id.
+/// A `UserId` alone is not unique across the server: the same id can appear
+/// in different rooms simultaneously. This composite key allows one user
+/// to be uniquely identified by the owning room instance, media worker,
+/// signaling connection, and user id.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransportSessionKey {
-    channel_instance: ChannelInstanceId,
+    room_instance: RoomInstanceId,
     media_worker: usize,
     connection: ConnectionId,
-    session: Arc<SessionId>,
+    user: Arc<UserId>,
 }
 
 impl TransportSessionKey {
     #[must_use]
     pub(crate) fn new(
-        channel_instance_id: ChannelInstanceId,
+        room_instance_id: RoomInstanceId,
         media_worker_id: usize,
         connection_id: ConnectionId,
-        session_id: SessionId,
+        user_id: UserId,
     ) -> Self {
         Self {
-            channel_instance: channel_instance_id,
+            room_instance: room_instance_id,
             media_worker: media_worker_id,
             connection: connection_id,
-            session: Arc::new(session_id),
+            user: Arc::new(user_id),
         }
     }
 
     #[must_use]
-    pub(crate) const fn channel_instance_id(&self) -> ChannelInstanceId {
-        self.channel_instance
+    pub(crate) const fn room_instance_id(&self) -> RoomInstanceId {
+        self.room_instance
     }
 
     #[must_use]
@@ -51,8 +51,8 @@ impl TransportSessionKey {
     }
 
     #[must_use]
-    pub(crate) fn session_id(&self) -> &SessionId {
-        self.session.as_ref()
+    pub(crate) fn user_id(&self) -> &UserId {
+        self.user.as_ref()
     }
 }
 
@@ -100,14 +100,14 @@ impl AppliedSessionAnswer {
     }
 }
 
-/// Point-in-time bitrate measurement aggregated across one or more transport sessions.
+/// Point-in-time bitrate measurement aggregated across one or more transport users.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TransportBitrateSnapshot {
     pub(crate) total: u64,
     pub(crate) per_media: Vec<(TransportMediaId, u64)>,
 }
 
-/// Latest receiver-side bandwidth estimates keyed by transport session.
+/// Latest receiver-side bandwidth estimates keyed by transport user.
 ///
 /// These values are produced by the WebRTC egress BWE path and consumed by
 /// room-owned media policy. They are cold-path control-plane facts, not packet

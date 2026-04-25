@@ -1,4 +1,4 @@
-//! Pure state types and session scheduling for the RTC transport adapter.
+//! Pure state types and user scheduling for the RTC transport adapter.
 //!
 //! `test_support` owns the transport lifecycle bookkeeping and state mutators
 //! that exist only for deterministic adapter tests.
@@ -83,7 +83,7 @@ pub(super) struct PendingRecvStream {
 #[derive(Default)]
 pub(super) struct RtcBootstrapState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
-    pub(super) sessions: BTreeMap<TransportSessionKey, RtcSessionState>,
+    pub(super) users: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     pub(super) route_control: RouteControlState,
     pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
@@ -179,12 +179,11 @@ impl RtcSnapshotState {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         self.live_sessions.remove(session_key);
+        self.remote_addr_demux.forget_user_remote_addrs(session_key);
         self.remote_addr_demux
-            .forget_session_remote_addrs(session_key);
+            .forget_user_local_ice_ufrag(session_key);
         self.remote_addr_demux
-            .forget_session_local_ice_ufrag(session_key);
-        self.remote_addr_demux
-            .forget_session_remote_candidate_addrs(session_key);
+            .forget_user_remote_candidate_addrs(session_key);
         self.receiver_bandwidth_by_session.remove(session_key);
         self.transport_health_by_session.remove(session_key)
     }

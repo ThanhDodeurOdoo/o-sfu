@@ -3,7 +3,7 @@
 //! The RTC adapter can observe RFC 6464 audio-level and VAD metadata while it
 //! routes packets. This module turns those packet facts into a bounded
 //! transport-owned active-speaker signal and a packet gate for silent audio
-//! sources. Channel policy later maps the active audio sources into room layout
+//! sources. Room policy later maps the active audio sources into room layout
 //! intent.
 
 use std::time::{Duration, Instant};

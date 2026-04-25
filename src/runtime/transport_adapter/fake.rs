@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use o_sfu_protocol::shared::SessionId;
+use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind,
     MediaStream as RouterRtpParameters, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
@@ -16,7 +16,7 @@ use tokio::time::sleep;
 
 use super::source_policy::SourcePolicySignal;
 #[cfg(test)]
-use crate::runtime::ChannelInstanceId;
+use crate::runtime::RoomInstanceId;
 use crate::runtime::transport_adapter::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
@@ -31,38 +31,38 @@ const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n"
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FakeWebRtcEvent {
     SessionClosed {
-        session_id: SessionId,
+        user_id: UserId,
     },
     PublishMediaRequested {
-        session_id: SessionId,
+        user_id: UserId,
         media_kind: MediaKind,
     },
     ConsumeMediaRequested {
-        consumer_session_id: SessionId,
-        source_session_id: SessionId,
+        consumer_user_id: UserId,
+        source_user_id: UserId,
         media_kind: MediaKind,
     },
     MediaRemoved {
-        session_id: SessionId,
+        user_id: UserId,
         transport_media_id: TransportMediaId,
     },
     ProducerActivityUpdated {
-        session_id: SessionId,
+        user_id: UserId,
         active: bool,
     },
     ConsumerActivityUpdated {
-        consumer_session_id: SessionId,
-        source_session_id: SessionId,
+        consumer_user_id: UserId,
+        source_user_id: UserId,
         active: bool,
     },
     ConsumerPacketGateUpdated {
-        consumer_session_id: SessionId,
-        source_session_id: SessionId,
+        consumer_user_id: UserId,
+        source_user_id: UserId,
         packet_gate: SourcePacketGate,
     },
     ConsumerKeyframeRequested {
-        consumer_session_id: SessionId,
-        source_session_id: SessionId,
+        consumer_user_id: UserId,
+        source_user_id: UserId,
     },
 }
 
@@ -74,7 +74,7 @@ pub(crate) struct FakeWebRtcAdapter {
     media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
-    receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<SessionId, u64>>>,
+    receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<UserId, u64>>>,
     delays: Arc<Mutex<FakeWebRtcAdapterDelays>>,
     source_policy_signal: Arc<SourcePolicySignal>,
 }
@@ -200,13 +200,13 @@ impl FakeWebRtcAdapter {
 
     #[cfg(test)]
     pub(crate) fn set_active_speaker_source_snapshot(&self, sources: Vec<ActiveSpeakerSource>) {
-        let dirty_channel_instance_ids = match self.media_owners.lock() {
+        let dirty_room_instance_ids = match self.media_owners.lock() {
             Ok(media_owners) => sources
                 .iter()
                 .filter_map(|source| {
                     media_owners
                         .get(&source.transport_media_id())
-                        .map(TransportSessionKey::channel_instance_id)
+                        .map(TransportSessionKey::room_instance_id)
                 })
                 .collect::<Vec<_>>(),
             Err(poisoned) => poisoned
@@ -216,7 +216,7 @@ impl FakeWebRtcAdapter {
                     sources
                         .iter()
                         .any(|source| source.transport_media_id() == *transport_media_id)
-                        .then_some(session_key.channel_instance_id())
+                        .then_some(session_key.room_instance_id())
                 })
                 .collect::<Vec<_>>(),
         };
@@ -228,46 +228,44 @@ impl FakeWebRtcAdapter {
                 *poisoned.into_inner() = sources;
             }
         }
-        for channel_instance_id in dirty_channel_instance_ids {
-            self.source_policy_signal.mark_dirty(channel_instance_id);
+        for room_instance_id in dirty_room_instance_ids {
+            self.source_policy_signal.mark_dirty(room_instance_id);
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn set_receiver_bandwidth_estimate(&self, session_id: SessionId, estimate_bps: u64) {
-        let dirty_channel_instance_ids = match self.media_owners.lock() {
+    pub(crate) fn set_receiver_bandwidth_estimate(&self, user_id: UserId, estimate_bps: u64) {
+        let dirty_room_instance_ids = match self.media_owners.lock() {
             Ok(media_owners) => media_owners
                 .values()
                 .filter_map(|session_key| {
-                    (session_key.session_id() == &session_id)
-                        .then_some(session_key.channel_instance_id())
+                    (session_key.user_id() == &user_id).then_some(session_key.room_instance_id())
                 })
                 .collect::<Vec<_>>(),
             Err(poisoned) => poisoned
                 .into_inner()
                 .values()
                 .filter_map(|session_key| {
-                    (session_key.session_id() == &session_id)
-                        .then_some(session_key.channel_instance_id())
+                    (session_key.user_id() == &user_id).then_some(session_key.room_instance_id())
                 })
                 .collect::<Vec<_>>(),
         };
         match self.receiver_bandwidth_estimates.lock() {
             Ok(mut estimates) => {
-                estimates.insert(session_id, estimate_bps);
+                estimates.insert(user_id, estimate_bps);
             }
             Err(poisoned) => {
-                poisoned.into_inner().insert(session_id, estimate_bps);
+                poisoned.into_inner().insert(user_id, estimate_bps);
             }
         }
-        for channel_instance_id in dirty_channel_instance_ids {
-            self.source_policy_signal.mark_dirty(channel_instance_id);
+        for room_instance_id in dirty_room_instance_ids {
+            self.source_policy_signal.mark_dirty(room_instance_id);
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn mark_source_policy_dirty(&self, channel_instance_id: ChannelInstanceId) {
-        self.source_policy_signal.mark_dirty(channel_instance_id);
+    pub(crate) fn mark_source_policy_dirty(&self, room_instance_id: RoomInstanceId) {
+        self.source_policy_signal.mark_dirty(room_instance_id);
     }
 }
 
@@ -315,7 +313,7 @@ impl FakeWebRtcAdapter {
                 .iter()
                 .filter_map(|session_key| {
                     estimates
-                        .get(session_key.session_id())
+                        .get(session_key.user_id())
                         .copied()
                         .map(|estimate_bps| (session_key.clone(), estimate_bps))
                 })
@@ -400,7 +398,7 @@ impl FakeWebRtcAdapter {
             }
         }
         self.record_event(FakeWebRtcEvent::SessionClosed {
-            session_id: session_key.session_id().clone(),
+            user_id: session_key.user_id().clone(),
         });
         Ok(())
     }
@@ -431,7 +429,7 @@ impl FakeWebRtcAdapter {
             }
         }
         self.record_event(FakeWebRtcEvent::MediaRemoved {
-            session_id: session_key.session_id().clone(),
+            user_id: session_key.user_id().clone(),
             transport_media_id,
         });
         Ok(())
@@ -471,7 +469,7 @@ impl FakeWebRtcAdapter {
         _rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::PublishMediaRequested {
-            session_id: session_key.session_id().clone(),
+            user_id: session_key.user_id().clone(),
             media_kind,
         });
         if let Some(delay) = self.delay_for_publish_media() {
@@ -514,8 +512,8 @@ impl FakeWebRtcAdapter {
         _consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::ConsumeMediaRequested {
-            consumer_session_id: consumer_session_key.session_id().clone(),
-            source_session_id: source_session_key.session_id().clone(),
+            consumer_user_id: consumer_session_key.user_id().clone(),
+            source_user_id: source_session_key.user_id().clone(),
             media_kind,
         });
         if let Some(delay) = self.delay_for_consume_media() {
@@ -536,7 +534,7 @@ impl FakeWebRtcAdapter {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::ProducerActivityUpdated {
-            session_id: session_key.session_id().clone(),
+            user_id: session_key.user_id().clone(),
             active,
         });
         if let Some(delay) = self.delay_for_producer_activity() {
@@ -558,8 +556,8 @@ impl FakeWebRtcAdapter {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::ConsumerActivityUpdated {
-            consumer_session_id: consumer_session_key.session_id().clone(),
-            source_session_id: source_session_key.session_id().clone(),
+            consumer_user_id: consumer_session_key.user_id().clone(),
+            source_user_id: source_session_key.user_id().clone(),
             active,
         });
         Ok(())
@@ -578,8 +576,8 @@ impl FakeWebRtcAdapter {
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::ConsumerPacketGateUpdated {
-            consumer_session_id: consumer_session_key.session_id().clone(),
-            source_session_id: source_session_key.session_id().clone(),
+            consumer_user_id: consumer_session_key.user_id().clone(),
+            source_user_id: source_session_key.user_id().clone(),
             packet_gate,
         });
         Ok(())
@@ -617,8 +615,8 @@ impl FakeWebRtcAdapter {
         _source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeWebRtcEvent::ConsumerKeyframeRequested {
-            consumer_session_id: consumer_session_key.session_id().clone(),
-            source_session_id: source_session_key.session_id().clone(),
+            consumer_user_id: consumer_session_key.user_id().clone(),
+            source_user_id: source_session_key.user_id().clone(),
         });
         Ok(())
     }

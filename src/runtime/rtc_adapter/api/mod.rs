@@ -7,7 +7,7 @@
 //! role of the dir:
 //!
 //! * **Backend Service Surface**: provide the concrete RTC backend methods the
-//!   runtime transport boundary uses for negotiation, media, session cleanup,
+//!   runtime transport boundary uses for negotiation, media, user cleanup,
 //!   and observability without adding a second selector-facing service layer.
 //! * **Worker Lifecycle**: Manages the lazy bootstrapping and shutdown of the
 //!   [`packet_loop`] workers.

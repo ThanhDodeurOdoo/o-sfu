@@ -33,7 +33,7 @@ use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::ChannelPacketSinkRegistry, transport_adapter::SourcePolicySignal,
+        packet_sink_registry::RoomPacketSinkRegistry, transport_adapter::SourcePolicySignal,
     },
 };
 
@@ -44,7 +44,7 @@ pub(crate) struct PacketLoopConfig {
     pub(crate) rtc_port_range: RtcPortRange,
     pub(crate) codec_flags: MediaCodecFlags,
     pub(crate) diagnostics: Arc<DiagnosticsStore>,
-    pub(crate) packet_sink_registry: Arc<ChannelPacketSinkRegistry>,
+    pub(crate) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(crate) relay_registry: Arc<RelayRegistry>,
     pub(crate) source_policy_signal: Arc<SourcePolicySignal>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
@@ -73,11 +73,11 @@ enum NextLoopInput {
 /// orchestrating the high-frequency tasks of the RTC adapter:
 ///
 /// 1. **Command Processing**: Drains control commands that modify the topology or state.
-/// 2. **Media Pumping**: Drains media from all active sessions and relay channels.
+/// 2. **Media Pumping**: Drains media from all active users and relay channels.
 /// 3. **Packet Transmission**: Flushes all pending transmissions (media, keyframe requests)
 ///    to the underlying UDP socket.
 /// 4. **Socket Reception**: Waits for incoming UDP datagrams and routes them to the
-///    appropriate session.
+///    appropriate user.
 ///
 /// This loop is "biased" towards control commands and shutdown to ensure the
 /// SFU remains responsive to management even under heavy media load.

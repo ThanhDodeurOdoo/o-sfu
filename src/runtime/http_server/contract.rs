@@ -1,8 +1,8 @@
 //! HTTP API Contracts
 //!
 //! This module defines the paths and JSON payloads for the SFU's HTTP
-//! These endpoints are primarily used by the Odoo server to manage channels, disconnect
-//! sessions, and get metrics.
+//! These endpoints are primarily used by the Odoo server to manage rooms, disconnect
+//! users, and get metrics.
 
 use serde::{Deserialize, Serialize};
 pub const METRICS_PATH: &str = "/metrics";
@@ -11,7 +11,7 @@ pub const STATS_PATH: &str = "/v1/stats";
 pub const CHANNEL_PATH: &str = "/v1/channel";
 pub const DISCONNECT_PATH: &str = "/v1/disconnect";
 pub const DIAGNOSTICS_SUMMARY_PATH: &str = "/internal/diagnostics/summary";
-pub const DIAGNOSTICS_CHANNELS_PATH: &str = "/internal/diagnostics/channels";
+pub const DIAGNOSTICS_ROOMS_PATH: &str = "/internal/diagnostics/rooms";
 
 /// Response payload for the `/v1/noop` health-check endpoint.
 /// used by the operators (infra team) to check if the SFU is up
@@ -30,28 +30,28 @@ impl NoopResponse {
     }
 }
 
-/// Query parameters for the `/v1/channel` creation endpoint.
+/// Query parameters for the `/v1/room` creation endpoint.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateChannelQuery {
-    /// Whether the channel supports WebRTC features. Defaults to `true`.
+pub struct CreateRoomQuery {
+    /// Whether the room supports WebRTC features. Defaults to `true`.
     #[serde(rename = "webRTC", skip_serializing_if = "Option::is_none")]
     pub web_rtc: Option<bool>,
-    /// Optional webhook address to send recordings to when a recording session finishes.
+    /// Optional webhook address to send recordings to when a recording user finishes.
     #[serde(rename = "recordingAddress", skip_serializing_if = "Option::is_none")]
     pub recording_address: Option<String>,
 }
 
-impl CreateChannelQuery {
+impl CreateRoomQuery {
     #[must_use]
     pub fn web_rtc_enabled(&self) -> bool {
         self.web_rtc.unwrap_or(true)
     }
 }
 
-/// Response payload for a successfully created channel.
+/// Response payload for a successfully created room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChannelResponse {
-    /// The unique identifier allocated for the newly created channel.
+pub struct RoomResponse {
+    /// The unique identifier allocated for the newly created room.
     pub uuid: String,
     /// The base URL (e.g., `https://sfu.example.com`) where clients should connect via WebSocket.
     pub url: String,
@@ -71,51 +71,52 @@ pub struct IncomingBitRateStats {
     pub camera: u64,
 }
 
-/// Aggregated statistics for all active sessions within a channel.
+/// Aggregated statistics for all active users within a room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionsStats {
-    /// Breakdown of incoming bitrates for the channel.
+pub struct UsersStats {
+    /// Breakdown of incoming bitrates for the room.
     pub incoming_bit_rate: IncomingBitRateStats,
-    /// Total number of connected sessions in this channel.
+    /// Total number of connected users in this room.
     pub count: u64,
-    /// Number of sessions currently publishing a camera stream.
+    /// Number of users currently publishing a camera stream.
     pub camera_count: u64,
-    /// Number of sessions currently publishing a screen share stream.
+    /// Number of users currently publishing a screen share stream.
     pub screen_count: u64,
 }
 
-/// Statistics payload for an individual active channel.
+/// Statistics payload for an individual active room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChannelStats {
-    /// ISO 8601 formatted timestamp of when the channel was created.
+pub struct RoomStats {
+    /// ISO 8601 formatted timestamp of when the room was created.
     pub create_date: String,
-    /// The channel's unique identifier.
+    /// The room's unique identifier.
     pub uuid: String,
-    /// The remote IP address that requested the channel creation.
+    /// The remote IP address that requested the room creation.
     pub remote_address: String,
-    /// Aggregated session statistics for the channel.
-    pub sessions_stats: SessionsStats,
-    /// Whether WebRTC is enabled for this channel.
+    /// Aggregated user statistics for the room.
+    #[serde(rename = "sessionsStats")]
+    pub users_stats: UsersStats,
+    /// Whether WebRTC is enabled for this room.
     pub web_rtc_enabled: bool,
 }
 
-/// Response payload for the `/v1/stats` endpoint, containing statistics for all active channels.
-pub type StatsResponse = Vec<ChannelStats>;
+/// Response payload for the `/v1/stats` endpoint, containing statistics for all active rooms.
+pub type StatsResponse = Vec<RoomStats>;
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
-        ChannelResponse, ChannelStats, CreateChannelQuery, IncomingBitRateStats, NoopResponse,
-        SessionsStats, StatsResponse,
+        CreateRoomQuery, IncomingBitRateStats, NoopResponse, RoomResponse, RoomStats,
+        StatsResponse, UsersStats,
     };
 
     #[test]
     fn route_types_round_trip() -> serde_json::Result<()> {
-        let query = CreateChannelQuery {
+        let query = CreateRoomQuery {
             web_rtc: Some(false),
             recording_address: Some("https://record.example.com".to_owned()),
         };
@@ -125,7 +126,7 @@ mod tests {
         });
         assert_eq!(serde_json::to_value(&query)?, expected_query);
         assert_eq!(
-            serde_json::from_value::<CreateChannelQuery>(expected_query)?,
+            serde_json::from_value::<CreateRoomQuery>(expected_query)?,
             query
         );
         assert!(!query.web_rtc_enabled());
@@ -135,25 +136,22 @@ mod tests {
         assert_eq!(serde_json::to_value(&noop)?, expected_noop);
         assert_eq!(serde_json::from_value::<NoopResponse>(expected_noop)?, noop);
 
-        let channel = ChannelResponse {
+        let room = RoomResponse {
             uuid: "31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned(),
             url: "https://sfu.example.com".to_owned(),
         };
-        let expected_channel = json!({
+        let expected_room = json!({
             "uuid": "31dcc5dc-4d26-453e-9bca-ab1f5d268303",
             "url": "https://sfu.example.com"
         });
-        assert_eq!(serde_json::to_value(&channel)?, expected_channel);
-        assert_eq!(
-            serde_json::from_value::<ChannelResponse>(expected_channel)?,
-            channel
-        );
+        assert_eq!(serde_json::to_value(&room)?, expected_room);
+        assert_eq!(serde_json::from_value::<RoomResponse>(expected_room)?, room);
 
-        let stats: StatsResponse = vec![ChannelStats {
+        let stats: StatsResponse = vec![RoomStats {
             create_date: "2026-04-02T01:02:03.000Z".to_owned(),
             uuid: "31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned(),
             remote_address: "203.0.113.10".to_owned(),
-            sessions_stats: SessionsStats {
+            users_stats: UsersStats {
                 incoming_bit_rate: IncomingBitRateStats {
                     total: 1200,
                     screen: 400,

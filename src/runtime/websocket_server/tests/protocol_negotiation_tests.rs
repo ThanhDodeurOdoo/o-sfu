@@ -5,15 +5,15 @@ use super::fixtures::*;
 use crate::runtime::test_rtp_samples::sample_simulcast_video_rtp_parameters;
 
 #[tokio::test]
-async fn protocol_session_serializes_topology_renegotiations() {
-    let Some((server, channel, mut publisher_socket, mut subscriber_socket)) =
+async fn protocol_user_serializes_topology_renegotiations() {
+    let Some((server, room, mut publisher_socket, mut subscriber_socket)) =
         setup_negotiated_protocol_pair().await
     else {
         return;
     };
 
     assert!(
-        publish_until_ready(&channel, &server, StreamType::Camera, "cam-queue",)
+        publish_until_ready(&room, &server, StreamType::Camera, "cam-queue",)
             .await
             .is_some(),
         "publisher should be ready"
@@ -34,7 +34,7 @@ async fn protocol_session_serializes_topology_renegotiations() {
     };
 
     assert!(
-        publish_until_ready(&channel, &server, StreamType::Screen, "screen-queue",)
+        publish_until_ready(&room, &server, StreamType::Screen, "screen-queue",)
             .await
             .is_some(),
         "second publish should succeed"
@@ -72,19 +72,17 @@ async fn protocol_session_serializes_topology_renegotiations() {
 }
 
 async fn setup_negotiated_protocol_pair()
--> Option<(TestServer, Arc<Channel>, TestWebSocket, TestWebSocket)> {
+-> Option<(TestServer, Arc<Room>, TestWebSocket, TestWebSocket)> {
     let server = spawn_protocol_test_server(1_000, 100).await?;
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-negotiation",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let publisher_token =
-        signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(81))?;
-    let subscriber_token =
-        signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(82))?;
+    let publisher_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(81))?;
+    let subscriber_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(82))?;
     let mut publisher_socket = authenticate_with_jwt(&server, &publisher_token).await?;
     let mut subscriber_socket = authenticate_with_jwt(&server, &subscriber_token).await?;
 
@@ -93,7 +91,7 @@ async fn setup_negotiated_protocol_pair()
     answer_initial_offer(&mut publisher_socket, "publisher-answer").await?;
     answer_initial_offer(&mut subscriber_socket, "subscriber-answer").await?;
 
-    Some((server, channel, publisher_socket, subscriber_socket))
+    Some((server, room, publisher_socket, subscriber_socket))
 }
 
 async fn answer_initial_offer(websocket: &mut TestWebSocket, answer_name: &str) -> Option<()> {
@@ -110,18 +108,18 @@ async fn answer_initial_offer(websocket: &mut TestWebSocket, answer_name: &str) 
 }
 
 async fn publish_until_ready(
-    channel: &Arc<Channel>,
+    room: &Arc<Room>,
     server: &TestServer,
     stream_type: StreamType,
     mid: &str,
 ) -> Option<String> {
     timeout(Duration::from_secs(1), async {
         loop {
-            if let Some(producer_id) = channel
+            if let Some(producer_id) = room
                 .test_api()
                 .media()
                 .publish_track(
-                    &SessionId::Integer(81),
+                    &UserId::Integer(81),
                     stream_type,
                     MediaKind::Video,
                     sample_video_rtp_parameters(mid),
@@ -152,13 +150,13 @@ async fn assert_track_snapshot(
     assert_eq!(actual_bindings.len(), bindings.len());
     for (actual, expected) in actual_bindings.iter().zip(bindings.iter()) {
         assert_eq!(actual.mid, expected.mid);
-        assert_eq!(actual.session_id, expected.session_id);
+        assert_eq!(actual.user_id, expected.user_id);
         assert_eq!(actual.stream_type, expected.stream_type);
         assert_eq!(actual.active, expected.active);
         let Some(source) = actual.source.as_ref() else {
             panic!("track snapshot should carry source descriptors");
         };
-        assert_eq!(source.session_id, expected.session_id);
+        assert_eq!(source.user_id, expected.user_id);
         assert_eq!(source.stream_type, expected.stream_type);
         assert_eq!(source.active, expected.active);
         assert_eq!(source.mid.as_deref(), Some(expected.mid.as_str()));
@@ -186,7 +184,7 @@ async fn expect_renegotiation_request(
 fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
     TrackBinding {
         mid: mid.to_owned(),
-        session_id: SessionId::Integer(81),
+        user_id: UserId::Integer(81),
         stream_type,
         active: true,
         source: None,

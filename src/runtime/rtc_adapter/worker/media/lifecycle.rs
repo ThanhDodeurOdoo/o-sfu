@@ -137,7 +137,7 @@ fn worker_remove_media(
             if let Ok(mut bitrate) = bitrate_state.lock() {
                 bitrate.remove_incoming_media(&session_key, transport_media_id);
             }
-            if let Some(session_state) = state.sessions.get_mut(&session_key) {
+            if let Some(session_state) = state.users.get_mut(&session_key) {
                 session_state
                     .sdp_negotiation
                     .negotiated_producer_parameters
@@ -152,7 +152,7 @@ fn worker_remove_media(
             source_transport_media_id,
             ..
         } => {
-            if let Some(session_state) = state.sessions.get_mut(&session_key) {
+            if let Some(session_state) = state.users.get_mut(&session_key) {
                 forget_transport_media_rewrites(
                     &mut session_state.local_send_rewrites,
                     transport_media_id,
@@ -180,7 +180,7 @@ fn worker_remove_media(
 
 /// Stage or apply removal before the public transport-handle registry changes.
 ///
-/// If removal cannot be represented in the session's live or staged SDP, the
+/// If removal cannot be represented in the user's live or staged SDP, the
 /// registry entry must remain intact so ownership and route bookeeping do not
 /// drift away from the RTC state
 fn stage_last_mid_removal_before_unregistering_handle(
@@ -197,7 +197,7 @@ fn stage_last_mid_removal_before_unregistering_handle(
         return Ok(());
     }
     let session_state = state
-        .sessions
+        .users
         .get_mut(handle.session_key())
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     if session_state.sdp_negotiation.initial_offer_applied {
@@ -271,7 +271,7 @@ fn worker_stage_native_media_removal(
     Ok(())
 }
 
-/// Declare one recv-only media line owned by the publishing session.
+/// Declare one recv-only media line owned by the publishing user.
 ///
 /// Before the first answer lands, the RTC state can be updated directly because
 /// there is no committed negotiated description to keep in sync yet. After that
@@ -284,7 +284,7 @@ fn worker_add_recv_media(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
 ) -> TransportResult<TransportMediaId> {
-    let Some(session_state) = state.sessions.get_mut(session_key) else {
+    let Some(session_state) = state.users.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let mid = if session_state.sdp_negotiation.initial_offer_applied {
@@ -326,11 +326,11 @@ fn worker_add_recv_media(
         state.register_incoming_bitrate_counter(transport_media_id, counter);
     }
     debug!(
-        session_id = ?session_key.session_id(),
+        user_id = ?session_key.user_id(),
         media_worker_id = session_key.media_worker_id(),
         ?transport_media_id,
         ?media_kind,
-        "declared recv-only media on rtc session for incoming producer RTP"
+        "declared recv-only media on rtc user for incoming producer RTP"
     );
     Ok(transport_media_id)
 }
@@ -390,7 +390,7 @@ fn worker_stage_native_recv_media(
 /// corresponding route-source ownership in the worker bootstrap state.
 ///
 /// Remote-source registration, consumer-media declaration, and route creation
-/// form one logical edge. If the consumer session is gone or media staging
+/// form one logical edge. If the consumer user is gone or media staging
 /// fails, any provisional remote-source registration is restored before the
 /// error escapes.
 fn worker_add_send_media(
@@ -420,9 +420,9 @@ fn worker_add_send_media(
         Ok(route_source) => route_source,
         Err(error) => {
             warn!(
-                consumer_session_id = ?consumer_session_key.session_id(),
+                consumer_user_id = ?consumer_session_key.user_id(),
                 consumer_media_worker_id = consumer_session_key.media_worker_id(),
-                source_session_id = ?source_session_key.session_id(),
+                source_user_id = ?source_session_key.user_id(),
                 source_media_worker_id = source_session_key.media_worker_id(),
                 ?source_transport_media_id,
                 error = ?error,
@@ -439,7 +439,7 @@ fn worker_add_send_media(
             );
         }
     };
-    let Some(session_state) = state.sessions.get_mut(consumer_session_key) else {
+    let Some(session_state) = state.users.get_mut(consumer_session_key) else {
         rollback_remote_source_registration(state);
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -473,9 +473,9 @@ fn worker_add_send_media(
         consumer_rtp_parameters,
     );
     debug!(
-        consumer_session_id = ?consumer_session_key.session_id(),
+        consumer_user_id = ?consumer_session_key.user_id(),
         consumer_media_worker_id = consumer_session_key.media_worker_id(),
-        source_session_id = ?source_session_key.session_id(),
+        source_user_id = ?source_session_key.user_id(),
         source_media_worker_id = source_session_key.media_worker_id(),
         ?source_transport_media_id,
         source_route_kind = route_source.label(),

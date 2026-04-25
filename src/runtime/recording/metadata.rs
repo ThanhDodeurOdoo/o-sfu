@@ -7,9 +7,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingMetadata {
     pub(crate) version: u16,
-    pub(crate) channel_name: String,
-    #[serde(rename = "channelUUID")]
-    pub(crate) channel_uuid: String,
+    pub(crate) room_name: String,
+    pub(crate) room_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) routing_address: Option<String>,
     pub(crate) audio: bool,
@@ -26,7 +25,7 @@ pub(crate) struct RecordingMetadata {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingFileMetadata {
     pub(crate) filename: String,
-    pub(crate) session_id: String,
+    pub(crate) user_id: String,
     pub(crate) stream_type: StreamType,
     pub(crate) codec: String,
     pub(crate) clock_rate: u32,

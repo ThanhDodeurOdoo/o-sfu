@@ -44,8 +44,8 @@ fn stream_writer_serializes_ortp_header_and_frames() {
 fn recording_metadata_round_trips_through_json() {
     let metadata = RecordingMetadata {
         version: 1,
-        channel_name: "demo".to_owned(),
-        channel_uuid: "channel-uuid".to_owned(),
+        room_name: "demo".to_owned(),
+        room_id: "room-uuid".to_owned(),
         routing_address: Some("https://record.example.test".to_owned()),
         audio: true,
         video: true,
@@ -57,7 +57,7 @@ fn recording_metadata_round_trips_through_json() {
             .collect(),
         files: vec![RecordingFileMetadata {
             filename: "audio/1000-42-audio.ortp".to_owned(),
-            session_id: "42".to_owned(),
+            user_id: "42".to_owned(),
             stream_type: StreamType::Audio,
             codec: "opus".to_owned(),
             clock_rate: 48_000,
@@ -74,8 +74,8 @@ fn recording_metadata_round_trips_through_json() {
         value.ok(),
         Some(json!({
             "version": 1,
-            "channelName": "demo",
-            "channelUUID": "channel-uuid",
+            "roomName": "demo",
+            "roomId": "room-uuid",
             "routingAddress": "https://record.example.test",
             "audio": true,
             "video": true,
@@ -85,7 +85,7 @@ fn recording_metadata_round_trips_through_json() {
             "labels": { "42": "Alice" },
             "files": [{
                 "filename": "audio/1000-42-audio.ortp",
-                "sessionId": "42",
+                "userId": "42",
                 "streamType": "audio",
                 "codec": "opus",
                 "clockRate": 48000,

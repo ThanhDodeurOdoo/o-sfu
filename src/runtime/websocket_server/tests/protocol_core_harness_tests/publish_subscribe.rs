@@ -7,15 +7,15 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-tracks",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(51));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(52));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(51));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(52));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -41,11 +41,11 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
             .is_some()
     );
 
-    let producer_id = channel
+    let producer_id = room
         .test_api()
         .media()
         .publish_track(
-            &SessionId::Integer(51),
+            &UserId::Integer(51),
             StreamType::Camera,
             MediaKind::Video,
             sample_video_rtp_parameters("cam-0"),
@@ -61,14 +61,14 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     let Some(track_binding) = bob.core.track_binding("cam-0") else {
         panic!("subscriber should keep the camera track binding");
     };
-    assert_eq!(track_binding.session_id, ProtocolSessionId::Integer(51));
+    assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(51));
     assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
     assert!(track_binding.active);
     let Some(source) = track_binding.source.as_ref() else {
         panic!("track binding should carry the additive source descriptor");
     };
     assert_eq!(source.source_id, "source-1");
-    assert_eq!(source.session_id, ProtocolSessionId::Integer(51));
+    assert_eq!(source.user_id, ProtocolSessionId::Integer(51));
     assert_eq!(source.stream_type, ProtocolStreamType::Camera);
     assert_eq!(source.mid.as_deref(), Some("cam-0"));
     assert_eq!(source.encodings.len(), 1);
@@ -99,7 +99,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
 }
 
 #[tokio::test]
-async fn protocol_core_publish_round_trips_through_real_server_session_protocol() {
+async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let server = spawn_test_server_with_timeouts(
         1_000,
@@ -113,15 +113,15 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-publish",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(53));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(54));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(53));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(54));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -164,13 +164,13 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
     let Some(track_binding) = bob.core.track_binding("fake-mid-0") else {
         panic!("subscriber should keep the camera track binding");
     };
-    assert_eq!(track_binding.session_id, ProtocolSessionId::Integer(53));
+    assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(53));
     assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
     assert!(track_binding.active);
     let Some(source) = track_binding.source.as_ref() else {
         panic!("track binding should carry the additive source descriptor");
     };
-    assert_eq!(source.session_id, ProtocolSessionId::Integer(53));
+    assert_eq!(source.user_id, ProtocolSessionId::Integer(53));
     assert_eq!(source.stream_type, ProtocolStreamType::Camera);
     assert_eq!(source.mid.as_deref(), Some("fake-mid-0"));
     assert_eq!(source.encodings.len(), 1);
@@ -182,30 +182,30 @@ async fn protocol_core_publish_round_trips_through_real_server_session_protocol(
         adapter.snapshot_events().iter().any(|event| matches!(
             event,
             FakeWebRtcEvent::PublishMediaRequested {
-                session_id,
+                user_id,
                 media_kind,
-            } if *session_id == SessionId::Integer(53) && *media_kind == MediaKind::Video
+            } if *user_id == UserId::Integer(53) && *media_kind == MediaKind::Video
         )),
         "protocol publish should declare producer media through the transport adapter"
     );
 }
 
 #[tokio::test]
-async fn protocol_core_publish_round_trips_through_real_rtc_server_session_protocol() {
+async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol() {
     let server = spawn_protocol_rtc_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-rtc-publish",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(71));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(72));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(71));
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(72));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -279,7 +279,7 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_session_proto
     let Some(published_track) = track_bindings.first() else {
         return;
     };
-    assert_eq!(published_track.session_id, ProtocolSessionId::Integer(71));
+    assert_eq!(published_track.user_id, ProtocolSessionId::Integer(71));
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
     let track_commands = bob.core.on_ws_message(&track_snapshot_payload);
@@ -296,20 +296,20 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_session_proto
 }
 
 #[tokio::test]
-async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_state() {
+async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_state() {
     let server = spawn_protocol_rtc_test_server(1_000, 100).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-rtc-capabilities",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), SessionId::Integer(75));
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(75));
     assert!(alice_token.is_some());
     let Some(alice_token) = alice_token else {
         return;
@@ -329,10 +329,10 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
 
     let parsed_client_rtp_capabilities = timeout(Duration::from_secs(1), async {
         loop {
-            if let Some(capabilities) = channel
+            if let Some(capabilities) = room
                 .test_api()
                 .inspect()
-                .parsed_client_rtp_capabilities(&SessionId::Integer(75))
+                .parsed_client_rtp_capabilities(&UserId::Integer(75))
                 .await
             {
                 return capabilities;
@@ -381,8 +381,8 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_session_
 async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-publish-queue",
-        SessionId::Integer(73),
-        SessionId::Integer(74),
+        UserId::Integer(73),
+        UserId::Integer(74),
         56_303,
         56_304,
     ))
@@ -476,8 +476,8 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
 async fn protocol_core_unpublish_cancels_pending_publish_before_commit() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-publish-cancel",
-        SessionId::Integer(75),
-        SessionId::Integer(76),
+        UserId::Integer(75),
+        UserId::Integer(76),
         56_305,
         56_306,
     ))
@@ -547,8 +547,8 @@ async fn protocol_core_unpublish_cancels_pending_publish_before_commit() {
 async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_commit() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-unpublish",
-        SessionId::Integer(77),
-        SessionId::Integer(78),
+        UserId::Integer(77),
+        UserId::Integer(78),
         56_307,
         56_308,
     ))
@@ -575,7 +575,7 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
     let Some(published_track) = initial_track_bindings.first() else {
         return;
     };
-    assert_eq!(published_track.session_id, ProtocolSessionId::Integer(77));
+    assert_eq!(published_track.user_id, ProtocolSessionId::Integer(77));
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
     assert!(
@@ -639,8 +639,8 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
 async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-unpublish-removal-queue",
-        SessionId::Integer(79),
-        SessionId::Integer(80),
+        UserId::Integer(79),
+        UserId::Integer(80),
         56_309,
         56_310,
     ))

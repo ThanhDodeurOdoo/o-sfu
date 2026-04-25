@@ -177,7 +177,7 @@ impl RequestTracker {
     /// Drops all pending tracker state without emitting host commands.
     ///
     /// This is the clean reset path for callers that already know the outer
-    /// session is being torn down and do not need per-request cancellation
+    /// user is being torn down and do not need per-request cancellation
     /// commands anymore.
     pub(super) fn clear(&mut self) {
         self.pending_requests.clear();

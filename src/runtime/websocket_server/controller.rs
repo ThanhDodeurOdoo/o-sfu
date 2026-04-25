@@ -1,25 +1,25 @@
 //! WebSocket Connection Lifecycle
 //!
 //! This module manages the lifecycle of a client's WebSocket connection and its
-//! relationship to the underlaying RTC sialing session:
+//! relationship to the underlaying RTC sialing user:
 //!
 //! 1. **Creation**: A connection begins when the Axum router accepts an HTTP upgrade
 //!    request in the `upgrade` handler. It is then split into a read and write stream
 //!    as a raw, unauthenticated socket.
 //!
-//! 2. **Upgrade to RTC Session**: The raw socket is passed to `handshake::establish_session`,
+//! 2. **Upgrade to RTC User**: The raw socket is passed to `handshake::establish_session`,
 //!    where it waits for an `auth` envelope from the client. After JWT validation,
-//!    the connection is admitted into a `Channel`. At this point, the connection is upgraded
-//!    into a full RTC session: a `SessionProtocol` is created to handle WebRTC state, and
+//!    the connection is admitted into a `Room`. At this point, the connection is upgraded
+//!    into a full RTC user: a `SessionProtocol` is created to handle WebRTC state, and
 //!    the `TransportAdapter` initializes the backend WebRTC transport resources.
 //!
 //! 3. **Steady State**: The connection enters the steady-state `session_loop::run`, continuously
 //!    polling for incoming WebSocket frames to feed the `SessionProtocol` and outbound
-//!    channel events to send back to the client.
+//!    room events to send back to the client.
 //!
-//! 4. **Removal**: When the session loop terminates (due to client disconnect, timeout, or
+//! 4. **Removal**: When the user loop terminates (due to client disconnect, timeout, or
 //!    protocol error), the connection is cleaned up. The `close_session` method is invoked
-//!    on the `ChannelManager`, which removes the user from the channel and signasl
+//!    on the `RoomManager`, which removes the user from the room and signasl
 //!    the `TransportAdapter` to tear down the associated WebRTC media resources.
 
 use std::{net::SocketAddr, sync::Arc};
@@ -33,26 +33,26 @@ use axum::{
     response::Response,
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
-use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
+use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
 use tokio::sync::mpsc;
 use tracing::{Instrument, Span, field, info};
 
 use super::{WsWriter, session_protocol::SessionProtocol};
 use crate::runtime::{
     ConnectionId, RuntimeState,
-    channel::{Channel, SessionOutbound},
     request_origin::resolve_remote_address,
+    room::{Room, UserOutbound},
     telemetry,
 };
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 
 pub(super) struct ConnectedSession {
-    pub(super) channel: Arc<Channel>,
-    pub(super) session_id: SessionId,
+    pub(super) room: Arc<Room>,
+    pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
     pub(super) remote_address: Arc<str>,
-    pub(super) outbound_rx: mpsc::UnboundedReceiver<SessionOutbound>,
+    pub(super) outbound_rx: mpsc::UnboundedReceiver<UserOutbound>,
     pub(super) session_protocol: SessionProtocol,
 }
 
@@ -70,13 +70,13 @@ pub(crate) async fn upgrade(
     websocket.on_upgrade(move |socket| handle_socket(socket, state, remote_address))
 }
 
-/// Owns one upgraded WebSocket from first split through final channel cleanup.
+/// Owns one upgraded WebSocket from first split through final room cleanup.
 ///
 /// After the HTTP upgrade complete, this function records connection metrics, delegates
 /// authenticated admission to [`super::handshake::establish_session`], runs the steady-state
-/// session loop, and then closes the logical channel session exactly once. Keeping that
+/// user loop, and then closes the logical room user exactly once. Keeping that
 /// sequencing here prevent handshake code and steady-state protocol code from racing to
-/// clean up the same chanel session.
+/// clean up the same chanel user.
 async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: Arc<str>) {
     async move {
         let current_span = Span::current();
@@ -96,7 +96,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             telemetry::schema::field::REMOTE_ADDRESS,
             field::display(remote_address.as_ref()),
         );
-        let Some(mut session) = super::handshake::establish_session(
+        let Some(mut user) = super::handshake::establish_session(
             &state,
             &mut ws_writer,
             &mut ws_reader,
@@ -107,34 +107,34 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         else {
             return;
         };
-        current_span.record("channel_uuid", field::display(session.channel.uuid()));
-        current_span.record("session_id", field::debug(&session.session_id));
-        current_span.record("connection_id", field::debug(session.connection_id));
-        state.metrics.record_ws_session_loop_started();
+        current_span.record("room_id", field::display(user.room.uuid()));
+        current_span.record("user_id", field::debug(&user.user_id));
+        current_span.record("connection_id", field::debug(user.connection_id));
+        state.metrics.record_ws_user_loop_started();
         let exit_reason = super::session_loop::run(
             &mut ws_writer,
             &mut ws_reader,
-            &mut session.outbound_rx,
-            &mut session.session_protocol,
-            state.config.session_timeout_ms,
+            &mut user.outbound_rx,
+            &mut user.session_protocol,
+            state.config.user_timeout_ms,
             state.config.ping_interval_ms,
             &state.metrics,
         )
         .await;
-        state.metrics.record_ws_session_loop_exit(exit_reason);
+        state.metrics.record_ws_user_loop_exit(exit_reason);
         info!(
             event = telemetry::schema::event::WS_CONNECTION_CLOSED,
-            connection_id = ?session.connection_id,
-            remote_address = session.remote_address.as_ref(),
+            connection_id = ?user.connection_id,
+            remote_address = user.remote_address.as_ref(),
             ?exit_reason,
-            "closing websocket session"
+            "closing websocket user"
         );
         let _ = state
-            .channel_manager
+            .room_manager
             .close_session(
-                session.channel.uuid(),
-                &session.session_id,
-                session.connection_id,
+                user.room.uuid(),
+                &user.user_id,
+                user.connection_id,
                 &state.transport_adapter,
             )
             .await;

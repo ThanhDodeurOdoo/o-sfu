@@ -62,7 +62,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
     {
-        let Some(session_state) = state.sessions.get_mut(session_key) else {
+        let Some(session_state) = state.users.get_mut(session_key) else {
             return refreshed_parameters;
         };
         session_state
@@ -182,7 +182,7 @@ fn apply_projected_recv_streams(
 }
 
 /// Resolve the router-native RTP parameters for one producer after answer-side
-/// projection has populated them for the owning session.
+/// projection has populated them for the owning user.
 #[cfg(test)]
 fn worker_resolve_negotiated_producer_parameters(
     state: &RtcBootstrapState,
@@ -201,7 +201,7 @@ fn worker_resolve_negotiated_producer_parameters(
             return Err(TransportAdapterError::InvalidInput);
         }
     };
-    let Some(session_state) = state.sessions.get(session_key) else {
+    let Some(session_state) = state.users.get(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let result = session_state
@@ -212,7 +212,7 @@ fn worker_resolve_negotiated_producer_parameters(
         .ok_or(TransportAdapterError::UnsupportedFeature);
     if let Err(TransportAdapterError::UnsupportedFeature) = &result {
         warn!(
-            session_id = ?session_key.session_id(),
+            user_id = ?session_key.user_id(),
             media_worker_id = session_key.media_worker_id(),
             ?transport_media_id,
             ?mid,

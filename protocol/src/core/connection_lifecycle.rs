@@ -20,9 +20,9 @@
 //! A few lifecycle rules:
 //! (if you are familiar with odoo/sfu's  client its basicly the same rules)
 //!
-//! - explicit `disconnect()` is terminal for the current session attempt and
+//! - explicit `disconnect()` is terminal for the current user attempt and
 //!   clears both runtime and sticky state
-//! - terminal websocket close codes (`AuthFailed`, `Kicked`, `ChannelFull`)
+//! - terminal websocket close codes (`AuthFailed`, `Kicked`, `RoomFull`)
 //!   also stop recovery, but keep sticky state untouched because the caller did
 //!   not explicitly ask to wipe intent
 //! - non-terminal websocket closes keep the saved connect context and move into
@@ -94,9 +94,9 @@ pub(super) enum ConnectContextUpdate {
 ///
 /// ```text
 /// connect() uses `Silent` because a fresh connect should drop old runtime
-/// state, but it should not emit teardown commands for an already-dead session.
+/// state, but it should not emit teardown commands for an already-dead user.
 ///
-/// disconnect() uses `WithCommands` becuse the caller is ending a live session
+/// disconnect() uses `WithCommands` becuse the caller is ending a live user
 /// and the host must see the explicit cleanup commands that fall out of it
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,7 +185,7 @@ impl LifecycleEffects {
 pub enum LifecycleCloseCause {
     AuthFailed,
     Kicked,
-    ChannelFull,
+    RoomFull,
 }
 
 /// Pure result of one lifecycle transition.
@@ -307,9 +307,7 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
     }
 
     if let Some(
-        WebSocketCloseCode::AuthFailed
-        | WebSocketCloseCode::Kicked
-        | WebSocketCloseCode::ChannelFull,
+        WebSocketCloseCode::AuthFailed | WebSocketCloseCode::Kicked | WebSocketCloseCode::RoomFull,
     ) = WebSocketCloseCode::from_u16(close_code)
     {
         model.state = BundleConnectionState::Closed;
@@ -487,7 +485,7 @@ fn terminal_close_cause(close_code: u16) -> Option<LifecycleCloseCause> {
     match WebSocketCloseCode::from_u16(close_code) {
         Some(WebSocketCloseCode::AuthFailed) => Some(LifecycleCloseCause::AuthFailed),
         Some(WebSocketCloseCode::Kicked) => Some(LifecycleCloseCause::Kicked),
-        Some(WebSocketCloseCode::ChannelFull) => Some(LifecycleCloseCause::ChannelFull),
+        Some(WebSocketCloseCode::RoomFull) => Some(LifecycleCloseCause::RoomFull),
         _ => None,
     }
 }
@@ -496,7 +494,7 @@ fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
     match cause {
         LifecycleCloseCause::AuthFailed => "auth_failed",
         LifecycleCloseCause::Kicked => "kicked",
-        LifecycleCloseCause::ChannelFull => "full",
+        LifecycleCloseCause::RoomFull => "full",
     }
 }
 
@@ -505,10 +503,10 @@ fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
 /// This is the only lifecycle entry point that intentionally wipes both
 /// runtime state and sticky replay state before reconnecting. A brand-new
 /// `connect(...)` means "start over with this new endpoint and auth context",
-/// not "resume whatever the previous session was trying to do".
+/// not "resume whatever the previous user was trying to do".
 ///
 /// Calls from any other state are ignored so the host cannot accidentally stack
-/// overlapping connection attempts on top of an already-live session.
+/// overlapping connection attempts on top of an already-live user.
 ///
 /// ```text
 /// Disconnected --connect(url, jwt, room)--> Connecting
@@ -517,16 +515,11 @@ pub(super) fn connect(
     core: &mut ProtocolCore,
     url: String,
     jwt: String,
-    channel: Option<String>,
+    room: Option<String>,
 ) -> Commands {
     let mut model = lifecycle_model(core);
     let plan = connect_model(&mut model);
-    apply_model(
-        core,
-        model,
-        plan,
-        Some(ConnectContext { url, jwt, channel }),
-    )
+    apply_model(core, model, plan, Some(ConnectContext { url, jwt, room }))
 }
 
 /// Marks the transport side as ready after the websocket/authentication phase.
@@ -544,7 +537,7 @@ pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Commands {
     apply_model(core, model, plan, None)
 }
 
-/// Ends the current session attempt on purpose.
+/// Ends the current user attempt on purpose.
 ///
 /// Unlike `on_ws_close(...)`, this is not a recovery path. It clears the saved
 /// connect context, runtime state and sticky replay state, then closes the
@@ -556,7 +549,7 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
     apply_model(core, model, plan, None)
 }
 
-/// Handles websocket closure after a session was already in flight.
+/// Handles websocket closure after a user was already in flight.
 ///
 /// There are three different cases here and mixing them up is the main way to
 /// break reconnect behavior:
@@ -584,7 +577,7 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
 ///
 /// This is intentionally narrow: only `Recovering` may consume the recovery
 /// timer. A stale timer firing after a successful reconnect or explicit
-/// disconnect must do nothing, otherwise dead sessions can get resurrected by
+/// disconnect must do nothing, otherwise dead users can get resurrected by
 /// old scheduled work.
 ///
 /// Example:

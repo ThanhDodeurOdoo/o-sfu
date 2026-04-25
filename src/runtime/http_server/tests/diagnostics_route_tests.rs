@@ -13,8 +13,8 @@ use o_sfu_router::{MediaKind, MediaStream};
 
 use super::fixtures::*;
 use crate::runtime::{
-    channel::Channel,
     diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
+    room::Room,
     test_rtp_samples::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
 };
 
@@ -23,44 +23,37 @@ fn test_simulcast_video_rtp_parameters() -> MediaStream {
 }
 
 async fn make_session_ready(
-    channel: &Channel,
-    session_id: &SessionId,
+    room: &Room,
+    user_id: &UserId,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
-    let Some(connection_id) = channel
-        .test_api()
-        .inspect()
-        .session_connection_id(session_id)
-        .await
-    else {
-        panic!("session should exist before publishing");
+    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
+        panic!("user should exist before publishing");
     };
     assert!(
-        channel
-            .apply_session_negotiated(
-                session_id,
-                connection_id,
-                sample_client_rtp_capabilities(),
-                transport_adapter,
-            )
-            .await
+        room.apply_session_negotiated(
+            user_id,
+            connection_id,
+            sample_client_rtp_capabilities(),
+            transport_adapter,
+        )
+        .await
     );
 }
 
 async fn publish_media_stream(
-    channel: &Channel,
-    session_id: &SessionId,
+    room: &Room,
+    user_id: &UserId,
     stream_type: StreamType,
     parameters: MediaStream,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
-    make_session_ready(channel, session_id, transport_adapter).await;
+    make_session_ready(room, user_id, transport_adapter).await;
     assert!(
-        channel
-            .test_api()
+        room.test_api()
             .media()
             .publish_track(
-                session_id,
+                user_id,
                 stream_type,
                 MediaKind::Video,
                 parameters,
@@ -125,90 +118,89 @@ async fn diagnostics_routes_require_the_configured_bearer_token() {
 }
 
 #[tokio::test]
-async fn diagnostics_routes_return_live_channel_and_session_details() {
+async fn diagnostics_routes_return_live_room_and_user_details() {
     let state = test_state();
-    let channel = state
-        .channel_manager
-        .serve_channel(
+    let room = state
+        .room_manager
+        .serve_room(
             "issuer-a",
             None,
-            &ChannelConfig::default(),
+            &RoomConfig::default(),
             Some("203.0.113.10"),
         )
         .await;
     let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
     let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
     let (carol_tx, _carol_rx) = mpsc::unbounded_channel();
-    let alice_session_id = SessionId::Integer(1);
-    let bob_session_id = SessionId::Integer(2);
-    let carol_session_id = SessionId::Integer(3);
-    let alice_join = channel
+    let alice_session_id = UserId::Integer(1);
+    let bob_session_id = UserId::Integer(2);
+    let carol_session_id = UserId::Integer(3);
+    let alice_join = room
         .test_api()
         .lifecycle()
-        .join_session(
+        .join_user(
             alice_session_id.clone(),
             None,
-            SessionPermissions::default(),
+            UserPermissions::default(),
             alice_tx,
         )
         .await;
-    let bob_join = channel
+    let bob_join = room
         .test_api()
         .lifecycle()
-        .join_session(
+        .join_user(
             bob_session_id.clone(),
             None,
-            SessionPermissions::default(),
+            UserPermissions::default(),
             bob_tx,
         )
         .await;
-    let carol_join = channel
+    let carol_join = room
         .test_api()
         .lifecycle()
-        .join_session(
+        .join_user(
             carol_session_id.clone(),
             None,
-            SessionPermissions::default(),
+            UserPermissions::default(),
             carol_tx,
         )
         .await;
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
     assert!(carol_join.is_ok());
-    make_session_ready(&channel, &bob_session_id, &state.transport_adapter).await;
-    make_session_ready(&channel, &carol_session_id, &state.transport_adapter).await;
+    make_session_ready(&room, &bob_session_id, &state.transport_adapter).await;
+    make_session_ready(&room, &carol_session_id, &state.transport_adapter).await;
     publish_media_stream(
-        &channel,
+        &room,
         &alice_session_id,
         StreamType::Camera,
         test_simulcast_video_rtp_parameters(),
         &state.transport_adapter,
     )
     .await;
-    let channels_request = build_request(Request::get(DIAGNOSTICS_CHANNELS_PATH), Body::empty());
-    assert!(channels_request.is_some());
-    let Some(channels_request) = channels_request else {
+    let rooms_request = build_request(Request::get(DIAGNOSTICS_ROOMS_PATH), Body::empty());
+    assert!(rooms_request.is_some());
+    let Some(rooms_request) = rooms_request else {
         return;
     };
-    let channels_response = app(state.clone()).oneshot(channels_request).await;
-    assert!(channels_response.is_ok());
-    let Some(channels_response) = channels_response.ok() else {
+    let rooms_response = app(state.clone()).oneshot(rooms_request).await;
+    assert!(rooms_response.is_ok());
+    let Some(rooms_response) = rooms_response.ok() else {
         return;
     };
-    assert_eq!(channels_response.status(), StatusCode::OK);
-    let channel_summaries: Option<Vec<DiagnosticsChannelSummary>> =
-        parse_json(channels_response).await;
-    assert!(channel_summaries.is_some());
-    let Some(channel_summaries) = channel_summaries else {
+    assert_eq!(rooms_response.status(), StatusCode::OK);
+    let room_summaries: Option<Vec<DiagnosticsRoomSummary>> = parse_json(rooms_response).await;
+    assert!(room_summaries.is_some());
+    let Some(room_summaries) = room_summaries else {
         return;
     };
-    assert_eq!(channel_summaries.len(), 1);
-    assert_eq!(channel_summaries[0].session_count, 3);
-    assert_eq!(channel_summaries[0].publication_count, 1);
-    assert_eq!(channel_summaries[0].subscription_count, 2);
+    assert_eq!(room_summaries.len(), 1);
+    assert_eq!(room_summaries[0].user_count, 3);
+    assert_eq!(room_summaries[0].publication_count, 1);
+    assert_eq!(room_summaries[0].subscription_count, 2);
 
     let detail_request = build_request(
-        Request::get(format!("/internal/diagnostics/channels/{}", channel.uuid())),
+        Request::get(format!("/internal/diagnostics/rooms/{}", room.uuid())),
         Body::empty(),
     );
     assert!(detail_request.is_some());
@@ -221,14 +213,14 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         return;
     };
     assert_eq!(detail_response.status(), StatusCode::OK);
-    let detail: Option<DiagnosticsChannelDetail> = parse_json(detail_response).await;
+    let detail: Option<DiagnosticsRoomDetail> = parse_json(detail_response).await;
     assert!(detail.is_some());
     let Some(detail) = detail else {
         return;
     };
-    assert_eq!(detail.summary.uuid, channel.uuid());
+    assert_eq!(detail.summary.uuid, room.uuid());
     assert_eq!(detail.summary.remote_address, "203.0.113.10");
-    assert_eq!(detail.sessions.len(), 3);
+    assert_eq!(detail.users.len(), 3);
     assert_eq!(detail.sources.len(), 1);
     assert_eq!(detail.sources[0].source_id, 1);
     assert_eq!(detail.sources[0].encodings.len(), 2);
@@ -251,7 +243,7 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
 
     let session_request = build_request(
         Request::get(format!(
-            "/internal/diagnostics/sessions/{}",
+            "/internal/diagnostics/users/{}",
             alice_session_id.clone().into_integer_string()
         )),
         Body::empty(),
@@ -266,26 +258,26 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         return;
     };
     assert_eq!(session_response.status(), StatusCode::OK);
-    let session_detail: Option<DiagnosticsSessionDetail> = parse_json(session_response).await;
+    let session_detail: Option<DiagnosticsUserDetail> = parse_json(session_response).await;
     assert!(session_detail.is_some());
     let Some(session_detail) = session_detail else {
         return;
     };
-    assert_eq!(session_detail.channel_uuid, channel.uuid());
-    assert_eq!(session_detail.session.session_id, alice_session_id);
-    assert_eq!(session_detail.session.publications.len(), 1);
-    assert_eq!(session_detail.session.publications[0].source_id, 1);
-    assert_eq!(session_detail.session.publications[0].encoding_ids.len(), 2);
+    assert_eq!(session_detail.room_id, room.uuid());
+    assert_eq!(session_detail.user.user_id, alice_session_id);
+    assert_eq!(session_detail.user.publications.len(), 1);
+    assert_eq!(session_detail.user.publications[0].source_id, 1);
+    assert_eq!(session_detail.user.publications[0].encoding_ids.len(), 2);
     assert!(
         session_detail
             .recent_events
             .iter()
-            .any(|event| event.event == "session.joined")
+            .any(|event| event.event == "user.joined")
     );
 
     let bob_session_request = build_request(
         Request::get(format!(
-            "/internal/diagnostics/sessions/{}",
+            "/internal/diagnostics/users/{}",
             bob_session_id.clone().into_integer_string()
         )),
         Body::empty(),
@@ -300,14 +292,13 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         return;
     };
     assert_eq!(bob_session_response.status(), StatusCode::OK);
-    let bob_session_detail: Option<DiagnosticsSessionDetail> =
-        parse_json(bob_session_response).await;
+    let bob_session_detail: Option<DiagnosticsUserDetail> = parse_json(bob_session_response).await;
     assert!(bob_session_detail.is_some());
     let Some(bob_session_detail) = bob_session_detail else {
         return;
     };
-    assert_eq!(bob_session_detail.session.subscriptions.len(), 1);
-    let subscription = &bob_session_detail.session.subscriptions[0];
+    assert_eq!(bob_session_detail.user.subscriptions.len(), 1);
+    let subscription = &bob_session_detail.user.subscriptions[0];
     assert_eq!(subscription.source_id, 1);
     assert_eq!(subscription.selection.selected_encoding_id, Some(1));
     assert_eq!(subscription.selection.selected_rid.as_deref(), Some("lo"));
@@ -337,66 +328,63 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
     let Some(summary) = summary else {
         return;
     };
-    assert_eq!(summary.channels_active, 1);
-    assert_eq!(summary.sessions_active, 3);
+    assert_eq!(summary.rooms_active, 1);
+    assert_eq!(summary.users_active, 3);
     assert_eq!(summary.publications_active, 1);
     assert_eq!(summary.subscriptions_active, 2);
 }
 
 #[tokio::test]
-async fn diagnostics_session_lookup_reports_ambiguous_matches() {
+async fn diagnostics_user_lookup_reports_ambiguous_matches() {
     let state = test_state();
-    let first_channel = state
-        .channel_manager
-        .serve_channel(
+    let first_room = state
+        .room_manager
+        .serve_room(
             "issuer-a",
             None,
-            &ChannelConfig::default(),
+            &RoomConfig::default(),
             Some("203.0.113.10"),
         )
         .await;
-    let second_channel = state
-        .channel_manager
-        .serve_channel(
+    let second_room = state
+        .room_manager
+        .serve_room(
             "issuer-b",
             None,
-            &ChannelConfig::default(),
+            &RoomConfig::default(),
             Some("203.0.113.11"),
         )
         .await;
     let (first_tx, _first_rx) = mpsc::unbounded_channel();
     let (second_tx, _second_rx) = mpsc::unbounded_channel();
     assert!(
-        first_channel
+        first_room
             .test_api()
             .lifecycle()
-            .join_session(
-                SessionId::Integer(7),
+            .join_user(
+                UserId::Integer(7),
                 None,
-                SessionPermissions::default(),
+                UserPermissions::default(),
                 first_tx,
             )
             .await
             .is_ok()
     );
     assert!(
-        second_channel
+        second_room
             .test_api()
             .lifecycle()
-            .join_session(
-                SessionId::Integer(7),
+            .join_user(
+                UserId::Integer(7),
                 None,
-                SessionPermissions::default(),
+                UserPermissions::default(),
                 second_tx,
             )
             .await
             .is_ok()
     );
 
-    let request = build_request(
-        Request::get("/internal/diagnostics/sessions/7"),
-        Body::empty(),
-    );
+    let request = build_request(Request::get("/internal/diagnostics/users/7"), Body::empty());
     assert!(request.is_some());
     let Some(request) = request else {
         return;
@@ -407,24 +395,24 @@ async fn diagnostics_session_lookup_reports_ambiguous_matches() {
         return;
     };
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    let conflict: Option<DiagnosticsSessionLookupConflict> = parse_json(response).await;
+    let conflict: Option<DiagnosticsUserLookupConflict> = parse_json(response).await;
     assert!(conflict.is_some());
     let Some(conflict) = conflict else {
         return;
     };
-    assert_eq!(conflict.requested_session_id, "7");
-    assert_eq!(conflict.matching_channel_uuids.len(), 2);
+    assert_eq!(conflict.requested_user_id, "7");
+    assert_eq!(conflict.matching_room_ids.len(), 2);
 }
 
 trait SessionIdExt {
     fn into_integer_string(self) -> String;
 }
 
-impl SessionIdExt for SessionId {
+impl SessionIdExt for UserId {
     fn into_integer_string(self) -> String {
         match self {
-            SessionId::Integer(value) => value.to_string(),
-            SessionId::String(value) => value,
+            UserId::Integer(value) => value.to_string(),
+            UserId::String(value) => value,
         }
     }
 }

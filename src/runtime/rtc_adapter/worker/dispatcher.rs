@@ -34,7 +34,7 @@ use super::{
 use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
-        ChannelInstanceId,
+        RoomInstanceId,
         metrics::RuntimeMetrics,
         transport_adapter::{
             ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError,
@@ -68,7 +68,7 @@ pub(crate) fn handle_worker_command(
         | RtcWorkerCommand::ActiveSpeakerSourceSnapshot { .. }
         | RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { .. }
         | RtcWorkerCommand::NextActiveSpeakerDeadline { .. }
-        | RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { .. }
+        | RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { .. }
         | RtcWorkerCommand::CreateSessionRenegotiationOffer { .. }
         | RtcWorkerCommand::ApplySessionAnswer { .. } => {
             handle_negotiation_command(state, context, command);
@@ -172,8 +172,8 @@ fn handle_negotiation_command(
         RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
             respond_next_active_speaker_deadline(state, response);
         }
-        RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { now, response } => {
-            respond_expired_active_speaker_channel_instance_ids(state, now, response);
+        RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => {
+            respond_expired_active_speaker_room_instance_ids(state, now, response);
         }
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
@@ -220,13 +220,13 @@ fn respond_next_active_speaker_deadline(
     let _ = response.send(Ok(deadline));
 }
 
-fn respond_expired_active_speaker_channel_instance_ids(
+fn respond_expired_active_speaker_room_instance_ids(
     state: &RtcBootstrapState,
     now: Instant,
-    response: oneshot::Sender<Result<BTreeSet<ChannelInstanceId>, TransportAdapterError>>,
+    response: oneshot::Sender<Result<BTreeSet<RoomInstanceId>, TransportAdapterError>>,
 ) {
-    let channel_instance_ids = state.expired_active_speaker_channel_instance_ids(now);
-    let _ = response.send(Ok(channel_instance_ids));
+    let room_instance_ids = state.expired_active_speaker_room_instance_ids(now);
+    let _ = response.send(Ok(room_instance_ids));
 }
 
 fn handle_media_command(

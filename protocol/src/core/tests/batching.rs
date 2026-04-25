@@ -6,9 +6,9 @@ fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() {
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
 
-    let first_commands = core.update_info(SessionInfo {
+    let first_commands = core.update_info(UserInfo {
         is_talking: Some(true),
-        ..SessionInfo::default()
+        ..UserInfo::default()
     });
     let second_commands = core.broadcast(serde_json::json!({ "kind": "notice" }));
 
@@ -32,9 +32,9 @@ fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() {
 
     assert_eq!(
         ClientEnvelope::decode(first_envelope),
-        Ok(ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
+        Ok(ClientEnvelope::Message(ClientMessage::Info(UserInfo {
             is_talking: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         })))
     );
     assert_eq!(

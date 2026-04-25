@@ -2,7 +2,7 @@ use o_sfu_protocol::{
     core::{
         Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
-    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
+    shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, RecordingOptions, RequestId,
         ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
@@ -52,7 +52,7 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
     assert!(core.publish(StreamType::Camera, true).is_empty());
     assert!(
         core.subscribe(
-            SessionId::String("peer-7".to_owned()),
+            UserId::String("peer-7".to_owned()),
             DownloadStates {
                 audio: Some(true),
                 camera: Some(false),
@@ -63,10 +63,10 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
         .is_empty()
     );
     assert!(
-        core.update_info(SessionInfo {
+        core.update_info(UserInfo {
             is_camera_on: Some(true),
             is_raising_hand: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         })
         .is_empty()
     );
@@ -86,7 +86,7 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
                 stream_type: StreamType::Camera,
             })),
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-                session_id: SessionId::String("peer-7".to_owned()),
+                user_id: UserId::String("peer-7".to_owned()),
                 states: DownloadStates {
                     audio: Some(true),
                     camera: Some(false),
@@ -94,10 +94,10 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
                     ..DownloadStates::default()
                 },
             })),
-            ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
+            ClientEnvelope::Message(ClientMessage::Info(UserInfo {
                 is_camera_on: Some(true),
                 is_raising_hand: Some(true),
-                ..SessionInfo::default()
+                ..UserInfo::default()
             })),
         ]
     );
@@ -264,7 +264,7 @@ fn disconnect_clears_pending_requests_track_snapshots_and_runtime_obligations() 
     let track_frame = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
         TrackBinding {
             mid: "0".to_owned(),
-            session_id: SessionId::String("peer-1".to_owned()),
+            user_id: UserId::String("peer-1".to_owned()),
             stream_type: StreamType::Audio,
             active: true,
             source: None,
@@ -276,7 +276,7 @@ fn disconnect_clears_pending_requests_track_snapshots_and_runtime_obligations() 
             event: ProtocolEvent::TrackSnapshot {
                 bindings: vec![TrackBinding {
                     mid: "0".to_owned(),
-                    session_id: SessionId::String("peer-1".to_owned()),
+                    user_id: UserId::String("peer-1".to_owned()),
                     stream_type: StreamType::Audio,
                     active: true,
                     source: None,

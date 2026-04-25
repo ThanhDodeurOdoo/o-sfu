@@ -12,9 +12,9 @@
 //!   when forwarding to multiple destinations (to avoid clones/copies).
 //! * **Biased Event Loop**: The main loop (`run_packet_loop`) uses a biased selection
 //!   strategy to prioritize control commands and shutdown signals.
-//! * **Efficient incoming Routing**: Incoming UDP datagrams are routed to sessions
+//! * **Efficient incoming Routing**: Incoming UDP datagrams are routed to users
 //!   using a milti tier approach:
-//!     1. **Fast-Path**: A direct map from source `SocketAddr` to session key.
+//!     1. **Fast-Path**: A direct map from source `SocketAddr` to user key.
 //!     2. **Recovery-Path**: On cache misses, packets are inspected for STUN/ICE
 //!        attributes to recover the routing state.
 //!     3. **Negative Caching**: Proved misses are cached to prevent repeated,
@@ -26,11 +26,11 @@
 //! ### sub files
 //!
 //! * [`loop_driver`]: The main loop and state machine transition logic.
-//! * [`ingress_routing`]: Logic for mapping raw UDP datagrams to the correct RTC session.
+//! * [`ingress_routing`]: Logic for mapping raw UDP datagrams to the correct RTC user.
 //! * [`forward_flush`]: Handles the actual transmission of packets to their destinations
-//!   (other sessions, recorders, or relay nodes).
+//!   (other users, recorders, or relay nodes).
 //! * [`buffers`]: Reusable memory pools for pending transmissions and batching.
-//! * [`session_drain`]: Pulls media from producer sessions into the packet loop.
+//! * [`session_drain`]: Pulls media from producer users into the packet loop.
 //! * [`keyframe_requests`]: Manages the lifecycle and flushing of RTCP keyframe requests (PLI/FIR).
 //! * [`event_observation`]: Translates low-level transport events into health and state metrics.
 

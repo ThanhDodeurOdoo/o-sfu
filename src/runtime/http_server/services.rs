@@ -9,62 +9,62 @@ use crate::{
     config::Config,
     runtime::{
         RuntimeState,
-        auth::{self, HttpChannelClaims, HttpDisconnectClaims},
-        channel::ChannelConfig,
-        http_server::contract::CreateChannelQuery,
+        auth::{self, HttpDisconnectClaims, HttpRoomClaims},
+        http_server::contract::CreateRoomQuery,
         request_origin::{resolve_remote_address, trusted_forwarded_header},
+        room::RoomConfig,
     },
 };
 
-pub(super) struct CreateChannelContext<'a> {
+pub(super) struct CreateRoomContext<'a> {
     pub(super) headers: &'a HeaderMap,
     pub(super) connect_address: Option<SocketAddr>,
-    pub(super) query: &'a CreateChannelQuery,
+    pub(super) query: &'a CreateRoomQuery,
 }
 
-pub(super) struct CreatedChannel {
+pub(super) struct CreatedRoom {
     pub(super) uuid: String,
     pub(super) base_url: String,
 }
 
-pub(super) enum CreateChannelError {
+pub(super) enum CreateRoomError {
     Unauthorized,
     Forbidden,
     BadRequest,
 }
 
-pub(super) async fn verify_and_get_channel(
+pub(super) async fn verify_and_get_room(
     state: &RuntimeState,
-    context: CreateChannelContext<'_>,
-) -> Result<CreatedChannel, CreateChannelError> {
+    context: CreateRoomContext<'_>,
+) -> Result<CreatedRoom, CreateRoomError> {
     let Some(token) = authorization_token(context.headers) else {
-        return Err(CreateChannelError::Unauthorized);
+        return Err(CreateRoomError::Unauthorized);
     };
-    let Ok(claims) = auth::verify::<HttpChannelClaims>(token, &state.config.auth_key) else {
-        return Err(CreateChannelError::Unauthorized);
+    let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.config.auth_key) else {
+        return Err(CreateRoomError::Unauthorized);
     };
     let Some(issuer) = claims.registered.iss.as_deref() else {
-        return Err(CreateChannelError::Forbidden);
+        return Err(CreateRoomError::Forbidden);
     };
     if context.query.recording_address.is_some() && claims.key.is_none() {
-        return Err(CreateChannelError::BadRequest);
+        return Err(CreateRoomError::BadRequest);
     }
     let remote_address =
         resolve_remote_address(context.headers, &state.config, context.connect_address);
-    let channel = state
-        .channel_manager
-        .serve_channel(
+    let room = state
+        .room_manager
+        .serve_room(
             issuer,
             claims.key.as_deref(),
-            &ChannelConfig {
+            &RoomConfig {
                 web_rtc_enabled: context.query.web_rtc_enabled(),
                 recording_address: context.query.recording_address.clone(),
             },
             Some(&remote_address),
         )
         .await;
-    Ok(CreatedChannel {
-        uuid: channel.uuid().to_owned(),
+    Ok(CreatedRoom {
+        uuid: room.uuid().to_owned(),
         base_url: request_base_url(context.headers, &state.config),
     })
 }
@@ -74,7 +74,7 @@ pub(super) enum DisconnectError {
     UnprocessableEntity,
 }
 
-pub(super) async fn disconnect_sessions(
+pub(super) async fn disconnect_users(
     state: &RuntimeState,
     body: &Bytes,
 ) -> Result<(), DisconnectError> {
@@ -84,10 +84,10 @@ pub(super) async fn disconnect_sessions(
     let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
         return Err(DisconnectError::UnprocessableEntity);
     };
-    for (channel_uuid, session_ids) in &claims.session_ids_by_channel {
+    for (room_id, user_ids) in &claims.user_ids_by_room {
         state
-            .channel_manager
-            .disconnect_sessions(channel_uuid, session_ids, &state.transport_adapter)
+            .room_manager
+            .disconnect_users(room_id, user_ids, &state.transport_adapter)
             .await;
     }
     Ok(())

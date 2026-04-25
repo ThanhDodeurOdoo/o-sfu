@@ -13,8 +13,8 @@
 //!
 //! Communication with the worker follows a request/response pattern:
 //! 1. The facade method constructs a command (e.g., `RtcWorkerCommand::CreateInitialSessionOffer`).
-//! 2. It creates a `oneshot` channel for the response.
-//! 3. It sends the command + the response sender to the worker via an `mpsc` channel.
+//! 2. It creates a `oneshot` room for the response.
+//! 3. It sends the command + the response sender to the worker via an `mpsc` room.
 //! 4. It waits for the response on the `oneshot` receiver.
 //!
 //! This pattern allows the facade methods to be `async` and return values from
@@ -44,7 +44,7 @@ use super::{
     facade::{RtcTransportAdapter, RtcTransportObservabilityFacade, RtcWorkerHandle},
 };
 use crate::runtime::{
-    ChannelInstanceId,
+    RoomInstanceId,
     transport_adapter::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
         TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
@@ -238,12 +238,12 @@ impl RtcTransportAdapter {
         self.observability().next_active_speaker_deadline().await
     }
 
-    pub(crate) async fn expired_active_speaker_channel_instance_ids(
+    pub(crate) async fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
-    ) -> BTreeSet<ChannelInstanceId> {
+    ) -> BTreeSet<RoomInstanceId> {
         self.observability()
-            .expired_active_speaker_channel_instance_ids(now)
+            .expired_active_speaker_room_instance_ids(now)
             .await
     }
 }
@@ -323,16 +323,16 @@ impl RtcTransportObservabilityFacade<'_> {
             .flatten()
     }
 
-    pub(crate) async fn expired_active_speaker_channel_instance_ids(
+    pub(crate) async fn expired_active_speaker_room_instance_ids(
         self,
         now: Instant,
-    ) -> BTreeSet<ChannelInstanceId> {
+    ) -> BTreeSet<RoomInstanceId> {
         let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
             return BTreeSet::new();
         };
         self.adapter
             .send_worker_command(&worker_handle, |response| {
-                RtcWorkerCommand::ExpiredActiveSpeakerChannelInstanceIds { now, response }
+                RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response }
             })
             .await
             .unwrap_or_default()

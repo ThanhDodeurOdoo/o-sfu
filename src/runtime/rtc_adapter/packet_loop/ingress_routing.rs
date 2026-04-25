@@ -1,4 +1,4 @@
-//! UDP ingress routing for RTC sessions.
+//! UDP ingress routing for RTC users.
 //!
 //! This file performes best-effort routing on the hot path.
 //! All routing decisions here are **hints only**.
@@ -7,7 +7,7 @@
 //! strategy:
 //! 1. Fast path: route by pinned source address.
 //! 2. Guardrails: avoid repeated expensive scans via mis cache + rate limiting.
-//! 3. Recovery: probe packet to narrow candidate sessions
+//! 3. Recovery: probe packet to narrow candidate users
 //! 4. Final decision: defer to `Rtc::accepts()`.
 //!
 //! what we should keep to guarantee:
@@ -54,7 +54,7 @@ enum IndexedSessionRecoveryOutcome {
     Malformed,
 }
 
-/// Recovery probes only narrow the candidate session set.
+/// Recovery probes only narrow the candidate user set.
 ///
 /// This classification must stay aligned with `str0m`'s own UDP multiplexing so
 /// the packet loop never "recovers" traffic that the authoritative
@@ -93,19 +93,19 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
     }
 }
 
-/// Routes an incoming UDP datagram to its owning RTC session.
+/// Routes an incoming UDP datagram to its owning RTC user.
 ///
 /// This function implements a tiered routing strategy to minimize CPU usage on the
 /// hot-path:
 ///
-/// 1. **Index Match**: Checks if the source address is already pinned to a session
+/// 1. **Index Match**: Checks if the source address is already pinned to a user
 ///    in the `remote_addr_demux` cache.
 /// 2. **Negative Cache Check**: Drops the packet if a recent scan already proved
-///    that no session accepts packets from this source.
+///    that no user accepts packets from this source.
 /// 3. **Recovery Scan**: If the source is unknown, it probes the packet (e.g., for
-///    ICE username fragments or STUN attributes) to identify the target session.
-/// 4. **Pinning**: Once a session is matched, the source address is pinned to that
-///    session to enable O(1) routing for subsequent packets.
+///    ICE username fragments or STUN attributes) to identify the target user.
+/// 4. **Pinning**: Once a user is matched, the source address is pinned to that
+///    user to enable O(1) routing for subsequent packets.
 pub(super) fn route_packet_to_matching_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -134,7 +134,7 @@ pub(super) fn route_packet_to_matching_session(
         }
         CachedRouteOutcome::NotMatched => {}
     }
-    // The recent-miss cache proves that no session accepted an identical packet
+    // The recent-miss cache proves that no user accepted an identical packet
     // from this source recently. This avoids repeated recovery scans on noisy or
     // hostile traffic
     //
@@ -144,7 +144,7 @@ pub(super) fn route_packet_to_matching_session(
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
         trace!(
             source = %source_addr,
-            "dropping UDP datagram because a recent cache miss already proved no rtc session accepted it"
+            "dropping UDP datagram because a recent cache miss already proved no rtc user accepted it"
         );
         return;
     }
@@ -168,9 +168,9 @@ pub(super) fn route_packet_to_matching_session(
         packet,
         now,
     };
-    // Fast path: with a single session, routing degenerates to a single `accepts()` check.
+    // Fast path: with a single user, routing degenerates to a single `accepts()` check.
     // No indexing or probing is required.
-    if state.sessions.len() == 1 {
+    if state.users.len() == 1 {
         route_packet_by_single_session(state, routing_state, miss_key, &route);
         return;
     }
@@ -191,7 +191,7 @@ fn route_packet_with_cached_session(
     else {
         return CachedRouteOutcome::NotMatched;
     };
-    let Some(session_state) = state.sessions.get_mut(&session_key) else {
+    let Some(session_state) = state.users.get_mut(&session_key) else {
         state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
             snapshot.remote_addr_demux.forget_remote_addr(source_addr);
@@ -213,9 +213,9 @@ fn route_packet_with_cached_session(
         debug!(
             source_addr = %source_addr,
             candidate_addr = %candidate_addr,
-            session_id = ?session_key.session_id(),
+            user_id = ?session_key.user_id(),
             media_worker_id = session_key.media_worker_id(),
-            "indexed rtc source address no longer matched the cached session; clearing source-address pin"
+            "indexed rtc source address no longer matched the cached user; clearing source-address pin"
         );
         state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
@@ -227,13 +227,13 @@ fn route_packet_with_cached_session(
     let _ = session_state;
     if handle_result.is_err() {
         // NOTE: We still consider the packet "routed" even if `handle_input` fails.
-        // Routing answers "which session owns this packet", not "was the packet valid".
+        // Routing answers "which user owns this packet", not "was the packet valid".
         //
         // This ensures we still update source-address pinning and avoid re-scanning.
         warn!(
-            session_id = ?session_key.session_id(),
+            user_id = ?session_key.user_id(),
             media_worker_id = session_key.media_worker_id(),
-            "failed to feed indexed UDP datagram into rtc session state"
+            "failed to feed indexed UDP datagram into rtc user state"
         );
     } else {
         state.mark_session_dirty(&session_key);
@@ -267,7 +267,7 @@ fn matching_indexed_session_key_for_packet(
             return IndexedSessionRecoveryOutcome::Malformed;
         }
     };
-    // The probe only narrows the candidate session set.
+    // The probe only narrows the candidate user set.
     // It is not authoritative: final ownership is decided by `Rtc::accepts()`.
     let packet_index_probe_description = packet_index_probe.describe();
     let candidate_session_keys = match packet_index_probe {
@@ -292,8 +292,8 @@ fn matching_indexed_session_key_for_packet(
     let matched_session_key = {
         let mut matched_session_key = None;
         for session_key in candidate_session_keys {
-            let Some(session_state) = state.sessions.get(session_key) else {
-                // The demux index may contain stale entries after session teardown.
+            let Some(session_state) = state.users.get(session_key) else {
+                // The demux index may contain stale entries after user teardown.
                 // We track and clean them here to keep the index consistent.
                 stale_session_keys.push(session_key.clone());
                 continue;
@@ -301,7 +301,7 @@ fn matching_indexed_session_key_for_packet(
             examined_sessions = examined_sessions.saturating_add(1);
             // `Rtc::accepts()` is the authoritative demux decision.
             // It accounts for ICE nomination, credentials, and candidate sets.
-            // The probe/index only reduces the number of sessions we test here.
+            // The probe/index only reduces the number of users we test here.
             if session_state.rtc.accepts(&input) {
                 matched_session_key = Some(session_key.clone());
                 break;
@@ -314,19 +314,19 @@ fn matching_indexed_session_key_for_packet(
         for stale_session_key in stale_session_keys {
             state
                 .remote_addr_demux
-                .forget_session_remote_candidate_addrs(&stale_session_key);
+                .forget_user_remote_candidate_addrs(&stale_session_key);
             state
                 .remote_addr_demux
-                .forget_session_local_ice_ufrag(&stale_session_key);
+                .forget_user_local_ice_ufrag(&stale_session_key);
         }
         debug!(
             source_addr = %source_addr,
             candidate_addr = %candidate_addr,
             probe = %packet_index_probe_description,
-            session_id = ?matched_session_key.session_id(),
+            user_id = ?matched_session_key.user_id(),
             media_worker_id = matched_session_key.media_worker_id(),
             examined_sessions,
-            "recovered rtc session routing from packet probe"
+            "recovered rtc user routing from packet probe"
         );
         return IndexedSessionRecoveryOutcome::Matched {
             session_key: matched_session_key,
@@ -336,17 +336,17 @@ fn matching_indexed_session_key_for_packet(
     for stale_session_key in stale_session_keys {
         state
             .remote_addr_demux
-            .forget_session_remote_candidate_addrs(&stale_session_key);
+            .forget_user_remote_candidate_addrs(&stale_session_key);
         state
             .remote_addr_demux
-            .forget_session_local_ice_ufrag(&stale_session_key);
+            .forget_user_local_ice_ufrag(&stale_session_key);
     }
     debug!(
         source_addr = %source_addr,
         candidate_addr = %candidate_addr,
         probe = %packet_index_probe_description,
         examined_sessions,
-        "packet probe did not match any rtc session"
+        "packet probe did not match any rtc user"
     );
     IndexedSessionRecoveryOutcome::NoMatch { examined_sessions }
 }
@@ -374,7 +374,7 @@ fn packet_index_probe(
             .map_err(|_error| IndexedSessionRecoveryOutcome::Malformed)?;
         if let Some((local_ice_ufrag, _remote_ice_ufrag)) = message.split_username() {
             // For inbound ICE checks, USERNAME is "remote:local".
-            // We use the local fragment to directly index the target session.
+            // We use the local fragment to directly index the target user.
             return Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag.to_owned()));
         }
         // STUN responses may not carry USERNAME, so we fall back to source-address recovery
@@ -425,7 +425,7 @@ fn route_packet_to_session(
     route: &PacketRouteContext<'_>,
     route_resolution: &'static str,
 ) -> bool {
-    let Some(session_state) = state.sessions.get_mut(session_key) else {
+    let Some(session_state) = state.users.get_mut(session_key) else {
         return false;
     };
     let Some(input) = receive_input(
@@ -441,14 +441,14 @@ fn route_packet_to_session(
     let _ = session_state;
     if handle_result.is_err() {
         warn!(
-            session_id = ?session_key.session_id(),
+            user_id = ?session_key.user_id(),
             media_worker_id = session_key.media_worker_id(),
-            "failed to feed incoming UDP datagram into rtc session state"
+            "failed to feed incoming UDP datagram into rtc user state"
         );
     } else {
         state.mark_session_dirty(session_key);
     }
-    // After successful routing, we pin the source address to this session.
+    // After successful routing, we pin the source address to this user.
     // ICE guarantees that subsequent media flows use the same tuple
     // If that change, the cached path will detect and invalidate the pin.
     let previous_session_key = state
@@ -469,11 +469,11 @@ fn route_packet_to_session(
                     source_addr = %route.source_addr,
                     candidate_addr = %route.candidate_addr,
                     route_resolution,
-                    previous_session_id = ?previous_session_key.session_id(),
+                    previous_session_id = ?previous_session_key.user_id(),
                     previous_media_worker_id = previous_session_key.media_worker_id(),
-                    session_id = ?session_key.session_id(),
+                    user_id = ?session_key.user_id(),
                     media_worker_id = session_key.media_worker_id(),
-                    "remapped rtc source address to a different session"
+                    "remapped rtc source address to a different user"
                 );
             }
             None => {
@@ -481,9 +481,9 @@ fn route_packet_to_session(
                     source_addr = %route.source_addr,
                     candidate_addr = %route.candidate_addr,
                     route_resolution,
-                    session_id = ?session_key.session_id(),
+                    user_id = ?session_key.user_id(),
                     media_worker_id = session_key.media_worker_id(),
-                    "pinned rtc source address to session"
+                    "pinned rtc source address to user"
                 );
             }
         }
@@ -502,7 +502,7 @@ fn route_packet_by_single_session(
 ) {
     #[cfg(test)]
     routing_state.record_fallback_attempt();
-    let Some(session_key) = state.sessions.keys().next().cloned() else {
+    let Some(session_key) = state.users.keys().next().cloned() else {
         return;
     };
     let Some(input) = receive_input(
@@ -518,22 +518,22 @@ fn route_packet_by_single_session(
         return;
     };
     let accepts_input = state
-        .sessions
+        .users
         .get(&session_key)
         .is_some_and(|session_state| session_state.rtc.accepts(&input));
     route.metrics.record_rtc_datagram_fallback_scan(1);
     if !accepts_input {
         route
             .metrics
-            .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
+            .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
         routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now);
         trace!(
             source = %route.source_addr,
-            "dropping UDP datagram because no rtc session accepted it"
+            "dropping UDP datagram because no rtc user accepted it"
         );
         return;
     }
-    if route_packet_to_session(state, &session_key, route, "single-session-scan") {
+    if route_packet_to_session(state, &session_key, route, "single-user-scan") {
         routing_state.record_route_success(miss_key, route.packet, route.source_addr);
     }
 }
@@ -568,11 +568,11 @@ fn route_packet_by_recovery_index(
                 .record_rtc_datagram_fallback_scan(examined_sessions);
             route
                 .metrics
-                .record_rtc_datagram_drop(RtcDatagramDropReason::NoSession);
+                .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
             routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now);
             trace!(
                 source = %route.source_addr,
-                "dropping UDP datagram because no rtc session accepted it"
+                "dropping UDP datagram because no rtc user accepted it"
             );
             return;
         }

@@ -8,7 +8,7 @@ use crate::{
     core::{
         Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
-    shared::{AvailableFeatures, RecordingState, SessionId, StreamType},
+    shared::{AvailableFeatures, RecordingState, StreamType, UserId},
     signaling::{NegotiationUploadSlot, RequestId, SourceDescriptor, TrackBinding},
 };
 
@@ -103,7 +103,7 @@ pub enum HostCommand {
     },
     RemoveSessionTracks {
         #[serde(rename = "sessionId")]
-        session_id: SessionId,
+        user_id: UserId,
     },
     EmitUpdate {
         update: BundleUpdate,
@@ -139,12 +139,12 @@ fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
         ProtocolEvent::SourceSnapshot { sources } => {
             vec![HostCommand::ReplaceSourceDescriptors { sources }]
         }
-        ProtocolEvent::PeerLeft { session_id } => vec![
+        ProtocolEvent::PeerLeft { user_id } => vec![
             HostCommand::RemoveSessionTracks {
-                session_id: session_id.clone(),
+                user_id: user_id.clone(),
             },
             HostCommand::EmitUpdate {
-                update: BundleUpdate::Disconnect(BundleDisconnectUpdate { session_id }),
+                update: BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id }),
             },
         ],
         other_event => project_bundle_update(other_event)
@@ -232,17 +232,17 @@ fn project_bundle_update(event: ProtocolEvent) -> Option<BundleUpdate> {
         ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
             peers
                 .into_iter()
-                .map(|peer| (bundle_session_info_key(&peer.session_id), peer.info))
+                .map(|peer| (bundle_session_info_key(&peer.user_id), peer.info))
                 .collect::<BundleSessionInfoSnapshotById>(),
         ),
         ProtocolEvent::TrackSnapshot { .. } | ProtocolEvent::SourceSnapshot { .. } => return None,
-        ProtocolEvent::PeerInfo { session_id, info } => BundleUpdate::SessionInfoChange(
-            [(bundle_session_info_key(&session_id), info)]
+        ProtocolEvent::PeerInfo { user_id, info } => BundleUpdate::SessionInfoChange(
+            [(bundle_session_info_key(&user_id), info)]
                 .into_iter()
                 .collect::<BundleSessionInfoSnapshotById>(),
         ),
-        ProtocolEvent::PeerLeft { session_id } => {
-            BundleUpdate::Disconnect(BundleDisconnectUpdate { session_id })
+        ProtocolEvent::PeerLeft { user_id } => {
+            BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id })
         }
         ProtocolEvent::Broadcast { sender_id, message } => {
             BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
@@ -259,7 +259,7 @@ mod tests {
     use crate::{
         bundle_api::BundleConnectionState,
         core::{Command, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent},
-        shared::{SessionId, StreamType},
+        shared::{StreamType, UserId},
         signaling::{RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding},
     };
 
@@ -307,7 +307,7 @@ mod tests {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: vec![TrackBinding {
                         mid: String::from("0"),
-                        session_id: SessionId::Integer(7),
+                        user_id: UserId::Integer(7),
                         stream_type: StreamType::Camera,
                         active: true,
                         source: None,
@@ -366,7 +366,7 @@ mod tests {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![SourceDescriptor {
                     source_id: String::from("source-7"),
-                    session_id: SessionId::Integer(7),
+                    user_id: UserId::Integer(7),
                     stream_type: StreamType::Camera,
                     active: true,
                     mid: Some(String::from("0")),
@@ -405,7 +405,7 @@ mod tests {
     fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
         let commands = host_commands(vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
-                session_id: SessionId::Integer(9),
+                user_id: UserId::Integer(9),
             },
         }]);
 

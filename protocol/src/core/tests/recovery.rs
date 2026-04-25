@@ -80,10 +80,10 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
             ..DownloadStates::default()
         },
     );
-    let _ = core.update_info(SessionInfo {
+    let _ = core.update_info(UserInfo {
         is_camera_on: Some(true),
         is_raising_hand: Some(true),
-        ..SessionInfo::default()
+        ..UserInfo::default()
     });
     let _ = core.on_ws_close(1011);
     let _ = core.on_timer(RECOVERY_TIMER_ID);
@@ -106,7 +106,7 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
                 stream_type: StreamType::Camera,
             })),
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-                session_id: String::from("peer-7").into(),
+                user_id: String::from("peer-7").into(),
                 states: DownloadStates {
                     audio: Some(true),
                     camera: Some(false),
@@ -114,10 +114,10 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
                     ..DownloadStates::default()
                 },
             })),
-            ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
+            ClientEnvelope::Message(ClientMessage::Info(UserInfo {
                 is_camera_on: Some(true),
                 is_raising_hand: Some(true),
-                ..SessionInfo::default()
+                ..UserInfo::default()
             })),
         ]
     );
@@ -150,9 +150,9 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
             ..DownloadStates::default()
         },
     );
-    let _ = core.update_info(SessionInfo {
+    let _ = core.update_info(UserInfo {
         is_self_muted: Some(true),
-        ..SessionInfo::default()
+        ..UserInfo::default()
     });
     let _ = core.on_timer(RECOVERY_TIMER_ID);
 
@@ -163,7 +163,7 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
         envelopes,
         vec![
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-                session_id: String::from("peer-7").into(),
+                user_id: String::from("peer-7").into(),
                 states: DownloadStates {
                     audio: Some(false),
                     camera: Some(true),
@@ -171,9 +171,9 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
                     ..DownloadStates::default()
                 },
             })),
-            ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
+            ClientEnvelope::Message(ClientMessage::Info(UserInfo {
                 is_self_muted: Some(true),
-                ..SessionInfo::default()
+                ..UserInfo::default()
             })),
         ]
     );

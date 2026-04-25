@@ -28,8 +28,8 @@ impl PostAuthSessionProtocol {
         name = "transport.offer.create",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id
         )
     )]
@@ -37,10 +37,10 @@ impl PostAuthSessionProtocol {
         &mut self,
         writer: &mut WsWriter,
     ) -> Result<(), WebSocketCloseCode> {
-        let router_capabilities = self.channel.router_rtp_capabilities().await;
+        let router_capabilities = self.room.router_rtp_capabilities().await;
         let session_key = self
-            .channel
-            .transport_session_key(&self.session_id, self.connection_id);
+            .room
+            .transport_user_key(&self.user_id, self.connection_id);
         let offer = create_initial_offer(&self.transport_adapter, &session_key)
             .await
             .map_err(|error| {
@@ -48,7 +48,7 @@ impl PostAuthSessionProtocol {
                     event = telemetry_event::NEGOTIATION_FAILED,
                     operation = "initial_offer_create",
                     outcome = "transport_error",
-                    session_id = ?self.session_id,
+                    user_id = ?self.user_id,
                     connection_id = ?self.connection_id,
                     remote_address = self.remote_address.as_ref(),
                     ?error,
@@ -85,7 +85,7 @@ impl PostAuthSessionProtocol {
                 event = telemetry_event::NEGOTIATION_FAILED,
                 operation = negotiation_operation_name(&action),
                 outcome = "request_send_failed",
-                session_id = ?self.session_id,
+                user_id = ?self.user_id,
                 connection_id = ?self.connection_id,
                 remote_address = self.remote_address.as_ref(),
                 ?request_id,
@@ -109,8 +109,8 @@ impl PostAuthSessionProtocol {
         name = "transport.renegotiate",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id
         )
     )]
@@ -122,8 +122,8 @@ impl PostAuthSessionProtocol {
             RenegotiationDisposition::Skip | RenegotiationDisposition::QueueOnly => Ok(false),
             RenegotiationDisposition::SendNow => {
                 let session_key = self
-                    .channel
-                    .transport_session_key(&self.session_id, self.connection_id);
+                    .room
+                    .transport_user_key(&self.user_id, self.connection_id);
                 let Some(request) = staged_renegotiation_request(
                     &self.transport_adapter,
                     &session_key,
@@ -190,7 +190,7 @@ impl PostAuthSessionProtocol {
     ) -> Result<(), SessionProtocolOutcome> {
         if answer.sdp.is_empty() {
             warn!(
-                session_id = ?self.session_id,
+                user_id = ?self.user_id,
                 connection_id = ?self.connection_id,
                 remote_address = self.remote_address.as_ref(),
                 ?response_to,
@@ -206,7 +206,7 @@ impl PostAuthSessionProtocol {
     fn resolve_negotiation_answer(&mut self, response_to: &RequestId) -> Option<ResolvedFlowState> {
         let Some(resolved) = self.flow_state.resolve_answer(response_to) else {
             warn!(
-                session_id = ?self.session_id,
+                user_id = ?self.user_id,
                 connection_id = ?self.connection_id,
                 remote_address = self.remote_address.as_ref(),
                 ?response_to,
@@ -221,8 +221,8 @@ impl PostAuthSessionProtocol {
         name = "transport.answer.apply",
         skip_all,
         fields(
-            channel_uuid = %self.channel.uuid(),
-            session_id = ?self.session_id,
+            room_id = %self.room.uuid(),
+            user_id = ?self.user_id,
             connection_id = ?self.connection_id
         )
     )]
@@ -233,8 +233,8 @@ impl PostAuthSessionProtocol {
         resolved: &ResolvedFlowState,
     ) -> Result<AppliedSessionAnswer, SessionProtocolOutcome> {
         let session_key = self
-            .channel
-            .transport_session_key(&self.session_id, self.connection_id);
+            .room
+            .transport_user_key(&self.user_id, self.connection_id);
         apply_transport_answer(&self.transport_adapter, &session_key, answer_sdp)
             .await
             .map_err(|error| {
@@ -242,13 +242,13 @@ impl PostAuthSessionProtocol {
                     event = telemetry_event::NEGOTIATION_FAILED,
                     operation = "answer_apply",
                     outcome = "transport_error",
-                    session_id = ?self.session_id,
+                    user_id = ?self.user_id,
                     connection_id = ?self.connection_id,
                     remote_address = self.remote_address.as_ref(),
                     ?response_to,
                     request = ?resolved.pending.request,
                     ?error,
-                    "failed to apply negotiation answer to the transport session"
+                    "failed to apply negotiation answer to the transport user"
                 );
                 SessionProtocolOutcome::Close(WebSocketCloseCode::Error)
             })
@@ -286,7 +286,7 @@ impl PostAuthSessionProtocol {
                             event = telemetry_event::NEGOTIATION_FAILED,
                             operation = "answer_apply",
                             outcome = "capability_projection_failed",
-                            session_id = ?self.session_id,
+                            user_id = ?self.user_id,
                             connection_id = ?self.connection_id,
                             remote_address = self.remote_address.as_ref(),
                             ?error,
@@ -294,9 +294,9 @@ impl PostAuthSessionProtocol {
                         );
                     })?;
                 if !self
-                    .channel
+                    .room
                     .apply_session_negotiated(
-                        &self.session_id,
+                        &self.user_id,
                         self.connection_id,
                         client_rtp_capabilities,
                         &self.transport_adapter,
@@ -307,19 +307,19 @@ impl PostAuthSessionProtocol {
                         event = telemetry_event::NEGOTIATION_FAILED,
                         operation = "answer_apply",
                         outcome = "channel_commit_failed",
-                        session_id = ?self.session_id,
+                        user_id = ?self.user_id,
                         connection_id = ?self.connection_id,
                         remote_address = self.remote_address.as_ref(),
-                        "failed to commit negotiated session state after initial answer"
+                        "failed to commit negotiated user state after initial answer"
                     );
                     return Err(());
                 }
             }
             PendingFlowAction::RefreshSession => {
                 if !self
-                    .channel
+                    .room
                     .apply_session_refreshed(
-                        &self.session_id,
+                        &self.user_id,
                         self.connection_id,
                         &self.transport_adapter,
                     )
@@ -329,10 +329,10 @@ impl PostAuthSessionProtocol {
                         event = telemetry_event::NEGOTIATION_FAILED,
                         operation = "renegotiation_apply",
                         outcome = "channel_refresh_failed",
-                        session_id = ?self.session_id,
+                        user_id = ?self.user_id,
                         connection_id = ?self.connection_id,
                         remote_address = self.remote_address.as_ref(),
-                        "failed to refresh session state after renegotiation answer"
+                        "failed to refresh user state after renegotiation answer"
                     );
                     return Err(());
                 }
@@ -464,7 +464,7 @@ mod tests {
         time::Instant,
     };
 
-    use o_sfu_protocol::{shared::SessionId, signaling::WebSocketCloseCode};
+    use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
     use str0m::{Candidate, Rtc, change::SdpOffer};
 
     use super::staged_renegotiation_request;
@@ -510,7 +510,7 @@ mod tests {
     #[tokio::test]
     async fn staged_renegotiation_request_returns_none_without_pending_offer() {
         let transport_adapter = build_real_rtc_transport_adapter(58_100);
-        let session_key = test_transport_session_key(7, 0, 11, SessionId::Integer(19));
+        let session_key = test_transport_session_key(7, 0, 11, UserId::Integer(19));
         let initial_offer_result = transport_adapter
             .create_initial_session_offer(&session_key)
             .await;
@@ -546,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn staged_renegotiation_request_keeps_transport_errors_fatal() {
         let transport_adapter = build_real_rtc_transport_adapter(58_400);
-        let missing_session_key = test_transport_session_key(8, 0, 12, SessionId::Integer(20));
+        let missing_session_key = test_transport_session_key(8, 0, 12, UserId::Integer(20));
 
         let renegotiation_request =
             staged_renegotiation_request(&transport_adapter, &missing_session_key, "127.0.0.1")

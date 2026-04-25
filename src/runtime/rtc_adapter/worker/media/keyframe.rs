@@ -62,7 +62,7 @@ pub(crate) fn request_keyframe_for_source(
     else {
         return;
     };
-    let Some(session_state) = state.sessions.get_mut(source_session_key) else {
+    let Some(session_state) = state.users.get_mut(source_session_key) else {
         return;
     };
     if session_state
@@ -82,7 +82,7 @@ pub(crate) fn request_keyframe_for_source(
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
         return;
     }
-    let Some(session_state) = state.sessions.get_mut(source_session_key) else {
+    let Some(session_state) = state.users.get_mut(source_session_key) else {
         return;
     };
     let mut direct_api = session_state.rtc.direct_api();

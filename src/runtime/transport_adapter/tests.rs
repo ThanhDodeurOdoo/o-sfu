@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_protocol::shared::SessionId;
+use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     MediaCapabilities as RouterRtpCapabilities, MediaCodecCapability, MediaKind,
     MediaKind as RouterMediaKind, MediaStream, StreamBinding,
@@ -17,7 +17,7 @@ use super::RuntimeTransportAdapter;
 use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
-        ChannelInstanceId, ConnectionId,
+        ConnectionId, RoomInstanceId,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -32,16 +32,16 @@ use crate::{
 };
 
 fn test_session_key(
-    channel_instance_id: u64,
+    room_instance_id: u64,
     media_worker_id: usize,
     connection_id: u64,
-    session_id: SessionId,
+    user_id: UserId,
 ) -> TransportSessionKey {
     TransportSessionKey::new(
-        ChannelInstanceId::from_raw(channel_instance_id),
+        RoomInstanceId::from_raw(room_instance_id),
         media_worker_id,
         ConnectionId::from_raw(connection_id),
-        session_id,
+        user_id,
     )
 }
 
@@ -261,7 +261,7 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
 async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
-    let session_key = test_session_key(17, 0, 3, SessionId::Integer(41));
+    let session_key = test_session_key(17, 0, 3, UserId::Integer(41));
     let audio_rtp_parameters = sample_audio_rtp_parameters("aud-up", 1234);
 
     let offer_result = create_offer_via_negotiation_port(&adapter, &session_key).await;
@@ -291,7 +291,7 @@ async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
     let updated_runtime_ids = updated_runtime_ids.into_iter().collect::<BTreeSet<_>>();
     assert_eq!(
         updated_runtime_ids,
-        BTreeSet::from([session_key.channel_instance_id()])
+        BTreeSet::from([session_key.room_instance_id()])
     );
 
     let active_speakers = observe_active_speakers(&adapter).await;
@@ -326,7 +326,7 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
 }
 
 #[tokio::test]
-async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
+async fn rtc_adapter_shards_room_bootstrap_by_explicit_media_worker() {
     let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         SessionBitrateLimits::new(8_000_000, 10_000_000),
@@ -337,15 +337,15 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));
-    let first_channel_session = test_session_key(10, 0, 1, SessionId::Integer(1));
-    let second_channel_session = test_session_key(11, 1, 1, SessionId::Integer(2));
-    let same_shard_session = test_session_key(12, 0, 1, SessionId::Integer(3));
+    let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
+    let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
+    let same_shard_session = test_session_key(12, 0, 1, UserId::Integer(3));
 
     let first_offer = adapter
-        .create_initial_session_offer(&first_channel_session)
+        .create_initial_session_offer(&first_room_session)
         .await;
     let second_offer = adapter
-        .create_initial_session_offer(&second_channel_session)
+        .create_initial_session_offer(&second_room_session)
         .await;
     let same_shard_offer = adapter
         .create_initial_session_offer(&same_shard_session)
@@ -382,7 +382,7 @@ async fn rtc_adapter_shards_channel_bootstrap_by_explicit_media_worker() {
 async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
-    let session_key = test_session_key(18, 0, 19, SessionId::Integer(20));
+    let session_key = test_session_key(18, 0, 19, UserId::Integer(20));
     let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
     fake.set_active_speaker_source_snapshot(vec![speaker_source]);
 
@@ -416,22 +416,19 @@ async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updat
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
     let subscription = adapter.source_policy_subscription();
-    let dirty_channel_instance_id = ChannelInstanceId::from_raw(27);
+    let dirty_room_instance_id = RoomInstanceId::from_raw(27);
 
-    fake.mark_source_policy_dirty(dirty_channel_instance_id);
+    fake.mark_source_policy_dirty(dirty_room_instance_id);
 
     let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
-    assert_eq!(
-        updates.ok(),
-        Some(BTreeSet::from([dirty_channel_instance_id]))
-    );
+    assert_eq!(updates.ok(), Some(BTreeSet::from([dirty_room_instance_id])));
 }
 
 #[tokio::test]
 async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
     let adapter = test_rtc_adapter(2, RtcPortRange::new(46_200, 46_299));
-    let source_session = test_session_key(20, 0, 1, SessionId::Integer(1));
-    let consumer_session = test_session_key(20, 1, 2, SessionId::Integer(2));
+    let source_session = test_session_key(20, 0, 1, UserId::Integer(1));
+    let consumer_session = test_session_key(20, 1, 2, UserId::Integer(2));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 41_000);
     let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 42_000);
 
@@ -457,8 +454,8 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
     let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
         return;
     };
-    let source_shard = shards.shard_for_session(&source_session);
-    let consumer_shard = shards.shard_for_session(&consumer_session);
+    let source_shard = shards.shard_for_user(&source_session);
+    let consumer_shard = shards.shard_for_user(&consumer_session);
 
     assert_eq!(
         source_shard.debug_relay_target_count_for_source(source_media_id),
@@ -527,9 +524,9 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
         Arc::new(MediaTap::default()),
         Arc::new(RuntimeMetrics::default()),
     ));
-    let source_session = test_session_key(30, 0, 1, SessionId::Integer(1));
-    let first_consumer_session = test_session_key(30, 1, 2, SessionId::Integer(2));
-    let second_consumer_session = test_session_key(30, 2, 3, SessionId::Integer(3));
+    let source_session = test_session_key(30, 0, 1, UserId::Integer(1));
+    let first_consumer_session = test_session_key(30, 1, 2, UserId::Integer(2));
+    let second_consumer_session = test_session_key(30, 2, 3, UserId::Integer(3));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 51_000);
     let first_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-1", 52_000);
     let second_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-2", 53_000);
@@ -575,9 +572,9 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
     let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
         return;
     };
-    let source_shard = shards.shard_for_session(&source_session);
-    let first_consumer_shard = shards.shard_for_session(&first_consumer_session);
-    let second_consumer_shard = shards.shard_for_session(&second_consumer_session);
+    let source_shard = shards.shard_for_user(&source_session);
+    let first_consumer_shard = shards.shard_for_user(&first_consumer_session);
+    let second_consumer_shard = shards.shard_for_user(&second_consumer_session);
 
     assert_relay_target_counts(source_shard.as_ref(), source_media_id, 2, 2);
     assert_remote_source_owner(
@@ -619,8 +616,8 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
 #[tokio::test]
 async fn rtc_adapter_rejects_stale_session_removal_without_dropping_consumer_handle() {
     let adapter = test_rtc_adapter(1, RtcPortRange::new(46_600, 46_649));
-    let source_session = test_session_key(35, 0, 1, SessionId::Integer(1));
-    let consumer_session = test_session_key(35, 0, 2, SessionId::Integer(2));
+    let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
+    let consumer_session = test_session_key(35, 0, 2, UserId::Integer(2));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
     let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 55_000);
 
@@ -676,9 +673,9 @@ async fn rtc_adapter_rejects_stale_session_removal_without_dropping_consumer_han
 #[tokio::test]
 async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes() {
     let adapter = test_rtc_adapter(2, RtcPortRange::new(46_600, 46_699));
-    let source_session = test_session_key(40, 0, 1, SessionId::Integer(1));
-    let local_consumer_session = test_session_key(40, 0, 2, SessionId::Integer(2));
-    let remote_consumer_session = test_session_key(40, 1, 3, SessionId::Integer(3));
+    let source_session = test_session_key(40, 0, 1, UserId::Integer(1));
+    let local_consumer_session = test_session_key(40, 0, 2, UserId::Integer(2));
+    let remote_consumer_session = test_session_key(40, 1, 3, UserId::Integer(3));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 61_000);
     let local_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-local", 62_000);
     let remote_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-remote", 63_000);
@@ -724,8 +721,8 @@ async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes(
     let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
         return;
     };
-    let source_shard = shards.shard_for_session(&source_session);
-    let remote_consumer_shard = shards.shard_for_session(&remote_consumer_session);
+    let source_shard = shards.shard_for_user(&source_session);
+    let remote_consumer_shard = shards.shard_for_user(&remote_consumer_session);
 
     assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1);
 

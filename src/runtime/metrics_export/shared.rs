@@ -313,7 +313,7 @@ pub(super) const fn close_code_label(close_code: WebSocketCloseCode) -> &'static
         WebSocketCloseCode::AuthTimeout => "auth_timeout",
         WebSocketCloseCode::AuthFailed => "auth_failed",
         WebSocketCloseCode::ProtocolError => "protocol_error",
-        WebSocketCloseCode::ChannelFull => "channel_full",
+        WebSocketCloseCode::RoomFull => "room_full",
         WebSocketCloseCode::Error => "error",
         WebSocketCloseCode::Clean => "clean",
         WebSocketCloseCode::Leaving => "leaving",

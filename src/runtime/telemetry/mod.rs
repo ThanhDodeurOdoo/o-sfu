@@ -299,8 +299,8 @@ pub(crate) fn http_request_span(route: &'static str) -> Span {
         "http.request",
         "otel.kind" = "server",
         route,
-        channel_uuid = field::Empty,
-        session_id = field::Empty,
+        room_id = field::Empty,
+        user_id = field::Empty,
         connection_id = field::Empty,
         remote_address = field::Empty
     ))
@@ -309,8 +309,8 @@ pub(crate) fn http_request_span(route: &'static str) -> Span {
 pub(crate) fn ws_upgrade_span() -> Span {
     activated_span(tracing::info_span!(
         "ws.upgrade",
-        channel_uuid = field::Empty,
-        session_id = field::Empty,
+        room_id = field::Empty,
+        user_id = field::Empty,
         connection_id = field::Empty,
         remote_address = field::Empty
     ))
@@ -319,8 +319,8 @@ pub(crate) fn ws_upgrade_span() -> Span {
 pub(crate) fn ws_handshake_span() -> Span {
     activated_span(tracing::info_span!(
         "ws.handshake",
-        channel_uuid = field::Empty,
-        session_id = field::Empty,
+        room_id = field::Empty,
+        user_id = field::Empty,
         connection_id = field::Empty,
         remote_address = field::Empty
     ))
@@ -553,15 +553,12 @@ mod tests {
         let writer = SharedWriter::default();
         let subscriber = json_test_subscriber(writer.clone());
         subscriber::with_default(subscriber, || {
-            let span = activated_span(tracing::info_span!(
-                "ws.handshake",
-                channel_uuid = "channel-a"
-            ));
+            let span = activated_span(tracing::info_span!("ws.handshake", room_id = "room-a"));
             let _entered = span.enter();
             tracing::info!(
                 event = schema::event::WS_JOIN_SUCCEEDED,
-                session_id = "session-1",
-                message = "joined session"
+                user_id = "user-1",
+                message = "joined user"
             );
         });
 
@@ -587,12 +584,12 @@ mod tests {
         };
 
         assert_json_string(&value, "event", schema::event::WS_JOIN_SUCCEEDED);
-        assert_json_string(&value, "message", "joined session");
+        assert_json_string(&value, "message", "joined user");
         assert_json_string(&value, "service.name", "o-sfu-test");
         assert_json_string(&value, "service.version", env!("CARGO_PKG_VERSION"));
         assert_json_string(&value, "service.instance.id", "test-instance");
         assert_json_string(&value, "deployment.environment", "test");
-        assert_json_string(&value, "session_id", "session-1");
+        assert_json_string(&value, "user_id", "user-1");
         assert_json_string(&value, "target", "o_sfu::runtime::telemetry::tests");
         assert!(json_is_string(&value, "timestamp"));
         assert!(json_is_string(&value, "trace_id"));
@@ -608,15 +605,12 @@ mod tests {
         let writer = SharedWriter::default();
         let subscriber = json_test_subscriber(writer.clone());
         subscriber::with_default(subscriber, || {
-            let span = activated_span(tracing::info_span!(
-                "ws.handshake",
-                channel_uuid = "channel-a"
-            ));
+            let span = activated_span(tracing::info_span!("ws.handshake", room_id = "room-a"));
             let _entered = span.enter();
             tracing::info!(
                 event = schema::event::WS_JOIN_SUCCEEDED,
-                session_id = "session-1",
-                message = "joined session"
+                user_id = "user-1",
+                message = "joined user"
             );
         });
 
@@ -642,12 +636,12 @@ mod tests {
         };
 
         assert_json_string(&value, "event", schema::event::WS_JOIN_SUCCEEDED);
-        assert_json_string(&value, "message", "joined session");
+        assert_json_string(&value, "message", "joined user");
         assert_json_string(&value, "service.name", "o-sfu-test");
         assert_json_string(&value, "service.version", env!("CARGO_PKG_VERSION"));
         assert_json_string(&value, "service.instance.id", "test-instance");
         assert_json_string(&value, "deployment.environment", "test");
-        assert_json_string(&value, "session_id", "session-1");
+        assert_json_string(&value, "user_id", "user-1");
         assert_json_string(&value, "target", "o_sfu::runtime::telemetry::tests");
         assert!(json_is_string(&value, "timestamp"));
         assert!(json_field(&value, "trace_id").is_none());

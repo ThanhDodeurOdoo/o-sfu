@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::ws::Message;
 use o_sfu_protocol::{
-    shared::SessionId,
+    shared::UserId,
     signaling::{ClientEnvelope, RequestId, ServerMessage, WebSocketCloseCode},
 };
 use tokio::runtime::Handle;
@@ -14,8 +14,8 @@ use super::super::{
 };
 use crate::runtime::{
     ConnectionId,
-    channel::{Channel, ChannelEventMessage, ChannelEventRequest, TrackBindingUpdate},
     metrics::RuntimeMetrics,
+    room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
     rtc_adapter::TransportSessionHealth,
     transport_adapter::{ObservabilityPort, RuntimeTransportAdapter},
     websocket_server::{
@@ -36,17 +36,17 @@ impl ServerRequestIdState {
     }
 }
 
-/// The main orchestrator for an authenticated session.
+/// The main orchestrator for an authenticated user.
 ///
 /// It centralizes envelope dispatch, renegotiation sequencing, and staged publish
-/// transitions behind one session-scoped owner. It bridges the gap between the
-/// authenticated protocol surface and the `channel` runtime.
+/// transitions behind one user-scoped owner. It bridges the gap between the
+/// authenticated protocol surface and the `room` runtime.
 #[derive(Debug)]
 pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
-    pub(super) session_id: SessionId,
+    pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
     pub(super) remote_address: Arc<str>,
-    pub(super) channel: Arc<Channel>,
+    pub(super) room: Arc<Room>,
     pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) request_ids: ServerRequestIdState,
@@ -56,18 +56,18 @@ pub(in crate::runtime::websocket_server) struct PostAuthSessionProtocol {
 
 impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) fn new(
-        session_id: SessionId,
+        user_id: UserId,
         connection_id: ConnectionId,
         remote_address: Arc<str>,
-        channel: Arc<Channel>,
+        room: Arc<Room>,
         transport_adapter: RuntimeTransportAdapter,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
-            session_id,
+            user_id,
             connection_id,
             remote_address,
-            channel,
+            room,
             transport_adapter,
             metrics,
             request_ids: ServerRequestIdState::default(),
@@ -80,8 +80,8 @@ impl PostAuthSessionProtocol {
         &self,
     ) -> Option<WebSocketCloseCode> {
         let session_key = self
-            .channel
-            .transport_session_key(&self.session_id, self.connection_id);
+            .room
+            .transport_user_key(&self.user_id, self.connection_id);
         self.transport_adapter
             .session_transport_health(&session_key)
             .and_then(|health| match health {
@@ -118,7 +118,7 @@ impl PostAuthSessionProtocol {
         if payload.len() > MAX_CLIENT_FRAME_BYTES {
             self.metrics.record_ws_bus_invalid_input_failure();
             warn!(
-                session_id = ?self.session_id,
+                user_id = ?self.user_id,
                 connection_id = ?self.connection_id,
                 remote_address = self.remote_address.as_ref(),
                 payload_len = payload.len(),
@@ -132,7 +132,7 @@ impl PostAuthSessionProtocol {
             Err(_error) => {
                 self.metrics.record_ws_bus_invalid_input_failure();
                 warn!(
-                    session_id = ?self.session_id,
+                    user_id = ?self.user_id,
                     connection_id = ?self.connection_id,
                     remote_address = self.remote_address.as_ref(),
                     "received websocket binary frame with invalid UTF-8"
@@ -154,7 +154,7 @@ impl PostAuthSessionProtocol {
                     ClientBatchDecodeFailureKind::InvalidInput => {
                         self.metrics.record_ws_bus_invalid_input_failure();
                         warn!(
-                            session_id = ?self.session_id,
+                            user_id = ?self.user_id,
                             connection_id = ?self.connection_id,
                             remote_address = self.remote_address.as_ref(),
                             "failed to decode client websocket batch because the payload was invalid"
@@ -163,7 +163,7 @@ impl PostAuthSessionProtocol {
                     ClientBatchDecodeFailureKind::UnsupportedFeature => {
                         self.metrics.record_ws_bus_unsupported_feature_failure();
                         warn!(
-                            session_id = ?self.session_id,
+                            user_id = ?self.user_id,
                             connection_id = ?self.connection_id,
                             remote_address = self.remote_address.as_ref(),
                             "failed to decode client websocket batch because it used an unsupported feature"
@@ -191,7 +191,7 @@ impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_outbound_message(
         &mut self,
         writer: &mut WsWriter,
-        message: ChannelEventMessage,
+        message: RoomEventMessage,
     ) -> Result<usize, WebSocketCloseCode> {
         let translated = self.track_projection.translate_server_message(message);
         let mut batch_len = send_server_messages(writer, translated.messages).await?;
@@ -204,10 +204,10 @@ impl PostAuthSessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_outbound_request(
         &mut self,
         writer: &mut WsWriter,
-        request: ChannelEventRequest,
+        request: RoomEventRequest,
     ) -> Result<usize, WebSocketCloseCode> {
         match request {
-            ChannelEventRequest::BootstrapRemoteTrack(payload) => {
+            RoomEventRequest::BootstrapRemoteTrack(payload) => {
                 self.track_projection.apply_remote_track_bootstrap(&payload);
                 let mut batch_len = send_server_messages(
                     writer,
@@ -240,19 +240,18 @@ impl PostAuthSessionProtocol {
 
 impl Drop for PostAuthSessionProtocol {
     fn drop(&mut self) {
-        let channel = Arc::clone(&self.channel);
+        let room = Arc::clone(&self.room);
         let transport_adapter = self.transport_adapter.clone();
-        let session_id = self.session_id.clone();
+        let user_id = self.user_id.clone();
         let connection_id = self.connection_id;
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
-                channel
-                    .rollback_staged_publishes_for_connection(
-                        &session_id,
-                        connection_id,
-                        &transport_adapter,
-                    )
-                    .await;
+                room.rollback_staged_publishes_for_connection(
+                    &user_id,
+                    connection_id,
+                    &transport_adapter,
+                )
+                .await;
             });
         }
     }

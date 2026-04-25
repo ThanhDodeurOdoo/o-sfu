@@ -9,15 +9,15 @@ pub(super) use o_sfu_protocol::{
     host_bridge::HostPendingRequestKind,
     shared::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
-        SessionId as ProtocolSessionId, SessionInfo as ProtocolSessionInfo,
         StopCode as ProtocolStopCode, StreamType as ProtocolStreamType,
+        UserId as ProtocolSessionId, UserInfo as ProtocolSessionInfo,
     },
     signaling::{EnvelopeBatch, RequestId, ServerMessage, TrackBinding},
 };
 use o_sfu_protocol::{
     core::{Command, NegotiationKind, ProtocolCore},
     host_bridge::{HostCommand, host_commands},
-    shared::{RecordingStateUpdate, SessionPermissions},
+    shared::{RecordingStateUpdate, UserPermissions},
     signaling::RecordingOptions,
 };
 pub(super) use o_sfu_router::MediaKind;
@@ -35,7 +35,7 @@ pub(super) use super::super::fixtures::*;
 use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 pub(super) use crate::{
     config::RuntimeFeatureFlags,
-    runtime::{channel::Channel, transport_adapter::RuntimeTransportAdapter},
+    runtime::{room::Room, transport_adapter::RuntimeTransportAdapter},
 };
 
 pub(super) const BATCH_FLUSH_DELAY_MS: u32 = 100;
@@ -150,9 +150,9 @@ impl ProtocolHarnessPeer {
         &mut self,
         url: &str,
         jwt: &str,
-        channel: Option<String>,
+        room: Option<String>,
     ) -> Option<()> {
-        let commands = self.core.connect(url.to_owned(), jwt.to_owned(), channel);
+        let commands = self.core.connect(url.to_owned(), jwt.to_owned(), room);
         self.run_commands(commands).await
     }
 
@@ -176,9 +176,9 @@ impl ProtocolHarnessPeer {
         &mut self,
         url: &str,
         jwt: &str,
-        channel: Option<String>,
+        room: Option<String>,
     ) -> Option<()> {
-        self.connect(url, jwt, channel).await?;
+        self.connect(url, jwt, room).await?;
         self.read_server_frame().await?;
         self.read_server_frame().await?;
         Some(())
@@ -208,10 +208,10 @@ impl ProtocolHarnessPeer {
 
     pub(super) async fn subscribe(
         &mut self,
-        session_id: ProtocolSessionId,
+        user_id: ProtocolSessionId,
         states: ProtocolDownloadStates,
     ) -> Option<()> {
-        let commands = self.core.subscribe(session_id, states);
+        let commands = self.core.subscribe(user_id, states);
         self.run_commands(commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
@@ -385,23 +385,22 @@ pub(super) async fn read_track_snapshot(
 
 pub(super) async fn real_rtc_route_activity(
     server: &TestServer,
-    channel: &Arc<Channel>,
-    source_session_id: SessionId,
-    consumer_session_id: SessionId,
+    room: &Arc<Room>,
+    source_user_id: UserId,
+    consumer_user_id: UserId,
     mid: &str,
 ) -> Option<RealRtcRouteActivity> {
-    let _source_connection_id = channel
+    let _source_connection_id = room
         .test_api()
         .inspect()
-        .session_connection_id(&source_session_id)
+        .user_connection_id(&source_user_id)
         .await?;
-    let consumer_connection_id = channel
+    let consumer_connection_id = room
         .test_api()
         .inspect()
-        .session_connection_id(&consumer_session_id)
+        .user_connection_id(&consumer_user_id)
         .await?;
-    let consumer_session_key =
-        channel.transport_session_key(&consumer_session_id, consumer_connection_id);
+    let consumer_session_key = room.transport_user_key(&consumer_user_id, consumer_connection_id);
     let route_entry = server
         .state
         .transport_adapter
@@ -418,14 +417,14 @@ pub(super) async fn real_rtc_route_activity(
 pub(super) async fn assert_real_rtc_subscribe_activity(
     bob: &mut ProtocolHarnessPeer,
     server: &TestServer,
-    channel: &Arc<Channel>,
+    room: &Arc<Room>,
     published_track: &TrackBinding,
-    source_session_id: SessionId,
-    consumer_session_id: SessionId,
+    source_user_id: UserId,
+    consumer_user_id: UserId,
     active: bool,
 ) -> Option<()> {
     bob.subscribe(
-        protocol_session_id(&source_session_id),
+        protocol_user_id(&source_user_id),
         ProtocolDownloadStates {
             camera: Some(active),
             ..ProtocolDownloadStates::default()
@@ -437,9 +436,9 @@ pub(super) async fn assert_real_rtc_subscribe_activity(
     }
     let route_activity = real_rtc_route_activity(
         server,
-        channel,
-        source_session_id,
-        consumer_session_id,
+        room,
+        source_user_id,
+        consumer_user_id,
         &published_track.mid,
     )
     .await?;
@@ -457,7 +456,7 @@ pub(super) async fn assert_real_rtc_subscribe_activity(
 pub(super) async fn publish_camera_and_bootstrap_subscriber(
     publisher: &mut ProtocolHarnessPeer,
     subscriber: &mut ProtocolHarnessPeer,
-    publisher_session_id: &SessionId,
+    publisher_user_id: &UserId,
     publish_context: &str,
     renegotiation_context: &str,
     snapshot_context: &str,
@@ -477,10 +476,7 @@ pub(super) async fn publish_camera_and_bootstrap_subscriber(
     assert!(track_snapshot.is_some(), "{snapshot_context}");
     let track_snapshot = track_snapshot?;
     let track_binding = track_snapshot.first()?;
-    assert_eq!(
-        track_binding.session_id,
-        protocol_session_id(publisher_session_id)
-    );
+    assert_eq!(track_binding.user_id, protocol_user_id(publisher_user_id));
     assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
     assert!(track_binding.active);
     assert!(
@@ -493,7 +489,7 @@ pub(super) async fn publish_camera_and_bootstrap_subscriber(
 pub(super) async fn recover_subscriber_and_replay_track(
     publisher: &mut ProtocolHarnessPeer,
     subscriber: &mut ProtocolHarnessPeer,
-    publisher_session_id: &SessionId,
+    publisher_user_id: &UserId,
     reconnect_context: &str,
     welcome_context: &str,
     offer_context: &str,
@@ -524,7 +520,7 @@ pub(super) async fn recover_subscriber_and_replay_track(
     let replayed_track_snapshot = replayed_track_snapshot?;
     assert_track_snapshot_contains(
         &replayed_track_snapshot,
-        &protocol_session_id(publisher_session_id),
+        &protocol_user_id(publisher_user_id),
         ProtocolStreamType::Camera,
     );
     let replayed_track = replayed_track_snapshot.first()?;
@@ -537,12 +533,12 @@ pub(super) async fn recover_subscriber_and_replay_track(
 
 pub(super) async fn setup_fake_protocol_peers(
     adapter: Arc<FakeWebRtcAdapter>,
-    channel_name: &str,
-    alice_session_id: SessionId,
-    bob_session_id: SessionId,
+    room_name: &str,
+    alice_user_id: UserId,
+    bob_user_id: UserId,
 ) -> Option<(
     TestServer,
-    Arc<Channel>,
+    Arc<Room>,
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
@@ -554,10 +550,9 @@ pub(super) async fn setup_fake_protocol_peers(
         RuntimeTransportAdapter::from_fake_adapter(adapter),
     )
     .await?;
-    let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
-    let alice_token =
-        signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id.clone())?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
+    let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id.clone())?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::default();
     let mut bob = ProtocolHarnessPeer::default();
@@ -566,8 +561,8 @@ pub(super) async fn setup_fake_protocol_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
-    consume_peer_joined_update(&mut alice, protocol_session_id(&bob_session_id)).await?;
-    Some((server, channel, alice, bob))
+    consume_peer_joined_update(&mut alice, protocol_user_id(&bob_user_id)).await?;
+    Some((server, room, alice, bob))
 }
 
 pub(super) async fn read_single_protocol_server_message(
@@ -585,60 +580,58 @@ pub(super) async fn read_single_protocol_server_message(
     Some(message)
 }
 
-pub(super) fn protocol_session_id(session_id: &SessionId) -> ProtocolSessionId {
-    match session_id {
-        SessionId::Integer(value) => ProtocolSessionId::Integer(*value),
-        SessionId::String(value) => ProtocolSessionId::String(value.clone()),
+pub(super) fn protocol_user_id(user_id: &UserId) -> ProtocolSessionId {
+    match user_id {
+        UserId::Integer(value) => ProtocolSessionId::Integer(*value),
+        UserId::String(value) => ProtocolSessionId::String(value.clone()),
     }
 }
 
 pub(super) async fn consume_peer_joined_update(
     peer: &mut ProtocolHarnessPeer,
-    session_id: ProtocolSessionId,
+    user_id: ProtocolSessionId,
 ) -> Option<()> {
     peer.read_server_frame().await?;
     assert_eq!(
         peer.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
-            bundle_session_info_key(&session_id),
+            bundle_session_info_key(&user_id),
             ProtocolSessionInfo::snapshot_defaults(),
         )]))),
-        "peer join should project into the post-auth session-info update surface"
+        "peer join should project into the post-auth user-info update surface"
     );
     Some(())
 }
 
 pub(super) fn assert_track_snapshot_contains(
     track_bindings: &[TrackBinding],
-    session_id: &ProtocolSessionId,
+    user_id: &ProtocolSessionId,
     stream_type: ProtocolStreamType,
 ) {
     assert!(
         track_bindings.iter().any(|binding| {
-            binding.session_id == *session_id
-                && binding.stream_type == stream_type
-                && binding.active
+            binding.user_id == *user_id && binding.stream_type == stream_type && binding.active
         }),
-        "expected an active track binding for session {session_id:?} and stream {stream_type:?}"
+        "expected an active track binding for user {user_id:?} and stream {stream_type:?}"
     );
 }
 
 pub(super) async fn setup_real_rtc_protocol_peers(
-    channel_name: &str,
-    alice_session_id: SessionId,
-    bob_session_id: SessionId,
+    room_name: &str,
+    alice_user_id: UserId,
+    bob_user_id: UserId,
     alice_port: u16,
     bob_port: u16,
 ) -> Option<(
     TestServer,
-    Arc<Channel>,
+    Arc<Room>,
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
     let server = spawn_protocol_rtc_test_server(1_000, 100).await?;
-    let channel = create_channel(&server, channel_name, None, CreateChannelQuery::default()).await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
+    let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id)?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
     let mut bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
@@ -647,9 +640,9 @@ pub(super) async fn setup_real_rtc_protocol_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
-    consume_peer_joined_update(&mut alice, protocol_session_id(&bob_session_id)).await?;
+    consume_peer_joined_update(&mut alice, protocol_user_id(&bob_user_id)).await?;
 
-    Some((server, channel, alice, bob))
+    Some((server, room, alice, bob))
 }
 
 pub(super) fn reduced_capability_rtc() -> Rtc {
@@ -676,8 +669,8 @@ pub(super) fn reduced_capability_rtc() -> Rtc {
     config.build(Instant::now())
 }
 
-fn recording_permissions() -> SessionPermissions {
-    SessionPermissions {
+fn recording_permissions() -> UserPermissions {
+    UserPermissions {
         transcription: Some(true),
         audio_recording: Some(true),
         video_recording: Some(true),
@@ -737,12 +730,12 @@ async fn drain_peer_until_recording_update(
 
 pub(super) async fn connect_protocol_recording_peer(
     server: &TestServer,
-    channel: &Channel,
+    room: &Room,
 ) -> Option<ProtocolHarnessPeer> {
     let token = signed_connect_claims_with_permissions(
         TEST_AUTH_KEY,
-        channel.uuid(),
-        SessionId::Integer(63),
+        room.uuid(),
+        UserId::Integer(63),
         Some(recording_permissions()),
     )?;
     let mut peer = ProtocolHarnessPeer::default();
@@ -779,24 +772,24 @@ pub(super) async fn assert_recording_request_roundtrip(
 }
 
 pub(super) async fn setup_protocol_recovery_peers(
-    alice_session_id: SessionId,
-    bob_session_id: SessionId,
+    alice_user_id: UserId,
+    bob_user_id: UserId,
 ) -> Option<(
     TestServer,
-    Arc<Channel>,
+    Arc<Room>,
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
     let server = spawn_protocol_test_server(1_000, 100).await?;
-    let channel = create_channel(
+    let room = create_room(
         &server,
         "issuer-protocol-recovery",
         None,
-        CreateChannelQuery::default(),
+        CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), alice_session_id)?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), bob_session_id.clone())?;
+    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id)?;
+    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::default();
     let mut bob = ProtocolHarnessPeer::default();
@@ -805,8 +798,8 @@ pub(super) async fn setup_protocol_recovery_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
-    consume_peer_joined_update(&mut alice, protocol_session_id(&bob_session_id)).await?;
-    Some((server, channel, alice, bob))
+    consume_peer_joined_update(&mut alice, protocol_user_id(&bob_user_id)).await?;
+    Some((server, room, alice, bob))
 }
 
 pub(super) async fn bob_update_info_and_deliver(

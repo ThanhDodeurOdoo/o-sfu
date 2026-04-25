@@ -1,6 +1,6 @@
 pub mod auth {
     pub use crate::runtime::auth::{
-        AuthenticationError, HttpChannelClaims, HttpDisconnectClaims, RegisteredJwtClaims,
+        AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims,
         WebSocketConnectClaims, sign, verify,
     };
 }
@@ -18,8 +18,8 @@ pub mod http {
     use axum::http::{HeaderMap, HeaderValue, header};
 
     pub use crate::runtime::http_server::contract::{
-        CHANNEL_PATH, ChannelResponse, CreateChannelQuery, DISCONNECT_PATH, IncomingBitRateStats,
-        METRICS_PATH, STATS_PATH, StatsResponse,
+        CHANNEL_PATH, CreateRoomQuery, DISCONNECT_PATH, IncomingBitRateStats, METRICS_PATH,
+        RoomResponse, STATS_PATH, StatsResponse,
     };
     use crate::{
         config::{
@@ -34,8 +34,8 @@ pub mod http {
             auth_key: "dGVzdC1rZXk=".to_owned(),
             bind_address: SocketAddr::from(([127, 0, 0, 1], 8070)),
             authentication_timeout_ms: 10_000,
-            channel_size: 100,
-            session_timeout_ms: 10_000,
+            room_size: 100,
+            user_timeout_ms: 10_000,
             ping_interval_ms: 60_000,
             trust_proxy_headers,
             feature_flags: RuntimeFeatureFlags::default(),
@@ -109,12 +109,12 @@ pub mod server {
 
 pub mod concurrency {
     pub use crate::runtime::testing::{
-        ActiveChannelRegistry, RelayTargetRegistry, SourcePolicyDirtyState, WorkerHandleSlot,
+        ActiveRoomRegistry, RelayTargetRegistry, SourcePolicyDirtyState, WorkerHandleSlot,
     };
 }
 
 pub mod transport {
-    pub use o_sfu_protocol::shared::SessionId;
+    pub use o_sfu_protocol::shared::UserId;
 
     pub use crate::runtime::{RemoteAddrDemux, TransportSessionKey, test_transport_session_key};
 }

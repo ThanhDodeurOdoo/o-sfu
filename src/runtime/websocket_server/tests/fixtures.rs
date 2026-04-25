@@ -6,7 +6,7 @@ pub(super) use std::{
 
 pub(super) use futures_util::{SinkExt, StreamExt};
 pub(super) use o_sfu_protocol::{
-    shared::{AvailableFeatures, RecordingState, SessionId, SessionPermissions, StreamType},
+    shared::{AvailableFeatures, RecordingState, StreamType, UserId, UserPermissions},
     signaling::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
         ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload, WelcomePayload,
@@ -30,14 +30,14 @@ pub(super) use crate::{
     runtime::{
         RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
-        channel::{
-            Channel, ChannelAdmissionPolicy, ChannelConfig, ChannelManager, ChannelManagerConfig,
-            ChannelRuntimePolicy, rtp_capabilities,
-        },
         diagnostics::DiagnosticsStore,
         http_server::app,
         metrics::RuntimeMetrics,
         recording::MediaTap,
+        room::{
+            Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
+            RoomRuntimePolicy, rtp_capabilities,
+        },
         testing::decode_protocol_welcome_batch,
         transport_adapter::{
             RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
@@ -47,15 +47,15 @@ pub(super) use crate::{
 };
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
-pub(super) const TEST_CHANNEL_KEY: &str = "Y2hhbm5lbC1rZXk=";
+pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
-pub(super) type CreateChannelQuery = ChannelConfig;
+pub(super) type CreateRoomQuery = RoomConfig;
 
 pub(super) struct TestServer {
     pub(super) addr: SocketAddr,
     pub(super) handle: JoinHandle<()>,
-    pub(super) channel_manager: Arc<ChannelManager>,
+    pub(super) room_manager: Arc<RoomManager>,
     pub(super) state: RuntimeState,
 }
 
@@ -73,16 +73,16 @@ impl Drop for TestServer {
 
 pub(super) fn test_config(
     authentication_timeout_ms: u64,
-    session_timeout_ms: u64,
+    user_timeout_ms: u64,
     ping_interval_ms: u64,
-    channel_size: usize,
+    room_size: usize,
 ) -> Config {
     Config {
         auth_key: TEST_AUTH_KEY.to_owned(),
         bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         authentication_timeout_ms,
-        channel_size,
-        session_timeout_ms,
+        room_size,
+        user_timeout_ms,
         ping_interval_ms,
         trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
@@ -99,13 +99,13 @@ pub(super) fn test_config(
 
 pub(super) async fn spawn_test_server(
     authentication_timeout_ms: u64,
-    channel_size: usize,
+    room_size: usize,
 ) -> Option<TestServer> {
     spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
-        channel_size,
+        room_size,
         RuntimeTransportAdapter::fake_for_testing(),
     )
     .await
@@ -113,16 +113,16 @@ pub(super) async fn spawn_test_server(
 
 pub(super) async fn spawn_test_server_with_timeouts(
     authentication_timeout_ms: u64,
-    session_timeout_ms: u64,
+    user_timeout_ms: u64,
     ping_interval_ms: u64,
-    channel_size: usize,
+    room_size: usize,
     transport_adapter: RuntimeTransportAdapter,
 ) -> Option<TestServer> {
     spawn_test_server_impl(
         authentication_timeout_ms,
-        session_timeout_ms,
+        user_timeout_ms,
         ping_interval_ms,
-        channel_size,
+        room_size,
         transport_adapter,
         RuntimeFeatureFlags::default(),
     )
@@ -131,26 +131,26 @@ pub(super) async fn spawn_test_server_with_timeouts(
 
 async fn spawn_test_server_impl(
     authentication_timeout_ms: u64,
-    session_timeout_ms: u64,
+    user_timeout_ms: u64,
     ping_interval_ms: u64,
-    channel_size: usize,
+    room_size: usize,
     transport_adapter: RuntimeTransportAdapter,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
     let mut config = test_config(
         authentication_timeout_ms,
-        session_timeout_ms,
+        user_timeout_ms,
         ping_interval_ms,
-        channel_size,
+        room_size,
     );
     config.feature_flags = feature_flags;
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
-    let channel_manager = Arc::new(ChannelManager::new(
-        ChannelManagerConfig::new(
+    let room_manager = Arc::new(RoomManager::new(
+        RoomManagerConfig::new(
             1,
-            ChannelRuntimePolicy::new(
-                ChannelAdmissionPolicy::new(config.channel_size),
+            RoomRuntimePolicy::new(
+                RoomAdmissionPolicy::new(config.room_size),
                 feature_flags,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
@@ -161,7 +161,7 @@ async fn spawn_test_server_impl(
     ));
     let state = RuntimeState {
         config,
-        channel_manager: Arc::clone(&channel_manager),
+        room_manager: Arc::clone(&room_manager),
         diagnostics,
         metrics,
         transport_adapter,
@@ -179,21 +179,21 @@ async fn spawn_test_server_impl(
     Some(TestServer {
         addr,
         handle,
-        channel_manager,
+        room_manager,
         state,
     })
 }
 
 pub(super) async fn spawn_test_server_with_adapter(
     authentication_timeout_ms: u64,
-    channel_size: usize,
+    room_size: usize,
     transport_adapter: RuntimeTransportAdapter,
 ) -> Option<TestServer> {
     spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
-        channel_size,
+        room_size,
         transport_adapter,
     )
     .await
@@ -201,13 +201,13 @@ pub(super) async fn spawn_test_server_with_adapter(
 
 pub(super) async fn spawn_protocol_test_server(
     authentication_timeout_ms: u64,
-    channel_size: usize,
+    room_size: usize,
 ) -> Option<TestServer> {
     spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
-        channel_size,
+        room_size,
         RuntimeTransportAdapter::fake_for_testing(),
     )
     .await
@@ -215,7 +215,7 @@ pub(super) async fn spawn_protocol_test_server(
 
 pub(super) async fn spawn_test_server_with_feature_flags(
     authentication_timeout_ms: u64,
-    channel_size: usize,
+    room_size: usize,
     transport_adapter: RuntimeTransportAdapter,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
@@ -223,7 +223,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
         authentication_timeout_ms,
         10_000,
         60_000,
-        channel_size,
+        room_size,
         transport_adapter,
         feature_flags,
     )
@@ -245,13 +245,13 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
 
 pub(super) async fn spawn_protocol_rtc_test_server(
     authentication_timeout_ms: u64,
-    channel_size: usize,
+    room_size: usize,
 ) -> Option<TestServer> {
     spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
-        channel_size,
+        room_size,
         build_real_rtc_transport_adapter(),
     )
     .await
@@ -279,25 +279,21 @@ pub(super) async fn connect_websocket(server: &TestServer) -> Option<TestWebSock
     Some(websocket.0)
 }
 
-pub(super) fn signed_connect_claims(
-    key: &str,
-    channel_uuid: &str,
-    session_id: SessionId,
-) -> Option<String> {
-    signed_connect_claims_with_permissions(key, channel_uuid, session_id, None)
+pub(super) fn signed_connect_claims(key: &str, room_id: &str, user_id: UserId) -> Option<String> {
+    signed_connect_claims_with_permissions(key, room_id, user_id, None)
 }
 
 pub(super) fn signed_connect_claims_with_permissions(
     key: &str,
-    channel_uuid: &str,
-    session_id: SessionId,
-    permissions: Option<SessionPermissions>,
+    room_id: &str,
+    user_id: UserId,
+    permissions: Option<UserPermissions>,
 ) -> Option<String> {
     sign(
         &WebSocketConnectClaims {
             registered: RegisteredJwtClaims::default(),
-            sfu_channel_uuid: channel_uuid.to_owned(),
-            session_id,
+            room_id: room_id.to_owned(),
+            user_id,
             label: Some("Alice".to_owned()),
             permissions,
         },
@@ -308,25 +304,25 @@ pub(super) fn signed_connect_claims_with_permissions(
 
 pub(super) fn signed_legacy_channel_scoped_connect_claims(
     key: &str,
-    session_id: SessionId,
-    permissions: Option<SessionPermissions>,
+    user_id: UserId,
+    permissions: Option<UserPermissions>,
 ) -> Option<String> {
     #[derive(serde::Serialize)]
     struct LegacyClaims {
         #[serde(flatten)]
         registered: RegisteredJwtClaims,
         #[serde(rename = "session_id")]
-        session_id: SessionId,
+        user_id: UserId,
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        permissions: Option<SessionPermissions>,
+        permissions: Option<UserPermissions>,
     }
 
     sign(
         &LegacyClaims {
             registered: RegisteredJwtClaims::default(),
-            session_id,
+            user_id,
             label: Some("Alice".to_owned()),
             permissions,
         },
@@ -335,15 +331,15 @@ pub(super) fn signed_legacy_channel_scoped_connect_claims(
     .ok()
 }
 
-pub(super) async fn create_channel(
+pub(super) async fn create_room(
     server: &TestServer,
     issuer: &str,
     key: Option<&str>,
-    config: ChannelConfig,
-) -> Arc<Channel> {
+    config: RoomConfig,
+) -> Arc<Room> {
     server
-        .channel_manager
-        .serve_channel(issuer, key, &config, None)
+        .room_manager
+        .serve_room(issuer, key, &config, None)
         .await
 }
 
@@ -363,15 +359,15 @@ pub(super) async fn authenticate_with_jwt(
     Some(websocket)
 }
 
-pub(super) async fn authenticate_with_channel(
+pub(super) async fn authenticate_with_room(
     server: &TestServer,
     token: &str,
-    channel_uuid: Option<&str>,
+    room_id: Option<&str>,
 ) -> Option<TestWebSocket> {
     let mut websocket = connect_websocket(server).await?;
     let payload = encode_protocol_auth(AuthPayload {
         jwt: token.to_owned(),
-        channel: channel_uuid.map(str::to_owned),
+        channel: room_id.map(str::to_owned),
     })?;
     websocket
         .send(tungstenite::Message::Text(payload.into()))
@@ -406,10 +402,10 @@ pub(super) async fn complete_initial_negotiation(
 
 pub(super) async fn setup_negotiated_session(
     server: &TestServer,
-    channel: &Arc<Channel>,
-    session_id: SessionId,
+    room: &Arc<Room>,
+    user_id: UserId,
 ) -> Option<TestWebSocket> {
-    let token = signed_connect_claims(TEST_AUTH_KEY, channel.uuid(), session_id)?;
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id)?;
     let (mut websocket, _welcome) = authenticate_and_read_welcome(server, &token).await?;
     complete_initial_negotiation(&mut websocket, "v=0\r\ns=test-answer\r\n").await?;
     Some(websocket)

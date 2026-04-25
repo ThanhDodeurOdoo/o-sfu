@@ -7,11 +7,11 @@ use std::time::Duration;
 
 use o_sfu::testing::http::IncomingBitRateStats;
 use o_sfu_protocol::{
-    shared::{DownloadStates, SessionId, SessionInfo, StreamType},
+    shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{ServerMessage, ServerRequest, TrackBinding},
 };
 use o_sfu_tests::support::{
-    TEST_CHANNEL_KEY,
+    TEST_ROOM_KEY,
     fake_media::{FakeClock, FakeMediaSource},
     protocol_full_stack::{ProtocolFakePeer, ProtocolLocalNetwork},
     test_config,
@@ -50,19 +50,17 @@ async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries(
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-a", Some(TEST_CHANNEL_KEY))
-        .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = network.create_room("issuer-a", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
     let publisher = network
-        .connect_fake_peer(&channel, SessionId::Integer(1), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(1), TEST_ROOM_KEY)
         .await;
     let subscriber = network
-        .connect_fake_peer(&channel, SessionId::Integer(2), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(2), TEST_ROOM_KEY)
         .await;
     assert!(publisher.is_some());
     assert!(subscriber.is_some());
@@ -79,17 +77,11 @@ async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries(
     let source = FakeMediaSource::audio();
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(
-        &mut subscriber,
-        SessionId::Integer(1),
-        StreamType::Audio,
-        true,
-    )
-    .await;
+    assert_track_snapshot(&mut subscriber, UserId::Integer(1), StreamType::Audio, true).await;
 }
 
 #[tokio::test]
-async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
+async fn fake_peers_keep_room_topology_isolation_with_same_user_ids() {
     let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
@@ -109,7 +101,7 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
     assert!(publisher_a.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber_a,
-        SessionId::Integer(90),
+        UserId::Integer(90),
         StreamType::Audio,
         true,
     )
@@ -120,14 +112,14 @@ async fn fake_peers_keep_channel_topology_isolation_with_same_session_ids() {
     assert!(publisher_b.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber_b,
-        SessionId::Integer(90),
+        UserId::Integer(90),
         StreamType::Audio,
         true,
     )
     .await;
 
     assert!(publisher_a.close().await.is_some());
-    assert_departure_message_protocol(&mut subscriber_a, SessionId::Integer(90)).await;
+    assert_departure_message_protocol(&mut subscriber_a, UserId::Integer(90)).await;
     assert_no_server_message_protocol(&mut subscriber_b).await;
 }
 
@@ -141,15 +133,13 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-b", Some(TEST_CHANNEL_KEY))
-        .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = network.create_room("issuer-b", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let peers = connect_camera_flow_peers(&network, &channel).await;
+    let peers = connect_camera_flow_peers(&network, &room).await;
     assert!(peers.is_some());
     let Some((mut publisher, mut subscriber)) = peers else {
         return;
@@ -164,21 +154,21 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
     assert_consumer_download_toggle_round_trip_protocol(&mut subscriber).await;
     assert_camera_unpublish_updates_snapshot_and_info(&mut publisher, &mut subscriber).await;
 
-    let late_subscriber = connect_late_subscriber(&network, &channel).await;
+    let late_subscriber = connect_late_subscriber(&network, &room).await;
     assert!(late_subscriber.is_some());
     let Some(mut late_subscriber) = late_subscriber else {
         return;
     };
-    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(30)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(30)).await;
     assert_late_join_has_no_track_snapshot(&mut late_subscriber).await;
 
     assert!(publisher.close().await.is_some());
-    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(10)).await;
-    assert_departure_message_protocol(&mut late_subscriber, SessionId::Integer(10)).await;
+    assert_departure_message_protocol(&mut subscriber, UserId::Integer(10)).await;
+    assert_departure_message_protocol(&mut late_subscriber, UserId::Integer(10)).await;
 }
 
 #[tokio::test]
-async fn fake_peers_cover_session_replacement_and_republish_over_protocol_session_flow() {
+async fn fake_peers_cover_user_replacement_and_republish_over_protocol_user_flow() {
     let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
@@ -187,19 +177,17 @@ async fn fake_peers_cover_session_replacement_and_republish_over_protocol_sessio
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-c", Some(TEST_CHANNEL_KEY))
-        .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = network.create_room("issuer-c", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
     let initial_publisher = network
-        .connect_fake_peer(&channel, SessionId::Integer(40), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(40), TEST_ROOM_KEY)
         .await;
     let subscriber = network
-        .connect_fake_peer(&channel, SessionId::Integer(50), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(50), TEST_ROOM_KEY)
         .await;
     assert!(initial_publisher.is_some());
     assert!(subscriber.is_some());
@@ -211,7 +199,7 @@ async fn fake_peers_cover_session_replacement_and_republish_over_protocol_sessio
     };
 
     let replacement = network
-        .connect_fake_peer(&channel, SessionId::Integer(40), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(40), TEST_ROOM_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(mut replacement) = replacement else {
@@ -222,15 +210,15 @@ async fn fake_peers_cover_session_replacement_and_republish_over_protocol_sessio
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(40)).await;
-    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(40)).await;
+    assert_departure_message_protocol(&mut subscriber, UserId::Integer(40)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(40)).await;
 
     let source = FakeMediaSource::audio();
     assert!(replacement.publish_track(&source).await.is_some());
     assert!(replacement.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber,
-        SessionId::Integer(40),
+        UserId::Integer(40),
         StreamType::Audio,
         true,
     )
@@ -238,7 +226,7 @@ async fn fake_peers_cover_session_replacement_and_republish_over_protocol_sessio
 }
 
 #[tokio::test]
-async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
+async fn fake_rtc_peer_media_updates_room_stats_deterministically() {
     let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
@@ -247,19 +235,17 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-d", Some(TEST_CHANNEL_KEY))
-        .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = network.create_room("issuer-d", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
     let publisher = network
-        .connect_fake_peer(&channel, SessionId::Integer(60), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(60), TEST_ROOM_KEY)
         .await;
     let subscriber = network
-        .connect_fake_peer(&channel, SessionId::Integer(61), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(61), TEST_ROOM_KEY)
         .await;
     assert!(publisher.is_some());
     assert!(subscriber.is_some());
@@ -287,7 +273,7 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
     assert!(publisher.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber,
-        SessionId::Integer(60),
+        UserId::Integer(60),
         StreamType::Audio,
         true,
     )
@@ -296,7 +282,7 @@ async fn fake_rtc_peer_media_updates_channel_stats_deterministically() {
     let mut clock = FakeClock::default();
     let stats = stream_until_audio_bitrate_is_observable(
         &network,
-        &channel,
+        &room,
         &mut publisher,
         &mut source,
         &mut clock,
@@ -320,19 +306,19 @@ async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-lifetime-metrics", Some(TEST_CHANNEL_KEY))
+    let room = network
+        .create_room("issuer-lifetime-metrics", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let peers = Box::pin(connect_audio_media_flow_peers_for_sessions(
+    let peers = Box::pin(connect_audio_media_flow_peers_for_users(
         &network,
-        &channel,
-        SessionId::Integer(62),
-        SessionId::Integer(63),
+        &room,
+        UserId::Integer(62),
+        UserId::Integer(63),
     ))
     .await;
     assert!(peers.is_some());
@@ -369,19 +355,19 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-live-metrics", Some(TEST_CHANNEL_KEY))
+    let room = network
+        .create_room("issuer-live-metrics", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let setup = Box::pin(connect_audio_media_flow_peers_for_sessions(
+    let setup = Box::pin(connect_audio_media_flow_peers_for_users(
         &network,
-        &channel,
-        SessionId::Integer(64),
-        SessionId::Integer(65),
+        &room,
+        UserId::Integer(64),
+        UserId::Integer(65),
     ))
     .await;
     assert!(setup.is_some());
@@ -394,7 +380,7 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
     assert!(publisher.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber,
-        SessionId::Integer(64),
+        UserId::Integer(64),
         StreamType::Audio,
         true,
     )
@@ -448,8 +434,8 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
         return;
     };
 
-    assert_eq!(after_live_metrics.connected_transport_sessions, 0);
-    assert_eq!(after_live_metrics.disconnected_transport_sessions, 0);
+    assert_eq!(after_live_metrics.connected_transport_users, 0);
+    assert_eq!(after_live_metrics.disconnected_transport_users, 0);
     assert_eq!(
         after_live_metrics.transport_health_transitions_connected_to_unset
             - during_live_metrics.transport_health_transitions_connected_to_unset,
@@ -458,7 +444,7 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
 }
 
 #[tokio::test]
-async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_routes() {
+async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes() {
     let config = test_config(1_000, 10);
 
     let network = ProtocolLocalNetwork::start(config).await;
@@ -467,19 +453,19 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-replacement-rtc", Some(TEST_CHANNEL_KEY))
+    let room = network
+        .create_room("issuer-replacement-rtc", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let setup = Box::pin(connect_audio_media_flow_peers_for_sessions(
+    let setup = Box::pin(connect_audio_media_flow_peers_for_users(
         &network,
-        &channel,
-        SessionId::Integer(80),
-        SessionId::Integer(81),
+        &room,
+        UserId::Integer(80),
+        UserId::Integer(81),
     ))
     .await;
     assert!(setup.is_some());
@@ -497,7 +483,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     );
     assert_track_snapshot(
         &mut subscriber,
-        SessionId::Integer(80),
+        UserId::Integer(80),
         StreamType::Audio,
         true,
     )
@@ -514,7 +500,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     .await;
 
     let replacement = network
-        .connect_fake_peer(&channel, SessionId::Integer(80), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(80), TEST_ROOM_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(mut replacement) = replacement else {
@@ -525,8 +511,8 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(80)).await;
-    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(80)).await;
+    assert_departure_message_protocol(&mut subscriber, UserId::Integer(80)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(80)).await;
 
     assert_audio_packet_dropped(
         &mut initial_publisher,
@@ -546,7 +532,7 @@ async fn fake_rtc_peers_rebootstrap_session_replacement_without_stale_media_rout
     assert!(replacement.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber,
-        SessionId::Integer(80),
+        UserId::Integer(80),
         StreamType::Audio,
         true,
     )
@@ -565,19 +551,19 @@ async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_st
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-replacement-unpublish", Some(TEST_CHANNEL_KEY))
+    let room = network
+        .create_room("issuer-replacement-unpublish", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let setup = Box::pin(connect_audio_media_flow_peers_for_sessions(
+    let setup = Box::pin(connect_audio_media_flow_peers_for_users(
         &network,
-        &channel,
-        SessionId::Integer(82),
-        SessionId::Integer(83),
+        &room,
+        UserId::Integer(82),
+        UserId::Integer(83),
     ))
     .await;
     assert!(setup.is_some());
@@ -587,24 +573,24 @@ async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_st
 
     Box::pin(assert_replacement_unpublish_and_republish_flow(
         &network,
-        &channel,
+        &room,
         &mut initial_publisher,
         &mut subscriber,
-        SessionId::Integer(82),
+        UserId::Integer(82),
     ))
     .await;
 }
 
 async fn assert_replacement_unpublish_and_republish_flow(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     initial_publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
-    publisher_session_id: SessionId,
+    publisher_user_id: UserId,
 ) {
     let mut source = FakeMediaSource::audio();
     let mut clock = FakeClock::default();
-    let harness = AudioRouteHarness::new(network, channel, &publisher_session_id);
+    let harness = AudioRouteHarness::new(network, room, &publisher_user_id);
     assert_published_audio_forwarding(
         &harness,
         initial_publisher,
@@ -615,7 +601,7 @@ async fn assert_replacement_unpublish_and_republish_flow(
     .await;
 
     let replacement = network
-        .connect_fake_peer(channel, publisher_session_id.clone(), TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, publisher_user_id.clone(), TEST_ROOM_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(mut replacement) = replacement else {
@@ -644,20 +630,20 @@ async fn assert_replacement_unpublish_and_republish_flow(
 
 struct AudioRouteHarness<'a> {
     network: &'a ProtocolLocalNetwork,
-    channel: &'a str,
-    publisher_session_id: &'a SessionId,
+    room: &'a str,
+    publisher_user_id: &'a UserId,
 }
 
 impl<'a> AudioRouteHarness<'a> {
     const fn new(
         network: &'a ProtocolLocalNetwork,
-        channel: &'a str,
-        publisher_session_id: &'a SessionId,
+        room: &'a str,
+        publisher_user_id: &'a UserId,
     ) -> Self {
         Self {
             network,
-            channel,
-            publisher_session_id,
+            room,
+            publisher_user_id,
         }
     }
 }
@@ -673,7 +659,7 @@ async fn assert_published_audio_forwarding(
     assert!(publisher.complete_next_negotiation().await.is_some());
     let track_binding = assert_track_snapshot(
         subscriber,
-        harness.publisher_session_id.clone(),
+        harness.publisher_user_id.clone(),
         StreamType::Audio,
         true,
     )
@@ -681,9 +667,9 @@ async fn assert_published_audio_forwarding(
     assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_consumer_route_active(
         harness.network,
-        harness.channel,
+        harness.room,
         subscriber,
-        harness.publisher_session_id,
+        harness.publisher_user_id,
         track_binding.stream_type,
     )
     .await;
@@ -702,8 +688,8 @@ async fn assert_replacement_audio_forwarding(
         initial_publisher.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(subscriber, harness.publisher_session_id.clone()).await;
-    assert_peer_joined_message_protocol(subscriber, harness.publisher_session_id.clone()).await;
+    assert_departure_message_protocol(subscriber, harness.publisher_user_id.clone()).await;
+    assert_peer_joined_message_protocol(subscriber, harness.publisher_user_id.clone()).await;
     assert_audio_packet_dropped(initial_publisher, subscriber, source, clock).await;
     assert!(
         replacement
@@ -731,9 +717,9 @@ async fn assert_replacement_unpublish_and_republish_audio(
     assert_empty_track_snapshot(subscriber).await;
     assert_consumer_route_absent(
         harness.network,
-        harness.channel,
+        harness.room,
         subscriber,
-        harness.publisher_session_id,
+        harness.publisher_user_id,
         StreamType::Audio,
     )
     .await;
@@ -751,19 +737,19 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-subscriber-replacement-mute", Some(TEST_CHANNEL_KEY))
+    let room = network
+        .create_room("issuer-subscriber-replacement-mute", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let setup = Box::pin(connect_audio_media_flow_peers_for_sessions(
+    let setup = Box::pin(connect_audio_media_flow_peers_for_users(
         &network,
-        &channel,
-        SessionId::Integer(82),
-        SessionId::Integer(83),
+        &room,
+        UserId::Integer(82),
+        UserId::Integer(83),
     ))
     .await;
     assert!(setup.is_some());
@@ -774,7 +760,7 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
     Box::pin(
         assert_subscriber_replacement_preserves_download_mute_after_renegotiation(
             &network,
-            &channel,
+            &room,
             &mut publisher,
             &mut subscriber,
         ),
@@ -784,16 +770,16 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
 
 async fn assert_subscriber_replacement_preserves_download_mute_after_renegotiation(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
     let muted_stream_type =
-        mute_subscriber_audio_download(network, channel, publisher, subscriber, &mut source).await;
+        mute_subscriber_audio_download(network, room, publisher, subscriber, &mut source).await;
     Box::pin(assert_replacement_subscriber_inherits_muted_audio_download(
         network,
-        channel,
+        room,
         publisher,
         subscriber,
         muted_stream_type,
@@ -804,7 +790,7 @@ async fn assert_subscriber_replacement_preserves_download_mute_after_renegotiati
 
 async fn mute_subscriber_audio_download(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
@@ -812,13 +798,13 @@ async fn mute_subscriber_audio_download(
     assert!(publisher.publish_track(source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
     let track_binding =
-        assert_track_snapshot(subscriber, SessionId::Integer(82), StreamType::Audio, true).await;
+        assert_track_snapshot(subscriber, UserId::Integer(82), StreamType::Audio, true).await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_consumer_route_active(
         network,
-        channel,
+        room,
         subscriber,
-        &SessionId::Integer(82),
+        &UserId::Integer(82),
         track_binding.stream_type,
     )
     .await;
@@ -829,7 +815,7 @@ async fn mute_subscriber_audio_download(
     assert!(
         subscriber
             .update_subscription(
-                SessionId::Integer(82),
+                UserId::Integer(82),
                 DownloadStates {
                     audio: Some(false),
                     ..DownloadStates::default()
@@ -840,9 +826,9 @@ async fn mute_subscriber_audio_download(
     );
     assert_consumer_route_inactive(
         network,
-        channel,
+        room,
         subscriber,
-        &SessionId::Integer(82),
+        &UserId::Integer(82),
         track_binding.stream_type,
     )
     .await;
@@ -851,14 +837,14 @@ async fn mute_subscriber_audio_download(
 
 async fn assert_replacement_subscriber_inherits_muted_audio_download(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
     muted_stream_type: StreamType,
     source: &mut FakeMediaSource,
 ) {
     let replacement = network
-        .connect_fake_peer(channel, SessionId::Integer(83), TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, UserId::Integer(83), TEST_ROOM_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(mut replacement) = replacement else {
@@ -869,8 +855,8 @@ async fn assert_replacement_subscriber_inherits_muted_audio_download(
         subscriber.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(publisher, SessionId::Integer(83)).await;
-    assert_peer_joined_message_protocol(publisher, SessionId::Integer(83)).await;
+    assert_departure_message_protocol(publisher, UserId::Integer(83)).await;
+    assert_peer_joined_message_protocol(publisher, UserId::Integer(83)).await;
     assert!(
         replacement
             .wait_until_connected(Duration::from_secs(5))
@@ -879,7 +865,7 @@ async fn assert_replacement_subscriber_inherits_muted_audio_download(
     );
     let replacement_track = assert_track_snapshot(
         &mut replacement,
-        SessionId::Integer(82),
+        UserId::Integer(82),
         StreamType::Audio,
         true,
     )
@@ -887,9 +873,9 @@ async fn assert_replacement_subscriber_inherits_muted_audio_download(
     assert!(replacement.complete_next_negotiation().await.is_some());
     assert_consumer_route_inactive(
         network,
-        channel,
+        room,
         &replacement,
-        &SessionId::Integer(82),
+        &UserId::Integer(82),
         replacement_track.stream_type,
     )
     .await;
@@ -909,19 +895,19 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-replacement-rtc-info", Some(TEST_CHANNEL_KEY))
+    let room = network
+        .create_room("issuer-replacement-rtc-info", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
     let initial = network
-        .connect_fake_peer(&channel, SessionId::Integer(84), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(84), TEST_ROOM_KEY)
         .await;
     let observer = network
-        .connect_fake_peer(&channel, SessionId::Integer(85), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(85), TEST_ROOM_KEY)
         .await;
     assert!(initial.is_some());
     assert!(observer.is_some());
@@ -929,10 +915,10 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
         return;
     };
 
-    assert_peer_joined_message_protocol(&mut initial, SessionId::Integer(85)).await;
+    assert_peer_joined_message_protocol(&mut initial, UserId::Integer(85)).await;
 
     let replacement = network
-        .connect_fake_peer(&channel, SessionId::Integer(84), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(84), TEST_ROOM_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(replacement) = replacement else {
@@ -940,9 +926,9 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
     };
 
     let _ = initial
-        .send_info(SessionInfo {
+        .send_info(UserInfo {
             is_talking: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         })
         .await;
 
@@ -950,8 +936,8 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
         initial.read_close_code().await,
         Some(CloseCode::Library(4003))
     );
-    assert_departure_message_protocol(&mut observer, SessionId::Integer(84)).await;
-    assert_peer_joined_message_protocol(&mut observer, SessionId::Integer(84)).await;
+    assert_departure_message_protocol(&mut observer, UserId::Integer(84)).await;
+    assert_peer_joined_message_protocol(&mut observer, UserId::Integer(84)).await;
     assert_no_server_message_protocol(&mut observer).await;
     assert!(replacement.close().await.is_some());
 }
@@ -966,22 +952,19 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
         return;
     };
 
-    let channel = network
-        .create_channel(
-            "issuer-replacement-rtc-queued-publish",
-            Some(TEST_CHANNEL_KEY),
-        )
+    let room = network
+        .create_room("issuer-replacement-rtc-queued-publish", Some(TEST_ROOM_KEY))
         .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
     let initial_publisher = network
-        .connect_fake_peer(&channel, SessionId::Integer(86), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(86), TEST_ROOM_KEY)
         .await;
     let subscriber = network
-        .connect_fake_peer(&channel, SessionId::Integer(87), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(87), TEST_ROOM_KEY)
         .await;
     assert!(initial_publisher.is_some());
     assert!(subscriber.is_some());
@@ -1016,15 +999,15 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
     );
 
     let replacement = network
-        .connect_fake_peer(&channel, SessionId::Integer(86), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room, UserId::Integer(86), TEST_ROOM_KEY)
         .await;
     assert!(replacement.is_some());
     let Some(mut replacement) = replacement else {
         return;
     };
 
-    assert_departure_message_protocol(&mut subscriber, SessionId::Integer(86)).await;
-    assert_peer_joined_message_protocol(&mut subscriber, SessionId::Integer(86)).await;
+    assert_departure_message_protocol(&mut subscriber, UserId::Integer(86)).await;
+    assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(86)).await;
 
     assert!(
         initial_publisher
@@ -1057,7 +1040,7 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
     assert!(replacement.complete_next_negotiation().await.is_some());
     assert_track_snapshot(
         &mut subscriber,
-        SessionId::Integer(86),
+        UserId::Integer(86),
         StreamType::Audio,
         true,
     )
@@ -1076,15 +1059,13 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-e", Some(TEST_CHANNEL_KEY))
-        .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = network.create_room("issuer-e", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let setup = Box::pin(connect_audio_media_flow_peers(&network, &channel)).await;
+    let setup = Box::pin(connect_audio_media_flow_peers(&network, &room)).await;
     assert!(setup.is_some());
     let Some((mut publisher, mut subscriber)) = setup else {
         return;
@@ -1092,7 +1073,7 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
 
     assert_audio_media_arrives_and_download_mute_stops_flow(
         &network,
-        &channel,
+        &room,
         &mut publisher,
         &mut subscriber,
     )
@@ -1109,15 +1090,13 @@ async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
         return;
     };
 
-    let channel = network
-        .create_channel("issuer-f", Some(TEST_CHANNEL_KEY))
-        .await;
-    assert!(channel.is_some());
-    let Some(channel) = channel else {
+    let room = network.create_room("issuer-f", Some(TEST_ROOM_KEY)).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
         return;
     };
 
-    let setup = Box::pin(connect_audio_media_flow_peers(&network, &channel)).await;
+    let setup = Box::pin(connect_audio_media_flow_peers(&network, &room)).await;
     assert!(setup.is_some());
     let Some((mut publisher, mut subscriber)) = setup else {
         return;
@@ -1125,7 +1104,7 @@ async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
 
     assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
         &network,
-        &channel,
+        &room,
         &mut publisher,
         &mut subscriber,
     )
@@ -1134,28 +1113,28 @@ async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
 
 async fn connect_audio_media_flow_peers(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
 ) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
-    Box::pin(connect_audio_media_flow_peers_for_sessions(
+    Box::pin(connect_audio_media_flow_peers_for_users(
         network,
-        channel,
-        SessionId::Integer(70),
-        SessionId::Integer(71),
+        room,
+        UserId::Integer(70),
+        UserId::Integer(71),
     ))
     .await
 }
 
-async fn connect_audio_media_flow_peers_for_sessions(
+async fn connect_audio_media_flow_peers_for_users(
     network: &ProtocolLocalNetwork,
-    channel: &str,
-    publisher_session_id: SessionId,
-    subscriber_session_id: SessionId,
+    room: &str,
+    publisher_user_id: UserId,
+    subscriber_user_id: UserId,
 ) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
     let publisher = network
-        .connect_fake_peer(channel, publisher_session_id, TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, publisher_user_id, TEST_ROOM_KEY)
         .await?;
     let subscriber = network
-        .connect_fake_peer(channel, subscriber_session_id, TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, subscriber_user_id, TEST_ROOM_KEY)
         .await?;
     let mut publisher = publisher;
     let mut subscriber = subscriber;
@@ -1217,24 +1196,24 @@ async fn connect_two_isolated_audio_flows(
     ProtocolFakePeer,
     ProtocolFakePeer,
 )> {
-    let channel_a = network
-        .create_channel("issuer-topology-a", Some(TEST_CHANNEL_KEY))
+    let room_a = network
+        .create_room("issuer-topology-a", Some(TEST_ROOM_KEY))
         .await?;
-    let channel_b = network
-        .create_channel("issuer-topology-b", Some(TEST_CHANNEL_KEY))
+    let room_b = network
+        .create_room("issuer-topology-b", Some(TEST_ROOM_KEY))
         .await?;
 
     let publisher_a = network
-        .connect_fake_peer(&channel_a, SessionId::Integer(90), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room_a, UserId::Integer(90), TEST_ROOM_KEY)
         .await?;
     let subscriber_a = network
-        .connect_fake_peer(&channel_a, SessionId::Integer(91), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room_a, UserId::Integer(91), TEST_ROOM_KEY)
         .await?;
     let publisher_b = network
-        .connect_fake_peer(&channel_b, SessionId::Integer(90), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room_b, UserId::Integer(90), TEST_ROOM_KEY)
         .await?;
     let subscriber_b = network
-        .connect_fake_peer(&channel_b, SessionId::Integer(91), TEST_CHANNEL_KEY)
+        .connect_fake_peer(&room_b, UserId::Integer(91), TEST_ROOM_KEY)
         .await?;
 
     let mut publisher_a = publisher_a;
@@ -1260,7 +1239,7 @@ async fn connect_two_isolated_audio_flows(
 
 async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
 ) {
@@ -1268,13 +1247,13 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
     let track_binding =
-        assert_track_snapshot(subscriber, SessionId::Integer(70), StreamType::Audio, true).await;
+        assert_track_snapshot(subscriber, UserId::Integer(70), StreamType::Audio, true).await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_consumer_route_active(
         network,
-        channel,
+        room,
         subscriber,
-        &SessionId::Integer(70),
+        &UserId::Integer(70),
         track_binding.stream_type,
     )
     .await;
@@ -1286,7 +1265,7 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     assert!(
         subscriber
             .update_subscription(
-                SessionId::Integer(70),
+                UserId::Integer(70),
                 DownloadStates {
                     audio: Some(false),
                     ..DownloadStates::default()
@@ -1297,9 +1276,9 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     );
     assert_consumer_route_inactive(
         network,
-        channel,
+        room,
         subscriber,
-        &SessionId::Integer(70),
+        &UserId::Integer(70),
         track_binding.stream_type,
     )
     .await;
@@ -1308,7 +1287,7 @@ async fn assert_audio_media_arrives_and_download_mute_stops_flow(
 
 async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
 ) {
@@ -1316,13 +1295,13 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
     let track_binding =
-        assert_track_snapshot(subscriber, SessionId::Integer(70), StreamType::Audio, true).await;
+        assert_track_snapshot(subscriber, UserId::Integer(70), StreamType::Audio, true).await;
     assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_consumer_route_active(
         network,
-        channel,
+        room,
         subscriber,
-        &SessionId::Integer(70),
+        &UserId::Integer(70),
         track_binding.stream_type,
     )
     .await;
@@ -1341,9 +1320,9 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
     assert_empty_track_snapshot(subscriber).await;
     assert_consumer_route_absent(
         network,
-        channel,
+        room,
         subscriber,
-        &SessionId::Integer(70),
+        &UserId::Integer(70),
         track_binding.stream_type,
     )
     .await;
@@ -1352,13 +1331,13 @@ async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
 
 async fn connect_camera_flow_peers(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
 ) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
     let publisher = network
-        .connect_fake_peer(channel, SessionId::Integer(10), TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, UserId::Integer(10), TEST_ROOM_KEY)
         .await?;
     let subscriber = network
-        .connect_fake_peer(channel, SessionId::Integer(20), TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, UserId::Integer(20), TEST_ROOM_KEY)
         .await?;
     Some((publisher, subscriber))
 }
@@ -1370,7 +1349,7 @@ async fn publish_camera_track(
     let source = FakeMediaSource::camera();
     publisher.publish_track(&source).await?;
     publisher.complete_next_negotiation().await?;
-    assert_track_snapshot(subscriber, SessionId::Integer(10), StreamType::Camera, true).await;
+    assert_track_snapshot(subscriber, UserId::Integer(10), StreamType::Camera, true).await;
     Some(())
 }
 
@@ -1378,7 +1357,7 @@ async fn assert_consumer_download_toggle_round_trip_protocol(subscriber: &mut Pr
     assert!(
         subscriber
             .update_subscription(
-                SessionId::Integer(10),
+                UserId::Integer(10),
                 DownloadStates {
                     camera: Some(false),
                     ..DownloadStates::default()
@@ -1390,7 +1369,7 @@ async fn assert_consumer_download_toggle_round_trip_protocol(subscriber: &mut Pr
     assert!(
         subscriber
             .update_subscription(
-                SessionId::Integer(10),
+                UserId::Integer(10),
                 DownloadStates {
                     camera: Some(true),
                     ..DownloadStates::default()
@@ -1427,22 +1406,22 @@ async fn assert_camera_unpublish_updates_snapshot_and_info(
     let Some(ServerMessage::PeerInfo(peer_info)) = peer_info else {
         panic!("expected peer info update after camera unpublish");
     };
-    assert_eq!(peer_info.session_id, SessionId::Integer(10));
+    assert_eq!(peer_info.user_id, UserId::Integer(10));
     assert_eq!(
         peer_info.info,
-        SessionInfo {
+        UserInfo {
             is_camera_on: Some(false),
-            ..SessionInfo::snapshot_defaults()
+            ..UserInfo::snapshot_defaults()
         }
     );
 }
 
 async fn connect_late_subscriber(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
 ) -> Option<ProtocolFakePeer> {
     network
-        .connect_fake_peer(channel, SessionId::Integer(30), TEST_CHANNEL_KEY)
+        .connect_fake_peer(room, UserId::Integer(30), TEST_ROOM_KEY)
         .await
 }
 
@@ -1457,33 +1436,27 @@ async fn assert_late_join_has_no_track_snapshot(late_subscriber: &mut ProtocolFa
     );
 }
 
-async fn assert_departure_message_protocol(
-    subscriber: &mut ProtocolFakePeer,
-    session_id: SessionId,
-) {
+async fn assert_departure_message_protocol(subscriber: &mut ProtocolFakePeer, user_id: UserId) {
     let departure = subscriber.read_next_server_message().await;
     assert!(departure.is_some());
     let Some(ServerMessage::PeerLeft(departure)) = departure else {
         panic!("expected protocol peer departure notification");
     };
-    assert_eq!(departure.session_id, session_id);
+    assert_eq!(departure.user_id, user_id);
 }
 
-async fn assert_peer_joined_message_protocol(
-    subscriber: &mut ProtocolFakePeer,
-    session_id: SessionId,
-) {
+async fn assert_peer_joined_message_protocol(subscriber: &mut ProtocolFakePeer, user_id: UserId) {
     let joined = subscriber.read_next_server_message().await;
     assert!(joined.is_some());
     let Some(ServerMessage::PeerJoined(joined)) = joined else {
         panic!("expected protocol peer joined notification");
     };
-    assert_eq!(joined.session_id, session_id);
+    assert_eq!(joined.user_id, user_id);
 }
 
 async fn assert_track_snapshot(
     subscriber: &mut ProtocolFakePeer,
-    session_id: SessionId,
+    user_id: UserId,
     stream_type: StreamType,
     active: bool,
 ) -> TrackBinding {
@@ -1496,7 +1469,7 @@ async fn assert_track_snapshot(
     let Some(track_binding) = track_bindings.first() else {
         panic!("expected one protocol track binding");
     };
-    assert_eq!(track_binding.session_id, session_id);
+    assert_eq!(track_binding.user_id, user_id);
     assert_eq!(track_binding.stream_type, stream_type);
     assert_eq!(track_binding.active, active);
     track_binding.clone()
@@ -1524,17 +1497,17 @@ async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {
 
 async fn assert_consumer_route_active(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     subscriber: &ProtocolFakePeer,
-    publisher_session_id: &SessionId,
+    publisher_user_id: &UserId,
     stream_type: StreamType,
 ) {
     assert!(
         network
             .wait_for_consumer_route_active(
-                channel,
-                subscriber.session_id(),
-                publisher_session_id,
+                room,
+                subscriber.user_id(),
+                publisher_user_id,
                 stream_type,
             )
             .await
@@ -1543,17 +1516,17 @@ async fn assert_consumer_route_active(
 
 async fn assert_consumer_route_inactive(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     subscriber: &ProtocolFakePeer,
-    publisher_session_id: &SessionId,
+    publisher_user_id: &UserId,
     stream_type: StreamType,
 ) {
     assert!(
         network
             .wait_for_consumer_route_inactive(
-                channel,
-                subscriber.session_id(),
-                publisher_session_id,
+                room,
+                subscriber.user_id(),
+                publisher_user_id,
                 stream_type,
             )
             .await
@@ -1562,17 +1535,17 @@ async fn assert_consumer_route_inactive(
 
 async fn assert_consumer_route_absent(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     subscriber: &ProtocolFakePeer,
-    publisher_session_id: &SessionId,
+    publisher_user_id: &UserId,
     stream_type: StreamType,
 ) {
     assert!(
         network
             .wait_for_consumer_route_absence(
-                channel,
-                subscriber.session_id(),
-                publisher_session_id,
+                room,
+                subscriber.user_id(),
+                publisher_user_id,
                 stream_type,
             )
             .await
@@ -1581,7 +1554,7 @@ async fn assert_consumer_route_absent(
 
 async fn stream_until_audio_bitrate_is_observable(
     network: &ProtocolLocalNetwork,
-    channel: &str,
+    room: &str,
     publisher: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
@@ -1589,9 +1562,9 @@ async fn stream_until_audio_bitrate_is_observable(
     for _ in 0..20 {
         publisher.send_rtp_packets(source, clock, 2).await?;
         let stats = network.stats().await?;
-        let channel_stats = stats.into_iter().find(|entry| entry.uuid == channel)?;
-        if channel_stats.sessions_stats.incoming_bit_rate.audio > 0 {
-            return Some(channel_stats.sessions_stats.incoming_bit_rate);
+        let room_stats = stats.into_iter().find(|entry| entry.uuid == room)?;
+        if room_stats.users_stats.incoming_bit_rate.audio > 0 {
+            return Some(room_stats.users_stats.incoming_bit_rate);
         }
         yield_now().await;
     }
@@ -1599,7 +1572,7 @@ async fn stream_until_audio_bitrate_is_observable(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct TransportSessionLifetimeMetrics {
+struct TransportUserLifetimeMetrics {
     le_1_second: u64,
     le_10_seconds: u64,
     le_60_seconds: u64,
@@ -1610,8 +1583,8 @@ struct TransportSessionLifetimeMetrics {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LiveRtcMetrics {
-    connected_transport_sessions: i64,
-    disconnected_transport_sessions: i64,
+    connected_transport_users: i64,
+    disconnected_transport_users: i64,
     transport_health_transitions_unset_to_connected: u64,
     transport_health_transitions_connected_to_disconnected: u64,
     transport_health_transitions_connected_to_unset: u64,
@@ -1630,13 +1603,13 @@ struct LiveRtcMetrics {
     indexed_routes: u64,
     scan_routes: u64,
     fallback_scans: u64,
-    scan_sessions: u64,
+    scan_users: u64,
 }
 
 async fn wait_for_transport_lifetime_metrics(
     network: &ProtocolLocalNetwork,
     expected_count: u64,
-) -> Option<TransportSessionLifetimeMetrics> {
+) -> Option<TransportUserLifetimeMetrics> {
     timeout(Duration::from_secs(3), async {
         loop {
             let metrics = parse_transport_lifetime_metrics(&network.metrics_text().await?)?;
@@ -1653,12 +1626,12 @@ async fn wait_for_transport_lifetime_metrics(
 
 async fn wait_for_live_rtc_metrics(
     network: &ProtocolLocalNetwork,
-    expected_connected_sessions: i64,
+    expected_connected_users: i64,
 ) -> Option<LiveRtcMetrics> {
     timeout(Duration::from_secs(3), async {
         loop {
             let metrics = parse_live_rtc_metrics(&network.metrics_text().await?)?;
-            if metrics.connected_transport_sessions == expected_connected_sessions {
+            if metrics.connected_transport_users == expected_connected_users {
                 return Some(metrics);
             }
             yield_now().await;
@@ -1669,44 +1642,41 @@ async fn wait_for_live_rtc_metrics(
     .flatten()
 }
 
-fn parse_transport_lifetime_metrics(metrics_text: &str) -> Option<TransportSessionLifetimeMetrics> {
-    Some(TransportSessionLifetimeMetrics {
+fn parse_transport_lifetime_metrics(metrics_text: &str) -> Option<TransportUserLifetimeMetrics> {
+    Some(TransportUserLifetimeMetrics {
         le_1_second: parse_prometheus_u64(
             metrics_text,
-            "osfu_transport_session_lifetime_seconds_bucket{le=\"1\"}",
+            "osfu_transport_user_lifetime_seconds_bucket{le=\"1\"}",
         )?,
         le_10_seconds: parse_prometheus_u64(
             metrics_text,
-            "osfu_transport_session_lifetime_seconds_bucket{le=\"10\"}",
+            "osfu_transport_user_lifetime_seconds_bucket{le=\"10\"}",
         )?,
         le_60_seconds: parse_prometheus_u64(
             metrics_text,
-            "osfu_transport_session_lifetime_seconds_bucket{le=\"60\"}",
+            "osfu_transport_user_lifetime_seconds_bucket{le=\"60\"}",
         )?,
         le_300_seconds: parse_prometheus_u64(
             metrics_text,
-            "osfu_transport_session_lifetime_seconds_bucket{le=\"300\"}",
+            "osfu_transport_user_lifetime_seconds_bucket{le=\"300\"}",
         )?,
-        count: parse_prometheus_u64(
-            metrics_text,
-            "osfu_transport_session_lifetime_seconds_count",
-        )?,
+        count: parse_prometheus_u64(metrics_text, "osfu_transport_user_lifetime_seconds_count")?,
         sum_seconds: parse_prometheus_f64(
             metrics_text,
-            "osfu_transport_session_lifetime_seconds_sum",
+            "osfu_transport_user_lifetime_seconds_sum",
         )?,
     })
 }
 
 fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
     Some(LiveRtcMetrics {
-        connected_transport_sessions: parse_prometheus_i64(
+        connected_transport_users: parse_prometheus_i64(
             metrics_text,
-            "osfu_transport_health_sessions{state=\"connected\"}",
+            "osfu_transport_health_users{state=\"connected\"}",
         )?,
-        disconnected_transport_sessions: parse_prometheus_i64(
+        disconnected_transport_users: parse_prometheus_i64(
             metrics_text,
-            "osfu_transport_health_sessions{state=\"disconnected\"}",
+            "osfu_transport_health_users{state=\"disconnected\"}",
         )?,
         transport_health_transitions_unset_to_connected: parse_prometheus_u64(
             metrics_text,
@@ -1780,16 +1750,16 @@ fn parse_live_rtc_metrics(metrics_text: &str) -> Option<LiveRtcMetrics> {
             metrics_text,
             "osfu_rtc_datagram_fallback_scans_total",
         )?,
-        scan_sessions: parse_prometheus_u64(metrics_text, "osfu_rtc_datagram_scan_sessions_total")?,
+        scan_users: parse_prometheus_u64(metrics_text, "osfu_rtc_datagram_scan_users_total")?,
     })
 }
 
 fn assert_initial_live_rtc_metrics(metrics: &LiveRtcMetrics, initial_forwarded_bytes: u64) {
-    assert_eq!(metrics.connected_transport_sessions, 2);
-    assert_eq!(metrics.disconnected_transport_sessions, 0);
+    assert_eq!(metrics.connected_transport_users, 2);
+    assert_eq!(metrics.disconnected_transport_users, 0);
     assert!(
         metrics.transport_health_transitions_unset_to_connected >= 2,
-        "expected both RTC sessions to enter a connected transport health state"
+        "expected both RTC users to enter a connected transport health state"
     );
     assert_eq!(
         metrics.transport_health_transitions_connected_to_disconnected,
@@ -1798,13 +1768,13 @@ fn assert_initial_live_rtc_metrics(metrics: &LiveRtcMetrics, initial_forwarded_b
     assert_eq!(metrics.transport_health_transitions_connected_to_unset, 0);
     assert!(
         metrics.transport_ice_state_changes_new + metrics.transport_ice_state_changes_checking >= 2,
-        "expected both RTC sessions to emit early ICE lifecycle counters"
+        "expected both RTC users to emit early ICE lifecycle counters"
     );
     assert!(
         metrics.transport_ice_state_changes_connected
             + metrics.transport_ice_state_changes_completed
             >= 2,
-        "expected both RTC sessions to reach a connected ICE lifecycle state"
+        "expected both RTC users to reach a connected ICE lifecycle state"
     );
     assert_eq!(metrics.transport_ice_state_changes_disconnected, 0);
     assert_eq!(metrics.transport_dtls_connected, 2);
@@ -1824,8 +1794,8 @@ fn assert_steady_state_live_rtc_metrics(
     during: &LiveRtcMetrics,
     additional_forwarded_bytes: u64,
 ) {
-    assert_eq!(during.connected_transport_sessions, 2);
-    assert_eq!(during.disconnected_transport_sessions, 0);
+    assert_eq!(during.connected_transport_users, 2);
+    assert_eq!(during.disconnected_transport_users, 0);
     assert_eq!(
         during.transport_health_transitions_unset_to_connected,
         before.transport_health_transitions_unset_to_connected
@@ -1868,7 +1838,7 @@ fn assert_steady_state_live_rtc_metrics(
     );
     assert_eq!(during.scan_routes, before.scan_routes);
     assert_eq!(during.fallback_scans, before.fallback_scans);
-    assert_eq!(during.scan_sessions, before.scan_sessions);
+    assert_eq!(during.scan_users, before.scan_users);
     assert_eq!(during.rtp_packets_ingress - before.rtp_packets_ingress, 4);
     assert_eq!(during.rtp_packets_egress - before.rtp_packets_egress, 4);
     assert_eq!(

@@ -11,7 +11,7 @@ use o_sfu_router::{
     Transport, TransportDirection, TransportId,
 };
 
-fn session(id: RouterSessionId) -> Session {
+fn user(id: RouterSessionId) -> Session {
     Session::new(id, SessionPermissions::default())
 }
 
@@ -29,8 +29,8 @@ fn sent_frames(commands: &[Command]) -> Vec<&str> {
 fn router_session_teardown_keeps_remaining_routing_consistent() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(session(RouterSessionId(10))), Ok(()));
-    assert_eq!(router.join_session(session(RouterSessionId(20))), Ok(()));
+    assert_eq!(router.join_session(user(RouterSessionId(10))), Ok(()));
+    assert_eq!(router.join_session(user(RouterSessionId(20))), Ok(()));
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(100),

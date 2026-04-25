@@ -15,11 +15,11 @@ use super::{
         Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
     },
     labels::{
-        ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus,
+        ControlPlaneDurationBucket, HttpDisconnectResponseStatus, HttpRoomResponseStatus,
         HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
         SourceSelectionKind, TransportHealthTransition, TransportIceState,
-        TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+        TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
         WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
@@ -28,7 +28,7 @@ use crate::runtime::{rtc_adapter::TransportSessionHealth, source_model::SourceSe
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeMetrics {
     pub(super) http_requests: CounterFamily<HttpRoute>,
-    pub(super) http_channel_responses: CounterFamily<HttpChannelResponseStatus>,
+    pub(super) http_room_responses: CounterFamily<HttpRoomResponseStatus>,
     pub(super) http_disconnect_responses: CounterFamily<HttpDisconnectResponseStatus>,
     pub(super) http_inflight_requests: UpDownCounterFamily<HttpRoute>,
     pub(super) http_request_duration: HistogramFamily<HttpRoute, ControlPlaneDurationBucket>,
@@ -36,8 +36,8 @@ pub(crate) struct RuntimeMetrics {
     pub(super) ws_handshake_rejections: CounterFamily<WebSocketCloseCode>,
     pub(super) ws_handshake_rejections_other: Counter,
     pub(super) ws_startup_failures: CounterFamily<WsStartupFailureKind>,
-    pub(super) ws_session_loops_started: Counter,
-    pub(super) ws_session_loop_exits: CounterFamily<WsSessionLoopExitReason>,
+    pub(super) ws_user_loops_started: Counter,
+    pub(super) ws_user_loop_exits: CounterFamily<WsSessionLoopExitReason>,
     pub(super) ws_bus_batches: CounterFamily<WsBusDirection>,
     pub(super) ws_bus_envelopes: CounterFamily<WsBusDirection>,
     pub(super) ws_bus_parse_failures: Counter,
@@ -45,15 +45,15 @@ pub(crate) struct RuntimeMetrics {
     pub(super) ws_bus_client_frames: CounterFamily<WsBusClientFrameKind>,
     pub(super) ws_handshake_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) ws_auth_duration: Histogram<ControlPlaneDurationBucket>,
-    pub(super) ws_session_initialize_duration: Histogram<ControlPlaneDurationBucket>,
-    pub(super) active_channels: UpDownCounter,
-    pub(super) active_sessions: UpDownCounter,
+    pub(super) ws_user_initialize_duration: Histogram<ControlPlaneDurationBucket>,
+    pub(super) active_rooms: UpDownCounter,
+    pub(super) active_users: UpDownCounter,
     pub(super) active_publications: UpDownCounter,
     pub(super) active_subscriptions: UpDownCounter,
-    pub(super) active_recording_channels: UpDownCounter,
-    pub(super) active_transport_sessions: UpDownCounter,
-    pub(super) connected_transport_sessions: UpDownCounter,
-    pub(super) disconnected_transport_sessions: UpDownCounter,
+    pub(super) active_recording_rooms: UpDownCounter,
+    pub(super) active_transport_users: UpDownCounter,
+    pub(super) connected_transport_users: UpDownCounter,
+    pub(super) disconnected_transport_users: UpDownCounter,
     pub(super) recording_actions: CounterFamily<RecordingActionOutcome>,
     pub(super) recording_captured_packets: Counter,
     pub(super) recording_captured_streams: Counter,
@@ -65,13 +65,13 @@ pub(crate) struct RuntimeMetrics {
     pub(super) transport_health_transitions: CounterFamily<TransportHealthTransition>,
     pub(super) transport_ice_state_changes: CounterFamily<TransportIceState>,
     pub(super) transport_dtls_connected: Counter,
-    pub(super) transport_session_lifetime_buckets: CounterFamily<TransportSessionLifetimeBucket>,
-    pub(super) transport_session_lifetime_count: Counter,
-    pub(super) transport_session_lifetime_sum_micros: Counter,
+    pub(super) transport_user_lifetime_buckets: CounterFamily<TransportUserLifetimeBucket>,
+    pub(super) transport_user_lifetime_count: Counter,
+    pub(super) transport_user_lifetime_sum_micros: Counter,
     pub(super) rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
     pub(super) rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
     pub(super) rtc_datagram_fallback_scans: Counter,
-    pub(super) rtc_datagram_scan_sessions: Counter,
+    pub(super) rtc_datagram_scan_users: Counter,
     pub(super) rtc_route_control: CounterFamily<RtcRouteControlOutcome>,
     pub(super) source_selection_updates: CounterFamily<SourceSelectionKind>,
 }
@@ -89,28 +89,28 @@ impl RuntimeMetrics {
         self.http_requests.increment(HttpRoute::Metrics);
     }
 
-    pub(crate) fn record_http_channel_request(&self) {
-        self.http_requests.increment(HttpRoute::Channel);
+    pub(crate) fn record_http_room_request(&self) {
+        self.http_requests.increment(HttpRoute::Room);
     }
 
-    pub(crate) fn record_http_channel_success(&self) {
-        self.http_channel_responses
-            .increment(HttpChannelResponseStatus::Success);
+    pub(crate) fn record_http_room_success(&self) {
+        self.http_room_responses
+            .increment(HttpRoomResponseStatus::Success);
     }
 
-    pub(crate) fn record_http_channel_unauthorized(&self) {
-        self.http_channel_responses
-            .increment(HttpChannelResponseStatus::Unauthorized);
+    pub(crate) fn record_http_room_unauthorized(&self) {
+        self.http_room_responses
+            .increment(HttpRoomResponseStatus::Unauthorized);
     }
 
-    pub(crate) fn record_http_channel_forbidden(&self) {
-        self.http_channel_responses
-            .increment(HttpChannelResponseStatus::Forbidden);
+    pub(crate) fn record_http_room_forbidden(&self) {
+        self.http_room_responses
+            .increment(HttpRoomResponseStatus::Forbidden);
     }
 
-    pub(crate) fn record_http_channel_bad_request(&self) {
-        self.http_channel_responses
-            .increment(HttpChannelResponseStatus::BadRequest);
+    pub(crate) fn record_http_room_bad_request(&self) {
+        self.http_room_responses
+            .increment(HttpRoomResponseStatus::BadRequest);
     }
 
     pub(crate) fn record_http_disconnect_request(&self) {
@@ -155,7 +155,7 @@ impl RuntimeMetrics {
                 close_code @ (WebSocketCloseCode::AuthTimeout
                 | WebSocketCloseCode::AuthFailed
                 | WebSocketCloseCode::ProtocolError
-                | WebSocketCloseCode::ChannelFull),
+                | WebSocketCloseCode::RoomFull),
             ) => self.ws_handshake_rejections.increment(close_code),
             Some(
                 WebSocketCloseCode::Error
@@ -167,7 +167,7 @@ impl RuntimeMetrics {
         }
     }
 
-    pub(crate) fn record_ws_session_joined(&self) {
+    pub(crate) fn record_ws_user_joined(&self) {
         self.ws_connections.increment(WsConnectionStage::Joined);
     }
 
@@ -176,17 +176,17 @@ impl RuntimeMetrics {
             .increment(WsStartupFailureKind::StartupSend);
     }
 
-    pub(crate) fn record_ws_session_initialize_failure(&self) {
+    pub(crate) fn record_ws_user_initialize_failure(&self) {
         self.ws_startup_failures
             .increment(WsStartupFailureKind::SessionInitialize);
     }
 
-    pub(crate) fn record_ws_session_loop_started(&self) {
-        self.ws_session_loops_started.increment();
+    pub(crate) fn record_ws_user_loop_started(&self) {
+        self.ws_user_loops_started.increment();
     }
 
-    pub(crate) fn record_ws_session_loop_exit(&self, reason: WsSessionLoopExitReason) {
-        self.ws_session_loop_exits.increment(reason);
+    pub(crate) fn record_ws_user_loop_exit(&self, reason: WsSessionLoopExitReason) {
+        self.ws_user_loop_exits.increment(reason);
     }
 
     pub(crate) fn record_ws_bus_batch_received(&self, envelope_count: usize) {
@@ -235,16 +235,16 @@ impl RuntimeMetrics {
         self.ws_auth_duration.observe(duration);
     }
 
-    pub(crate) fn record_ws_session_initialize_duration(&self, duration: Duration) {
-        self.ws_session_initialize_duration.observe(duration);
+    pub(crate) fn record_ws_user_initialize_duration(&self, duration: Duration) {
+        self.ws_user_initialize_duration.observe(duration);
     }
 
-    pub(crate) fn add_active_channels(&self, delta: i64) {
-        self.active_channels.add(delta);
+    pub(crate) fn add_active_rooms(&self, delta: i64) {
+        self.active_rooms.add(delta);
     }
 
-    pub(crate) fn add_active_sessions(&self, delta: i64) {
-        self.active_sessions.add(delta);
+    pub(crate) fn add_active_users(&self, delta: i64) {
+        self.active_users.add(delta);
     }
 
     pub(crate) fn add_active_publications(&self, delta: i64) {
@@ -255,12 +255,12 @@ impl RuntimeMetrics {
         self.active_subscriptions.add(delta);
     }
 
-    pub(crate) fn add_active_recording_channels(&self, delta: i64) {
-        self.active_recording_channels.add(delta);
+    pub(crate) fn add_active_recording_rooms(&self, delta: i64) {
+        self.active_recording_rooms.add(delta);
     }
 
-    pub(crate) fn add_active_transport_sessions(&self, delta: i64) {
-        self.active_transport_sessions.add(delta);
+    pub(crate) fn add_active_transport_users(&self, delta: i64) {
+        self.active_transport_users.add(delta);
     }
 
     pub(crate) fn record_transport_health_transition(
@@ -304,16 +304,16 @@ impl RuntimeMetrics {
             ) => {}
         }
         match previous {
-            Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(-1),
+            Some(TransportSessionHealth::Connected) => self.connected_transport_users.add(-1),
             Some(TransportSessionHealth::Disconnected) => {
-                self.disconnected_transport_sessions.add(-1);
+                self.disconnected_transport_users.add(-1);
             }
             None => {}
         }
         match next {
-            Some(TransportSessionHealth::Connected) => self.connected_transport_sessions.add(1),
+            Some(TransportSessionHealth::Connected) => self.connected_transport_users.add(1),
             Some(TransportSessionHealth::Disconnected) => {
-                self.disconnected_transport_sessions.add(1);
+                self.disconnected_transport_users.add(1);
             }
             None => {}
         }
@@ -381,25 +381,25 @@ impl RuntimeMetrics {
         self.transport_dtls_connected.increment();
     }
 
-    pub(crate) fn record_transport_session_lifetime(&self, duration: Duration) {
-        self.transport_session_lifetime_count.increment();
-        self.transport_session_lifetime_sum_micros
+    pub(crate) fn record_transport_user_lifetime(&self, duration: Duration) {
+        self.transport_user_lifetime_count.increment();
+        self.transport_user_lifetime_sum_micros
             .add_u64(u64::try_from(duration.as_micros()).unwrap_or(u64::MAX));
         if duration <= Duration::from_secs(1) {
-            self.transport_session_lifetime_buckets
-                .increment(TransportSessionLifetimeBucket::Le1Second);
+            self.transport_user_lifetime_buckets
+                .increment(TransportUserLifetimeBucket::Le1Second);
         }
         if duration <= Duration::from_secs(10) {
-            self.transport_session_lifetime_buckets
-                .increment(TransportSessionLifetimeBucket::Le10Seconds);
+            self.transport_user_lifetime_buckets
+                .increment(TransportUserLifetimeBucket::Le10Seconds);
         }
         if duration <= Duration::from_secs(60) {
-            self.transport_session_lifetime_buckets
-                .increment(TransportSessionLifetimeBucket::Le60Seconds);
+            self.transport_user_lifetime_buckets
+                .increment(TransportUserLifetimeBucket::Le60Seconds);
         }
         if duration <= Duration::from_secs(300) {
-            self.transport_session_lifetime_buckets
-                .increment(TransportSessionLifetimeBucket::Le300Seconds);
+            self.transport_user_lifetime_buckets
+                .increment(TransportUserLifetimeBucket::Le300Seconds);
         }
     }
 
@@ -413,7 +413,7 @@ impl RuntimeMetrics {
 
     pub(crate) fn record_rtc_datagram_fallback_scan(&self, examined_sessions: usize) {
         self.rtc_datagram_fallback_scans.increment();
-        self.rtc_datagram_scan_sessions.add(examined_sessions);
+        self.rtc_datagram_scan_users.add(examined_sessions);
     }
 
     pub(crate) fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {

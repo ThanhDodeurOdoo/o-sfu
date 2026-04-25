@@ -15,8 +15,8 @@ use super::{
     session_protocol::{SessionProtocol, SessionProtocolOutcome},
 };
 use crate::runtime::{
-    channel::SessionOutbound,
     metrics::{RuntimeMetrics, WsSessionLoopExitReason},
+    room::UserOutbound,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,23 +34,23 @@ impl LivenessState {
     }
 }
 
-/// Drives a live authenticated WebSocket session until it terminates.
+/// Drives a live authenticated WebSocket user until it terminates.
 ///
 /// This loop owns transport-shaped concerns only: ping timeouts, RTC transport health
-/// checks, inbound frame dispatch, and outbound channel fanout. The detailed signaling
+/// checks, inbound frame dispatch, and outbound room fanout. The detailed signaling
 /// state machine lives behind [`SessionProtocol`]; this function only decides which event
 /// source fired next and converts that outcome into a [`WsSessionLoopExitReason`].
 pub(super) async fn run(
     writer: &mut WsWriter,
     reader: &mut WsReader,
-    outbound_rx: &mut mpsc::UnboundedReceiver<SessionOutbound>,
+    outbound_rx: &mut mpsc::UnboundedReceiver<UserOutbound>,
     session_protocol: &mut SessionProtocol,
-    session_timeout_ms: u64,
+    user_timeout_ms: u64,
     ping_interval_ms: u64,
     metrics: &RuntimeMetrics,
 ) -> WsSessionLoopExitReason {
     let ping_interval = Duration::from_millis(ping_interval_ms);
-    let ping_timeout = Duration::from_millis(session_timeout_ms);
+    let ping_timeout = Duration::from_millis(user_timeout_ms);
     let mut next_ping_at = Instant::now() + ping_interval;
     let mut next_transport_state_check_at = next_ping_at;
     let mut liveness_state = LivenessState::Idle;
@@ -183,7 +183,7 @@ async fn handle_incoming_frame(
         SessionProtocolOutcome::Close(code) => {
             debug!(
                 close_code = u16::from(code),
-                "closing websocket from session loop"
+                "closing websocket from user loop"
             );
             close_writer(writer, code).await;
             Some(WsSessionLoopExitReason::BusBreak)
@@ -193,25 +193,25 @@ async fn handle_incoming_frame(
 
 async fn handle_outbound_event(
     writer: &mut WsWriter,
-    outbound: Option<SessionOutbound>,
+    outbound: Option<UserOutbound>,
     session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     if let Some(outbound) = outbound {
         handle_outbound_payload(writer, outbound, session_protocol, metrics).await
     } else {
-        debug!("session outbound channel closed");
+        debug!("user outbound room closed");
         Some(WsSessionLoopExitReason::OutboundChannelClosed)
     }
 }
 
 #[allow(
     clippy::cognitive_complexity,
-    reason = "outbound handling keeps protocol send, close-signal handling, and metrics in one explicit session-loop branch"
+    reason = "outbound handling keeps protocol send, close-signal handling, and metrics in one explicit user-loop branch"
 )]
 async fn handle_outbound_payload(
     writer: &mut WsWriter,
-    outbound: SessionOutbound,
+    outbound: UserOutbound,
     session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
@@ -229,14 +229,14 @@ async fn handle_outbound_payload(
             metrics.record_ws_bus_send_failure();
             debug!(
                 close_code = u16::from(code),
-                "failed to send outbound session event"
+                "failed to send outbound user event"
             );
             if matches!(
                 code,
                 WebSocketCloseCode::Clean
                     | WebSocketCloseCode::Leaving
                     | WebSocketCloseCode::Kicked
-                    | WebSocketCloseCode::ChannelFull
+                    | WebSocketCloseCode::RoomFull
                     | WebSocketCloseCode::AuthFailed
                     | WebSocketCloseCode::AuthTimeout
             ) {

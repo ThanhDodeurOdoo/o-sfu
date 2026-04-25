@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use o_sfu_protocol::{
-    shared::{SessionId, SessionInfo, StreamType},
+    shared::{StreamType, UserId, UserInfo},
     signaling::{
         PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor,
         SourceEncodingDescriptor, TrackBinding,
@@ -9,7 +9,7 @@ use o_sfu_protocol::{
 };
 
 use crate::runtime::{
-    channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate},
+    room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
     source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
 };
 
@@ -36,35 +36,33 @@ pub(super) struct RemoteTrackProjection {
 impl RemoteTrackProjection {
     pub(super) fn translate_server_message(
         &mut self,
-        message: ChannelEventMessage,
+        message: RoomEventMessage,
     ) -> TranslatedServerMessage {
         match message {
-            ChannelEventMessage::Broadcast { sender_id, message } => {
+            RoomEventMessage::Broadcast { sender_id, message } => {
                 TranslatedServerMessage::messages(vec![ServerMessage::Broadcast(
                     ServerBroadcastPayload { sender_id, message },
                 )])
             }
-            ChannelEventMessage::SessionJoined { session_id, info } => {
-                TranslatedServerMessage::messages(vec![ServerMessage::PeerJoined(
-                    PeerInfoPayload { session_id, info },
-                )])
-            }
-            ChannelEventMessage::SessionDeparted { session_id } => {
+            RoomEventMessage::UserJoined { user_id, info } => TranslatedServerMessage::messages(
+                vec![ServerMessage::PeerJoined(PeerInfoPayload { user_id, info })],
+            ),
+            RoomEventMessage::UserDeparted { user_id } => {
                 let removed_tracks = self
                     .bindings_by_mid
                     .values()
-                    .any(|binding| binding.session_id == session_id);
+                    .any(|binding| binding.user_id == user_id);
                 self.bindings_by_mid
-                    .retain(|_mid, binding| binding.session_id != session_id);
+                    .retain(|_mid, binding| binding.user_id != user_id);
                 TranslatedServerMessage {
-                    messages: vec![ServerMessage::PeerLeft(PeerLeftPayload { session_id })],
+                    messages: vec![ServerMessage::PeerLeft(PeerLeftPayload { user_id })],
                     needs_renegotiation: removed_tracks,
                 }
             }
-            ChannelEventMessage::SessionInfoChanged(snapshot) => {
-                self.translate_session_info_snapshot(snapshot)
+            RoomEventMessage::UserInfoChanged(snapshot) => {
+                self.translate_user_info_snapshot(snapshot)
             }
-            ChannelEventMessage::RecordingStateChanged(state) => {
+            RoomEventMessage::RecordingStateChanged(state) => {
                 TranslatedServerMessage::messages(vec![ServerMessage::RecordingChange(state)])
             }
         }
@@ -74,7 +72,7 @@ impl RemoteTrackProjection {
         let mid = payload.mid().to_owned();
         self.apply_track_binding(
             mid,
-            payload.session_id().clone(),
+            payload.user_id().clone(),
             payload.stream_type(),
             payload.active(),
             payload.source_descriptor(),
@@ -84,7 +82,7 @@ impl RemoteTrackProjection {
     fn apply_track_binding(
         &mut self,
         mid: String,
-        session_id: SessionId,
+        user_id: UserId,
         stream_type: StreamType,
         active: bool,
         source: &PublishedSourceDescriptor,
@@ -93,12 +91,12 @@ impl RemoteTrackProjection {
             mid.clone(),
             TrackBinding {
                 mid,
-                session_id: session_id.clone(),
+                user_id: user_id.clone(),
                 stream_type,
                 active,
                 source: Some(source_descriptor_from_source(
                     source,
-                    session_id,
+                    user_id,
                     stream_type,
                     active,
                 )),
@@ -115,8 +113,8 @@ impl RemoteTrackProjection {
         update: &TrackBindingUpdate,
     ) -> TranslatedServerMessage {
         let changed = match update.active {
-            Some(active) => self.set_track_active(&update.session_id, update.stream_type, active),
-            None => self.remove_track_binding(&update.session_id, update.stream_type),
+            Some(active) => self.set_track_active(&update.user_id, update.stream_type, active),
+            None => self.remove_track_binding(&update.user_id, update.stream_type),
         };
         if !changed {
             return TranslatedServerMessage::messages(Vec::new());
@@ -127,18 +125,15 @@ impl RemoteTrackProjection {
         }
     }
 
-    fn translate_session_info_snapshot(
+    fn translate_user_info_snapshot(
         &mut self,
-        snapshot: BTreeMap<SessionId, SessionInfo>,
+        snapshot: BTreeMap<UserId, UserInfo>,
     ) -> TranslatedServerMessage {
         let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
         let mut track_snapshot_changed = false;
-        for (session_id, info) in snapshot {
-            track_snapshot_changed |= self.apply_session_info_to_tracks(&session_id, &info);
-            messages.push(ServerMessage::PeerInfo(PeerInfoPayload {
-                session_id,
-                info,
-            }));
+        for (user_id, info) in snapshot {
+            track_snapshot_changed |= self.apply_user_info_to_tracks(&user_id, &info);
+            messages.push(ServerMessage::PeerInfo(PeerInfoPayload { user_id, info }));
         }
         if track_snapshot_changed {
             messages.push(ServerMessage::Tracks(self.snapshot()));
@@ -149,10 +144,10 @@ impl RemoteTrackProjection {
         }
     }
 
-    fn apply_session_info_to_tracks(&mut self, session_id: &SessionId, info: &SessionInfo) -> bool {
+    fn apply_user_info_to_tracks(&mut self, user_id: &UserId, info: &UserInfo) -> bool {
         let mut changed = false;
         for binding in self.bindings_by_mid.values_mut() {
-            if &binding.session_id != session_id {
+            if &binding.user_id != user_id {
                 continue;
             }
             let next_active = match binding.stream_type {
@@ -176,13 +171,13 @@ impl RemoteTrackProjection {
 
     fn set_track_active(
         &mut self,
-        session_id: &SessionId,
+        user_id: &UserId,
         stream_type: StreamType,
         active: bool,
     ) -> bool {
         let mut changed = false;
         for binding in self.bindings_by_mid.values_mut() {
-            if &binding.session_id != session_id || binding.stream_type != stream_type {
+            if &binding.user_id != user_id || binding.stream_type != stream_type {
                 continue;
             }
             if binding.active != active {
@@ -196,10 +191,10 @@ impl RemoteTrackProjection {
         changed
     }
 
-    fn remove_track_binding(&mut self, session_id: &SessionId, stream_type: StreamType) -> bool {
+    fn remove_track_binding(&mut self, user_id: &UserId, stream_type: StreamType) -> bool {
         let binding_count = self.bindings_by_mid.len();
         self.bindings_by_mid.retain(|_mid, binding| {
-            &binding.session_id != session_id || binding.stream_type != stream_type
+            &binding.user_id != user_id || binding.stream_type != stream_type
         });
         self.bindings_by_mid.len() != binding_count
     }
@@ -207,13 +202,13 @@ impl RemoteTrackProjection {
 
 fn source_descriptor_from_source(
     source: &PublishedSourceDescriptor,
-    session_id: SessionId,
+    user_id: UserId,
     stream_type: StreamType,
     active: bool,
 ) -> SourceDescriptor {
     SourceDescriptor {
         source_id: source.source_id().to_string(),
-        session_id,
+        user_id,
         stream_type,
         active,
         mid: source.mid().map(|mid| mid.as_str().to_owned()),
@@ -257,7 +252,7 @@ mod tests {
 
         projection.apply_track_binding(
             "subscriber-down-0".to_owned(),
-            SessionId::Integer(7),
+            UserId::Integer(7),
             StreamType::Camera,
             true,
             &source,
@@ -289,7 +284,7 @@ mod tests {
         });
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(SessionId::Integer(7)),
+            owner: PublishedSourceOwner::new(UserId::Integer(7)),
             stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: Some(Mid::new(mid)),

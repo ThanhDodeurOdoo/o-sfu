@@ -2,7 +2,7 @@ use super::{
     ClientBroadcastPayload, Envelope, RecordingOptions, RequestId, SessionDescriptionPayload,
     StreamIntentPayload, SubscribePayload,
 };
-use crate::shared::SessionInfo;
+use crate::shared::UserInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMessage {
@@ -10,7 +10,7 @@ pub enum ClientMessage {
     Publish(StreamIntentPayload),
     Unpublish(StreamIntentPayload),
     Subscribe(SubscribePayload),
-    Info(SessionInfo),
+    Info(UserInfo),
     Broadcast(ClientBroadcastPayload),
 }
 

@@ -15,7 +15,7 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     match event {
         Event::IceConnectionStateChange(state) => {
             debug!(
-                session_id = ?session_key.session_id(),
+                user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id(),
                 ?state,
                 "rtc ICE connection state transition"
@@ -23,14 +23,14 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
         }
         Event::Connected => {
             debug!(
-                session_id = ?session_key.session_id(),
+                user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id(),
                 "rtc DTLS transport reached connected state"
             );
         }
         _ => {
             trace!(
-                session_id = ?session_key.session_id(),
+                user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id(),
                 ?event,
                 "rtc packet loop event"
@@ -73,9 +73,9 @@ pub(super) fn observe_rtc_event(
     let mut fields = serde_json::Map::new();
     fields.insert(String::from("from"), maybe_health_json_value(previous));
     fields.insert(String::from("to"), health_json_value(health));
-    diagnostics.record_transport_session_event(
-        session_key.channel_instance_id(),
-        session_key.session_id(),
+    diagnostics.record_transport_user_event(
+        session_key.room_instance_id(),
+        session_key.user_id(),
         schema::event::TRANSPORT_HEALTH_CHANGED,
         session_key.media_worker_id(),
         fields,
@@ -100,7 +100,7 @@ fn observe_receiver_bandwidth(
     if snapshot_state.set_receiver_bandwidth(session_key, estimate_bps) == Some(estimate_bps) {
         return;
     }
-    source_policy_signal.mark_dirty(session_key.channel_instance_id());
+    source_policy_signal.mark_dirty(session_key.room_instance_id());
 }
 
 pub(crate) fn transport_ice_state(state: IceConnectionState) -> TransportIceState {

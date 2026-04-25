@@ -34,14 +34,14 @@ pub(super) fn record_incoming_stats(
             );
             if audio_policy_changed {
                 dirty_source_policy_channel_ids
-                    .push(packet.source_session_key().channel_instance_id());
+                    .push(packet.source_session_key().room_instance_id());
             }
             let first_ingress = state
                 .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
                 .unwrap_or(false);
             if first_ingress {
                 debug!(
-                    session_id = ?packet.source_session_key().session_id(),
+                    user_id = ?packet.source_session_key().user_id(),
                     media_worker_id = packet.source_session_key().media_worker_id(),
                     ?transport_media_id,
                     payload_bytes = payload_len,
@@ -146,7 +146,7 @@ pub(super) fn flush_forward_routes(
                 warn!(
                     ?destination,
                     ?error,
-                    "failed to write media to destination session"
+                    "failed to write media to destination user"
                 );
             }
         }

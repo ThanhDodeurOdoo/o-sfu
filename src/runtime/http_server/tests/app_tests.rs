@@ -3,7 +3,7 @@ use o_sfu_router::{MediaKind, MediaStream};
 
 use super::fixtures::*;
 use crate::runtime::{
-    channel::Channel,
+    room::Room,
     test_rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
 
@@ -12,29 +12,27 @@ fn test_video_rtp_parameters(ssrc: u64) -> MediaStream {
 }
 
 async fn publish_video_stream(
-    channel: &Channel,
-    session_id: &SessionId,
+    room: &Room,
+    user_id: &UserId,
     connection_id: ConnectionId,
     stream_type: StreamType,
     ssrc: u64,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
     assert!(
-        channel
-            .apply_session_negotiated(
-                session_id,
-                connection_id,
-                sample_client_rtp_capabilities(),
-                transport_adapter,
-            )
-            .await
+        room.apply_session_negotiated(
+            user_id,
+            connection_id,
+            sample_client_rtp_capabilities(),
+            transport_adapter,
+        )
+        .await
     );
     assert!(
-        channel
-            .test_api()
+        room.test_api()
             .media()
             .publish_track(
-                session_id,
+                user_id,
                 stream_type,
                 MediaKind::Video,
                 test_video_rtp_parameters(ssrc),
@@ -70,15 +68,15 @@ async fn noop_returns_ok_response() {
 }
 
 #[tokio::test]
-async fn stats_returns_live_channel_data() {
+async fn stats_returns_live_room_data() {
     let state = test_state();
-    let query = CreateChannelQuery::default();
-    let channel = state
-        .channel_manager
-        .serve_channel(
+    let query = CreateRoomQuery::default();
+    let room = state
+        .room_manager
+        .serve_room(
             "issuer-a",
             None,
-            &ChannelConfig {
+            &RoomConfig {
                 web_rtc_enabled: query.web_rtc_enabled(),
                 recording_address: query.recording_address.clone(),
             },
@@ -87,25 +85,20 @@ async fn stats_returns_live_channel_data() {
         .await;
     let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
     let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
-    let alice_join = channel
+    let alice_join = room
         .test_api()
         .lifecycle()
-        .join_session(
-            SessionId::Integer(1),
+        .join_user(
+            UserId::Integer(1),
             None,
-            SessionPermissions::default(),
+            UserPermissions::default(),
             alice_tx,
         )
         .await;
-    let bob_join = channel
+    let bob_join = room
         .test_api()
         .lifecycle()
-        .join_session(
-            SessionId::Integer(2),
-            None,
-            SessionPermissions::default(),
-            bob_tx,
-        )
+        .join_user(UserId::Integer(2), None, UserPermissions::default(), bob_tx)
         .await;
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
@@ -116,8 +109,8 @@ async fn stats_returns_live_channel_data() {
         return;
     };
     publish_video_stream(
-        &channel,
-        &SessionId::Integer(1),
+        &room,
+        &UserId::Integer(1),
         alice_connection_id,
         StreamType::Camera,
         22_222,
@@ -125,8 +118,8 @@ async fn stats_returns_live_channel_data() {
     )
     .await;
     publish_video_stream(
-        &channel,
-        &SessionId::Integer(2),
+        &room,
+        &UserId::Integer(2),
         bob_connection_id,
         StreamType::Screen,
         33_333,
@@ -159,15 +152,15 @@ async fn stats_returns_live_channel_data() {
     let Some(first) = first else {
         return;
     };
-    assert_eq!(first.uuid, channel.uuid());
+    assert_eq!(first.uuid, room.uuid());
     assert_eq!(first.remote_address, "203.0.113.10");
-    assert_eq!(first.sessions_stats.count, 2);
-    assert_eq!(first.sessions_stats.camera_count, 1);
-    assert_eq!(first.sessions_stats.screen_count, 1);
-    assert_eq!(first.sessions_stats.incoming_bit_rate.total, 0);
-    assert_eq!(first.sessions_stats.incoming_bit_rate.audio, 0);
-    assert_eq!(first.sessions_stats.incoming_bit_rate.camera, 0);
-    assert_eq!(first.sessions_stats.incoming_bit_rate.screen, 0);
+    assert_eq!(first.users_stats.count, 2);
+    assert_eq!(first.users_stats.camera_count, 1);
+    assert_eq!(first.users_stats.screen_count, 1);
+    assert_eq!(first.users_stats.incoming_bit_rate.total, 0);
+    assert_eq!(first.users_stats.incoming_bit_rate.audio, 0);
+    assert_eq!(first.users_stats.incoming_bit_rate.camera, 0);
+    assert_eq!(first.users_stats.incoming_bit_rate.screen, 0);
     assert!(first.web_rtc_enabled);
     assert!(first.create_date.contains('T'));
     assert!(first.create_date.ends_with('Z'));

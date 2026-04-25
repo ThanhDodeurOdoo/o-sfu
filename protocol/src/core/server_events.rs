@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::{Command, Commands, ProtocolCore, ProtocolEvent};
 use crate::{
-    shared::SessionId,
+    shared::UserId,
     signaling::{
         PeerInfoPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor, TrackBinding,
     },
@@ -16,8 +16,7 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
             peer_info_commands(payload)
         }
         ServerMessage::PeerLeft(payload) => {
-            let source_snapshot_changed =
-                remove_track_bindings_for_session(core, &payload.session_id);
+            let source_snapshot_changed = remove_track_bindings_for_session(core, &payload.user_id);
             let mut commands = if source_snapshot_changed {
                 vec![Command::EmitEvent {
                     event: ProtocolEvent::SourceSnapshot {
@@ -29,7 +28,7 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
             };
             commands.push(Command::EmitEvent {
                 event: ProtocolEvent::PeerLeft {
-                    session_id: payload.session_id,
+                    user_id: payload.user_id,
                 },
             });
             commands
@@ -67,10 +66,10 @@ fn replace_track_snapshot(core: &mut ProtocolCore, bindings: Vec<TrackBinding>) 
     commands
 }
 
-fn remove_track_bindings_for_session(core: &mut ProtocolCore, session_id: &SessionId) -> bool {
+fn remove_track_bindings_for_session(core: &mut ProtocolCore, user_id: &UserId) -> bool {
     let mut removed_source_descriptors = false;
     core.track_bindings.retain(|_, binding| {
-        let remove = &binding.session_id == session_id;
+        let remove = &binding.user_id == user_id;
         removed_source_descriptors |= remove && binding.source.is_some();
         !remove
     });
@@ -102,7 +101,7 @@ fn source_descriptors_from_track_bindings(core: &ProtocolCore) -> Vec<SourceDesc
 fn peer_info_commands(payload: PeerInfoPayload) -> Commands {
     vec![Command::EmitEvent {
         event: ProtocolEvent::PeerInfo {
-            session_id: payload.session_id,
+            user_id: payload.user_id,
             info: payload.info,
         },
     }]

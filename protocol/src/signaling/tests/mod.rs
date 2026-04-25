@@ -9,8 +9,8 @@ use super::{
     StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
 };
 use crate::shared::{
-    AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
-    SessionInfo, StopCode, StreamType, VideoLayoutIntent,
+    AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType,
+    UserId, UserInfo, VideoLayoutIntent,
 };
 
 #[test]
@@ -18,14 +18,14 @@ fn protocol_close_codes_follow_phase_nine_contract() {
     assert_eq!(u16::from(WebSocketCloseCode::AuthFailed), 4001);
     assert_eq!(u16::from(WebSocketCloseCode::AuthTimeout), 4002);
     assert_eq!(u16::from(WebSocketCloseCode::Kicked), 4003);
-    assert_eq!(u16::from(WebSocketCloseCode::ChannelFull), 4004);
+    assert_eq!(u16::from(WebSocketCloseCode::RoomFull), 4004);
     assert_eq!(
         WebSocketCloseCode::from_u16(4001),
         Some(WebSocketCloseCode::AuthFailed)
     );
     assert_eq!(
         WebSocketCloseCode::from_u16(4004),
-        Some(WebSocketCloseCode::ChannelFull)
+        Some(WebSocketCloseCode::RoomFull)
     );
     assert_eq!(WebSocketCloseCode::from_u16(4999), None);
 }
@@ -116,7 +116,7 @@ fn protocol_subscribe_message_decodes_flat_download_state_shape() {
         decoded,
         Ok(ClientEnvelope::Message(ClientMessage::Subscribe(
             SubscribePayload {
-                session_id: SessionId::Integer(7),
+                user_id: UserId::Integer(7),
                 states: DownloadStates {
                     audio: Some(true),
                     camera: Some(false),
@@ -157,10 +157,10 @@ fn protocol_welcome_message_round_trips_to_wire_envelope() -> serde_json::Result
             video: Some(false),
         },
         peers: vec![PeerSnapshot {
-            session_id: SessionId::String(String::from("alice")),
-            info: SessionInfo {
+            user_id: UserId::String(String::from("alice")),
+            info: UserInfo {
                 is_talking: Some(true),
-                ..SessionInfo::default()
+                ..UserInfo::default()
             },
         }],
     })
@@ -217,7 +217,7 @@ fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> ser
 {
     let track_update = ServerMessage::Tracks(vec![TrackBinding {
         mid: String::from("0"),
-        session_id: SessionId::Integer(5),
+        user_id: UserId::Integer(5),
         stream_type: StreamType::Camera,
         active: true,
         source: None,
@@ -237,10 +237,10 @@ fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> ser
     );
 
     let peer_joined = ServerMessage::PeerJoined(PeerInfoPayload {
-        session_id: SessionId::Integer(9),
-        info: SessionInfo {
+        user_id: UserId::Integer(9),
+        info: UserInfo {
             is_camera_on: Some(true),
-            ..SessionInfo::default()
+            ..UserInfo::default()
         },
     })
     .into_envelope()?;
@@ -258,7 +258,7 @@ fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> ser
     );
 
     let peer_left = ServerMessage::PeerLeft(PeerLeftPayload {
-        session_id: SessionId::Integer(9),
+        user_id: UserId::Integer(9),
     })
     .into_envelope()?;
     assert_eq!(
@@ -277,7 +277,7 @@ fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> ser
 fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::Result<()> {
     let source = SourceDescriptor {
         source_id: String::from("source-7"),
-        session_id: SessionId::Integer(5),
+        user_id: UserId::Integer(5),
         stream_type: StreamType::Camera,
         active: true,
         mid: Some(String::from("0")),
@@ -298,7 +298,7 @@ fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::
     };
     let track_update = ServerMessage::Tracks(vec![TrackBinding {
         mid: String::from("0"),
-        session_id: SessionId::Integer(5),
+        user_id: UserId::Integer(5),
         stream_type: StreamType::Camera,
         active: true,
         source: Some(source),
@@ -383,10 +383,10 @@ fn protocol_server_welcome_message_decodes_without_routing_metadata() {
                     video: None,
                 },
                 peers: vec![PeerSnapshot {
-                    session_id: SessionId::Integer(7),
-                    info: SessionInfo {
+                    user_id: UserId::Integer(7),
+                    info: UserInfo {
                         is_talking: Some(false),
-                        ..SessionInfo::default()
+                        ..UserInfo::default()
                     },
                 }],
             }
@@ -488,7 +488,7 @@ fn protocol_server_stop_recording_response_round_trips_through_server_envelope()
 fn protocol_server_broadcast_and_recording_messages_round_trip_to_wire_envelopes()
 -> serde_json::Result<()> {
     let broadcast = ServerMessage::Broadcast(ServerBroadcastPayload {
-        sender_id: SessionId::String(String::from("bob")),
+        sender_id: UserId::String(String::from("bob")),
         message: json!({"text": "hello"}),
     })
     .into_envelope()?;
