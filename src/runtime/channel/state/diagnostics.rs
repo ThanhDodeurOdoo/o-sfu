@@ -8,7 +8,12 @@ use crate::runtime::{
     diagnostics::{
         DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
         DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionTransport,
-        DiagnosticsSessionView, DiagnosticsSubscription,
+        DiagnosticsSessionView, DiagnosticsSource, DiagnosticsSourceEncoding,
+        DiagnosticsSourceSelection, DiagnosticsSubscription,
+    },
+    source_model::{
+        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+        SourceEncodingDescriptor, SourceEncodingId,
     },
     transport_adapter::TransportMediaId,
 };
@@ -40,6 +45,56 @@ impl ChannelState {
             }
         }
         incoming_bitrate
+    }
+
+    pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_source(
+        &self,
+        per_media: &[(TransportMediaId, u64)],
+    ) -> BTreeMap<PublishedSourceId, u64> {
+        let mut incoming_bitrate: BTreeMap<PublishedSourceId, u64> = BTreeMap::new();
+        for (transport_media_id, bits) in per_media {
+            let Some(entry) = self.source_transport_media_entry(*transport_media_id) else {
+                continue;
+            };
+            let source_bitrate = incoming_bitrate.entry(entry.source_id).or_default();
+            *source_bitrate = (*source_bitrate).saturating_add(*bits);
+        }
+        incoming_bitrate
+    }
+
+    pub(in crate::runtime) fn diagnostics_sources(
+        &self,
+        incoming_bitrate_by_source: &BTreeMap<PublishedSourceId, u64>,
+    ) -> Vec<DiagnosticsSource> {
+        self.sources
+            .values()
+            .map(|source| {
+                let producer = self
+                    .producer_id_by_source_id
+                    .get(&source.source_id())
+                    .and_then(|producer_id| self.producers.get(producer_id));
+                let encodings = source
+                    .encodings()
+                    .map(diagnostics_source_encoding)
+                    .collect();
+                DiagnosticsSource {
+                    active: producer.is_some_and(|producer| producer.active),
+                    current_incoming_bitrate_bps: incoming_bitrate_by_source
+                        .get(&source.source_id())
+                        .copied()
+                        .unwrap_or_default(),
+                    encodings,
+                    media_kind: DiagnosticsMediaKind::from(source.media_kind()),
+                    mid: source.mid().map(|mid| mid.as_str().to_owned()),
+                    owner_session_id: source.owner().session_id().clone(),
+                    source_id: source.source_id().as_u64(),
+                    stream_type: source.stream_type(),
+                    transport_media_id: producer
+                        .and_then(|producer| producer.transport_media_id)
+                        .map(TransportMediaId::as_u64),
+                }
+            })
+            .collect()
     }
 
     pub(in crate::runtime) fn diagnostics_session_views(
@@ -118,6 +173,11 @@ impl ChannelState {
                     return None;
                 }
                 let source = self.sources.get(&key.source_id)?;
+                let selection = self
+                    .consumer_source_selections
+                    .get(key)
+                    .copied()
+                    .unwrap_or_else(|| ConsumerSourceSelection::open(true));
                 let route_state = self.consumer_route_state(
                     session_id,
                     source.owner().session_id(),
@@ -126,6 +186,8 @@ impl ChannelState {
                 Some(DiagnosticsSubscription {
                     consumer_transport_media_id: Some(consumer_state.consumer_media.as_u64()),
                     producer_session_id: source.owner().session_id().clone(),
+                    selection: diagnostics_source_selection(source, selection),
+                    source_id: source.source_id().as_u64(),
                     source_transport_media_id: Some(consumer_state.source_media.as_u64()),
                     state: match route_state {
                         super::ConsumerRouteState::Active => DiagnosticsRouteState::Active,
@@ -151,9 +213,16 @@ impl ChannelState {
             .collect::<BTreeSet<ConsumerKey>>();
         subscriptions.extend(pending_keys.difference(&existing_keys).filter_map(|key| {
             let source = self.sources.get(&key.source_id)?;
+            let selection = self
+                .consumer_source_selections
+                .get(key)
+                .copied()
+                .unwrap_or_else(|| ConsumerSourceSelection::open(true));
             Some(DiagnosticsSubscription {
                 consumer_transport_media_id: None,
                 producer_session_id: source.owner().session_id().clone(),
+                selection: diagnostics_source_selection(source, selection),
+                source_id: source.source_id().as_u64(),
                 source_transport_media_id: self
                     .producer_id_by_source_id
                     .get(&key.source_id)
@@ -165,5 +234,40 @@ impl ChannelState {
             })
         }));
         subscriptions
+    }
+}
+
+fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> DiagnosticsSourceEncoding {
+    let negotiated_format = encoding.negotiated_format();
+    DiagnosticsSourceEncoding {
+        codec: negotiated_format.map(|format| format.codec_name().to_owned()),
+        encoding_id: encoding.encoding_id().as_u64(),
+        max_bitrate_bps: encoding.max_bitrate(),
+        payload_type: negotiated_format.map(o_sfu_router::MediaFormat::payload_type),
+        primary_ssrc: encoding.primary_ssrc().map(o_sfu_router::Ssrc::value),
+        repair_ssrc: encoding.repair_ssrc().map(o_sfu_router::Ssrc::value),
+        rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
+        transport_media_id: encoding
+            .transport_binding()
+            .map(|binding| binding.transport_media_id().as_u64()),
+    }
+}
+
+fn diagnostics_source_selection(
+    source: &PublishedSourceDescriptor,
+    selection: ConsumerSourceSelection,
+) -> DiagnosticsSourceSelection {
+    let selected_encoding_id = selection.selector().selected_encoding();
+    DiagnosticsSourceSelection {
+        active: selection.active(),
+        pressure_observations: selection.pressure_observations(),
+        selection_reason: selection.selector().into(),
+        selector: selection.selector().into(),
+        selected_encoding_id: selected_encoding_id.map(SourceEncodingId::as_u64),
+        selected_rid: selected_encoding_id
+            .and_then(|encoding_id| source.encoding(encoding_id))
+            .and_then(SourceEncodingDescriptor::rid)
+            .map(|rid| rid.as_str().to_owned()),
+        upgrade_observations: selection.upgrade_observations(),
     }
 }

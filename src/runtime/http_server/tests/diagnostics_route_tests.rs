@@ -8,24 +8,22 @@
 
 use std::net::SocketAddr;
 
-use o_sfu_protocol::shared::{DownloadStates, StreamType};
+use o_sfu_protocol::shared::StreamType;
 use o_sfu_router::{MediaKind, MediaStream};
 
 use super::fixtures::*;
 use crate::runtime::{
     channel::Channel,
-    test_rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
+    test_rtp_samples::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
 };
 
-fn test_video_rtp_parameters(ssrc: u64) -> MediaStream {
-    sample_video_rtp_parameters(None, u32::try_from(ssrc).unwrap_or(u32::MAX))
+fn test_simulcast_video_rtp_parameters() -> MediaStream {
+    sample_simulcast_video_rtp_parameters(None)
 }
 
-async fn publish_video_stream(
+async fn make_session_ready(
     channel: &Channel,
     session_id: &SessionId,
-    stream_type: StreamType,
-    ssrc: u64,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
     let Some(connection_id) = channel
@@ -46,6 +44,16 @@ async fn publish_video_stream(
             )
             .await
     );
+}
+
+async fn publish_media_stream(
+    channel: &Channel,
+    session_id: &SessionId,
+    stream_type: StreamType,
+    parameters: MediaStream,
+    transport_adapter: &RuntimeTransportAdapter,
+) {
+    make_session_ready(channel, session_id, transport_adapter).await;
     assert!(
         channel
             .test_api()
@@ -54,7 +62,7 @@ async fn publish_video_stream(
                 session_id,
                 stream_type,
                 MediaKind::Video,
-                test_video_rtp_parameters(ssrc),
+                parameters,
                 transport_adapter,
             )
             .await
@@ -129,8 +137,10 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         .await;
     let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
     let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
+    let (carol_tx, _carol_rx) = mpsc::unbounded_channel();
     let alice_session_id = SessionId::Integer(1);
     let bob_session_id = SessionId::Integer(2);
+    let carol_session_id = SessionId::Integer(3);
     let alice_join = channel
         .test_api()
         .lifecycle()
@@ -151,30 +161,29 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
             bob_tx,
         )
         .await;
+    let carol_join = channel
+        .test_api()
+        .lifecycle()
+        .join_session(
+            carol_session_id.clone(),
+            None,
+            SessionPermissions::default(),
+            carol_tx,
+        )
+        .await;
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
-    publish_video_stream(
+    assert!(carol_join.is_ok());
+    make_session_ready(&channel, &bob_session_id, &state.transport_adapter).await;
+    make_session_ready(&channel, &carol_session_id, &state.transport_adapter).await;
+    publish_media_stream(
         &channel,
         &alice_session_id,
         StreamType::Camera,
-        22_222,
+        test_simulcast_video_rtp_parameters(),
         &state.transport_adapter,
     )
     .await;
-    channel
-        .test_api()
-        .media()
-        .update_subscription(
-            &bob_session_id,
-            &alice_session_id,
-            &DownloadStates {
-                audio: None,
-                camera: Some(true),
-                screen: None,
-            },
-            &state.transport_adapter,
-        )
-        .await;
     let channels_request = build_request(Request::get(DIAGNOSTICS_CHANNELS_PATH), Body::empty());
     assert!(channels_request.is_some());
     let Some(channels_request) = channels_request else {
@@ -193,9 +202,9 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         return;
     };
     assert_eq!(channel_summaries.len(), 1);
-    assert_eq!(channel_summaries[0].session_count, 2);
+    assert_eq!(channel_summaries[0].session_count, 3);
     assert_eq!(channel_summaries[0].publication_count, 1);
-    assert_eq!(channel_summaries[0].subscription_count, 0);
+    assert_eq!(channel_summaries[0].subscription_count, 2);
 
     let detail_request = build_request(
         Request::get(format!("/internal/diagnostics/channels/{}", channel.uuid())),
@@ -218,7 +227,12 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
     };
     assert_eq!(detail.summary.uuid, channel.uuid());
     assert_eq!(detail.summary.remote_address, "203.0.113.10");
-    assert_eq!(detail.sessions.len(), 2);
+    assert_eq!(detail.sessions.len(), 3);
+    assert_eq!(detail.sources.len(), 1);
+    assert_eq!(detail.sources[0].source_id, 1);
+    assert_eq!(detail.sources[0].encodings.len(), 2);
+    assert_eq!(detail.sources[0].encodings[0].rid.as_deref(), Some("lo"));
+    assert_eq!(detail.sources[0].encodings[1].rid.as_deref(), Some("hi"));
     assert!(
         detail
             .recent_events
@@ -252,12 +266,45 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
     assert_eq!(session_detail.session.session_id, alice_session_id);
     assert_eq!(session_detail.session.publications.len(), 1);
     assert_eq!(session_detail.session.publications[0].source_id, 1);
-    assert_eq!(session_detail.session.publications[0].encoding_ids.len(), 1);
+    assert_eq!(session_detail.session.publications[0].encoding_ids.len(), 2);
     assert!(
         session_detail
             .recent_events
             .iter()
             .any(|event| event.event == "session.joined")
+    );
+
+    let bob_session_request = build_request(
+        Request::get(format!(
+            "/internal/diagnostics/sessions/{}",
+            bob_session_id.clone().into_integer_string()
+        )),
+        Body::empty(),
+    );
+    assert!(bob_session_request.is_some());
+    let Some(bob_session_request) = bob_session_request else {
+        return;
+    };
+    let bob_session_response = app(state.clone()).oneshot(bob_session_request).await;
+    assert!(bob_session_response.is_ok());
+    let Some(bob_session_response) = bob_session_response.ok() else {
+        return;
+    };
+    assert_eq!(bob_session_response.status(), StatusCode::OK);
+    let bob_session_detail: Option<DiagnosticsSessionDetail> =
+        parse_json(bob_session_response).await;
+    assert!(bob_session_detail.is_some());
+    let Some(bob_session_detail) = bob_session_detail else {
+        return;
+    };
+    assert_eq!(bob_session_detail.session.subscriptions.len(), 1);
+    let subscription = &bob_session_detail.session.subscriptions[0];
+    assert_eq!(subscription.source_id, 1);
+    assert_eq!(subscription.selection.selected_encoding_id, Some(1));
+    assert_eq!(subscription.selection.selected_rid.as_deref(), Some("lo"));
+    assert_eq!(
+        subscription.selection.selection_reason,
+        DiagnosticsSourceSelectionReason::ReceiverAdaptation
     );
 
     let summary_request = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
@@ -277,9 +324,9 @@ async fn diagnostics_routes_return_live_channel_and_session_details() {
         return;
     };
     assert_eq!(summary.channels_active, 1);
-    assert_eq!(summary.sessions_active, 2);
+    assert_eq!(summary.sessions_active, 3);
     assert_eq!(summary.publications_active, 1);
-    assert_eq!(summary.subscriptions_active, 0);
+    assert_eq!(summary.subscriptions_active, 2);
 }
 
 #[tokio::test]

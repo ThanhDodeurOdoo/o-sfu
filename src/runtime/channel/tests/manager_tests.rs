@@ -491,6 +491,70 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
 }
 
 #[tokio::test]
+async fn manager_metrics_track_receiver_source_selection_updates() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = ChannelManager::new(
+        super::super::ChannelManagerConfig::new(
+            1,
+            super::super::ChannelRuntimePolicy::new(
+                ChannelAdmissionPolicy::new(3),
+                RuntimeFeatureFlags::default(),
+                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::new(DiagnosticsStore::default()),
+        Arc::clone(&metrics),
+    );
+    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let channel = manager
+        .serve_channel(
+            "issuer-source-selection",
+            None,
+            &ChannelConfig::default(),
+            None,
+        )
+        .await;
+
+    for raw_session_id in [1_i64, 2, 3] {
+        let (sender, _receiver) = test_sender();
+        let session_id = SessionId::Integer(raw_session_id);
+        assert!(
+            channel
+                .test_api()
+                .lifecycle()
+                .join_session(
+                    session_id.clone(),
+                    None,
+                    SessionPermissions::default(),
+                    sender
+                )
+                .await
+                .is_ok()
+        );
+        make_session_ready(&channel, &session_id).await;
+    }
+
+    assert!(
+        channel
+            .test_api()
+            .media()
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_simulcast_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.source_selection_updates_encoding, 2);
+}
+
+#[tokio::test]
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = ChannelManager::for_test();
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();

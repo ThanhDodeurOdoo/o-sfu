@@ -29,6 +29,7 @@ pub(crate) use store::{DiagnosticsEventData, DiagnosticsStore};
 pub(crate) use types::{
     DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPublication,
     DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSessionLookup,
-    DiagnosticsSessionTransport, DiagnosticsSessionView, DiagnosticsSubscription,
+    DiagnosticsSessionTransport, DiagnosticsSessionView, DiagnosticsSource,
+    DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
     health_json_value, maybe_health_json_value,
 };

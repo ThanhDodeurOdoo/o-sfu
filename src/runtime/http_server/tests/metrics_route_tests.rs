@@ -45,6 +45,7 @@ fn assert_transport_metrics_payload(payload: &str) {
     assert!(payload.contains("osfu_transport_session_lifetime_seconds_bucket{le=\"+Inf\"} 0"));
     assert!(payload.contains("osfu_transport_session_lifetime_seconds_sum 0.0"));
     assert!(payload.contains("osfu_transport_session_lifetime_seconds_count 0"));
+    assert!(payload.contains("osfu_source_selection_updates_total{selector=\"encoding\"} 0"));
 }
 
 fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {

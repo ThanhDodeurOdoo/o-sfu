@@ -171,6 +171,10 @@ async fn channel_snapshot(
         .channel()
         .diagnostics_session_views(observability_port)
         .await;
+    let sources = entry
+        .channel()
+        .diagnostics_sources(observability_port)
+        .await;
     let transport = transport_counts(&sessions);
     let publication_count = sessions
         .iter()
@@ -184,6 +188,7 @@ async fn channel_snapshot(
         detail: DiagnosticsChannelDetail {
             recent_events: diagnostics.channel_recent_events(entry.channel().uuid()),
             sessions: sessions.clone(),
+            sources,
             summary: DiagnosticsChannelSummary {
                 create_date: entry.create_date().to_owned(),
                 media_worker_id: entry.channel().media_worker_id(),

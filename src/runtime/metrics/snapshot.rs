@@ -6,9 +6,9 @@ use super::{
         ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus,
         HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
-        TransportHealthTransition, TransportIceState, TransportSessionLifetimeBucket,
-        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
-        WsSessionLoopExitReason, WsStartupFailureKind,
+        SourceSelectionKind, TransportHealthTransition, TransportIceState,
+        TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+        WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
 
@@ -154,6 +154,10 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtc_route_control_route_gated_relay_drops: u64,
     pub rtc_route_control_layer_allowed: u64,
     pub rtc_route_control_layer_dropped: u64,
+    pub source_selection_updates_open: u64,
+    pub source_selection_updates_encoding: u64,
+    pub source_selection_updates_room_policy_featured: u64,
+    pub source_selection_updates_room_policy_thumbnail: u64,
 }
 
 struct HttpSnapshot {
@@ -280,6 +284,13 @@ struct RtcRouteControlSnapshot {
     layer_dropped: u64,
 }
 
+struct SourceSelectionSnapshot {
+    open: u64,
+    encoding: u64,
+    room_policy_featured: u64,
+    room_policy_thumbnail: u64,
+}
+
 impl RuntimeMetrics {
     #[allow(
         dead_code,
@@ -304,6 +315,7 @@ impl RuntimeMetrics {
         let transport_lifecycle = self.snapshot_transport_lifecycle();
         let rtc_datagram = self.snapshot_rtc_datagram();
         let rtc_route_control = self.snapshot_rtc_route_control();
+        let source_selection = self.snapshot_source_selection();
         RuntimeMetricsSnapshot {
             http_noop_requests: http.noop_requests,
             http_stats_requests: http.stats_requests,
@@ -428,6 +440,10 @@ impl RuntimeMetrics {
             rtc_route_control_route_gated_relay_drops: rtc_route_control.route_gated_relay_drops,
             rtc_route_control_layer_allowed: rtc_route_control.layer_allowed,
             rtc_route_control_layer_dropped: rtc_route_control.layer_dropped,
+            source_selection_updates_open: source_selection.open,
+            source_selection_updates_encoding: source_selection.encoding,
+            source_selection_updates_room_policy_featured: source_selection.room_policy_featured,
+            source_selection_updates_room_policy_thumbnail: source_selection.room_policy_thumbnail,
         }
     }
 
@@ -729,6 +745,23 @@ impl RuntimeMetrics {
             layer_dropped: self
                 .rtc_route_control
                 .load(RtcRouteControlOutcome::LayerDropped),
+        }
+    }
+
+    fn snapshot_source_selection(&self) -> SourceSelectionSnapshot {
+        SourceSelectionSnapshot {
+            open: self
+                .source_selection_updates
+                .load(SourceSelectionKind::Open),
+            encoding: self
+                .source_selection_updates
+                .load(SourceSelectionKind::Encoding),
+            room_policy_featured: self
+                .source_selection_updates
+                .load(SourceSelectionKind::RoomPolicyFeatured),
+            room_policy_thumbnail: self
+                .source_selection_updates
+                .load(SourceSelectionKind::RoomPolicyThumbnail),
         }
     }
 }

@@ -18,12 +18,12 @@ use super::{
         ControlPlaneDurationBucket, HttpChannelResponseStatus, HttpDisconnectResponseStatus,
         HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
-        TransportHealthTransition, TransportIceState, TransportSessionLifetimeBucket,
-        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
-        WsSessionLoopExitReason, WsStartupFailureKind,
+        SourceSelectionKind, TransportHealthTransition, TransportIceState,
+        TransportSessionLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+        WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
-use crate::runtime::rtc_adapter::TransportSessionHealth;
+use crate::runtime::{rtc_adapter::TransportSessionHealth, source_model::SourceSelector};
 
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeMetrics {
@@ -73,6 +73,7 @@ pub(crate) struct RuntimeMetrics {
     pub(super) rtc_datagram_fallback_scans: Counter,
     pub(super) rtc_datagram_scan_sessions: Counter,
     pub(super) rtc_route_control: CounterFamily<RtcRouteControlOutcome>,
+    pub(super) source_selection_updates: CounterFamily<SourceSelectionKind>,
 }
 
 impl RuntimeMetrics {
@@ -417,5 +418,9 @@ impl RuntimeMetrics {
 
     pub(crate) fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
         self.rtc_route_control.increment(outcome);
+    }
+
+    pub(crate) fn record_source_selection_update(&self, selector: SourceSelector) {
+        self.source_selection_updates.increment(selector.into());
     }
 }

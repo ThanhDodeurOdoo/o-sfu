@@ -7,7 +7,10 @@ use super::{
     RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
     TransportIceState, WsSessionLoopExitReason,
 };
-use crate::runtime::rtc_adapter::TransportSessionHealth;
+use crate::runtime::{
+    rtc_adapter::TransportSessionHealth,
+    source_model::{SourceEncodingId, SourceSelector},
+};
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.active_channels, 1);
@@ -93,6 +96,13 @@ fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapsh
     assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 1);
     assert_eq!(snapshot.rtc_route_control_layer_allowed, 1);
     assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
+}
+
+fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.source_selection_updates_open, 0);
+    assert_eq!(snapshot.source_selection_updates_encoding, 1);
+    assert_eq!(snapshot.source_selection_updates_room_policy_featured, 0);
+    assert_eq!(snapshot.source_selection_updates_room_policy_thumbnail, 0);
 }
 
 fn assert_control_plane_latency_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -207,6 +217,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+    metrics.record_source_selection_update(SourceSelector::Encoding(SourceEncodingId::from_raw(1)));
 
     let snapshot = metrics.snapshot();
 
@@ -216,6 +227,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     assert_rtp_metrics(&snapshot);
     assert_forwarding_volume_metrics(&snapshot);
     assert_rtc_datagram_and_route_control_metrics(&snapshot);
+    assert_source_selection_metrics(&snapshot);
 }
 
 #[test]

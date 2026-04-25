@@ -31,7 +31,8 @@ pub(super) use crate::{
             DiagnosticsStore,
             types::{
                 DiagnosticsChannelDetail, DiagnosticsChannelSummary, DiagnosticsSessionDetail,
-                DiagnosticsSessionLookupConflict, DiagnosticsSummaryResponse,
+                DiagnosticsSessionLookupConflict, DiagnosticsSourceSelectionReason,
+                DiagnosticsSummaryResponse,
             },
         },
         http_server::contract::{

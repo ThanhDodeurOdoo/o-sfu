@@ -54,7 +54,7 @@ use crate::{
         ChannelInstanceId, ConnectionId,
         diagnostics::{
             DiagnosticsQualitySummary, DiagnosticsSessionTransport, DiagnosticsSessionView,
-            DiagnosticsStore,
+            DiagnosticsSource, DiagnosticsStore,
         },
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
@@ -781,6 +781,30 @@ impl Channel {
             })
             .collect();
         state.diagnostics_session_views(self.definition.media_worker_id(), &transport_by_session)
+    }
+
+    /// Builds the live source inventory for operator diagnostics.
+    ///
+    /// Source descriptors are room-domain objects, while bitrate samples come
+    /// from the transport observability port. This method keeps the merge at
+    /// the channel boundary so diagnostics routes do not inspect channel state
+    /// or transport internals directly.
+    pub(crate) async fn diagnostics_sources(
+        &self,
+        observability_port: &impl ObservabilityPort,
+    ) -> Vec<DiagnosticsSource> {
+        let state = self.state.read().await;
+        let session_keys = state
+            .transport_session_entries()
+            .iter()
+            .map(|(session_id, connection_id)| {
+                self.transport_session_key(session_id, *connection_id)
+            })
+            .collect::<Vec<_>>();
+        let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
+        let incoming_bitrate_by_source =
+            state.diagnostics_incoming_bitrate_by_source(&transport_snapshot.per_media);
+        state.diagnostics_sources(&incoming_bitrate_by_source)
     }
 
     /// Resolve a diagnostics request path agaisnt either nummeric or string session ids.

@@ -3,6 +3,7 @@ use std::time::Duration;
 use o_sfu_protocol::signaling::WebSocketCloseCode;
 
 use super::counter::{HistogramBucketLabel, MetricLabel};
+use crate::runtime::source_model::{SourceRoomPolicySelector, SourceSelector};
 
 macro_rules! impl_metric_label {
     ($label:ty { $($variant:ident => $index:expr),+ $(,)? }) => {
@@ -141,6 +142,14 @@ pub(crate) enum RtcRouteControlOutcome {
     RouteGatedRelayDrop,
     LayerAllowed,
     LayerDropped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceSelectionKind {
+    Open,
+    Encoding,
+    RoomPolicyFeatured,
+    RoomPolicyThumbnail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +334,13 @@ impl_metric_label!(RtcRouteControlOutcome {
     LayerDropped => 4,
 });
 
+impl_metric_label!(SourceSelectionKind {
+    Open => 0,
+    Encoding => 1,
+    RoomPolicyFeatured => 2,
+    RoomPolicyThumbnail => 3,
+});
+
 impl_metric_label!(TransportIceState {
     New => 0,
     Checking => 1,
@@ -355,3 +371,18 @@ impl_metric_label!(RecordingActionOutcome {
     StopAccepted => 2,
     StopRejected => 3,
 });
+
+impl From<SourceSelector> for SourceSelectionKind {
+    fn from(value: SourceSelector) -> Self {
+        match value {
+            SourceSelector::Open => Self::Open,
+            SourceSelector::Encoding(_) => Self::Encoding,
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
+                Self::RoomPolicyFeatured
+            }
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Thumbnail) => {
+                Self::RoomPolicyThumbnail
+            }
+        }
+    }
+}

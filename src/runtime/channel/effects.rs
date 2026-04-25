@@ -557,6 +557,7 @@ impl SourcePacketPolicyEffectPlan {
         {
             return;
         }
+        Self::record_source_selection_metrics(channel, &applied_consumer_packet_updates);
         let info_fanout = {
             let mut state = channel.state.write().await;
             state.commit_source_packet_selection_updates(&applied_source_packet_updates);
@@ -565,6 +566,19 @@ impl SourcePacketPolicyEffectPlan {
         };
         if let Some(info_fanout) = info_fanout {
             info_fanout.emit();
+        }
+    }
+
+    fn record_source_selection_metrics(
+        channel: &Channel,
+        updates: &[ConsumerPacketSelectionUpdate],
+    ) {
+        for update in updates {
+            if update.packet_gate().is_some() {
+                channel
+                    .metrics
+                    .record_source_selection_update(update.selector());
+            }
         }
     }
 

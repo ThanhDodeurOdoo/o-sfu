@@ -2,6 +2,7 @@ mod http;
 mod recording;
 mod rtc;
 mod shared;
+mod source;
 mod transport;
 mod websocket;
 
@@ -27,6 +28,7 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
     transport::append_transport_lifecycle_metrics(&mut output, snapshot);
     rtc::append_rtc_datagram_metrics(&mut output, snapshot);
     rtc::append_rtc_route_control_metrics(&mut output, snapshot);
+    source::append_source_selection_metrics(&mut output, snapshot);
     output
 }
 
@@ -43,6 +45,7 @@ mod tests {
             RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
         },
         rtc_adapter::TransportSessionHealth,
+        source_model::{SourceEncodingId, SourceSelector},
     };
 
     fn assert_http_and_websocket_metrics(rendered: &str) {
@@ -110,6 +113,7 @@ mod tests {
         );
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"absorbed\"} 1"));
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"forwarded\"} 1"));
+        assert!(rendered.contains("osfu_source_selection_updates_total{selector=\"encoding\"} 1"));
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
         assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
         assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
@@ -164,6 +168,9 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+        metrics.record_source_selection_update(SourceSelector::Encoding(
+            SourceEncodingId::from_raw(1),
+        ));
         metrics
     }
 
