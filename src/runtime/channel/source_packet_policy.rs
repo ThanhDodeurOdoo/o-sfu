@@ -1,7 +1,32 @@
+//! Async executer for room-owned source packet policy.
+//!
+//! This file connects `Channel` to the pure source-selection policy in
+//! `state::source_packet_policy`. The state module decides which source-domain
+//! selector each receiver should use, while `SourcePacketPolicyEffectPlan`
+//! applies the resulting tranpsort gates after the channel lock is released.
+//!
+//! The observations consumed here are best-effort transport snapshots. They
+//! guide quality policy, but they do not become authoritative room state until
+//! the effect plan has applied the transport work and committed only the updates
+//! that still match the live channel routes.
+//!
+//! # Concurrency model
+//!
+//! This module muts not hold a channel lock across observability or media-port
+//! awaits. It takes short state snapshots, builds a cold-path effect plan and
+//! lets the effect layer revalidate connection and media handles before any
+//! selector state is stored.
+
 use super::{Channel, effects::SourcePacketPolicyEffectPlan};
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
 
 impl Channel {
+    /// Refreshes source packet policy from live transport observability.
+    ///
+    /// Normal channel transitions call this after publish, subscribe or session
+    /// membership changes may have altered route pressure. If no observability
+    /// port exists, the runtime has no active-speaker or receiver-bandwidth
+    /// signal to consume, so the refresh is intentionally a no-op.
     pub(super) async fn sync_source_packet_selection_policy(
         &self,
         observability_port: Option<&impl ObservabilityPort>,
@@ -19,6 +44,19 @@ impl Channel {
         .await;
     }
 
+    /// Refreshes source packet policy from a caller-provided active-speaker snapshot.
+    ///
+    /// This variant exists so manager-level fanout and tests can reuse the same
+    /// policy path after they already have an active-speaker obesrvation. The
+    /// method still asks the observability port for receiver bandwidth using
+    /// the current transport sessions, because bandwidth estimates must be
+    /// scoped to the sessions that are still attached to this channel
+    ///
+    /// The state is read twice on purpose. The first read gathers transport
+    /// session keys for the bandwidth query, then the lock is released before
+    /// consulting observability. The second read builds the effect planfrom
+    /// the latest room state. Any change between the two snapshots is handled
+    /// by the effect plan's stale-update checks.
     pub(super) async fn sync_source_packet_selection_policy_from_observations(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],

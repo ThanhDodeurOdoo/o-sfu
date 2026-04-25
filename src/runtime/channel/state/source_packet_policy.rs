@@ -1,10 +1,16 @@
-//! Pure room policy for source-layer selection.
+//! Room-owned source-layer policy and post-effect commit checks.
 //!
-//! This module maps chanel state plus transport observations into
-//! `SourceSelector` decisions. It does not call the tranpsort adapter and it
-//! does not mutate packet-loop state. The async effect layer projects accepted
-//! decisions into transport gates, then commits only the selectors that still
-//! match the current room state.
+//! # Boundary role
+//!
+//! This module is the channel side of simulcast and layered source selection.
+//! It maps authoritative room state plus best-effort transport observations
+//! into [`SourceSelector`] values, then describes the transport calls needed to
+//! apply those values as packet gates.
+//!
+//! No function in this file awaits transport work or mutates packet-loop state.
+//! The async effect layer consumes the planned updates, calls the transport
+//! adapter without holding the channel lock, then calls the commit methods here
+//! with only the updates that the transport accepted.
 //!
 //! Producer-wide gates are kept only as a compatibility cleanup surface.
 //! Receiver-driven simulcast policy lives on consumer selections so different
@@ -33,14 +39,46 @@ use crate::runtime::{
     },
 };
 
+/// Minimum room size where camera simulcast adaptation starts constraining receivers.
+///
+/// With the current value, one-on-one calls and two-session rooms keep every
+/// camera on the highest encoding. The third joined session turns on multiparty
+/// policy, so non-featured camera routes may be constrained to a lower RID when
+/// the receiver budget does not fit the high layer.
 const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;
+
+/// Maximum number of active-speaker cameras that keep featured quality treatment.
+///
+/// Active speaker observations arrive as an ordered transport snapshot. If the
+/// snapshot resolves to seven camera owners, only the first five keep featured
+/// camera treatment. The remaining speakers are budgeted like thumbnails until
+/// a later refresh moves them into the first five.
 const ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT: usize = 5;
+
+/// Number of policy refreshes that must agree before a lower encoding is committed.
+///
+/// Downswitch pressure is counted only when receiver bandwidth is known. With
+/// the current value, the first refresh that targets a lower encoding stores
+/// pressure but keeps the current gate. If the next refresh still targets the
+/// lower encoding, the selector is committed and the pressure counter resets.
 const DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
+
+/// Number of policy refreshes that must agree before a higher encoding is committed.
+///
+/// Upswitches are intentionally slower than downswitches. With the current
+/// value, a low route needs three refreshes that still target a higher encoding
+/// before the gate changes and a keyframe is requested. One optimistic estimate
+/// is not enough to move the receiver back to a larger layer.
 const UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
+
+/// Extra conservatism applied after thumbnail budget is split across visible videos.
+///
+/// Thumbnail budget is `receiver_bandwidth / (active_video_route_count * this
+/// value)`. With the current value, a receiver estimated at `1_800_000` bps and
+/// watching three active videos gives each thumbnail a `300_000` bps budget,
+/// enough for the `150_000` bps low layer but not the `900_000` bps high layer.
 const THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
 
-// Pressure and recovery are counted in policy refreshes, not wall time. This
-// keeps the policy deterministic under coalesced transport wakeups.
 /// Producer-level selector update used to clear stale source-wide gates.
 ///
 /// Adaptive simulcast should not use this path for receiver quality. Keep it
@@ -48,32 +86,54 @@ const THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
 /// selections own per-receiver policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct SourcePacketSelectionUpdate {
+    /// Producer record that must still be present when the post-transport commit runs.
     producer_id: ProducerRuntimeId,
+    /// Logical publisher observed while the cleanup decision was planned.
     owner_session_id: SessionId,
+    /// Publisher connection observed while planning, used to reject stale websocket work.
     owner_connection_id: ConnectionId,
+    /// Transport media handle that should receive the source-wide gate.
     transport_media_id: TransportMediaId,
+    /// Source-domain selector that should be stored if the transport accepted the gate.
     selector: SourceSelector,
+    /// Packet-facing projection already resolved from the source descriptor.
     packet_gate: SourcePacketGate,
 }
 
 /// One receiver-side source selection that is ready for the effect boundary.
 ///
 /// The update carries the transport handles and connection ids observed while
-/// planning. Commit revalidate them after async transport work so stale
+/// planning. Commit revalidates them after async transport work so stale
 /// replacement or cleanup events cannot write selector state onto a newer route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct ConsumerPacketSelectionUpdate {
+    /// Receiver whose route should be constrained or whose hysteresis counters should move.
     consumer_session_id: SessionId,
+    /// Receiver connection observed before the effect boundary awaited transport work.
     consumer_connection_id: ConnectionId,
+    /// Publisher session used to address the source-side transport route.
     source_session_id: SessionId,
+    /// Publisher connection observed before the effect boundary awaited transport work.
     source_connection_id: ConnectionId,
+    /// Source-side media handle that identifies the published packets at transport level.
     source_transport_media_id: TransportMediaId,
+    /// Consumer-side media handle that identifies this receiver's subscribed route.
     consumer_transport_media_id: TransportMediaId,
+    /// Room-domain source identity used to find the same consumer selection during commit.
     source_id: PublishedSourceId,
+    /// Authoritative selector to store if the route still matches this staged update.
     selector: SourceSelector,
+    /// Pending downswitch pressure counted in policy refreshes, not wall time.
     pressure_observations: u8,
+    /// Pending upswitch stability counted in policy refreshes, not wall time.
     upgrade_observations: u8,
+    /// Transport gate to apply when the packet-facing selector changed.
+    ///
+    /// `None` means the update only advances hysteresis counters. The effect
+    /// executor should then skip packet-gate I/O but still commit the counters
+    /// if the route is still current.
     packet_gate: Option<SourcePacketGate>,
+    /// Whether a successful upswitch should ask the receiver for a fresh keyframe.
     request_keyframe: bool,
 }
 
@@ -153,11 +213,13 @@ impl SourcePacketSelectionUpdate {
 
 /// Server-owned featured state derived from active-speaker observations.
 ///
-/// This is kept next to packet policy becuase the same observation decides both
+/// This is kept next to packet policy because the same observation decides both
 /// visible layout state and the quality floor used for receiver adaptation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::channel) struct FeaturedSessionUpdate {
+    /// Session whose public layout projection should change.
     session_id: SessionId,
+    /// New featured value, where `None` means no explicit server-derived state.
     featured: Option<bool>,
 }
 
@@ -172,11 +234,15 @@ impl FeaturedSessionUpdate {
 }
 
 impl ChannelState {
-    /// Plans producer-wide packet gates for stale source-level state only.
+    /// Plans producer-wide packet gates for stale source-level cleanup only.
     ///
-    /// Receiver quality is no longer expressed by constraining the producer.
-    /// Per-receiver choices are emitted by `consumer_packet_selection_updates`
-    /// so two consumers can select diferent encodings from one source.
+    /// This method intentionally resolves current producer policy to `Open`.
+    /// Receiver quality is owned by `consumer_packet_selection_updates`, because
+    /// two consumers may need different encodings from the same source.
+    ///
+    /// The returned updates are staged work. They are not authoritative until
+    /// the effect executor applies the transport gate and the commit method
+    /// rechecks the producer identity.
     pub(in crate::runtime::channel) fn source_packet_selection_updates(
         &self,
         _active_speaker_sources: &[ActiveSpeakerSource],
@@ -205,9 +271,14 @@ impl ChannelState {
 
     /// Plans deterministic per-consumer source selectors for live video routes.
     ///
-    /// `packet_gate` is present only when the selected encoding changes at the
-    /// transport boundary. Counter-only updates are still emitted so sustained
-    /// pressure and stable recovery survive across policy refreshes.
+    /// The snapshot inputs are best-effort transport observations. They do not
+    /// change room authority on their own. This method combines them with
+    /// committed source descriptors, subscription state and active-speaker
+    /// layout state to build staged updates for the effect executor.
+    ///
+    /// A `packet_gate` is present only when the selected encoding changes at
+    /// the transport boundary. Counter-only updates are still emitted so
+    /// sustained pressure and stable recovery survive across policy refreshes.
     pub(in crate::runtime::channel) fn consumer_packet_selection_updates(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
@@ -280,6 +351,12 @@ impl ChannelState {
             .collect()
     }
 
+    /// Counts active visible routes per receiver for thumbnail budget sharing.
+    ///
+    /// The count is built from current channel indexes, not from transport
+    /// snapshots. Removed routes, inactive producers and stale consumer
+    /// connections are ignored so the budget reflects the room state that will
+    /// also be used during commit.
     fn active_video_route_counts_by_consumer(&self) -> BTreeMap<SessionId, usize> {
         let mut counts = BTreeMap::new();
         for (consumer_key, consumer_state) in &self.consumer_index {
@@ -320,6 +397,13 @@ impl ChannelState {
         counts
     }
 
+    /// Maps active audio speakers to camera owners that should keep featured quality.
+    ///
+    /// The transport reports active sources by media handle. Channel state owns
+    /// the source graph, so this helper resolves audio activity back to owner
+    /// sessions that also publish a camera. Only the first few active speakers
+    /// are treated as featured to keep large rooms from opening too many high
+    /// quality camera routes at once.
     fn cleared_camera_session_ids_for_active_speakers(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
@@ -339,6 +423,13 @@ impl ChannelState {
             .collect()
     }
 
+    /// Plans public featured-state changes from the same active-speaker snapshot.
+    ///
+    /// The returned updates are committed together with source-policy effects
+    /// so the user-visible `isFeatured` projection and the quality floor come
+    /// from the same observation. If there is no current active speaker, the
+    /// method only emits clears when some session still has server-derived
+    /// featured state.
     pub(in crate::runtime::channel) fn featured_session_updates(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
@@ -393,6 +484,11 @@ impl ChannelState {
             .map(|entry| entry.owner_session_id().clone())
     }
 
+    /// Stores producer-level selectors that still describe the live producer.
+    ///
+    /// The effect executor may have awaited transport work before this method
+    /// runs. Producer identity, connection id and transport media id are checked
+    /// again so a replaced publisher cannot receive a stale selector.
     pub(in crate::runtime::channel) fn commit_source_packet_selection_updates(
         &mut self,
         updates: &[SourcePacketSelectionUpdate],
@@ -413,9 +509,11 @@ impl ChannelState {
 
     /// Commits selector updates that still match the routed consumer media.
     ///
-    /// The effect executor may await tranpsort work before calling this method.
+    /// The effect executor may await transport work before calling this method.
     /// Every connection and transport handle is checked again so stale effects
-    /// from a replaced socket or removed route become no-ops
+    /// from a replaced socket or removed route become no-ops. Accepted updates
+    /// store both the selected source-domain intent and the hysteresis counters
+    /// that make later refreshes deterministic.
     pub(in crate::runtime::channel) fn commit_consumer_packet_selection_updates(
         &mut self,
         updates: &[ConsumerPacketSelectionUpdate],
@@ -445,6 +543,11 @@ impl ChannelState {
         }
     }
 
+    /// Commits featured-state updates and builds the compatibility fanout.
+    ///
+    /// The returned fanout is emitted after the caller releases the channel
+    /// write lock. That keeps layout projection consistent with room state
+    /// while preserving the no-I/O-under-lock rule used by the effect layer.
     pub(in crate::runtime::channel) fn commit_featured_session_updates(
         &mut self,
         updates: &[FeaturedSessionUpdate],
@@ -473,12 +576,22 @@ impl ChannelState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ConsumerAdaptationPlan {
+    /// Selector that should become authoritative after any required transport work.
     selector: SourceSelector,
+    /// Downswitch pressure to persist when the lower target is not committed yet.
     pressure_observations: u8,
+    /// Upswitch stability to persist when the higher target is not committed yet.
     upgrade_observations: u8,
+    /// Whether the effect executor should request a decodable frame after applying the gate.
     request_keyframe: bool,
 }
 
+/// Normalizes transport-session bandwidth observations to room session ids.
+///
+/// The selector policy is keyed by receiver session, while the transport
+/// snapshot is keyed by transport session. This conversion keeps the transport
+/// identity at the boundary and lets the rest of the planner use room-domain
+/// keys only.
 fn receiver_bandwidth_by_session(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<SessionId, u64> {
     snapshot
         .per_session
@@ -487,6 +600,10 @@ fn receiver_bandwidth_by_session(snapshot: &ReceiverBandwidthSnapshot) -> BTreeM
         .collect()
 }
 
+/// Placeholder for source-wide policy while receiver-driven selection is authoritative.
+///
+/// Returning `Open` is intentional. It lets this path clear stale producer gates
+/// left by older policy without reintroducing producer-level quality decisions.
 fn desired_source_packet_selector(
     _stream_type: StreamType,
     _source: &PublishedSourceDescriptor,
@@ -494,11 +611,18 @@ fn desired_source_packet_selector(
     SourceSelector::Open
 }
 
-/// Chooses the next receiver selector using deterministic hysteresis.
+/// Chooses the next receiver selector using deterministic refresh-based hysteresis.
 ///
-/// Downswitches wait for repeated pressure so one low estimate does not drop a
-/// layer immediately. Upswitches wait longer and request a keyframe when the
-/// chosen layer changes, because the receiver needs a fresh decodable frame
+/// This is the policy core for camera simulcast. It returns `None` when a
+/// source is not eligible for receiver-driven adaptation, which keeps audio,
+/// screen share and single-encoding sources out of the RID gate path.
+///
+/// Pressure and recovery are counted in policy refreshes rather than wall time.
+/// That makes behavior deterministic even when transport observation wakeups
+/// are coalesced. Downswitches wait for repeated pressure so one low estimate
+/// does not drop a layer immediately. Upswitches wait longer and request a
+/// keyframe when the chosen layer changes, because the receiver needs a fresh
+/// decodable frame.
 fn consumer_adaptation_plan(
     session_count: usize,
     source: &PublishedSourceDescriptor,
@@ -591,7 +715,11 @@ fn consumer_adaptation_plan(
 ///
 /// In small rooms every camera keeps the highest encoding. In larger rooms a
 /// featured camera gets the receiver budget, while thumbnails share that budget
-/// across the active video routes for that receiver
+/// across the active video routes for that receiver.
+///
+/// Missing bandwidth is treated as startup state. Featured cameras keep the
+/// highest declared encoding and thumbnails start at the lowest encoding until
+/// the transport has enough receiver-side evidence to refine the choice.
 fn desired_encoding_index(
     session_count: usize,
     featured: bool,
@@ -650,6 +778,12 @@ fn highest_affordable_encoding_index(
         .map_or(0, |(index, _encoding)| index)
 }
 
+/// Interprets an existing selector as an index in the sorted encoding ladder.
+///
+/// An unconstrained or unrecognized selector is treated as the highest layer.
+/// That matches what `Open` means at the transport boundary and avoids
+/// inventing pressure for a route that is already receiving the best available
+/// encoding.
 fn selector_index(selector: SourceSelector, encodings: &[&SourceEncodingDescriptor]) -> usize {
     selector
         .selected_encoding()
@@ -663,8 +797,14 @@ fn selector_index(selector: SourceSelector, encodings: &[&SourceEncodingDescript
 
 /// Projects room-domain selector intent into the transport gate vocabulary.
 ///
-/// `RoomPolicy` selectors must be resolved before this bridge. The transport
-/// worker only understands an open route or one concrete RID.
+/// `RoomPolicy` selectors must be resolved before this bridge. `Encoding`
+/// selectors require a negotiated RID because the current packet gate for
+/// simulcast is RID-based. `OperatingPoint` selectors validate their temporal
+/// ceiling against the source descriptor before crossing into transport state.
+///
+/// `None` means the selector cannot be enforced safely at the transport
+/// boundary. Callers should skip the update rather than store a selector that
+/// the packet loop cannot apply.
 fn source_packet_gate_for_selector(
     source: &PublishedSourceDescriptor,
     selector: SourceSelector,
@@ -715,6 +855,16 @@ fn lowest_declared_encoding(source: &PublishedSourceDescriptor) -> Option<Source
         .map(|(_index, encoding)| encoding.encoding_id())
 }
 
+/// Returns the RID-addressable encoding ladder used by camera adaptation.
+///
+/// The current transport gate can only constrain camera simulcast through RID
+/// or through an operating point derived from a concrete encoding. If any
+/// encoding lacks a RID, this helper returns an empty ladder so the planner
+/// leaves that source open instead of applying a partial policy.
+///
+/// When bitrate ceilings are available they define the ladder order. If no
+/// ceiling is available, declaration order is preserved so negotiation remains
+/// the source of truth.
 fn selectable_encodings(source: &PublishedSourceDescriptor) -> Vec<&SourceEncodingDescriptor> {
     let mut encodings = source.encodings().collect::<Vec<_>>();
     if encodings.iter().any(|encoding| encoding.rid().is_none()) {
