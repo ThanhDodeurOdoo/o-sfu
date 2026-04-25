@@ -72,14 +72,36 @@ impl RemoteTrackProjection {
 
     pub(super) fn apply_remote_track_bootstrap(&mut self, payload: &RemoteTrackBootstrap) {
         let mid = payload.mid().to_owned();
+        self.apply_track_binding(
+            mid,
+            payload.session_id().clone(),
+            payload.stream_type(),
+            payload.active(),
+            payload.source_descriptor(),
+        );
+    }
+
+    fn apply_track_binding(
+        &mut self,
+        mid: String,
+        session_id: SessionId,
+        stream_type: StreamType,
+        active: bool,
+        source: &PublishedSourceDescriptor,
+    ) {
         self.bindings_by_mid.insert(
             mid.clone(),
             TrackBinding {
                 mid,
-                session_id: payload.session_id().clone(),
-                stream_type: payload.stream_type(),
-                active: payload.active(),
-                source: Some(source_descriptor_from_bootstrap(payload)),
+                session_id: session_id.clone(),
+                stream_type,
+                active,
+                source: Some(source_descriptor_from_source(
+                    source,
+                    session_id,
+                    stream_type,
+                    active,
+                )),
             },
         );
     }
@@ -183,14 +205,18 @@ impl RemoteTrackProjection {
     }
 }
 
-fn source_descriptor_from_bootstrap(payload: &RemoteTrackBootstrap) -> SourceDescriptor {
-    let source = payload.source_descriptor();
+fn source_descriptor_from_source(
+    source: &PublishedSourceDescriptor,
+    session_id: SessionId,
+    stream_type: StreamType,
+    active: bool,
+) -> SourceDescriptor {
     SourceDescriptor {
         source_id: source.source_id().to_string(),
-        session_id: payload.session_id().clone(),
-        stream_type: payload.stream_type(),
-        active: payload.active(),
-        mid: Some(payload.mid().to_owned()),
+        session_id,
+        stream_type,
+        active,
+        mid: source.mid().map(|mid| mid.as_str().to_owned()),
         encodings: source_encodings(source),
     }
 }
@@ -207,4 +233,74 @@ fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDes
                 .map(SourceTemporalLayerId::as_u8),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "test assertions use expect for direct fixture failures"
+    )]
+
+    use o_sfu_router::{MediaKind, Mid, Rid};
+
+    use super::*;
+    use crate::runtime::{
+        ConnectionId,
+        source_model::{
+            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+            SourceTransportBinding,
+        },
+        transport_adapter::TransportMediaId,
+    };
+
+    #[test]
+    fn source_descriptor_mid_uses_published_source_mid_not_consumer_binding_mid() {
+        let source = published_source("published-cam-0");
+        let mut projection = RemoteTrackProjection::default();
+
+        projection.apply_track_binding(
+            "subscriber-down-0".to_owned(),
+            SessionId::Integer(7),
+            StreamType::Camera,
+            true,
+            &source,
+        );
+
+        let snapshot = projection.snapshot();
+        let binding = snapshot
+            .first()
+            .expect("projection should contain the inserted track binding");
+        assert_eq!(binding.mid, "subscriber-down-0");
+        let source = binding
+            .source
+            .as_ref()
+            .expect("track binding should carry a source descriptor");
+        assert_eq!(source.mid.as_deref(), Some("published-cam-0"));
+    }
+
+    fn published_source(mid: &str) -> PublishedSourceDescriptor {
+        let source_id = PublishedSourceId::from_raw(1);
+        let encoding = SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id: SourceEncodingId::from_raw(2),
+            source_id,
+            rid: Some(Rid::new("hi")),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: Some(900_000),
+            max_temporal_layer_id: None,
+            negotiated_format: None,
+            transport_binding: Some(SourceTransportBinding::new(TransportMediaId::new(3))),
+        });
+        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id,
+            owner: PublishedSourceOwner::new(SessionId::Integer(7), ConnectionId::from_raw(11)),
+            stream_type: StreamType::Camera,
+            media_kind: MediaKind::Video,
+            mid: Some(Mid::new(mid)),
+            encodings: vec![encoding],
+        })
+        .expect("test source descriptor should satisfy source graph invariants")
+    }
 }

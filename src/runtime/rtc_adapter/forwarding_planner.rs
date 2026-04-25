@@ -1,13 +1,14 @@
 use super::{
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
-    relay_registry::{RelayRegistry, RelayTargetTransport},
-    route_control::PacketRouteDecision,
+    relay_registry::{ActiveRelayTarget, RelayRegistry, RelayTargetId, RelayTargetTransport},
+    route_control::{PacketLayerMetadata, PacketRouteDecision},
     state::RtcBootstrapState,
 };
 use crate::runtime::{
     metrics::{RtcRouteControlOutcome, RuntimeMetrics},
     packet_sink_registry::ChannelPacketSinkRegistry,
+    transport_adapter::TransportMediaId as RouteTransportMediaId,
 };
 
 // TODO: needs documentation:
@@ -41,10 +42,11 @@ pub(super) fn populate_forward_routes(
         };
         let route_entry = state.media_route_index.get(&source_transport_media_id);
         if has_routed_forward(relay_targets.as_deref(), route_entry) {
-            match state.route_control.decide_packet_route(
-                source_transport_media_id,
-                packet.route_control_layer_metadata(),
-            ) {
+            let metadata = packet.route_control_layer_metadata();
+            match state
+                .route_control
+                .decide_packet_route(source_transport_media_id, metadata)
+            {
                 PacketRouteDecision::Forward => {
                     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
                 }
@@ -53,47 +55,67 @@ pub(super) fn populate_forward_routes(
                     continue;
                 }
             }
-        }
-        if let Some(relay_targets) = relay_targets {
-            for relay_target in relay_targets.iter().cloned() {
-                match relay_target {
-                    RelayTargetTransport::IntraNodeMailbox(mailbox) => {
-                        forwards.push(PacketForward::from_intra_node_relay_sink(
-                            packet_idx,
-                            source_transport_media_id,
-                            mailbox,
-                        ));
+            if let Some(relay_targets) = relay_targets {
+                for relay_target in relay_targets.iter() {
+                    if !relay_target_gate_permits(
+                        state,
+                        source_transport_media_id,
+                        relay_target.target_id(),
+                        metadata,
+                    ) {
+                        continue;
                     }
-                    RelayTargetTransport::InterNodeSender(sender) => {
-                        forwards.push(PacketForward::from_inter_node_relay_sink(
-                            packet_idx,
-                            source_transport_media_id,
-                            sender,
-                        ));
+                    match relay_target.target().clone() {
+                        RelayTargetTransport::IntraNodeMailbox(mailbox) => {
+                            forwards.push(PacketForward::from_intra_node_relay_sink(
+                                packet_idx,
+                                source_transport_media_id,
+                                mailbox,
+                            ));
+                        }
+                        RelayTargetTransport::InterNodeSender(sender) => {
+                            forwards.push(PacketForward::from_inter_node_relay_sink(
+                                packet_idx,
+                                source_transport_media_id,
+                                sender,
+                            ));
+                        }
                     }
                 }
             }
-        }
-        let Some(route_entry) = route_entry else {
-            continue;
-        };
-        if !route_entry.source_active {
-            continue;
-        }
-        for destination in &route_entry.destinations {
-            if !destination.active {
+            let Some(route_entry) = route_entry else {
+                continue;
+            };
+            if !route_entry.source_active {
                 continue;
             }
-            forwards.push(PacketForward::from_local_route_destination(
-                packet_idx,
-                destination,
-            ));
+            for destination in &route_entry.destinations {
+                if !destination.active || !destination.packet_gate.permits(metadata) {
+                    continue;
+                }
+                forwards.push(PacketForward::from_local_route_destination(
+                    packet_idx,
+                    destination,
+                ));
+            }
         }
     }
 }
 
+fn relay_target_gate_permits(
+    state: &RtcBootstrapState,
+    source_transport_media_id: RouteTransportMediaId,
+    target_id: RelayTargetId,
+    metadata: PacketLayerMetadata,
+) -> bool {
+    state
+        .route_control
+        .relay_packet_gate(source_transport_media_id, target_id)
+        .is_none_or(|packet_gate| packet_gate.permits(metadata))
+}
+
 fn has_routed_forward(
-    relay_targets: Option<&[RelayTargetTransport]>,
+    relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
     route_entry: Option<&super::demux::MediaRouteEntry>,
 ) -> bool {
     relay_targets.is_some_and(|targets| !targets.is_empty())
@@ -587,6 +609,285 @@ mod tests {
             forwards.first().map(PacketForward::destination),
             Some(ForwardingDestination::InterNodeRelay(_))
         ));
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the two-consumer route matrix is clearer as one complete planner regression"
+    )]
+    #[test]
+    fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admits() {
+        let producer_session = test_transport_session_key(81, 0, 82, SessionId::Integer(83));
+        let lo_consumer_session = test_transport_session_key(81, 0, 82, SessionId::Integer(84));
+        let hi_consumer_session = test_transport_session_key(81, 0, 82, SessionId::Integer(85));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("cam-up"),
+            });
+        let lo_consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: lo_consumer_session.clone(),
+                mid: Mid::from("cam-down-lo"),
+                source_transport_media_id,
+            });
+        let hi_consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: hi_consumer_session.clone(),
+                mid: Mid::from("cam-down-hi"),
+                source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![
+                    MediaRouteDestination {
+                        dest_session: lo_consumer_session.clone(),
+                        dest_transport_media_id: lo_consumer_transport_media_id,
+                        dest_mid: Mid::from("cam-down-lo"),
+                        active: true,
+                        packet_gate: PacketLayerGate::Rid("lo".into()),
+                    },
+                    MediaRouteDestination {
+                        dest_session: hi_consumer_session.clone(),
+                        dest_transport_media_id: hi_consumer_transport_media_id,
+                        dest_mid: Mid::from("cam-down-hi"),
+                        active: true,
+                        packet_gate: PacketLayerGate::Rid("hi".into()),
+                    },
+                ],
+            },
+        );
+        state
+            .route_control
+            .set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
+        let mut pending_packets = vec![
+            sample_forwarded_packet_with_rid(
+                producer_session.clone(),
+                "cam-up",
+                Some("hi"),
+                b"hi-packet",
+            ),
+            sample_forwarded_packet_with_rid(producer_session, "cam-up", Some("lo"), b"lo-packet"),
+        ];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &mut pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 2);
+        assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(destination) if destination.session_key() == Some(&hi_consumer_session)
+        ));
+        assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
+        assert!(matches!(
+            forwards.get(1).map(PacketForward::destination),
+            Some(destination) if destination.session_key() == Some(&lo_consumer_session)
+        ));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 2);
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 0);
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the temporal-ceiling route matrix is clearer as one complete planner regression"
+    )]
+    #[test]
+    fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggregate_admits() {
+        let producer_session = test_transport_session_key(86, 0, 87, SessionId::Integer(88));
+        let base_consumer_session = test_transport_session_key(86, 0, 87, SessionId::Integer(89));
+        let high_consumer_session = test_transport_session_key(86, 0, 87, SessionId::Integer(90));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("cam-up"),
+            });
+        let base_consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: base_consumer_session.clone(),
+                mid: Mid::from("cam-down-base"),
+                source_transport_media_id,
+            });
+        let high_consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: high_consumer_session.clone(),
+                mid: Mid::from("cam-down-high"),
+                source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![
+                    MediaRouteDestination {
+                        dest_session: base_consumer_session.clone(),
+                        dest_transport_media_id: base_consumer_transport_media_id,
+                        dest_mid: Mid::from("cam-down-base"),
+                        active: true,
+                        packet_gate: PacketLayerGate::OperatingPoint(
+                            PacketOperatingPointGate::new(Some("hi".into()), 0),
+                        ),
+                    },
+                    MediaRouteDestination {
+                        dest_session: high_consumer_session.clone(),
+                        dest_transport_media_id: high_consumer_transport_media_id,
+                        dest_mid: Mid::from("cam-down-high"),
+                        active: true,
+                        packet_gate: PacketLayerGate::OperatingPoint(
+                            PacketOperatingPointGate::new(Some("hi".into()), 2),
+                        ),
+                    },
+                ],
+            },
+        );
+        state.route_control.set_local_packet_gate(
+            source_transport_media_id,
+            Some(PacketLayerGate::OperatingPoint(
+                PacketOperatingPointGate::new(Some("hi".into()), 2),
+            )),
+        );
+        let mut pending_packets = vec![
+            sample_forwarded_packet_with_frame_mark(
+                producer_session.clone(),
+                "cam-up",
+                Some("hi"),
+                1_u32 << 24,
+                b"temporal-one",
+            ),
+            sample_forwarded_packet_with_frame_mark(
+                producer_session,
+                "cam-up",
+                Some("hi"),
+                0,
+                b"temporal-zero",
+            ),
+        ];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &mut pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 3);
+        assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(destination) if destination.session_key() == Some(&high_consumer_session)
+        ));
+        assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
+        assert!(matches!(
+            forwards.get(1).map(PacketForward::destination),
+            Some(destination) if destination.session_key() == Some(&base_consumer_session)
+        ));
+        assert_eq!(forwards.get(2).map(PacketForward::packet_idx), Some(1));
+        assert!(matches!(
+            forwards.get(2).map(PacketForward::destination),
+            Some(destination) if destination.session_key() == Some(&high_consumer_session)
+        ));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 2);
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 0);
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the heterogeneous relay-target matrix is clearer as one complete planner regression"
+    )]
+    #[test]
+    fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admits() {
+        let producer_session = test_transport_session_key(91, 0, 92, SessionId::Integer(93));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let (intra_node_mailbox, _intra_node_rx) = RelayPacketMailbox::channel_for_test();
+        let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("cam-up"),
+            });
+        let hi_target_id = RelayTargetId::new(1);
+        let lo_target_id = RelayTargetId::new(2);
+        relay_registry.activate_source_target(
+            source_transport_media_id,
+            hi_target_id,
+            intra_node_mailbox.into(),
+        );
+        relay_registry.set_source_target_active(source_transport_media_id, hi_target_id, true);
+        relay_registry.activate_source_target(
+            source_transport_media_id,
+            lo_target_id,
+            inter_node_sender.into(),
+        );
+        relay_registry.set_source_target_active(source_transport_media_id, lo_target_id, true);
+        state.route_control.set_relay_packet_gate(
+            source_transport_media_id,
+            hi_target_id,
+            PacketLayerGate::Rid("hi".into()),
+        );
+        state.route_control.set_relay_packet_gate(
+            source_transport_media_id,
+            lo_target_id,
+            PacketLayerGate::Rid("lo".into()),
+        );
+        let mut pending_packets = vec![
+            sample_forwarded_packet_with_rid(
+                producer_session.clone(),
+                "cam-up",
+                Some("hi"),
+                b"hi-packet",
+            ),
+            sample_forwarded_packet_with_rid(producer_session, "cam-up", Some("lo"), b"lo-packet"),
+        ];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &mut pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 2);
+        assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(ForwardingDestination::IntraNodeRelay(_))
+        ));
+        assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
+        assert!(matches!(
+            forwards.get(1).map(PacketForward::destination),
+            Some(ForwardingDestination::InterNodeRelay(_))
+        ));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 2);
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 0);
     }
 
     #[allow(

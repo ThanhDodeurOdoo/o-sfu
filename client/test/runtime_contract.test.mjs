@@ -96,6 +96,16 @@ function validCore(overrides = {}) {
     };
 }
 
+function validSourceDescriptor(encodingOverrides = {}) {
+    return {
+        active: true,
+        encodings: [{ encodingId: "encoding-1", ...encodingOverrides }],
+        sessionId: 7,
+        sourceId: "source-1",
+        type: "camera"
+    };
+}
+
 test("wrapped protocol core rejects malformed host commands", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
@@ -158,15 +168,7 @@ test("wrapped protocol core validates source descriptors", () => {
                 return [
                     {
                         kind: "replaceSourceDescriptors",
-                        sources: [
-                            {
-                                active: true,
-                                encodings: [{ encodingId: "encoding-1", maxBitrate: -1 }],
-                                sessionId: 7,
-                                sourceId: "source-1",
-                                type: "camera"
-                            }
-                        ]
+                        sources: [validSourceDescriptor({ maxBitrate: -1 })]
                     }
                 ];
             }
@@ -178,6 +180,45 @@ test("wrapped protocol core validates source descriptors", () => {
         "protocol core connect() command #0.sources[0].encodings[0].maxBitrate must be a non-negative integer when provided"
     );
 });
+
+test("wrapped protocol core accepts valid temporal layer ids", () => {
+    const core = wrapProtocolCoreBindings(
+        validCore({
+            connect() {
+                return [
+                    {
+                        kind: "replaceSourceDescriptors",
+                        sources: [validSourceDescriptor({ maxTemporalLayerId: 7 })]
+                    }
+                ];
+            }
+        })
+    );
+
+    assert.doesNotThrow(() => core.connect("ws://example.test", "jwt", null));
+});
+
+for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
+    test(`wrapped protocol core rejects invalid temporal layer id ${String(maxTemporalLayerId)}`, () => {
+        const core = wrapProtocolCoreBindings(
+            validCore({
+                connect() {
+                    return [
+                        {
+                            kind: "replaceSourceDescriptors",
+                            sources: [validSourceDescriptor({ maxTemporalLayerId })]
+                        }
+                    ];
+                }
+            })
+        );
+
+        assertThrowsMessage(
+            () => core.connect("ws://example.test", "jwt", null),
+            "protocol core connect() command #0.sources[0].encodings[0].maxTemporalLayerId must be an integer from 0 through 7 when provided"
+        );
+    });
+}
 
 test("wrapped protocol core rejects NaN and infinite numeric session IDs", () => {
     const nanSessionIdCore = wrapProtocolCoreBindings(

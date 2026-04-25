@@ -73,6 +73,17 @@ impl PacketOperatingPointGate {
     }
 }
 
+impl PacketLayerGate {
+    pub(super) fn permits(&self, metadata: PacketLayerMetadata) -> bool {
+        match self {
+            Self::Open => true,
+            Self::Block => false,
+            Self::Rid(selected_rid) => metadata.rid() == Some(*selected_rid),
+            Self::OperatingPoint(operating_point) => operating_point.permits(metadata),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct PacketLayerMetadata {
     rid: Option<Rid>,
@@ -138,22 +149,8 @@ impl RouteControlState {
             .effective_packet_gate()
             .unwrap_or(PacketLayerGate::Open)
         {
-            PacketLayerGate::Open => PacketRouteDecision::Forward,
-            PacketLayerGate::Block => PacketRouteDecision::Drop,
-            PacketLayerGate::Rid(selected_rid) => {
-                if metadata.rid() == Some(selected_rid) {
-                    PacketRouteDecision::Forward
-                } else {
-                    PacketRouteDecision::Drop
-                }
-            }
-            PacketLayerGate::OperatingPoint(operating_point) => {
-                if operating_point.permits(metadata) {
-                    PacketRouteDecision::Forward
-                } else {
-                    PacketRouteDecision::Drop
-                }
-            }
+            gate if gate.permits(metadata) => PacketRouteDecision::Forward,
+            _ => PacketRouteDecision::Drop,
         }
     }
 
@@ -251,6 +248,16 @@ impl RouteControlState {
             .or_default()
             .relay_packet_gates
             .insert(target_id, packet_gate);
+    }
+
+    pub(super) fn relay_packet_gate(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+    ) -> Option<&PacketLayerGate> {
+        self.sources
+            .get(&source_transport_media_id)
+            .and_then(|source_control| source_control.relay_packet_gates.get(&target_id))
     }
 
     pub(super) fn forget_source(&mut self, source_transport_media_id: TransportMediaId) {

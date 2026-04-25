@@ -64,6 +64,29 @@ pub(super) enum RelayTargetTransport {
     InterNodeSender(InterNodeRelaySender),
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveRelayTarget<TargetId, Target> {
+    target_id: TargetId,
+    target: Target,
+}
+
+impl<TargetId, Target> ActiveRelayTarget<TargetId, Target> {
+    fn new(target_id: TargetId, target: Target) -> Self {
+        Self { target_id, target }
+    }
+
+    pub const fn target_id(&self) -> TargetId
+    where
+        TargetId: Copy,
+    {
+        self.target_id
+    }
+
+    pub const fn target(&self) -> &Target {
+        &self.target
+    }
+}
+
 impl From<RelayPacketMailbox> for RelayTargetTransport {
     fn from(value: RelayPacketMailbox) -> Self {
         Self::IntraNodeMailbox(value)
@@ -109,7 +132,7 @@ struct RelayTargetRegistration<Target> {
 #[derive(Debug, Clone)]
 pub struct RelayTargetRegistry<TargetId, Target> {
     targets: BTreeMap<TargetId, RelayTargetRegistration<Target>>,
-    active_targets: Arc<[Target]>,
+    active_targets: Arc<[ActiveRelayTarget<TargetId, Target>]>,
 }
 
 impl<TargetId, Target> Default for RelayTargetRegistry<TargetId, Target> {
@@ -178,7 +201,7 @@ where
     }
 
     #[must_use]
-    pub fn active_targets(&self) -> Arc<[Target]> {
+    pub fn active_targets(&self) -> Arc<[ActiveRelayTarget<TargetId, Target>]> {
         Arc::clone(&self.active_targets)
     }
 
@@ -211,9 +234,11 @@ where
     fn rebuild_mailboxes(&mut self) {
         self.active_targets = self
             .targets
-            .values()
-            .filter(|registration| registration.active_reference_count > 0)
-            .map(|registration| registration.target.clone())
+            .iter()
+            .filter(|(_target_id, registration)| registration.active_reference_count > 0)
+            .map(|(target_id, registration)| {
+                ActiveRelayTarget::new(*target_id, registration.target.clone())
+            })
             .collect::<Vec<_>>()
             .into();
     }
@@ -239,7 +264,7 @@ impl RelayRegistry {
     pub(super) fn targets_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
-    ) -> Option<Arc<[RelayTargetTransport]>> {
+    ) -> Option<Arc<[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>> {
         if !self.any_active.load(Ordering::Acquire) {
             return None;
         }

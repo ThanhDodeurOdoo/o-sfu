@@ -14,6 +14,9 @@ import {
 } from "./public_api.js";
 import type { NegotiationUploadSlot, TrackBinding } from "./protocol.js";
 
+const MIN_TEMPORAL_LAYER_ID = 0;
+const MAX_TEMPORAL_LAYER_ID = 7;
+
 export const NEGOTIATION_KIND = {
     OFFER: "offer",
     RENEGOTIATE: "renegotiate"
@@ -427,6 +430,10 @@ function validateOptionalSourceDescriptor(
             descriptor.maxBitrate,
             `${context}.encodings[${index}].maxBitrate`
         );
+        requireOptionalTemporalLayerId(
+            descriptor.maxTemporalLayerId,
+            `${context}.encodings[${index}].maxTemporalLayerId`
+        );
     });
     return value as SourceDescriptor;
 }
@@ -631,5 +638,21 @@ function requireOptionalNonNegativeInteger(value: unknown, context: string): voi
     }
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
         throw new Error(`${context} must be a non-negative integer when provided`);
+    }
+}
+
+function requireOptionalTemporalLayerId(value: unknown, context: string): void {
+    if (value === undefined) {
+        return;
+    }
+    if (
+        typeof value !== "number" ||
+        !Number.isInteger(value) ||
+        value < MIN_TEMPORAL_LAYER_ID ||
+        value > MAX_TEMPORAL_LAYER_ID
+    ) {
+        throw new Error(
+            `${context} must be an integer from ${MIN_TEMPORAL_LAYER_ID} through ${MAX_TEMPORAL_LAYER_ID} when provided`
+        );
     }
 }
