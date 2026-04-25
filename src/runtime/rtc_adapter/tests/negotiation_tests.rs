@@ -64,11 +64,11 @@ async fn rtc_initial_session_offer_advertises_simulcast_receive_surface() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 134, SessionId::Integer(134));
 
-    let offer_sdp = adapter
+    let (offer_sdp, upload_slots) = adapter
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
-        .into_sdp();
+        .into_parts();
 
     assert!(
         contains_sdp_extmap_uri(&offer_sdp, webrtc::rtp_header_extension_uri::RTP_STREAM_ID),
@@ -112,6 +112,62 @@ async fn rtc_initial_session_offer_advertises_simulcast_receive_surface() {
             webrtc::rtcp_feedback::parameter::PLI
         )),
         "video offers should retain the keyframe feedback surface used after layer switches"
+    );
+    let video_slot = upload_slots
+        .iter()
+        .find(|slot| slot.kind == SessionUploadKind::Video)
+        .expect("initial offer should include a video upload slot");
+    assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
+    assert_eq!(video_slot.simulcast_encodings.len(), 2);
+}
+
+#[tokio::test]
+async fn rtc_initial_session_offer_omits_simulcast_when_vp8_is_disabled() {
+    let adapter = rtc_adapter_with_codec_flags(
+        MediaCodecFlags::default()
+            .with_vp8(false)
+            .with_h264(true)
+            .with_vp9(true)
+            .with_av1(true),
+    );
+    let session_key = transport_key(1, 136, SessionId::Integer(136));
+
+    let (offer_sdp, upload_slots) = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed")
+        .into_parts();
+
+    assert!(
+        !offer_sdp.contains(&sdp_rid_line(
+            "lo",
+            webrtc::sdp::rid::DIRECTION_RECV,
+            Some(150_000)
+        )),
+        "video offers must not claim RID simulcast when the production VP8 path is disabled"
+    );
+    assert!(
+        !offer_sdp.contains(&sdp_simulcast_line(
+            webrtc::sdp::simulcast::DIRECTION_RECV,
+            &["lo", "hi"]
+        )),
+        "video offers must not claim simulcast for H264, VP9, or AV1-only configurations"
+    );
+    let video_slot = upload_slots
+        .iter()
+        .find(|slot| slot.kind == SessionUploadKind::Video)
+        .expect("initial offer should include a video upload slot");
+    assert_eq!(
+        video_slot.codecs,
+        vec![
+            String::from("H264"),
+            String::from("VP9"),
+            String::from("AV1")
+        ]
+    );
+    assert!(
+        video_slot.simulcast_encodings.is_empty(),
+        "upload-slot metadata must not ask the browser to configure unsupported simulcast codecs"
     );
 }
 

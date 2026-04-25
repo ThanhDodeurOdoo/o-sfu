@@ -121,7 +121,7 @@ fn worker_create_initial_session_offer(
     let bootstrap_mids = &mut session_state.sdp_negotiation.bootstrap_mids;
     let (offer, pending_offer) = {
         let mut sdp_api = session_state.rtc.sdp_api();
-        ensure_initial_negotiation_media(bootstrap_mids, &mut sdp_api);
+        ensure_initial_negotiation_media(bootstrap_mids, &mut sdp_api, config.codec_flags);
         sdp_api
             .apply()
             .ok_or(TransportAdapterError::TransportUnavailable)?
@@ -323,7 +323,11 @@ fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessio
     }
 }
 
-fn ensure_initial_negotiation_media(bootstrap_mids: &mut Vec<Mid>, sdp_api: &mut SdpApi<'_>) {
+fn ensure_initial_negotiation_media(
+    bootstrap_mids: &mut Vec<Mid>,
+    sdp_api: &mut SdpApi<'_>,
+    codec_flags: MediaCodecFlags,
+) {
     if !bootstrap_mids.is_empty() {
         return;
     }
@@ -335,7 +339,7 @@ fn ensure_initial_negotiation_media(bootstrap_mids: &mut Vec<Mid>, sdp_api: &mut
                 INITIAL_NEGOTIATION_DIRECTION,
                 None,
                 None,
-                sdp_simulcast::bootstrap_recv_simulcast(media_kind),
+                sdp_simulcast::bootstrap_recv_simulcast(media_kind, codec_flags),
             )
         })
         .collect();
@@ -352,7 +356,10 @@ fn initial_upload_slots(
             mid: mid.to_string(),
             kind: upload_kind(*media_kind),
             codecs: offered_codecs(*media_kind, codec_flags),
-            simulcast_encodings: sdp_simulcast::bootstrap_upload_encodings(*media_kind),
+            simulcast_encodings: sdp_simulcast::bootstrap_upload_encodings(
+                *media_kind,
+                codec_flags,
+            ),
         })
         .collect()
 }

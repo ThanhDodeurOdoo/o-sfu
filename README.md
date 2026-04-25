@@ -123,7 +123,18 @@ allow the SFUs to share shards between them.
 
 ### Simulcast/SVC
 
-WIP
+Partial coverage
+
+| Codec path                    | Support status                                                                       |
+| :---------------------------- | :----------------------------------------------------------------------------------- |
+| VP8 RID simulcast             | Production path, enabled by default with `CODEC_VP8=true`.                           |
+| H.264 simulcast               | Interop pending; `CODEC_H264=true` enables codec negotiation, not a simulcast claim. |
+| VP9 hybrid/layered forwarding | WIP; `CODEC_VP9=true` is codec negotiation only.                                     |
+| AV1 hybrid/layered forwarding | WIP; `CODEC_AV1=true` is codec negotiation only.                                     |
+
+The browser bundle configures RID send encodings only for upload slots that
+include the production VP8 simulcast path. Optional codec-only configurations
+fall back to single-encoding publication until more work is done to get thm covered
 
 ## Tooling
 

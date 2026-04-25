@@ -267,8 +267,8 @@ export async function spawnLiveServer({
                 PUBLIC_IP: publicIp,
                 RTC_MAX_PORT: String(rtcMaxPort),
                 RTC_MIN_PORT: String(rtcMinPort),
-                ENABLE_CODEC_H264: String(Boolean(codecFlags.h264)),
-                ENABLE_CODEC_VP9: String(Boolean(codecFlags.vp9))
+                CODEC_H264: String(Boolean(codecFlags.h264)),
+                CODEC_VP9: String(Boolean(codecFlags.vp9))
             },
             stdio: "ignore"
         }

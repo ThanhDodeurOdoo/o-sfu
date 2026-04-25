@@ -17,7 +17,7 @@ export type UploadPublicationPlan = {
 };
 
 const MIN_SIMULCAST_ENCODINGS = 2;
-const SUPPORTED_SIMULCAST_CODEC = "VP8";
+const PRODUCTION_SIMULCAST_CODEC = "VP8";
 
 export async function applyUploadPublicationPolicy(
     streamType: StreamType,
@@ -30,8 +30,8 @@ export async function applyUploadPublicationPolicy(
     if (!plan || plan.simulcastEncodings.length < MIN_SIMULCAST_ENCODINGS) {
         return singleEncoding("offer did not advertise multiple simulcast encodings");
     }
-    if (!plan.codecs.some((codec) => codec.toUpperCase() === SUPPORTED_SIMULCAST_CODEC)) {
-        return singleEncoding("offer did not include the VP8 simulcast path");
+    if (!plan.codecs.some((codec) => codec.toUpperCase() === PRODUCTION_SIMULCAST_CODEC)) {
+        return singleEncoding("offer did not include the production VP8 simulcast path");
     }
     if (!transceiver.sender.getParameters || !transceiver.sender.setParameters) {
         return singleEncoding("sender parameter API is unavailable");

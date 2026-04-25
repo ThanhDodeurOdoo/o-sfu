@@ -4,14 +4,14 @@
 //! keeps SDP RID and simulcast details at the RTC boundary and only exposes the
 //! normalized encoding facts needed by offer generation and answer projection.
 
-use o_sfu_rfc::webrtc;
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{
     MediaKind, Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast,
     SimulcastLayer as Str0mSimulcastLayer,
 };
 
-use crate::runtime::transport_adapter::SessionUploadEncoding;
+use crate::{config::MediaCodecFlags, runtime::transport_adapter::SessionUploadEncoding};
 
 const SDP_ATTRIBUTE_PREFIX: &str = "a=";
 const SDP_MEDIA_PREFIX: &str = "m=";
@@ -33,8 +33,11 @@ struct SimulcastLayerSpec<'a> {
     max_bitrate: Option<u64>,
 }
 
-pub(super) fn bootstrap_recv_simulcast(media_kind: MediaKind) -> Option<Str0mSimulcast> {
-    if !media_kind.is_video() {
+pub(super) fn bootstrap_recv_simulcast(
+    media_kind: MediaKind,
+    codec_flags: MediaCodecFlags,
+) -> Option<Str0mSimulcast> {
+    if !bootstrap_simulcast_enabled(media_kind, codec_flags) {
         return None;
     }
     Some(recv_simulcast_from_specs(&[
@@ -49,8 +52,11 @@ pub(super) fn bootstrap_recv_simulcast(media_kind: MediaKind) -> Option<Str0mSim
     ]))
 }
 
-pub(super) fn bootstrap_upload_encodings(media_kind: MediaKind) -> Vec<SessionUploadEncoding> {
-    if !media_kind.is_video() {
+pub(super) fn bootstrap_upload_encodings(
+    media_kind: MediaKind,
+    codec_flags: MediaCodecFlags,
+) -> Vec<SessionUploadEncoding> {
+    if !bootstrap_simulcast_enabled(media_kind, codec_flags) {
         return Vec::new();
     }
     upload_encodings_from_specs(&[
@@ -69,7 +75,7 @@ pub(super) fn publish_recv_simulcast(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
 ) -> Option<Str0mSimulcast> {
-    if !media_kind.is_video() {
+    if !publish_simulcast_enabled(media_kind, rtp_parameters) {
         return None;
     }
     let mut layers = Vec::new();
@@ -96,7 +102,7 @@ pub(super) fn publish_upload_encodings(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
 ) -> Vec<SessionUploadEncoding> {
-    if !media_kind.is_video() {
+    if !publish_simulcast_enabled(media_kind, rtp_parameters) {
         return Vec::new();
     }
     let mut layers = Vec::new();
@@ -120,6 +126,17 @@ pub(super) fn publish_upload_encodings(
         return Vec::new();
     }
     upload_encodings_from_specs(&layers)
+}
+
+fn bootstrap_simulcast_enabled(media_kind: MediaKind, codec_flags: MediaCodecFlags) -> bool {
+    media_kind.is_video() && codec_flags.vp8_enabled()
+}
+
+fn publish_simulcast_enabled(media_kind: MediaKind, rtp_parameters: &RouterRtpParameters) -> bool {
+    media_kind.is_video()
+        && rtp_parameters
+            .formats()
+            .any(|format| format.codec() == &rfc_rtp::CodecName::Vp8)
 }
 
 pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {
@@ -204,6 +221,8 @@ fn parse_max_bitrate(restrictions: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_router::{MediaFormat, MediaKind as RouterMediaKind, StreamBinding};
+
     use super::*;
 
     #[test]
@@ -239,5 +258,29 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn publish_simulcast_metadata_is_limited_to_vp8() {
+        let h264 = video_parameters(rfc_rtp::CodecName::H264);
+
+        assert!(publish_recv_simulcast(MediaKind::Video, &h264).is_none());
+        assert!(publish_upload_encodings(MediaKind::Video, &h264).is_empty());
+
+        let vp8 = video_parameters(rfc_rtp::CodecName::Vp8);
+
+        assert!(publish_recv_simulcast(MediaKind::Video, &vp8).is_some());
+        assert_eq!(publish_upload_encodings(MediaKind::Video, &vp8).len(), 2);
+    }
+
+    fn video_parameters(codec: rfc_rtp::CodecName) -> RouterRtpParameters {
+        RouterRtpParameters::new(
+            vec![MediaFormat::new(RouterMediaKind::Video, codec, 96, 90_000)],
+            Vec::new(),
+            vec![
+                StreamBinding::new().with_rid(DEFAULT_LOW_RID),
+                StreamBinding::new().with_rid(DEFAULT_HIGH_RID),
+            ],
+        )
     }
 }

@@ -34,7 +34,8 @@ pub(super) use crate::{
         recording::MediaTap,
         transport_adapter::{
             ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
-            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
+            SessionUploadKind, SourcePolicySignal, TransportAdapterError, TransportMediaId,
+            TransportSessionKey,
         },
     },
 };
@@ -87,12 +88,28 @@ pub(super) fn rtc_adapter_with_bitrate_limits(
     max_bitrate_in_bps: u64,
     max_bitrate_out_bps: u64,
 ) -> RtcTransportAdapter {
+    rtc_adapter_for_test(
+        max_bitrate_in_bps,
+        max_bitrate_out_bps,
+        MediaCodecFlags::default(),
+    )
+}
+
+pub(super) fn rtc_adapter_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportAdapter {
+    rtc_adapter_for_test(8_000_000, 10_000_000, codec_flags)
+}
+
+fn rtc_adapter_for_test(
+    max_bitrate_in_bps: u64,
+    max_bitrate_out_bps: u64,
+    codec_flags: MediaCodecFlags,
+) -> RtcTransportAdapter {
     RtcTransportAdapter::new(
         &RtcTransportAdapterConfig::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
             RtcPortRange::new(40_000, 49_999),
-            MediaCodecFlags::default(),
+            codec_flags,
             Arc::new(DiagnosticsStore::default()),
             Arc::new(MediaTap::default()),
             Arc::new(RuntimeMetrics::default()),
