@@ -233,35 +233,22 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
             .is_some()
     );
 
-    let Some(transport_media_id) = channel
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &SessionId::Integer(1),
-            test_connection_id(0),
-            StreamType::Camera,
-        )
-        .await
-    else {
-        panic!("published camera should expose a transport media id");
-    };
-
-    assert!(fake.snapshot_events().iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id,
-                transport_media_id: updated_media_id,
-                packet_gate: SourcePacketGate::Rid(rid),
-            } if *session_id == SessionId::Integer(1)
-                && *updated_media_id == transport_media_id
-                && rid == "lo"
-        )
-    }));
+    assert_consumer_packet_selection_update(
+        &fake.snapshot_events(),
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "lo",
+    );
+    assert_consumer_packet_selection_update(
+        &fake.snapshot_events(),
+        &SessionId::Integer(3),
+        &SessionId::Integer(1),
+        "lo",
+    );
 }
 
 #[tokio::test]
-async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() {
+async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_sessions_with_fake().await;
 
@@ -285,17 +272,16 @@ async fn two_party_camera_publish_keeps_the_initial_simulcast_selection_unset() 
             .iter()
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
-    assert!(
-        !fake
-            .snapshot_events()
-            .iter()
-            .any(|event| matches!(event, FakeWebRtcEvent::SourcePacketGateUpdated { .. })),
-        "two-party camera publish should not force a shared source layer yet"
+    assert_consumer_packet_selection_update(
+        &fake.snapshot_events(),
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "hi",
     );
 }
 
 #[tokio::test]
-async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
+async fn joining_a_third_session_lowers_existing_thumbnail_consumers() {
     let (channel, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_sessions_with_fake().await;
 
@@ -320,19 +306,7 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
             .any(|message| matches!(message, SessionOutbound::Request(_)))
     );
 
-    let Some(transport_media_id) = channel
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &SessionId::Integer(1),
-            test_connection_id(0),
-            StreamType::Camera,
-        )
-        .await
-    else {
-        panic!("published camera should expose a transport media id");
-    };
-
+    let baseline_event_count = fake.snapshot_events().len();
     let (sender, _receiver) = test_sender();
     channel
         .test_api()
@@ -347,22 +321,17 @@ async fn joining_a_third_session_applies_the_shared_camera_source_selection() {
         .await
         .expect("third session should join");
 
-    assert!(fake.snapshot_events().iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id,
-                transport_media_id: updated_media_id,
-                packet_gate: SourcePacketGate::Rid(rid),
-            } if *session_id == SessionId::Integer(1)
-                && *updated_media_id == transport_media_id
-                && rid == "lo"
-        )
-    }));
+    let events = fake.snapshot_events();
+    assert_consumer_packet_selection_update(
+        &events[baseline_event_count..],
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "lo",
+    );
 }
 
 #[tokio::test]
-async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
+async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
     let manager = ChannelManager::for_test();
     let channel = manager
         .serve_channel("issuer-a", None, &ChannelConfig::default(), None)
@@ -401,19 +370,7 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
             .is_some()
     );
 
-    let Some(transport_media_id) = channel
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &SessionId::Integer(1),
-            test_connection_id(0),
-            StreamType::Camera,
-        )
-        .await
-    else {
-        panic!("published camera should expose a transport media id");
-    };
-
+    let baseline_event_count = fake.snapshot_events().len();
     assert!(
         channel
             .test_api()
@@ -426,15 +383,139 @@ async fn leaving_a_multiparty_room_clears_the_shared_camera_source_selection() {
             .await
     );
 
-    assert!(fake.snapshot_events().iter().any(|event| {
+    let events = fake.snapshot_events();
+    assert_consumer_packet_selection_update(
+        &events[baseline_event_count..],
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "hi",
+    );
+    assert!(events[baseline_event_count..].iter().any(|event| {
         matches!(
             event,
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id,
-                transport_media_id: updated_media_id,
-                packet_gate: SourcePacketGate::Open,
-            } if *session_id == SessionId::Integer(1)
-                && *updated_media_id == transport_media_id
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_session_id,
+                source_session_id,
+            } if *consumer_session_id == SessionId::Integer(2)
+                && *source_session_id == SessionId::Integer(1)
+        )
+    }));
+}
+
+#[tokio::test]
+async fn receiver_bandwidth_pressure_downswitches_after_sustained_observations() {
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
+    publish_audio_and_camera(&channel, &SessionId::Integer(1), &adapter).await;
+    let (first_audio_media_id, _first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        first_audio_media_id,
+        Instant::now(),
+    )]);
+    channel
+        .test_api()
+        .lifecycle()
+        .update_session_info_runtime(
+            &SessionId::Integer(1),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+    assert_consumer_packet_selection_update(
+        &fake.snapshot_events(),
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "hi",
+    );
+
+    fake.set_receiver_bandwidth_estimate(SessionId::Integer(2), 100_000);
+    let baseline_event_count = fake.snapshot_events().len();
+    for _ in 0..2 {
+        channel
+            .test_api()
+            .lifecycle()
+            .update_session_info_runtime(
+                &SessionId::Integer(1),
+                SessionInfo::default(),
+                false,
+                &adapter,
+            )
+            .await;
+    }
+
+    let events = fake.snapshot_events();
+    assert_consumer_packet_selection_update(
+        &events[baseline_event_count..],
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "lo",
+    );
+}
+
+#[tokio::test]
+async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
+    publish_audio_and_camera(&channel, &SessionId::Integer(1), &adapter).await;
+    let (first_audio_media_id, _first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        first_audio_media_id,
+        Instant::now(),
+    )]);
+    fake.set_receiver_bandwidth_estimate(SessionId::Integer(2), 100_000);
+    for _ in 0..2 {
+        channel
+            .test_api()
+            .lifecycle()
+            .update_session_info_runtime(
+                &SessionId::Integer(1),
+                SessionInfo::default(),
+                false,
+                &adapter,
+            )
+            .await;
+    }
+    assert_consumer_packet_selection_update(
+        &fake.snapshot_events(),
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "lo",
+    );
+
+    fake.set_receiver_bandwidth_estimate(SessionId::Integer(2), 2_000_000);
+    let baseline_event_count = fake.snapshot_events().len();
+    for _ in 0..3 {
+        channel
+            .test_api()
+            .lifecycle()
+            .update_session_info_runtime(
+                &SessionId::Integer(1),
+                SessionInfo::default(),
+                false,
+                &adapter,
+            )
+            .await;
+    }
+
+    let events = fake.snapshot_events();
+    let recovery_events = &events[baseline_event_count..];
+    assert_consumer_packet_selection_update(
+        recovery_events,
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "hi",
+    );
+    assert!(recovery_events.iter().any(|event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_session_id,
+                source_session_id,
+            } if *consumer_session_id == SessionId::Integer(2)
+                && *source_session_id == SessionId::Integer(1)
         )
     }));
 }
@@ -596,34 +677,23 @@ async fn assert_session_has_no_producer_route_target(
     );
 }
 
-fn assert_source_packet_selection_update(
+fn assert_consumer_packet_selection_update(
     events: &[FakeWebRtcEvent],
-    session_id: &SessionId,
-    transport_media_id: TransportMediaId,
-    selection: Option<&str>,
+    consumer_session_id: &SessionId,
+    source_session_id: &SessionId,
+    expected_rid: &str,
 ) {
-    assert!(events.iter().any(|event| match (event, selection) {
-        (
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id: updated_session_id,
-                transport_media_id: updated_media_id,
-                packet_gate: SourcePacketGate::Open,
-            },
-            None,
-        ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
-        (
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id: updated_session_id,
-                transport_media_id: updated_media_id,
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerPacketGateUpdated {
+                consumer_session_id: updated_consumer_session_id,
+                source_session_id: updated_source_session_id,
                 packet_gate: SourcePacketGate::Rid(rid),
-            },
-            Some(expected_rid),
-        ) => {
-            updated_session_id == session_id
-                && *updated_media_id == transport_media_id
+            } if updated_consumer_session_id == consumer_session_id
+                && updated_source_session_id == source_session_id
                 && rid == expected_rid
-        }
-        _ => false,
+        )
     }));
 }
 
@@ -634,9 +704,9 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         publish_audio_and_camera(&channel, &session_id, &adapter).await;
     }
 
-    let (first_audio_media_id, first_camera_media_id) =
+    let (first_audio_media_id, _first_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(1)).await;
-    let (second_audio_media_id, second_camera_media_id) =
+    let (second_audio_media_id, _second_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(2)).await;
 
     let baseline_event_count = fake.snapshot_events().len();
@@ -657,23 +727,18 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
 
     let events = fake.snapshot_events();
     let speaker_two_events = &events[baseline_event_count..];
-    assert_source_packet_selection_update(
+    assert_consumer_packet_selection_update(
         speaker_two_events,
+        &SessionId::Integer(1),
         &SessionId::Integer(2),
-        second_camera_media_id,
-        None,
+        "hi",
     );
-    assert!(!speaker_two_events.iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id,
-                transport_media_id,
-                packet_gate: SourcePacketGate::Open,
-            } if *session_id == SessionId::Integer(1)
-                && *transport_media_id == first_camera_media_id
-        )
-    }));
+    assert_consumer_packet_selection_update(
+        speaker_two_events,
+        &SessionId::Integer(3),
+        &SessionId::Integer(2),
+        "hi",
+    );
 
     let second_baseline_event_count = events.len();
     fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
@@ -693,17 +758,29 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
 
     let events = fake.snapshot_events();
     let speaker_one_events = &events[second_baseline_event_count..];
-    assert_source_packet_selection_update(
-        speaker_one_events,
-        &SessionId::Integer(1),
-        first_camera_media_id,
-        None,
-    );
-    assert_source_packet_selection_update(
+    assert_consumer_packet_selection_update(
         speaker_one_events,
         &SessionId::Integer(2),
-        second_camera_media_id,
-        Some("lo"),
+        &SessionId::Integer(1),
+        "hi",
+    );
+    assert_consumer_packet_selection_update(
+        speaker_one_events,
+        &SessionId::Integer(3),
+        &SessionId::Integer(1),
+        "hi",
+    );
+    assert_consumer_packet_selection_update(
+        speaker_one_events,
+        &SessionId::Integer(1),
+        &SessionId::Integer(2),
+        "lo",
+    );
+    assert_consumer_packet_selection_update(
+        speaker_one_events,
+        &SessionId::Integer(3),
+        &SessionId::Integer(2),
+        "lo",
     );
 }
 
@@ -715,12 +792,10 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
     }
 
     let mut ordered_audio_media_ids = Vec::new();
-    let mut ordered_camera_media_ids = Vec::new();
     for raw_session_id in 1_i64..=6 {
-        let (audio_media_id, camera_media_id) =
+        let (audio_media_id, _camera_media_id) =
             source_media_ids(&channel, &SessionId::Integer(raw_session_id)).await;
         ordered_audio_media_ids.push(audio_media_id);
-        ordered_camera_media_ids.push(camera_media_id);
     }
 
     let baseline_event_count = fake.snapshot_events().len();
@@ -745,25 +820,14 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
 
     let events = fake.snapshot_events();
     let active_speaker_events = &events[baseline_event_count..];
-    for (camera_idx, raw_session_id) in (2_i64..=6).enumerate() {
-        assert_source_packet_selection_update(
+    for raw_session_id in 2_i64..=6 {
+        assert_consumer_packet_selection_update(
             active_speaker_events,
+            &SessionId::Integer(7),
             &SessionId::Integer(raw_session_id),
-            ordered_camera_media_ids[camera_idx + 1],
-            None,
+            "hi",
         );
     }
-    assert!(!active_speaker_events.iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id,
-                transport_media_id,
-                packet_gate: SourcePacketGate::Open,
-            } if *session_id == SessionId::Integer(1)
-                && *transport_media_id == ordered_camera_media_ids[0]
-        )
-    }));
 }
 
 #[tokio::test]

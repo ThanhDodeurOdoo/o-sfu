@@ -200,7 +200,7 @@ impl PendingPublishTransactions {
     /// Removes one staged publish from the registry and transfers ownership to
     /// the caller.
     ///
-    /// The retirned transaction must be commited or cleaned up explicitly.
+    /// The returned transaction must be committed or cleaned up explicitly.
     /// This method is used by explicit unpublish before the answer lands.
     pub(super) fn take(
         &mut self,
@@ -509,10 +509,10 @@ impl CommittedPublish {
     /// channel state.
     ///
     /// Ordering matters:
-    /// - metrics must observe the state delta that just happende
-    /// - room-owned source policy must see the new producer before consumers
-    ///   bootstrap against it
-    /// - bootstrap and diagnostics happen last
+    /// - metrics must observe the state delta that just happened
+    /// - consumers bootstrap before receiver-driven policy so the policy can
+    ///   choose per-consumer simulcast layers
+    /// - diagnostics happen last
     async fn finish(
         self,
         channel: &Channel,
@@ -521,14 +521,14 @@ impl CommittedPublish {
     ) {
         channel.record_media_count_delta(self.media_counts_before, self.media_counts_after);
         channel
-            .sync_source_packet_selection_policy(Some(observability_port), media_port)
-            .await;
-        channel
             .bootstrap_consumer_targets(
                 media_port,
                 ConsumerBootstrapOrigin::Publish,
                 self.consumer_targets,
             )
+            .await;
+        channel
+            .sync_source_packet_selection_policy(Some(observability_port), media_port)
             .await;
         channel.diagnostics.record(self.diagnostics);
     }

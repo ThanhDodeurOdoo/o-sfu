@@ -7,8 +7,8 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -202,6 +202,27 @@ impl MediaPort for RtcTransportAdapterShardSet {
             .await
     }
 
+    async fn set_consumer_packet_gate(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError> {
+        ensure_same_channel_instance(consumer_session_key, source_session_key)?;
+        self.shard_for_session(consumer_session_key)
+            .media()
+            .set_consumer_packet_gate(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+                packet_gate,
+            )
+            .await
+    }
+
     async fn request_consumer_keyframe(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -253,6 +274,13 @@ impl ObservabilityPort for RtcTransportAdapterShardSet {
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
         Self::transport_bitrate_snapshot(self, session_keys)
+    }
+
+    fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        Self::receiver_bandwidth_snapshot(self, session_keys)
     }
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {

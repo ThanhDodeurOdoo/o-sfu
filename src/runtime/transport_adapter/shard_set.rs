@@ -14,7 +14,10 @@ use crate::runtime::{
         SourcePolicyUpdateSubscription,
         config::RtcTransportAdapterShardSetConfig,
         source_policy::SourcePolicySignal,
-        types::{ActiveSpeakerSource, TransportBitrateSnapshot, TransportSessionKey},
+        types::{
+            ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot,
+            TransportSessionKey,
+        },
     },
 };
 
@@ -127,6 +130,26 @@ impl RtcTransportAdapterShardSet {
             let shard_snapshot = shard.transport_bitrate_snapshot(&shard_session_keys);
             snapshot.total = snapshot.total.saturating_add(shard_snapshot.total);
             snapshot.per_media.extend(shard_snapshot.per_media);
+        }
+        snapshot
+    }
+
+    pub(super) fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
+        for session_key in session_keys {
+            keys_by_shard
+                .entry(self.shard_index_for_session(session_key))
+                .or_default()
+                .push(session_key.clone());
+        }
+        let mut snapshot = ReceiverBandwidthSnapshot::default();
+        for (shard_index, shard_session_keys) in keys_by_shard {
+            let shard = self.shard_for_index(shard_index);
+            let shard_snapshot = shard.receiver_bandwidth_snapshot(&shard_session_keys);
+            snapshot.per_session.extend(shard_snapshot.per_session);
         }
         snapshot
     }

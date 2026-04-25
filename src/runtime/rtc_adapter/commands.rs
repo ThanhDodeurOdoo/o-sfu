@@ -261,6 +261,14 @@ pub(super) enum RtcWorkerCommand {
         active: bool,
         response: RtcWorkerResponse<()>,
     },
+    SetConsumerPacketGate {
+        consumer_session_key: TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: PacketLayerGate,
+        response: RtcWorkerResponse<()>,
+    },
     RequestConsumerKeyframe {
         consumer_session_key: TransportSessionKey,
         consumer_transport_media_id: TransportMediaId,

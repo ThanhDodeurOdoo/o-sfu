@@ -70,6 +70,16 @@ pub(crate) struct TransportBitrateSnapshot {
     pub(crate) per_media: Vec<(TransportMediaId, u64)>,
 }
 
+/// Latest receiver-side bandwidth estimates keyed by transport session.
+///
+/// These values are produced by the WebRTC egress BWE path and consumed by
+/// room-owned media policy. They are cold-path control-plane facts, not packet
+/// loop routing state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ReceiverBandwidthSnapshot {
+    pub(crate) per_session: Vec<(TransportSessionKey, u64)>,
+}
+
 /// Opaque identifier for a media line allocated by the transport adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub(crate) struct TransportMediaId(u64);

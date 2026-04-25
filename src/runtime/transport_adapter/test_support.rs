@@ -12,7 +12,8 @@ pub(crate) use super::fake::FakeWebRtcEvent;
 use super::shard_set::RtcTransportAdapterShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{
-    ActiveSpeakerSource, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
+    TransportSessionKey,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{SessionOffer, SourcePacketGate, TransportAdapterError};
@@ -146,6 +147,25 @@ impl MediaPort for FakeWebRtcAdapter {
         .await
     }
 
+    async fn set_consumer_packet_gate(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError> {
+        Self::set_consumer_packet_gate(
+            self,
+            consumer_session_key,
+            consumer_transport_media_id,
+            source_session_key,
+            source_transport_media_id,
+            packet_gate,
+        )
+        .await
+    }
+
     async fn request_consumer_keyframe(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -194,6 +214,13 @@ impl ObservabilityPort for FakeWebRtcAdapter {
         _session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
         TransportBitrateSnapshot::default()
+    }
+
+    fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        Self::receiver_bandwidth_snapshot(self, session_keys)
     }
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {

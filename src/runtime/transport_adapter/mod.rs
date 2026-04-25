@@ -23,8 +23,8 @@ pub(crate) use source_policy::{
 };
 pub use types::TransportSessionKey;
 pub(crate) use types::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportResult,
+    ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+    TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportResult,
 };
 
 #[cfg(test)]

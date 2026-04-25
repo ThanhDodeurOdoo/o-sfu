@@ -15,8 +15,8 @@ use tokio::sync::{mpsc, oneshot};
 use super::{
     AddSendMediaRequest, RemoteKeyframeRequest, request_keyframe_for_source,
     respond_add_send_media, respond_remove_media, respond_request_consumer_keyframe,
-    respond_request_remote_keyframe, respond_set_remote_source_packet_gate,
-    respond_set_source_packet_gate,
+    respond_request_remote_keyframe, respond_set_consumer_packet_gate,
+    respond_set_remote_source_packet_gate, respond_set_source_packet_gate,
 };
 use crate::{
     config::MediaCodecFlags,
@@ -428,6 +428,86 @@ fn set_source_packet_gate_updates_the_effective_gate_for_a_local_source() {
             .route_control
             .effective_packet_gate(source_transport_media_id),
         None
+    );
+}
+
+#[test]
+fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate() {
+    let source_session = test_transport_session_key(131, 0, 132, SessionId::Integer(133));
+    let first_consumer_session = test_transport_session_key(131, 0, 134, SessionId::Integer(135));
+    let second_consumer_session = test_transport_session_key(131, 0, 136, SessionId::Integer(137));
+    let source_mid = Mid::from("cam-up");
+    let first_consumer_mid = Mid::from("cam-down-a");
+    let second_consumer_mid = Mid::from("cam-down-b");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id =
+        prepare_source_session(&mut state, &source_session, source_mid, 88_889);
+    let first_consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: first_consumer_session.clone(),
+            mid: first_consumer_mid,
+            source_transport_media_id,
+        });
+    let second_consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: second_consumer_session.clone(),
+            mid: second_consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![
+                MediaRouteDestination {
+                    dest_session: first_consumer_session.clone(),
+                    dest_transport_media_id: first_consumer_transport_media_id,
+                    dest_mid: first_consumer_mid,
+                    active: true,
+                    packet_gate: PacketLayerGate::Open,
+                },
+                MediaRouteDestination {
+                    dest_session: second_consumer_session.clone(),
+                    dest_transport_media_id: second_consumer_transport_media_id,
+                    dest_mid: second_consumer_mid,
+                    active: true,
+                    packet_gate: PacketLayerGate::Open,
+                },
+            ],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_set_consumer_packet_gate(
+        &mut state,
+        &first_consumer_session,
+        first_consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        PacketLayerGate::Rid("lo".into()),
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(matches!(
+        state.media_route_index.get(&source_transport_media_id),
+        Some(route_entry) if route_entry.destinations.iter().any(|destination| {
+            destination.dest_session == first_consumer_session
+                && destination.packet_gate == PacketLayerGate::Rid("lo".into())
+        })
+    ));
+    assert!(matches!(
+        state.media_route_index.get(&source_transport_media_id),
+        Some(route_entry) if route_entry.destinations.iter().any(|destination| {
+            destination.dest_session == second_consumer_session
+                && destination.packet_gate == PacketLayerGate::Open
+        })
+    ));
+    assert_eq!(
+        state
+            .route_control
+            .effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Open)
     );
 }
 

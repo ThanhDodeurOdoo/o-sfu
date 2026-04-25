@@ -46,7 +46,8 @@ use super::{
 use crate::runtime::{
     ChannelInstanceId,
     transport_adapter::{
-        ActiveSpeakerSource, TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportAdapterError,
+        TransportBitrateSnapshot, TransportSessionKey,
     },
 };
 
@@ -205,6 +206,14 @@ impl RtcTransportAdapter {
             .transport_bitrate_snapshot(session_keys)
     }
 
+    pub(crate) fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        self.observability()
+            .receiver_bandwidth_snapshot(session_keys)
+    }
+
     #[cfg(test)]
     pub(crate) fn session_transport_health(
         &self,
@@ -243,6 +252,19 @@ impl RtcTransportObservabilityFacade<'_> {
             return TransportBitrateSnapshot::default();
         };
         bitrate_state.transport_bitrate_snapshot_at(session_keys, Instant::now())
+    }
+
+    pub(crate) fn receiver_bandwidth_snapshot(
+        self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+            return ReceiverBandwidthSnapshot::default();
+        };
+        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+            return ReceiverBandwidthSnapshot::default();
+        };
+        snapshot_state.receiver_bandwidth_snapshot(session_keys)
     }
 
     pub(crate) fn session_transport_health(

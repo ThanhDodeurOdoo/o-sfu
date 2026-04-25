@@ -323,6 +323,7 @@ fn snapshot_and_pump(
         snapshot_state,
         &config.diagnostics,
         &config.metrics,
+        &config.source_policy_signal,
         buffers,
         now,
     );

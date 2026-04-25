@@ -34,7 +34,9 @@ use super::{
     },
     route_control::RouteControlState,
 };
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::transport_adapter::{
+    ReceiverBandwidthSnapshot, TransportMediaId, TransportSessionKey,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportSessionHealth {
@@ -163,6 +165,7 @@ pub(crate) struct RtcSnapshotState {
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
+    receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, u64>,
 }
 
 impl RtcSnapshotState {
@@ -181,6 +184,7 @@ impl RtcSnapshotState {
             .forget_session_local_ice_ufrag(session_key);
         self.remote_addr_demux
             .forget_session_remote_candidate_addrs(session_key);
+        self.receiver_bandwidth_by_session.remove(session_key);
         self.transport_health_by_session.remove(session_key)
     }
 
@@ -198,5 +202,31 @@ impl RtcSnapshotState {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         self.transport_health_by_session.get(session_key).copied()
+    }
+
+    pub(super) fn set_receiver_bandwidth(
+        &mut self,
+        session_key: &TransportSessionKey,
+        estimate_bps: u64,
+    ) -> Option<u64> {
+        self.receiver_bandwidth_by_session
+            .insert(session_key.clone(), estimate_bps)
+    }
+
+    pub(crate) fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        ReceiverBandwidthSnapshot {
+            per_session: session_keys
+                .iter()
+                .filter_map(|session_key| {
+                    self.receiver_bandwidth_by_session
+                        .get(session_key)
+                        .copied()
+                        .map(|estimate_bps| (session_key.clone(), estimate_bps))
+                })
+                .collect(),
+        }
     }
 }

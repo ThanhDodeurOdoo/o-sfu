@@ -207,6 +207,8 @@ pub(crate) enum SourceRoomPolicySelector {
 pub(crate) struct ConsumerSourceSelection {
     active: bool,
     selector: SourceSelector,
+    pressure_observations: u8,
+    upgrade_observations: u8,
 }
 
 impl ConsumerSourceSelection {
@@ -215,6 +217,8 @@ impl ConsumerSourceSelection {
         Self {
             active,
             selector: SourceSelector::Open,
+            pressure_observations: 0,
+            upgrade_observations: 0,
         }
     }
 
@@ -228,8 +232,31 @@ impl ConsumerSourceSelection {
         self.selector
     }
 
+    #[must_use]
+    pub(crate) const fn pressure_observations(self) -> u8 {
+        self.pressure_observations
+    }
+
+    #[must_use]
+    pub(crate) const fn upgrade_observations(self) -> u8 {
+        self.upgrade_observations
+    }
+
     pub(crate) const fn set_active(&mut self, active: bool) {
         self.active = active;
+    }
+
+    pub(crate) const fn set_selector(&mut self, selector: SourceSelector) {
+        self.selector = selector;
+    }
+
+    pub(crate) const fn set_adaptation_observations(
+        &mut self,
+        pressure_observations: u8,
+        upgrade_observations: u8,
+    ) {
+        self.pressure_observations = pressure_observations;
+        self.upgrade_observations = upgrade_observations;
     }
 }
 

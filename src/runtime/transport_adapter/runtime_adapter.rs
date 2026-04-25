@@ -10,8 +10,8 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -282,6 +282,39 @@ impl MediaPort for RuntimeTransportAdapter {
         result
     }
 
+    async fn set_consumer_packet_gate(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError> {
+        let result = dispatch_transport_backend!(self, |backend| {
+            backend
+                .set_consumer_packet_gate(
+                    consumer_session_key,
+                    consumer_transport_media_id,
+                    source_session_key,
+                    source_transport_media_id,
+                    packet_gate.clone(),
+                )
+                .await
+        });
+        if let Err(error) = &result {
+            warn!(
+                ?consumer_session_key,
+                ?consumer_transport_media_id,
+                ?source_session_key,
+                ?source_transport_media_id,
+                ?packet_gate,
+                ?error,
+                "transport adapter failed to update consumer packet gate"
+            );
+        }
+        result
+    }
+
     async fn request_consumer_keyframe(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -359,6 +392,15 @@ impl ObservabilityPort for RuntimeTransportAdapter {
     ) -> TransportBitrateSnapshot {
         dispatch_transport_backend!(self, |backend| {
             backend.transport_bitrate_snapshot(session_keys)
+        })
+    }
+
+    fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        dispatch_transport_backend!(self, |backend| {
+            backend.receiver_bandwidth_snapshot(session_keys)
         })
     }
 

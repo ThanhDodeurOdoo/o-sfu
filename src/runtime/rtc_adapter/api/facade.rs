@@ -340,6 +340,32 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    pub(crate) async fn set_consumer_packet_gate(
+        self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError> {
+        let packet_gate = match packet_gate {
+            SourcePacketGate::Open => super::super::route_control::PacketLayerGate::Open,
+            SourcePacketGate::Rid(rid) => {
+                super::super::route_control::PacketLayerGate::Rid(rid.as_str().into())
+            }
+        };
+        self.adapter
+            .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGate {
+                consumer_session_key: consumer_session_key.clone(),
+                consumer_transport_media_id,
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                packet_gate,
+                response,
+            })
+            .await
+    }
+
     pub(crate) async fn request_consumer_keyframe(
         self,
         consumer_session_key: &TransportSessionKey,

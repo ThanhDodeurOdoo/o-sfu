@@ -18,8 +18,8 @@ use super::source_policy::SourcePolicySignal;
 #[cfg(test)]
 use crate::runtime::ChannelInstanceId;
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError, TransportMediaId,
-    TransportSessionKey,
+    ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+    TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
@@ -53,6 +53,11 @@ pub(crate) enum FakeWebRtcEvent {
         source_session_id: SessionId,
         active: bool,
     },
+    ConsumerPacketGateUpdated {
+        consumer_session_id: SessionId,
+        source_session_id: SessionId,
+        packet_gate: SourcePacketGate,
+    },
     ConsumerKeyframeRequested {
         consumer_session_id: SessionId,
         source_session_id: SessionId,
@@ -72,6 +77,7 @@ pub(crate) struct FakeWebRtcAdapter {
     media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
+    receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<SessionId, u64>>>,
     delays: Arc<Mutex<FakeWebRtcAdapterDelays>>,
     source_policy_signal: Arc<SourcePolicySignal>,
 }
@@ -231,6 +237,38 @@ impl FakeWebRtcAdapter {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_receiver_bandwidth_estimate(&self, session_id: SessionId, estimate_bps: u64) {
+        let dirty_channel_instance_ids = match self.media_owners.lock() {
+            Ok(media_owners) => media_owners
+                .values()
+                .filter_map(|session_key| {
+                    (session_key.session_id() == &session_id)
+                        .then_some(session_key.channel_instance_id())
+                })
+                .collect::<Vec<_>>(),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .values()
+                .filter_map(|session_key| {
+                    (session_key.session_id() == &session_id)
+                        .then_some(session_key.channel_instance_id())
+                })
+                .collect::<Vec<_>>(),
+        };
+        match self.receiver_bandwidth_estimates.lock() {
+            Ok(mut estimates) => {
+                estimates.insert(session_id, estimate_bps);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(session_id, estimate_bps);
+            }
+        }
+        for channel_instance_id in dirty_channel_instance_ids {
+            self.source_policy_signal.mark_dirty(channel_instance_id);
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn mark_source_policy_dirty(&self, channel_instance_id: ChannelInstanceId) {
         self.source_policy_signal.mark_dirty(channel_instance_id);
     }
@@ -245,6 +283,27 @@ impl FakeWebRtcAdapter {
         match self.active_speaker_sources.lock() {
             Ok(active_speaker_sources) => active_speaker_sources.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub(crate) fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot {
+        let estimates = match self.receiver_bandwidth_estimates.lock() {
+            Ok(estimates) => estimates.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        ReceiverBandwidthSnapshot {
+            per_session: session_keys
+                .iter()
+                .filter_map(|session_key| {
+                    estimates
+                        .get(session_key.session_id())
+                        .copied()
+                        .map(|estimate_bps| (session_key.clone(), estimate_bps))
+                })
+                .collect(),
         }
     }
 
@@ -479,6 +538,26 @@ impl FakeWebRtcAdapter {
             consumer_session_id: consumer_session_key.session_id().clone(),
             source_session_id: source_session_key.session_id().clone(),
             active,
+        });
+        Ok(())
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    )]
+    pub(crate) async fn set_consumer_packet_gate(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        _consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        _source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError> {
+        self.record_event(FakeWebRtcEvent::ConsumerPacketGateUpdated {
+            consumer_session_id: consumer_session_key.session_id().clone(),
+            source_session_id: source_session_key.session_id().clone(),
+            packet_gate,
         });
         Ok(())
     }

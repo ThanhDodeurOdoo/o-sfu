@@ -247,8 +247,9 @@ impl ChannelManager {
         let active_speaker_sources = observability_port.active_speaker_source_snapshot().await;
         for channel in channels {
             channel
-                .sync_source_packet_selection_policy_from_active_speakers(
+                .sync_source_packet_selection_policy_from_observations(
                     &active_speaker_sources,
+                    observability_port,
                     media_port,
                 )
                 .await;

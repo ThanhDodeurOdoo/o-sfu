@@ -36,8 +36,8 @@ use crate::runtime::{
     transport_adapter::{
         SourcePolicyUpdateSubscription,
         types::{
-            ActiveSpeakerSource, SessionOffer, SourcePacketGate, TransportAdapterError,
-            TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -120,6 +120,15 @@ pub(crate) trait MediaPort {
         active: bool,
     ) -> Result<(), TransportAdapterError>;
 
+    async fn set_consumer_packet_gate(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_transport_media_id: TransportMediaId,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError>;
+
     async fn request_consumer_keyframe(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -148,6 +157,11 @@ pub(crate) trait ObservabilityPort {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot;
+
+    fn receiver_bandwidth_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> ReceiverBandwidthSnapshot;
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource>;
 

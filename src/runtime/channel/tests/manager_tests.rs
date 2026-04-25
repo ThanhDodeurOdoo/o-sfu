@@ -77,34 +77,23 @@ async fn source_media_ids(
     (audio_media_id, camera_media_id)
 }
 
-fn assert_source_packet_selection_update(
+fn assert_consumer_packet_selection_update(
     events: &[FakeWebRtcEvent],
-    session_id: &SessionId,
-    transport_media_id: TransportMediaId,
-    selection: Option<&str>,
+    consumer_session_id: &SessionId,
+    source_session_id: &SessionId,
+    expected_rid: &str,
 ) {
-    assert!(events.iter().any(|event| match (event, selection) {
-        (
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id: updated_session_id,
-                transport_media_id: updated_media_id,
-                packet_gate: SourcePacketGate::Open,
-            },
-            None,
-        ) => updated_session_id == session_id && *updated_media_id == transport_media_id,
-        (
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id: updated_session_id,
-                transport_media_id: updated_media_id,
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerPacketGateUpdated {
+                consumer_session_id: updated_consumer_session_id,
+                source_session_id: updated_source_session_id,
                 packet_gate: SourcePacketGate::Rid(rid),
-            },
-            Some(expected_rid),
-        ) => {
-            updated_session_id == session_id
-                && *updated_media_id == transport_media_id
+            } if updated_consumer_session_id == consumer_session_id
+                && updated_source_session_id == source_session_id
                 && rid == expected_rid
-        }
-        _ => false,
+        )
     }));
 }
 
@@ -541,9 +530,9 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         let _ = drain_outbound(receiver);
     }
 
-    let (_first_audio_media_id, first_camera_media_id) =
+    let (_first_audio_media_id, _first_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(1)).await;
-    let (second_audio_media_id, second_camera_media_id) =
+    let (second_audio_media_id, _second_camera_media_id) =
         source_media_ids(&channel, &SessionId::Integer(2)).await;
 
     let baseline_event_count = fake.snapshot_events().len();
@@ -563,23 +552,18 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let events = fake.snapshot_events();
     let policy_events = &events[baseline_event_count..];
     let featured_messages = drain_outbound(&mut receivers[0]);
-    assert_source_packet_selection_update(
+    assert_consumer_packet_selection_update(
         policy_events,
+        &SessionId::Integer(1),
         &SessionId::Integer(2),
-        second_camera_media_id,
-        None,
+        "hi",
     );
-    assert!(!policy_events.iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::SourcePacketGateUpdated {
-                session_id,
-                transport_media_id,
-                packet_gate: SourcePacketGate::Open,
-            } if *session_id == SessionId::Integer(1)
-                && *transport_media_id == first_camera_media_id
-        )
-    }));
+    assert_consumer_packet_selection_update(
+        policy_events,
+        &SessionId::Integer(3),
+        &SessionId::Integer(2),
+        "hi",
+    );
     assert_featured_snapshot_update(&featured_messages, &SessionId::Integer(1), false);
     assert_featured_snapshot_update(&featured_messages, &SessionId::Integer(2), true);
 }

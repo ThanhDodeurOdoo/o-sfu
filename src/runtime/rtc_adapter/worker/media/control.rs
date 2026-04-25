@@ -1,15 +1,17 @@
-//! This module exists because consumer-route mutation touches several pieces of
-//! worker-local state that must stay consistent:
+//! Worker-local route control for declared media.
 //!
-//! - `media_route_index` records which consumer transpors depend on a source
+//! This module exists because consumer-route mutation touches several pieces of
+//! state that must stay consistent:
+//!
+//! - `media_route_index` records which consumer transports depend on a source
 //! - remote-source registrations track cross-worker ownership and relay control
-//! - `route_control` keeps the effective local and relay packet gates
+//! - `route_control` keeps the effective local, relay and server-owned gates
 //! - relay cleanup must be emitted when the last remote-backed route disappears
 //!
 //! `lifecycle.rs` owns media declaration and teardown against `RtcSessionState`.
 //! Once a producer or consumer handle exists, this module owns the routing-side
-//! bookkeeping that decides whether the source is valid, how one consumer route
-//! is registered or removed and how packet-gate state is recomputed
+//! bookkeeping that validates sources, registers or removes consumer routes and
+//! recomputes packet-gate state.
 //!
 //! Small ownership graph:
 //!
@@ -29,8 +31,9 @@
 //!   `-- reads the same source-ownership rules for feedback routing
 //! ```
 //!
-//! The `respond_*` functions at the top are command-adapter entry points
-//! for the worker dispatcher
+//! The `respond_*` functions at the top are command-adapter entry points for the
+//! worker dispatcher. The lower worker functions keep the ownership checks close
+//! to the state they protect.
 
 use std::time::Instant;
 
@@ -56,6 +59,11 @@ use crate::runtime::{
     transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
 };
 
+/// Controls whether route-source lookup may create a remote-source entry.
+///
+/// Registering a consumer route is the only path alwowed to install remote
+/// source control. Later active, gate and keyframe changes must find an existing
+/// registration so stale commands cannot recreate a removed remote route.
 enum RouteSourceAccess {
     Existing,
     Register(Option<RemoteSourceControl>),
@@ -110,6 +118,30 @@ pub(crate) fn respond_set_consumer_active(
     ));
 }
 
+/// Command adapter for receiver-driven layer updates.
+///
+/// The dispatcher already owns the mutable worker state. This wrapper keeps the
+/// oneshot response boundary at the command edge while the worker function
+/// revalidates the route before mutating packet-gate state.
+pub(crate) fn respond_set_consumer_packet_gate(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: PacketLayerGate,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_consumer_packet_gate(
+        state,
+        consumer_session_key,
+        consumer_transport_media_id,
+        source_session_key,
+        source_transport_media_id,
+        packet_gate,
+    ));
+}
+
 pub(crate) fn respond_request_consumer_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
@@ -158,13 +190,11 @@ pub(crate) fn respond_set_remote_source_packet_gate(
         .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
 }
 
-/// Reduce negotiated consumer RTP parameters into the route-level packet gate
-/// used by worker forwarding
+/// Reduces negotiated consumer RTP parameters into the route-level packet gate.
 ///
-/// A single selected RID means: this route should forward only that simulcast
-/// layer.
-/// Mixed or RID-less encodings means: stay open so non-simulcast streams and
-/// broader compatibility cases keep the previous behavior
+/// A single selected RID means this route shoud forward only that simulcast
+/// layer. Mixed or RID-less encodings stay open so non-simulcast streams and
+/// broader compatibility cases keep the previous behavior.
 pub(super) fn consumer_packet_gate(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> PacketLayerGate {
@@ -203,8 +233,10 @@ pub(super) fn ensure_route_source_registered(
 /// Register one consumer route in the worker-local forwarding index.
 ///
 /// This binds the consumer transport media to its source route, installs the
-/// packet gate that later drives RID selection, and update any remote-source
-/// relay activity that depends on this route existing.
+/// negotiated packet gate that drives the initial RID selection and updates any
+/// remote-source relay activity that depends on this route existing. Room policy
+/// may later replace the gate for this one consumer without changing other
+/// destinations on the same source.
 pub(super) fn register_consumer_route(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,
@@ -398,12 +430,72 @@ fn worker_set_consumer_active(
     Ok(())
 }
 
+/// Replaces the packet gate for exactly one consumer route.
+///
+/// Source ownership is checked first because a stale channel effect may arrive
+/// after session replacement or route cleanup. The source aggregate is refreshed
+/// only when the destination gate actually changed
+fn worker_set_consumer_packet_gate(
+    state: &mut RtcBootstrapState,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: PacketLayerGate,
+) -> Result<(), TransportAdapterError> {
+    ensure_route_source(
+        state,
+        consumer_session_key,
+        source_session_key,
+        source_transport_media_id,
+        RouteSourceAccess::Existing,
+    )?;
+    match state
+        .mid_registry
+        .get(&consumer_transport_media_id.as_u64())
+    {
+        Some(RegisteredMediaHandle::Consumer {
+            session_key,
+            source_transport_media_id: consumer_source_transport_media_id,
+            ..
+        }) if session_key == consumer_session_key
+            && *consumer_source_transport_media_id == source_transport_media_id => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    let mut route_changed = false;
+    {
+        let route_entry = state
+            .media_route_index
+            .get_mut(&source_transport_media_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let destination = route_entry
+            .destinations
+            .iter_mut()
+            .find(|destination| {
+                destination.dest_session == *consumer_session_key
+                    && destination.dest_transport_media_id == consumer_transport_media_id
+            })
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        if destination.packet_gate != packet_gate {
+            destination.packet_gate = packet_gate;
+            route_changed = true;
+        }
+    }
+    if route_changed {
+        refresh_source_packet_gate(state, source_transport_media_id);
+    }
+    Ok(())
+}
+
 /// Request a refresh frame for an already-declared consumer route.
 ///
-/// The worker revalidates consumer/source ownership, skips paused routes, maps
-/// RID-gated destinations back into the keyframe target, and then either marks
-/// the local source dirty or forwards a remote keyframe request with the normal
-/// coalescing rules.
+/// The worker revalidates consumer/source ownership and skips paused routes.
+/// RID-gated destinations are mapped back into the keyframe target before the
+/// local source is marked dirty or the remote keyframe request is forwarded with
+/// the normal coalescing rules.
 fn worker_request_consumer_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,

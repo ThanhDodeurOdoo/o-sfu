@@ -37,5 +37,7 @@ pub(in crate::runtime::channel) use self::{
         DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome, LifecycleEffects,
     },
     shared::{ChannelState, TransportMediaRemoval},
-    source_packet_policy::{FeaturedSessionUpdate, SourcePacketSelectionUpdate},
+    source_packet_policy::{
+        ConsumerPacketSelectionUpdate, FeaturedSessionUpdate, SourcePacketSelectionUpdate,
+    },
 };

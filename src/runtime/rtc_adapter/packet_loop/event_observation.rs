@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use str0m::{Event, IceConnectionState};
+use str0m::{Event, IceConnectionState, bwe::BweKind};
 use tracing::{debug, trace};
 
 use super::super::state::{RtcSnapshotState, TransportSessionHealth};
@@ -8,7 +8,7 @@ use crate::runtime::{
     diagnostics::{DiagnosticsStore, health_json_value, maybe_health_json_value},
     metrics::{RuntimeMetrics, TransportIceState},
     telemetry::schema,
-    transport_adapter::TransportSessionKey,
+    transport_adapter::{SourcePolicySignal, TransportSessionKey},
 };
 
 pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
@@ -43,6 +43,7 @@ pub(super) fn observe_rtc_event(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     diagnostics: &Arc<DiagnosticsStore>,
     metrics: &RuntimeMetrics,
+    source_policy_signal: &SourcePolicySignal,
     session_key: &TransportSessionKey,
     event: &Event,
 ) {
@@ -52,6 +53,9 @@ pub(super) fn observe_rtc_event(
         }
         Event::Connected => {
             metrics.record_transport_dtls_connected();
+        }
+        Event::EgressBitrateEstimate(kind) => {
+            observe_receiver_bandwidth(snapshot_state, source_policy_signal, session_key, kind);
         }
         _ => {}
     }
@@ -76,6 +80,27 @@ pub(super) fn observe_rtc_event(
         session_key.media_worker_id(),
         fields,
     );
+}
+
+fn observe_receiver_bandwidth(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    source_policy_signal: &SourcePolicySignal,
+    session_key: &TransportSessionKey,
+    kind: &BweKind,
+) {
+    let Some(estimate_bps) = (match kind {
+        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate) => Some(bitrate.as_u64()),
+        _ => None,
+    }) else {
+        return;
+    };
+    let Ok(mut snapshot_state) = snapshot_state.lock() else {
+        return;
+    };
+    if snapshot_state.set_receiver_bandwidth(session_key, estimate_bps) == Some(estimate_bps) {
+        return;
+    }
+    source_policy_signal.mark_dirty(session_key.channel_instance_id());
 }
 
 pub(crate) fn transport_ice_state(state: IceConnectionState) -> TransportIceState {
