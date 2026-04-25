@@ -13,7 +13,7 @@
 //! - `forwarding_planner`: adapter-local destination planning over forwarded packets
 //! - `local_forwarding`: destination-local send boundary for packet fan-out
 //! - `relay_registry`: source-media-scoped relay targets for inter-worker mailboxes and future inter-node forwarding
-//! - `route_control`: transport-native control policy for keyed feedback absorption and gating
+//! - `route_control`: transport-native packet gates, active-speaker packet state, and keyframe coalescing
 //! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
 //! - `sdp_simulcast`: RTC-edge SDP RID/simulcast offer and answer helpers
 //! - `shared_payload`: adapter-local payload ownership boundary for forwarding and recording

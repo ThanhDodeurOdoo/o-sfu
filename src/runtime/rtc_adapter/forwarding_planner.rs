@@ -1,3 +1,11 @@
+//! Packet forwarding planner for the RTC adapter.
+//!
+//! The planner converts buffered `ForwardedPacket` entries into concrete
+//! forwarding destinations after route-control gates have already been
+//! projected into packet-facing terms. It owns mechanical fanout only: local
+//! RTC destinations, packet sinks such as recording, and relay mailboxes. It
+//! does not interpret room layout, receiver budget, or source-policy reasons.
+
 use super::{
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
@@ -11,7 +19,6 @@ use crate::runtime::{
     transport_adapter::TransportMediaId as RouteTransportMediaId,
 };
 
-// TODO: needs documentation:
 pub(super) fn populate_forward_routes(
     state: &RtcBootstrapState,
     packet_sink_registry: &ChannelPacketSinkRegistry,

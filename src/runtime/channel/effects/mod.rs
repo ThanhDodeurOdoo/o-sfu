@@ -1,39 +1,36 @@
-//! Post-lock effect plans for `Chanel` transitions.
+//! Post-lock effect plans for `Channel` transitions.
 //!
 //! `ChannelState` owns pure room mutation and validation under lock. This
 //! module owns the transport calls, diagnostics writes and fanout that must run
 //! after that lock is released.
 //!
 //! 1. read or mutate channel state under lock
-//! 2. build a typed plan for the side effects of that transitition
+//! 2. build a typed plan for the side effects of that transition
 //! 3. execute transport work after unlock
 //! 4. commit only the post-transport state that is still valid
 //!
 //! The important invariant is that each transition makes its ordering and failure
 //! handling explicit where room state meets transport state.
 
-use std::collections::BTreeSet;
-
 use o_sfu_protocol::shared::{SessionId, StreamType};
 use tracing::warn;
+
+mod source_policy;
+pub(super) use source_policy::SourcePolicyEffectPlan;
 
 use super::{
     Channel, ChannelMediaCounts,
     state::{
-        ChannelState, ConsumerBootstrapOrigin, ConsumerPacketSelectionUpdate, ConsumerRouteUpdate,
-        FeaturedSessionUpdate, PendingConsumerBootstrap, PendingConsumerBootstrapTarget,
-        PlannedConsumerBootstrap, PlannedSubscriptionChange, PreparedConsumerBootstrap,
-        TransportMediaRemoval,
+        ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
+        PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
+        PreparedConsumerBootstrap, TransportMediaRemoval,
     },
 };
 use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{
-        ActiveSpeakerSource, ConsumerPacketGateUpdate, MediaPort, ReceiverBandwidthSnapshot,
-        TransportMediaId,
-    },
+    transport_adapter::{MediaPort, TransportMediaId},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -319,7 +316,7 @@ impl ConsumerBootstrapOp {
     /// Declare the transport-side consumer media before committing the channel
     /// bootstrap.
     ///
-    /// Keepign this outside the state commit makes transport failure handling
+    /// Keeping this outside the state commit makes transport failure handling
     /// explicit: the channel can release the pending bootstrap instead of
     /// committing room state that points at missing transport media
     async fn declare_consumer_transport_media(
@@ -501,176 +498,5 @@ impl UnpublishEffectPlan {
         MediaCountDelta::new(media_counts_before, media_counts_after).record(channel);
         outcome.emit(&self.session_id, self.stream_type);
         true
-    }
-}
-
-/// Executes room-owned source policy after pure channel planning.
-///
-/// Consumer packet updates touch the transport before channel state records the
-/// new selector. That keeps stale transport failures local to one update
-/// instead of rolling back a room transition that may already have moved on.
-/// Featured-session projection is still part of this plan so outbound layout
-/// state is derived from the same active-speaker observation.
-#[derive(Debug, Default)]
-pub(super) struct SourcePacketPolicyEffectPlan {
-    consumer_packets: Vec<ConsumerPacketSelectionUpdate>,
-    featured_sessions: Vec<FeaturedSessionUpdate>,
-}
-
-impl SourcePacketPolicyEffectPlan {
-    /// Builds a cold-path effect plan from one transport observation snapshot.
-    ///
-    /// The caller has already released any long-lived transport work. This
-    /// constructor only reads channel state and does not mutate transport state.
-    pub(super) fn from_state(
-        state: &ChannelState,
-        active_speaker_sources: &[ActiveSpeakerSource],
-        receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
-    ) -> Self {
-        Self {
-            consumer_packets: state.consumer_packet_selection_updates(
-                active_speaker_sources,
-                receiver_bandwidth_snapshot,
-            ),
-            featured_sessions: state.featured_session_updates(active_speaker_sources),
-        }
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.consumer_packets.is_empty() && self.featured_sessions.is_empty()
-    }
-
-    /// Applies transport-visible gates before committing selector state.
-    ///
-    /// This method must not hold the chanel write lock while awaiting the
-    /// transport adapter. Only updates accepted by the transport are committed
-    /// back into `ChannelState`
-    pub(super) async fn execute(self, channel: &Channel, media_port: &impl MediaPort) {
-        let applied_consumer_packet_updates =
-            Self::apply_consumer_packet_updates(channel, media_port, self.consumer_packets).await;
-        if applied_consumer_packet_updates.is_empty() && self.featured_sessions.is_empty() {
-            return;
-        }
-        Self::record_source_selection_metrics(channel, &applied_consumer_packet_updates);
-        let info_fanout = {
-            let mut state = channel.state.write().await;
-            state.commit_consumer_packet_selection_updates(&applied_consumer_packet_updates);
-            state.commit_featured_session_updates(&self.featured_sessions)
-        };
-        if let Some(info_fanout) = info_fanout {
-            info_fanout.emit();
-        }
-    }
-
-    fn record_source_selection_metrics(
-        channel: &Channel,
-        updates: &[ConsumerPacketSelectionUpdate],
-    ) {
-        for update in updates {
-            if update.packet_gate().is_some() {
-                channel
-                    .metrics
-                    .record_source_selection_update(update.selector());
-            }
-        }
-    }
-
-    async fn apply_consumer_packet_updates(
-        channel: &Channel,
-        media_port: &impl MediaPort,
-        updates: Vec<ConsumerPacketSelectionUpdate>,
-    ) -> Vec<ConsumerPacketSelectionUpdate> {
-        let mut packet_gate_updates = Vec::with_capacity(updates.len());
-        let mut update_indexes_with_packet_gates = Vec::with_capacity(updates.len());
-        for (index, update) in updates.iter().enumerate() {
-            let Some(packet_gate) = update.packet_gate() else {
-                continue;
-            };
-            packet_gate_updates.push(ConsumerPacketGateUpdate::new(
-                channel.transport_session_key(
-                    update.consumer_session_id(),
-                    update.consumer_connection_id(),
-                ),
-                update.consumer_transport_media_id(),
-                channel.transport_session_key(
-                    update.source_session_id(),
-                    update.source_connection_id(),
-                ),
-                update.source_transport_media_id(),
-                packet_gate.clone(),
-            ));
-            update_indexes_with_packet_gates.push(index);
-        }
-        let rejected_packet_gate_update_offsets =
-            Self::rejected_packet_gate_updates(media_port, &packet_gate_updates).await;
-        let rejected_packet_gate_updates = rejected_packet_gate_update_offsets
-            .into_iter()
-            .filter_map(|offset| update_indexes_with_packet_gates.get(offset).copied())
-            .collect::<BTreeSet<_>>();
-        let mut applied_updates = Vec::with_capacity(updates.len());
-        for (index, update) in updates.into_iter().enumerate() {
-            if rejected_packet_gate_updates.contains(&index) {
-                warn!(
-                    consumer_session_id = ?update.consumer_session_id(),
-                    source_session_id = ?update.source_session_id(),
-                    source_transport_media_id = ?update.source_transport_media_id(),
-                    consumer_transport_media_id = ?update.consumer_transport_media_id(),
-                    "transport adapter rejected the receiver-driven packet selection update"
-                );
-                continue;
-            }
-            if !Self::request_adaptation_keyframe(channel, media_port, &update).await {
-                warn!(
-                    consumer_session_id = ?update.consumer_session_id(),
-                    source_session_id = ?update.source_session_id(),
-                    source_transport_media_id = ?update.source_transport_media_id(),
-                    consumer_transport_media_id = ?update.consumer_transport_media_id(),
-                    "transport adapter failed to request an adaptation keyframe refresh"
-                );
-            }
-            applied_updates.push(update);
-        }
-        applied_updates
-    }
-
-    async fn rejected_packet_gate_updates(
-        media_port: &impl MediaPort,
-        packet_gate_updates: &[ConsumerPacketGateUpdate],
-    ) -> BTreeSet<usize> {
-        let mut rejected_updates = BTreeSet::new();
-        let results = media_port
-            .set_consumer_packet_gates(packet_gate_updates)
-            .await;
-        for index in 0..packet_gate_updates.len() {
-            if !matches!(results.get(index), Some(Ok(()))) {
-                rejected_updates.insert(index);
-            }
-        }
-        rejected_updates
-    }
-
-    async fn request_adaptation_keyframe(
-        channel: &Channel,
-        media_port: &impl MediaPort,
-        update: &ConsumerPacketSelectionUpdate,
-    ) -> bool {
-        if !update.request_keyframe() {
-            return true;
-        }
-        media_port
-            .request_consumer_keyframe(
-                &channel.transport_session_key(
-                    update.consumer_session_id(),
-                    update.consumer_connection_id(),
-                ),
-                update.consumer_transport_media_id(),
-                &channel.transport_session_key(
-                    update.source_session_id(),
-                    update.source_connection_id(),
-                ),
-                update.source_transport_media_id(),
-            )
-            .await
-            .is_ok()
     }
 }

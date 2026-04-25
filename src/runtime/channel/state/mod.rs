@@ -6,7 +6,7 @@
 //! `presence` owns client-driven session presence state.
 //! `recording` owns channel recording-control state updates and fan-out.
 //! `session_info_projection` owns outward-facing session and peer projection.
-//! `source_packet_policy` owns room-level source-layer selection planning.
+//! `video_policy` owns room-level source selection input, planning, projection, and commit.
 //! `shared` owns the in-memory state and bookkeeping types.
 //! `membership` owns session lifecycle, presence fan-out, and negotiation readiness.
 //! `media` owns producer/consumer bootstrap and routing-side media bookkeeping.
@@ -22,9 +22,9 @@ mod presence;
 mod recording;
 mod session_info_projection;
 mod shared;
-mod source_packet_policy;
 #[cfg(test)]
 mod test_support;
+mod video_policy;
 
 pub(crate) use self::media::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(in crate::runtime::channel) use self::{
@@ -37,5 +37,5 @@ pub(in crate::runtime::channel) use self::{
         DisconnectSessionsOutcome, JoinSessionOutcome, LeaveSessionOutcome, LifecycleEffects,
     },
     shared::{ChannelState, TransportMediaRemoval},
-    source_packet_policy::{ConsumerPacketSelectionUpdate, FeaturedSessionUpdate},
+    video_policy::{ConsumerPacketSelectionUpdate, FeaturedSessionUpdate},
 };

@@ -1,9 +1,9 @@
-//! Async executer for room-owned source packet policy.
+//! Async synchronization bridge for room-owned video source policy.
 //!
 //! This file connects `Channel` to the pure source-selection policy in
-//! `state::source_packet_policy`. The state module decides which source-domain
-//! selector each receiver should use, while `SourcePacketPolicyEffectPlan`
-//! applies the resulting tranpsort gates after the channel lock is released.
+//! `state::video_policy`. Channel state decides which source-domain selector
+//! each receiver should use, while `SourcePolicyEffectPlan` applies the
+//! resulting transport gates after the channel lock is released.
 //!
 //! The observations consumed here are best-effort transport snapshots. They
 //! guide quality policy, but they do not become authoritative room state until
@@ -12,12 +12,12 @@
 //!
 //! # Concurrency model
 //!
-//! This module muts not hold a channel lock across observability or media-port
+//! This module must not hold a channel lock across observability or media-port
 //! awaits. It takes short state snapshots, builds a cold-path effect plan and
 //! lets the effect layer revalidate connection and media handles before any
 //! selector state is stored.
 
-use super::{Channel, effects::SourcePacketPolicyEffectPlan};
+use super::{Channel, effects::SourcePolicyEffectPlan};
 use crate::runtime::transport_adapter::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
 
 impl Channel {
@@ -47,14 +47,14 @@ impl Channel {
     /// Refreshes source packet policy from a caller-provided active-speaker snapshot.
     ///
     /// This variant exists so manager-level fanout and tests can reuse the same
-    /// policy path after they already have an active-speaker obesrvation. The
+    /// policy path after they already have an active-speaker observation. The
     /// method still asks the observability port for receiver bandwidth using
     /// the current transport sessions, because bandwidth estimates must be
     /// scoped to the sessions that are still attached to this channel
     ///
     /// The state is read twice on purpose. The first read gathers transport
     /// session keys for the bandwidth query, then the lock is released before
-    /// consulting observability. The second read builds the effect planfrom
+    /// consulting observability. The second read builds the effect plan from
     /// the latest room state. Any change between the two snapshots is handled
     /// by the effect plan's stale-update checks.
     pub(super) async fn sync_source_packet_selection_policy_from_observations(
@@ -77,7 +77,7 @@ impl Channel {
             observability_port.receiver_bandwidth_snapshot(&session_keys);
         let effect_plan = {
             let state = self.state.read().await;
-            SourcePacketPolicyEffectPlan::from_state(
+            SourcePolicyEffectPlan::from_state(
                 &state,
                 active_speaker_sources,
                 &receiver_bandwidth_snapshot,

@@ -15,7 +15,7 @@
 //!    |- router_state        -> bridge into the router core
 //!    |- topology            -> routing placement boundary
 //!    |- outbound            -> shared server-to-client fanout helpers
-//!    `- source_packet_policy-> room-owned packet gate intent for transport execution
+//!    `- source_policy_sync -> room-owned video policy refresh bridge
 //! ```
 
 mod controller;
@@ -34,7 +34,7 @@ mod recording;
 mod router_state;
 pub(crate) mod rtp_capabilities;
 mod session_negotiation;
-mod source_packet_policy;
+mod source_policy_sync;
 mod state;
 #[cfg(test)]
 mod tests;

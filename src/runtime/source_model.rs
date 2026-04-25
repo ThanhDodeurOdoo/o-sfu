@@ -1,10 +1,8 @@
-//! Runtime-native source and encoding vocabulary for published media.
-//!
-//! # !!!! TEMPORARY DOC, THE IMPLEMENTATION MAY CHANGE AS WE DEVELOP SIMULCAST/SVC. !!!!
+//! Runtime-native source, encoding, and selection vocabulary for published media.
 //!
 //! # Boundary role
 //!
-//! This module defines the room-domain source identity that chanel state,
+//! This module defines the room-domain source identity that channel state,
 //! transport projection, diagnostics and recording metadata are expected to
 //! share. It is the vocabulary above SDP, browser APIs and worker-local media
 //! handles: those layers may attach facts to a source, but they must not define
@@ -15,14 +13,22 @@
 //! `Rid` and `Ssrc` stay as negotiated or transport-facing attachment points.
 //! Keeping those identities separate lets later same-room
 //! spillover and recording consume the same source inventory without redefining
-//! it around local worker placement (recording and spillover are not implemented
-//! yet, just built ahead with them in mind, todo: remove comment when it is implemented)
+//! it around local worker placement.
 //!
 //! # Performance
 //!
 //! The types here are cold-path metadata used while planning or describing
 //! publications. Packet loops should consume already-projected transport gates
 //! instead of walking these descriptors per packet.
+//!
+//! # Upload layer profiles
+//!
+//! The server-owned upload ladder currently lives at the RTC offer edge as
+//! upload-slot metadata, while this module stores the negotiated source
+//! encodings that result from the answer. When task 17 makes resolution scale
+//! and frame-rate hints server-owned, the lasting upload-layer profile
+//! vocabulary belongs here so browser hints, source descriptors, diagnostics
+//! and future recording manifests share one model.
 
 use std::fmt::{self, Display, Formatter};
 
@@ -260,6 +266,28 @@ pub(crate) enum SourceRoomPolicySelector {
     Featured,
     /// Source is consumed as a small or background view.
     Thumbnail,
+}
+
+/// Server-owned reason why video policy may withhold a live route.
+///
+/// The current production policy never emits pause actions; it only selects
+/// encodings. The reason vocabulary is defined here so the later budget solver,
+/// diagnostics, and recording metadata all describe policy pauses with the same
+/// source-domain terms instead of transport drop reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "semantic route pause reasons are reserved for the upcoming budget solver"
+)]
+pub(crate) enum PolicyPauseReason {
+    /// The receiver budget cannot fit this route after lower layers were tried.
+    BudgetPressure,
+    /// The receiver layout says the source is currently hidden.
+    HiddenTile,
+    /// The receiver layout puts this source outside the visible tile set.
+    OverflowTile,
+    /// No negotiated encoding or operating point can be forwarded usefully.
+    MissingUsableLayer,
 }
 
 /// Consumer-side desired state for one published source.
@@ -542,7 +570,7 @@ impl SourceEncodingDescriptor {
 ///
 /// The fields are optional where negotiation may not have learned the fact yet.
 /// The source and encoding ids must still be stable before the descriptor is
-/// stored in chanel state
+/// stored in channel state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceEncodingDescriptorParts {
     /// Stable encoding id allocated by the room-domain registry.
@@ -568,7 +596,7 @@ pub(crate) struct SourceEncodingDescriptorParts {
 /// # Error handling guidance
 ///
 /// These are construction-time domain errors. They should be handled before a
-/// publish becomes authoritative in chanel state. They are not transport
+/// publish becomes authoritative in channel state. They are not transport
 /// failures and should not be retried without rebuilding the source descriptor
 /// from valid runtime facts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

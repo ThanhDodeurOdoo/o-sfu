@@ -63,7 +63,7 @@ use crate::runtime::{
 
 /// Controls whether route-source lookup may create a remote-source entry.
 ///
-/// Registering a consumer route is the only path alwowed to install remote
+/// Registering a consumer route is the only path allowed to install remote
 /// source control. Later active, gate and keyframe changes must find an existing
 /// registration so stale commands cannot recreate a removed remote route.
 enum RouteSourceAccess {
@@ -194,7 +194,7 @@ pub(crate) fn respond_set_remote_source_packet_gate(
 
 /// Reduces negotiated consumer RTP parameters into the route-level packet gate.
 ///
-/// A single selected RID means this route shoud forward only that simulcast
+/// A single selected RID means this route should forward only that simulcast
 /// layer. Mixed or RID-less encodings stay open so non-simulcast streams and
 /// broader compatibility cases keep the previous behavior.
 pub(super) fn consumer_packet_gate(
