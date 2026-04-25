@@ -10,7 +10,7 @@ use super::{
 };
 use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, SessionId,
-    SessionInfo, StopCode, StreamType,
+    SessionInfo, StopCode, StreamType, VideoLayoutIntent,
 };
 
 #[test]
@@ -106,6 +106,7 @@ fn protocol_subscribe_message_decodes_flat_download_state_shape() {
             "sessionId": 7,
             "audio": true,
             "camera": false,
+            "cameraLayout": "pinned",
         })),
         request_id: None,
         response_to: None,
@@ -120,6 +121,8 @@ fn protocol_subscribe_message_decodes_flat_download_state_shape() {
                     audio: Some(true),
                     camera: Some(false),
                     screen: None,
+                    camera_layout: Some(VideoLayoutIntent::Pinned),
+                    ..DownloadStates::default()
                 },
             }
         )))

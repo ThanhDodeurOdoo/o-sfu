@@ -32,6 +32,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -52,6 +53,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
                 camera: Some(true),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -90,6 +92,7 @@ async fn consumption_change_updates_transport_route_activity() {
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -136,6 +139,7 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -163,6 +167,7 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
                 camera: Some(true),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -195,6 +200,7 @@ async fn consumption_change_ignores_nonexistent_consumer() {
                 camera: Some(false),
                 audio: Some(false),
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -218,6 +224,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -292,6 +299,7 @@ async fn consumption_change_handles_multiple_stream_types() {
                 camera: Some(false),
                 audio: Some(false),
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )
@@ -340,6 +348,7 @@ async fn session_leave_purges_producer_and_consumer_indexes() {
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
             &adapter,
         )

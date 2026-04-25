@@ -11,6 +11,7 @@ use crate::runtime::{
         DiagnosticsSessionTransport, DiagnosticsSessionView, DiagnosticsSource,
         DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
         DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
+        DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
     },
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
@@ -192,8 +193,13 @@ impl ChannelState {
                     source.owner().session_id(),
                     source.stream_type(),
                 )?;
+                let layout_intent = self.diagnostics_video_layout_intent(session_id, source);
                 Some(DiagnosticsSubscription {
                     consumer_transport_media_id: Some(consumer_state.consumer_media.as_u64()),
+                    layout_priority: layout_intent
+                        .map(|intent| DiagnosticsVideoRoutePriority::from(intent.priority())),
+                    layout_role: layout_intent
+                        .map(|intent| DiagnosticsVideoLayoutRole::from(intent.role())),
                     producer_session_id: source.owner().session_id().clone(),
                     selection: diagnostics_source_selection(source, selection),
                     source_id: source.source_id().as_u64(),
@@ -227,8 +233,13 @@ impl ChannelState {
                 .get(key)
                 .copied()
                 .unwrap_or_else(|| ConsumerSourceSelection::open(true));
+            let layout_intent = self.diagnostics_video_layout_intent(session_id, source);
             Some(DiagnosticsSubscription {
                 consumer_transport_media_id: None,
+                layout_priority: layout_intent
+                    .map(|intent| DiagnosticsVideoRoutePriority::from(intent.priority())),
+                layout_role: layout_intent
+                    .map(|intent| DiagnosticsVideoLayoutRole::from(intent.role())),
                 producer_session_id: source.owner().session_id().clone(),
                 selection: diagnostics_source_selection(source, selection),
                 source_id: source.source_id().as_u64(),

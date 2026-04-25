@@ -42,6 +42,21 @@ export function validateDownloadStates(states: DownloadStates): void {
             throw new Error("download state flags must be booleans when provided");
         }
     }
+    for (const [name, value] of [
+        ["cameraLayout", states.cameraLayout],
+        ["screenLayout", states.screenLayout]
+    ] as const) {
+        if (
+            value !== undefined &&
+            value !== "featured" &&
+            value !== "pinned" &&
+            value !== "visible_thumbnail" &&
+            value !== "hidden" &&
+            value !== "overflow"
+        ) {
+            throw new Error(`${name} must be a valid video layout intent when provided`);
+        }
+    }
 }
 
 export function validateTrackForStreamType(

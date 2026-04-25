@@ -11,7 +11,9 @@ use crate::{
     config::{MediaCodecFlags, RtcPortRange},
     runtime::{
         channel::Channel,
-        diagnostics::DiagnosticsStore,
+        diagnostics::{
+            DiagnosticsStore, DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+        },
         metrics::RuntimeMetrics,
         recording::MediaTap,
         test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
@@ -740,6 +742,31 @@ fn assert_consumer_packet_selection_update(
     }));
 }
 
+async fn assert_subscription_layout(
+    channel: &Arc<Channel>,
+    adapter: &RuntimeTransportAdapter,
+    consumer_session_id: &SessionId,
+    stream_type: StreamType,
+    expected_role: DiagnosticsVideoLayoutRole,
+    expected_priority: DiagnosticsVideoRoutePriority,
+) {
+    let diagnostics = channel.diagnostics_session_views(adapter).await;
+    let Some(session) = diagnostics
+        .iter()
+        .find(|view| &view.session_id == consumer_session_id)
+    else {
+        panic!("diagnostics should include the consumer session");
+    };
+    assert!(
+        session.subscriptions.iter().any(|subscription| {
+            subscription.stream_type == stream_type
+                && subscription.layout_role == Some(expected_role)
+                && subscription.layout_priority == Some(expected_priority)
+        }),
+        "diagnostics should expose the subscription layout role and priority"
+    );
+}
+
 #[tokio::test]
 async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate() {
     let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
@@ -871,6 +898,183 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
             "hi",
         );
     }
+}
+
+#[tokio::test]
+async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() {
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
+    publish_audio_and_camera(&channel, &SessionId::Integer(1), &adapter).await;
+    publish_audio_and_camera(&channel, &SessionId::Integer(3), &adapter).await;
+    let (_first_audio_media_id, _first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+    let (third_audio_media_id, _third_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(3)).await;
+
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        third_audio_media_id,
+        Instant::now(),
+    )]);
+    channel
+        .test_api()
+        .lifecycle()
+        .update_session_info_runtime(
+            &SessionId::Integer(3),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+
+    let baseline_event_count = fake.snapshot_events().len();
+    channel
+        .test_api()
+        .media()
+        .update_subscription(
+            &SessionId::Integer(2),
+            &SessionId::Integer(1),
+            &DownloadStates {
+                camera_layout: Some(VideoLayoutIntent::Pinned),
+                ..DownloadStates::default()
+            },
+            &adapter,
+        )
+        .await;
+
+    let events = fake.snapshot_events();
+    let layout_events = &events[baseline_event_count..];
+    assert_consumer_packet_selection_update(
+        layout_events,
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "hi",
+    );
+}
+
+#[tokio::test]
+async fn hidden_camera_layout_suppresses_active_speaker_featured_quality() {
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
+    publish_audio_and_camera(&channel, &SessionId::Integer(1), &adapter).await;
+    let (first_audio_media_id, _first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        first_audio_media_id,
+        Instant::now(),
+    )]);
+    channel
+        .test_api()
+        .lifecycle()
+        .update_session_info_runtime(
+            &SessionId::Integer(1),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+
+    let baseline_event_count = fake.snapshot_events().len();
+    channel
+        .test_api()
+        .media()
+        .update_subscription(
+            &SessionId::Integer(2),
+            &SessionId::Integer(1),
+            &DownloadStates {
+                camera_layout: Some(VideoLayoutIntent::Hidden),
+                ..DownloadStates::default()
+            },
+            &adapter,
+        )
+        .await;
+
+    let events = fake.snapshot_events();
+    let layout_events = &events[baseline_event_count..];
+    assert_consumer_packet_selection_update(
+        layout_events,
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "lo",
+    );
+}
+
+#[tokio::test]
+async fn explicit_visible_thumbnail_camera_layout_stays_on_thumbnail_quality() {
+    let (channel, adapter, fake) = setup_three_ready_sessions_with_fake().await;
+    publish_audio_and_camera(&channel, &SessionId::Integer(1), &adapter).await;
+    let (first_audio_media_id, _first_camera_media_id) =
+        source_media_ids(&channel, &SessionId::Integer(1)).await;
+
+    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
+        first_audio_media_id,
+        Instant::now(),
+    )]);
+    channel
+        .test_api()
+        .lifecycle()
+        .update_session_info_runtime(
+            &SessionId::Integer(1),
+            SessionInfo::default(),
+            false,
+            &adapter,
+        )
+        .await;
+
+    let baseline_event_count = fake.snapshot_events().len();
+    channel
+        .test_api()
+        .media()
+        .update_subscription(
+            &SessionId::Integer(2),
+            &SessionId::Integer(1),
+            &DownloadStates {
+                camera_layout: Some(VideoLayoutIntent::VisibleThumbnail),
+                ..DownloadStates::default()
+            },
+            &adapter,
+        )
+        .await;
+
+    let events = fake.snapshot_events();
+    let layout_events = &events[baseline_event_count..];
+    assert_consumer_packet_selection_update(
+        layout_events,
+        &SessionId::Integer(2),
+        &SessionId::Integer(1),
+        "lo",
+    );
+}
+
+#[tokio::test]
+async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
+    let (channel, adapter, _fake, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_sessions_with_fake().await;
+
+    assert!(
+        channel
+            .test_api()
+            .media()
+            .publish_track(
+                &SessionId::Integer(1),
+                StreamType::Screen,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    drain_outbound(&mut publisher_rx);
+    drain_outbound(&mut subscriber_rx);
+
+    assert_subscription_layout(
+        &channel,
+        &adapter,
+        &SessionId::Integer(2),
+        StreamType::Screen,
+        DiagnosticsVideoLayoutRole::ScreenShare,
+        DiagnosticsVideoRoutePriority::ScreenShare,
+    )
+    .await;
 }
 
 #[tokio::test]

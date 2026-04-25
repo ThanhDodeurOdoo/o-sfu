@@ -14,6 +14,8 @@ export type PublishedSourceId = string;
 
 export type SourceEncodingId = string;
 
+export type VideoLayoutIntent = "featured" | "pinned" | "visible_thumbnail" | "hidden" | "overflow";
+
 export interface ConnectOptions {
     channelUUID?: string;
     iceServers?: RTCIceServer[];
@@ -23,6 +25,8 @@ export interface DownloadStates {
     audio?: boolean;
     camera?: boolean;
     screen?: boolean;
+    cameraLayout?: VideoLayoutIntent;
+    screenLayout?: VideoLayoutIntent;
 }
 
 export interface SourceEncodingDescriptor {

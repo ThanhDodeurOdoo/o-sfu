@@ -282,6 +282,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
         )
         .into_parts();
@@ -385,6 +386,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
                 camera: Some(false),
                 audio: None,
                 screen: None,
+                ..DownloadStates::default()
             },
         )
         .into_parts();

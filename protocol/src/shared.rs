@@ -133,6 +133,10 @@ pub struct DownloadStates {
     pub camera: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screen: Option<bool>,
+    #[serde(rename = "cameraLayout", skip_serializing_if = "Option::is_none")]
+    pub camera_layout: Option<VideoLayoutIntent>,
+    #[serde(rename = "screenLayout", skip_serializing_if = "Option::is_none")]
+    pub screen_layout: Option<VideoLayoutIntent>,
 }
 
 impl DownloadStates {
@@ -146,6 +150,16 @@ impl DownloadStates {
         .into_iter()
         .flatten()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoLayoutIntent {
+    Featured,
+    Pinned,
+    VisibleThumbnail,
+    Hidden,
+    Overflow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

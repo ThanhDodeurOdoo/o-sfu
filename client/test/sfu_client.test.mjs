@@ -1323,6 +1323,31 @@ test("subscribe overlays local download state onto existing remote tracks", asyn
     ]);
 });
 
+test("subscribe forwards additive video layout intent to the protocol core", async () => {
+    const core = new FakeProtocolCore();
+    const client = new SfuClient({
+        createProtocolCore: () => core,
+        createWebSocket: () => new FakeWebSocket("ws://example.test/ws")
+    });
+
+    client.subscribe(42, {
+        camera: true,
+        cameraLayout: "pinned",
+        screenLayout: "hidden"
+    });
+
+    assert.deepEqual(core.subscriptionUpdates, [
+        {
+            sessionId: 42,
+            states: {
+                camera: true,
+                cameraLayout: "pinned",
+                screenLayout: "hidden"
+            }
+        }
+    ]);
+});
+
 test("subscribe preferences apply to future remote track bindings", async () => {
     const core = new FakeProtocolCore();
     const sockets = [];

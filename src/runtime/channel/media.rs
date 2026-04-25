@@ -7,8 +7,10 @@ use super::{
     state::ConsumerBootstrapOrigin,
 };
 use crate::runtime::{
-    ConnectionId, diagnostics::DiagnosticsEventData, telemetry::schema::event as telemetry_event,
-    transport_adapter::MediaPort,
+    ConnectionId,
+    diagnostics::DiagnosticsEventData,
+    telemetry::schema::event as telemetry_event,
+    transport_adapter::{MediaPort, ObservabilityPort},
 };
 
 impl Channel {
@@ -136,7 +138,7 @@ impl Channel {
         connection_id: ConnectionId,
         target_session_id: &SessionId,
         states: &DownloadStates,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + ObservabilityPort),
     ) {
         let effect_plan = {
             let mut state = self.state.write().await;
@@ -169,6 +171,8 @@ impl Channel {
             )
         };
         effect_plan.execute(self, media_port).await;
+        self.sync_source_packet_selection_policy(Some(media_port), media_port)
+            .await;
     }
 
     pub(crate) async fn is_stream_published(

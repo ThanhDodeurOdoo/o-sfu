@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::runtime::{
     rtc_adapter::TransportSessionHealth,
-    source_model::{SourceRoomPolicySelector, SourceSelector},
+    source_model::{SourceRoomPolicySelector, SourceRoutePriority, SourceSelector},
     transport_adapter::{
         ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
     },
@@ -44,8 +44,13 @@ pub(crate) enum DiagnosticsSourceSelector {
     Open,
     Encoding,
     OperatingPoint,
+    RoomPolicyPinned,
     RoomPolicyFeatured,
-    RoomPolicyThumbnail,
+    RoomPolicyScreenShare,
+    RoomPolicyActiveSpeaker,
+    RoomPolicyVisibleThumbnail,
+    RoomPolicyHidden,
+    RoomPolicyOverflow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +73,28 @@ pub(crate) enum DiagnosticsTemporalLayerMetadata {
 pub(crate) enum DiagnosticsTemporalLayerSelection {
     NotSelected,
     Selected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticsVideoLayoutRole {
+    Pinned,
+    Featured,
+    ScreenShare,
+    ActiveSpeaker,
+    VisibleThumbnail,
+    Hidden,
+    Overflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticsVideoRoutePriority {
+    PinnedOrFeatured,
+    ScreenShare,
+    ActiveSpeaker,
+    VisibleThumbnail,
+    HiddenOrOverflow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +248,10 @@ pub(crate) struct DiagnosticsSourceSelection {
 pub(crate) struct DiagnosticsSubscription {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) consumer_transport_media_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) layout_priority: Option<DiagnosticsVideoRoutePriority>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) layout_role: Option<DiagnosticsVideoLayoutRole>,
     pub(crate) producer_session_id: SessionId,
     pub(crate) selection: DiagnosticsSourceSelection,
     pub(crate) source_id: u64,
@@ -393,11 +424,22 @@ impl From<SourceSelector> for DiagnosticsSourceSelector {
             SourceSelector::Open => Self::Open,
             SourceSelector::Encoding(_) => Self::Encoding,
             SourceSelector::OperatingPoint(_) => Self::OperatingPoint,
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Pinned) => Self::RoomPolicyPinned,
             SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
                 Self::RoomPolicyFeatured
             }
-            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Thumbnail) => {
-                Self::RoomPolicyThumbnail
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::ScreenShare) => {
+                Self::RoomPolicyScreenShare
+            }
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::ActiveSpeaker) => {
+                Self::RoomPolicyActiveSpeaker
+            }
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::VisibleThumbnail) => {
+                Self::RoomPolicyVisibleThumbnail
+            }
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Hidden) => Self::RoomPolicyHidden,
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Overflow) => {
+                Self::RoomPolicyOverflow
             }
         }
     }
@@ -411,6 +453,32 @@ impl From<SourceSelector> for DiagnosticsSourceSelectionReason {
                 Self::ReceiverAdaptation
             }
             SourceSelector::RoomPolicy(_) => Self::RoomPolicy,
+        }
+    }
+}
+
+impl From<SourceRoomPolicySelector> for DiagnosticsVideoLayoutRole {
+    fn from(value: SourceRoomPolicySelector) -> Self {
+        match value {
+            SourceRoomPolicySelector::Pinned => Self::Pinned,
+            SourceRoomPolicySelector::Featured => Self::Featured,
+            SourceRoomPolicySelector::ScreenShare => Self::ScreenShare,
+            SourceRoomPolicySelector::ActiveSpeaker => Self::ActiveSpeaker,
+            SourceRoomPolicySelector::VisibleThumbnail => Self::VisibleThumbnail,
+            SourceRoomPolicySelector::Hidden => Self::Hidden,
+            SourceRoomPolicySelector::Overflow => Self::Overflow,
+        }
+    }
+}
+
+impl From<SourceRoutePriority> for DiagnosticsVideoRoutePriority {
+    fn from(value: SourceRoutePriority) -> Self {
+        match value {
+            SourceRoutePriority::PinnedOrFeatured => Self::PinnedOrFeatured,
+            SourceRoutePriority::ScreenShare => Self::ScreenShare,
+            SourceRoutePriority::ActiveSpeaker => Self::ActiveSpeaker,
+            SourceRoutePriority::VisibleThumbnail => Self::VisibleThumbnail,
+            SourceRoutePriority::HiddenOrOverflow => Self::HiddenOrOverflow,
         }
     }
 }

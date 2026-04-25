@@ -418,6 +418,7 @@ mod tests {
                 audio: Some(false),
                 camera: None,
                 screen: Some(true),
+                ..DownloadStates::default()
             },
         });
         assert_round_trip(
@@ -475,6 +476,7 @@ mod tests {
                     audio: Some(false),
                     camera: None,
                     screen: None,
+                    ..DownloadStates::default()
                 },
             })
         );

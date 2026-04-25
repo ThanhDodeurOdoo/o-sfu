@@ -1,13 +1,13 @@
 //! Receiver video layout intent derived from current room state.
 //!
-//! The current implementation has only two server-derived roles: featured
-//! camera and thumbnail camera. Keeping that role explicit gives later manual
-//! pinning, hidden tiles, and overflow layout policy one owner without teaching
-//! the RTC route-control layer about room UI semantics.
+//! Layout roles are receiver-specific room policy. The transport layer only
+//! sees the selector that this policy later resolves to a packet gate; it never
+//! learns whether a route is pinned, screen-share, active-speaker, visible,
+//! hidden, or overflow.
 
 use std::collections::BTreeSet;
 
-use o_sfu_protocol::shared::SessionId;
+use o_sfu_protocol::shared::{DownloadStates, SessionId, StreamType, VideoLayoutIntent};
 
 use super::{
     super::shared::ChannelState,
@@ -17,23 +17,69 @@ use super::{
         first_featured_camera_sessions_for_active_speakers,
     },
 };
-use crate::runtime::transport_adapter::ActiveSpeakerSource;
+use crate::runtime::{
+    source_model::{PublishedSourceDescriptor, SourceRoomPolicySelector, SourceRoutePriority},
+    transport_adapter::ActiveSpeakerSource,
+};
 
 const ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT: usize = 5;
 
 /// Receiver-specific importance of one video source for the current layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::runtime::channel) enum ReceiverVideoLayoutIntent {
-    /// The route should receive featured quality treatment.
-    Featured,
-    /// The route is currently treated as a multiparty thumbnail.
-    Thumbnail,
+pub(in crate::runtime::channel) struct ReceiverVideoLayoutIntent {
+    role: SourceRoomPolicySelector,
 }
 
 impl ReceiverVideoLayoutIntent {
     #[must_use]
-    pub(in crate::runtime::channel) const fn is_featured(self) -> bool {
-        matches!(self, Self::Featured)
+    pub(in crate::runtime::channel) const fn new(role: SourceRoomPolicySelector) -> Self {
+        Self { role }
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) const fn role(self) -> SourceRoomPolicySelector {
+        self.role
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) const fn priority(self) -> SourceRoutePriority {
+        self.role.priority()
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) const fn uses_featured_quality(self) -> bool {
+        self.role.uses_featured_quality()
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) const fn counts_toward_visible_budget(self) -> bool {
+        self.role.counts_toward_visible_budget()
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) fn resolve(
+        stream_type: StreamType,
+        preference: Option<VideoLayoutIntent>,
+        active_speaker: bool,
+    ) -> Self {
+        let role = match stream_type {
+            StreamType::Camera => preference.map_or_else(
+                || {
+                    if active_speaker {
+                        SourceRoomPolicySelector::ActiveSpeaker
+                    } else {
+                        SourceRoomPolicySelector::VisibleThumbnail
+                    }
+                },
+                explicit_camera_layout_role,
+            ),
+            StreamType::Screen => preference.map_or(
+                SourceRoomPolicySelector::ScreenShare,
+                explicit_screen_layout_role,
+            ),
+            StreamType::Audio => SourceRoomPolicySelector::Hidden,
+        };
+        Self::new(role)
     }
 }
 
@@ -49,6 +95,54 @@ pub(in crate::runtime::channel) fn featured_camera_session_ids_for_active_speake
 }
 
 impl ChannelState {
+    #[must_use]
+    pub(in crate::runtime::channel) fn receiver_video_layout_intent(
+        &self,
+        consumer_session_id: &SessionId,
+        source: &PublishedSourceDescriptor,
+        active_speaker_camera_session_ids: &BTreeSet<SessionId>,
+    ) -> ReceiverVideoLayoutIntent {
+        let preference = self
+            .sessions
+            .get(consumer_session_id)
+            .and_then(|session| {
+                session
+                    .desired_download_states
+                    .get(source.owner().session_id())
+            })
+            .and_then(|states| layout_preference_for_stream_type(states, source.stream_type()));
+        ReceiverVideoLayoutIntent::resolve(
+            source.stream_type(),
+            preference,
+            active_speaker_camera_session_ids.contains(source.owner().session_id()),
+        )
+    }
+
+    #[must_use]
+    pub(in crate::runtime::channel) fn diagnostics_video_layout_intent(
+        &self,
+        consumer_session_id: &SessionId,
+        source: &PublishedSourceDescriptor,
+    ) -> Option<ReceiverVideoLayoutIntent> {
+        if !matches!(
+            source.stream_type(),
+            StreamType::Camera | StreamType::Screen
+        ) {
+            return None;
+        }
+        let active_speaker_camera_session_ids = self
+            .sessions
+            .iter()
+            .filter(|(_session_id, session)| session.layout.featured() == Some(true))
+            .map(|(session_id, _session)| session_id.clone())
+            .collect();
+        Some(self.receiver_video_layout_intent(
+            consumer_session_id,
+            source,
+            &active_speaker_camera_session_ids,
+        ))
+    }
+
     /// Plans public featured-state changes from the active-speaker snapshot.
     ///
     /// The returned updates are committed together with source-policy effects
@@ -81,5 +175,86 @@ impl ChannelState {
                     .then(|| FeaturedSessionUpdate::new(session_id.clone(), desired_featured))
             })
             .collect()
+    }
+}
+
+fn layout_preference_for_stream_type(
+    states: &DownloadStates,
+    stream_type: StreamType,
+) -> Option<VideoLayoutIntent> {
+    match stream_type {
+        StreamType::Audio => None,
+        StreamType::Camera => states.camera_layout,
+        StreamType::Screen => states.screen_layout,
+    }
+}
+
+const fn explicit_camera_layout_role(preference: VideoLayoutIntent) -> SourceRoomPolicySelector {
+    match preference {
+        VideoLayoutIntent::Pinned => SourceRoomPolicySelector::Pinned,
+        VideoLayoutIntent::Featured => SourceRoomPolicySelector::Featured,
+        VideoLayoutIntent::VisibleThumbnail => SourceRoomPolicySelector::VisibleThumbnail,
+        VideoLayoutIntent::Hidden => SourceRoomPolicySelector::Hidden,
+        VideoLayoutIntent::Overflow => SourceRoomPolicySelector::Overflow,
+    }
+}
+
+const fn explicit_screen_layout_role(preference: VideoLayoutIntent) -> SourceRoomPolicySelector {
+    match preference {
+        VideoLayoutIntent::Pinned => SourceRoomPolicySelector::Pinned,
+        VideoLayoutIntent::Featured => SourceRoomPolicySelector::Featured,
+        VideoLayoutIntent::VisibleThumbnail => SourceRoomPolicySelector::ScreenShare,
+        VideoLayoutIntent::Hidden => SourceRoomPolicySelector::Hidden,
+        VideoLayoutIntent::Overflow => SourceRoomPolicySelector::Overflow,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_speaker_is_default_camera_intent_without_explicit_layout() {
+        let intent = ReceiverVideoLayoutIntent::resolve(StreamType::Camera, None, true);
+
+        assert_eq!(intent.role(), SourceRoomPolicySelector::ActiveSpeaker);
+        assert_eq!(intent.priority(), SourceRoutePriority::ActiveSpeaker);
+        assert!(intent.uses_featured_quality());
+    }
+
+    #[test]
+    fn pinned_camera_intent_overrides_active_speaker_default() {
+        let intent = ReceiverVideoLayoutIntent::resolve(
+            StreamType::Camera,
+            Some(VideoLayoutIntent::Pinned),
+            false,
+        );
+
+        assert_eq!(intent.role(), SourceRoomPolicySelector::Pinned);
+        assert_eq!(intent.priority(), SourceRoutePriority::PinnedOrFeatured);
+        assert!(intent.uses_featured_quality());
+    }
+
+    #[test]
+    fn explicit_hidden_camera_does_not_use_featured_quality_even_when_speaking() {
+        let intent = ReceiverVideoLayoutIntent::resolve(
+            StreamType::Camera,
+            Some(VideoLayoutIntent::Hidden),
+            true,
+        );
+
+        assert_eq!(intent.role(), SourceRoomPolicySelector::Hidden);
+        assert_eq!(intent.priority(), SourceRoutePriority::HiddenOrOverflow);
+        assert!(!intent.uses_featured_quality());
+        assert!(!intent.counts_toward_visible_budget());
+    }
+
+    #[test]
+    fn screen_share_has_screen_specific_priority_by_default() {
+        let intent = ReceiverVideoLayoutIntent::resolve(StreamType::Screen, None, false);
+
+        assert_eq!(intent.role(), SourceRoomPolicySelector::ScreenShare);
+        assert_eq!(intent.priority(), SourceRoutePriority::ScreenShare);
+        assert!(intent.uses_featured_quality());
     }
 }

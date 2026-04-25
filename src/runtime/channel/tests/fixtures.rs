@@ -1,7 +1,7 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
 pub(super) use o_sfu_protocol::shared::{
-    DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType,
+    DownloadStates, SessionId, SessionInfo, SessionPermissions, StreamType, VideoLayoutIntent,
 };
 pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,

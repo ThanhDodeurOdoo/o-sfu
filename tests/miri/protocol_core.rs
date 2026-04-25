@@ -57,6 +57,7 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
                 audio: Some(true),
                 camera: Some(false),
                 screen: None,
+                ..DownloadStates::default()
             },
         )
         .is_empty()
@@ -90,6 +91,7 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
                     audio: Some(true),
                     camera: Some(false),
                     screen: None,
+                    ..DownloadStates::default()
                 },
             })),
             ClientEnvelope::Message(ClientMessage::Info(SessionInfo {

@@ -77,6 +77,7 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
             audio: Some(true),
             camera: Some(false),
             screen: None,
+            ..DownloadStates::default()
         },
     );
     let _ = core.update_info(SessionInfo {
@@ -110,6 +111,7 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
                     audio: Some(true),
                     camera: Some(false),
                     screen: None,
+                    ..DownloadStates::default()
                 },
             })),
             ClientEnvelope::Message(ClientMessage::Info(SessionInfo {
@@ -134,6 +136,7 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
             audio: Some(true),
             camera: None,
             screen: None,
+            ..DownloadStates::default()
         },
     );
     let _ = core.on_ws_close(1011);
@@ -144,6 +147,7 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
             audio: Some(false),
             camera: Some(true),
             screen: None,
+            ..DownloadStates::default()
         },
     );
     let _ = core.update_info(SessionInfo {
@@ -164,6 +168,7 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
                     audio: Some(false),
                     camera: Some(true),
                     screen: None,
+                    ..DownloadStates::default()
                 },
             })),
             ClientEnvelope::Message(ClientMessage::Info(SessionInfo {

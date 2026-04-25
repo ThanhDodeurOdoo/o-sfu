@@ -380,12 +380,17 @@ impl From<SourceSelector> for SourceSelectionKind {
             SourceSelector::Open => Self::Open,
             SourceSelector::Encoding(_) => Self::Encoding,
             SourceSelector::OperatingPoint(_) => Self::OperatingPoint,
-            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
-                Self::RoomPolicyFeatured
-            }
-            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Thumbnail) => {
-                Self::RoomPolicyThumbnail
-            }
+            SourceSelector::RoomPolicy(
+                SourceRoomPolicySelector::Pinned
+                | SourceRoomPolicySelector::Featured
+                | SourceRoomPolicySelector::ScreenShare
+                | SourceRoomPolicySelector::ActiveSpeaker,
+            ) => Self::RoomPolicyFeatured,
+            SourceSelector::RoomPolicy(
+                SourceRoomPolicySelector::VisibleThumbnail
+                | SourceRoomPolicySelector::Hidden
+                | SourceRoomPolicySelector::Overflow,
+            ) => Self::RoomPolicyThumbnail,
         }
     }
 }

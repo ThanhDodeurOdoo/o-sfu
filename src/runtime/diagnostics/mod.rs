@@ -32,5 +32,6 @@ pub(crate) use types::{
     DiagnosticsSessionLookup, DiagnosticsSessionTransport, DiagnosticsSessionView,
     DiagnosticsSource, DiagnosticsSourceEncoding, DiagnosticsSourceSelection,
     DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
-    health_json_value, maybe_health_json_value,
+    DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority, health_json_value,
+    maybe_health_json_value,
 };

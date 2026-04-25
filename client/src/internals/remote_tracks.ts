@@ -210,6 +210,12 @@ export class RemoteTracks {
             }
             merged[streamType] = next[streamType];
         }
+        if (next.cameraLayout !== undefined) {
+            merged.cameraLayout = next.cameraLayout;
+        }
+        if (next.screenLayout !== undefined) {
+            merged.screenLayout = next.screenLayout;
+        }
         return merged;
     }
 
@@ -222,7 +228,11 @@ export class RemoteTracks {
 
     private downloadStatesAreEmpty(states: DownloadStates): boolean {
         return (
-            states.audio === undefined && states.camera === undefined && states.screen === undefined
+            states.audio === undefined &&
+            states.camera === undefined &&
+            states.screen === undefined &&
+            states.cameraLayout === undefined &&
+            states.screenLayout === undefined
         );
     }
 

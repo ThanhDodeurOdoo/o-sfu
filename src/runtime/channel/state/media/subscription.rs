@@ -831,10 +831,20 @@ fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {
     if let Some(screen) = update.screen {
         target.screen = Some(screen);
     }
+    if let Some(camera_layout) = update.camera_layout {
+        target.camera_layout = Some(camera_layout);
+    }
+    if let Some(screen_layout) = update.screen_layout {
+        target.screen_layout = Some(screen_layout);
+    }
 }
 
 fn download_states_are_empty(states: &DownloadStates) -> bool {
-    states.audio.is_none() && states.camera.is_none() && states.screen.is_none()
+    states.audio.is_none()
+        && states.camera.is_none()
+        && states.screen.is_none()
+        && states.camera_layout.is_none()
+        && states.screen_layout.is_none()
 }
 
 fn download_state_for_stream_type(

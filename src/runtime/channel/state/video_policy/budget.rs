@@ -48,8 +48,8 @@ impl<'a> ReceiverVideoBudgetPlan<'a> {
                     route.stream_type(),
                     route.encodings(),
                     route.current_selection(),
-                    route.layout_intent().is_featured(),
-                    route.active_video_route_count(),
+                    route.layout_intent().uses_featured_quality(),
+                    route.visible_camera_route_count(),
                     route.receiver_bandwidth_bps(),
                 )?;
                 Some(ReceiverVideoRouteAction::new(
@@ -111,7 +111,7 @@ fn consumer_adaptation_plan(
     encodings: &[&SourceEncodingDescriptor],
     current: ConsumerSourceSelection,
     featured: bool,
-    active_video_route_count: usize,
+    visible_camera_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
 ) -> Option<ConsumerAdaptationPlan> {
     if stream_type != StreamType::Camera {
@@ -124,7 +124,7 @@ fn consumer_adaptation_plan(
     let target_index = desired_encoding_index(
         session_count,
         featured,
-        active_video_route_count,
+        visible_camera_route_count,
         receiver_bandwidth_bps,
         encodings,
     );
@@ -196,7 +196,7 @@ fn consumer_adaptation_plan(
 fn desired_encoding_index(
     session_count: usize,
     featured: bool,
-    active_video_route_count: usize,
+    visible_camera_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
     encodings: &[&SourceEncodingDescriptor],
 ) -> usize {
@@ -210,7 +210,7 @@ fn desired_encoding_index(
     let budget_bps = if featured {
         receiver_bandwidth_bps
     } else {
-        let divisor = u64::try_from(active_video_route_count)
+        let divisor = u64::try_from(visible_camera_route_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(THUMBNAIL_BUDGET_DIVISOR)
             .max(1);

@@ -227,7 +227,7 @@ pub(crate) enum SourceSelector {
     /// Defer the concrete encoding choice to room-level policy.
     #[allow(
         dead_code,
-        reason = "room-policy selectors are reserved until layout policy emits explicit quality buckets"
+        reason = "room-policy selectors are policy input today; the budget planner still resolves them before transport projection"
     )]
     RoomPolicy(SourceRoomPolicySelector),
 }
@@ -257,15 +257,62 @@ impl SourceSelector {
 /// later that a thumbnail should map to a lower simulcast encoding while a
 /// featured source stays unconstrained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "room-policy buckets are reserved until layout policy emits explicit quality selectors"
-)]
 pub(crate) enum SourceRoomPolicySelector {
-    /// Source is important for the current room layout.
+    /// The receiver explicitly pinned this source.
+    Pinned,
+    /// The receiver explicitly promoted this source to featured treatment.
     Featured,
-    /// Source is consumed as a small or background view.
-    Thumbnail,
+    /// Screen share keeps readability-focused priority separate from cameras.
+    ScreenShare,
+    /// The active-speaker snapshot promoted this camera source.
+    ActiveSpeaker,
+    /// Source is consumed as a visible small tile.
+    VisibleThumbnail,
+    /// Source is subscribed but not currently visible in the receiver layout.
+    Hidden,
+    /// Source is outside the visible receiver tile set.
+    Overflow,
+}
+
+impl SourceRoomPolicySelector {
+    #[must_use]
+    pub(crate) const fn priority(self) -> SourceRoutePriority {
+        match self {
+            Self::Pinned | Self::Featured => SourceRoutePriority::PinnedOrFeatured,
+            Self::ScreenShare => SourceRoutePriority::ScreenShare,
+            Self::ActiveSpeaker => SourceRoutePriority::ActiveSpeaker,
+            Self::VisibleThumbnail => SourceRoutePriority::VisibleThumbnail,
+            Self::Hidden | Self::Overflow => SourceRoutePriority::HiddenOrOverflow,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn uses_featured_quality(self) -> bool {
+        matches!(
+            self,
+            Self::Pinned | Self::Featured | Self::ScreenShare | Self::ActiveSpeaker
+        )
+    }
+
+    #[must_use]
+    pub(crate) const fn counts_toward_visible_budget(self) -> bool {
+        !matches!(self, Self::Hidden | Self::Overflow)
+    }
+}
+
+/// Receiver-side priority bucket used by room policy and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SourceRoutePriority {
+    /// User-pinned or explicitly featured video wins overload decisions.
+    PinnedOrFeatured,
+    /// Screen share keeps readability ahead of active-speaker camera bias.
+    ScreenShare,
+    /// Active speaker is important, but still below explicit receiver intent.
+    ActiveSpeaker,
+    /// Visible camera thumbnails are useful but degradable.
+    VisibleThumbnail,
+    /// Hidden and overflow videos are first to lose budget in later overload work.
+    HiddenOrOverflow,
 }
 
 /// Server-owned reason why video policy may withhold a live route.
@@ -751,7 +798,8 @@ mod tests {
         );
         assert_eq!(SourceSelector::Open.selected_encoding(), None);
         assert_eq!(
-            SourceSelector::RoomPolicy(SourceRoomPolicySelector::Thumbnail).selected_encoding(),
+            SourceSelector::RoomPolicy(SourceRoomPolicySelector::VisibleThumbnail)
+                .selected_encoding(),
             None
         );
     }

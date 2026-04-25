@@ -44,7 +44,8 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
             featured_camera_session_ids_for_active_speakers(state, active_speaker_sources);
         let receiver_bandwidth_by_session =
             receiver_bandwidth_by_session(receiver_bandwidth_snapshot);
-        let active_video_route_counts = active_video_route_counts_by_consumer(state);
+        let visible_camera_route_counts =
+            visible_camera_route_counts_by_consumer(state, &featured_camera_session_ids);
         let selectable_encoding_ladders = selectable_encoding_ladders_by_source(&state.sources);
         let routes = state
             .consumer_index
@@ -67,12 +68,11 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                 if !current_selection.active() {
                     return None;
                 }
-                let layout_intent =
-                    if featured_camera_session_ids.contains(source.owner().session_id()) {
-                        ReceiverVideoLayoutIntent::Featured
-                    } else {
-                        ReceiverVideoLayoutIntent::Thumbnail
-                    };
+                let layout_intent = state.receiver_video_layout_intent(
+                    &consumer_key.consumer_session_id,
+                    source,
+                    &featured_camera_session_ids,
+                );
                 Some(ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
                     session_count: state.session_count(),
                     source,
@@ -84,7 +84,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                     consumer_transport_media_id: consumer_state.consumer_media,
                     current_selection,
                     layout_intent,
-                    active_video_route_count: active_video_route_counts
+                    visible_camera_route_count: visible_camera_route_counts
                         .get(&consumer_key.consumer_session_id)
                         .copied()
                         .unwrap_or(1),
@@ -116,7 +116,7 @@ pub(in crate::runtime::channel) struct ReceiverVideoRouteInput<'a> {
     consumer_transport_media_id: TransportMediaId,
     current_selection: ConsumerSourceSelection,
     layout_intent: ReceiverVideoLayoutIntent,
-    active_video_route_count: usize,
+    visible_camera_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
     encodings: Vec<&'a SourceEncodingDescriptor>,
 }
@@ -137,7 +137,7 @@ pub(in crate::runtime::channel) struct ReceiverVideoRouteInputParts<'a> {
     pub(in crate::runtime::channel) consumer_transport_media_id: TransportMediaId,
     pub(in crate::runtime::channel) current_selection: ConsumerSourceSelection,
     pub(in crate::runtime::channel) layout_intent: ReceiverVideoLayoutIntent,
-    pub(in crate::runtime::channel) active_video_route_count: usize,
+    pub(in crate::runtime::channel) visible_camera_route_count: usize,
     pub(in crate::runtime::channel) receiver_bandwidth_bps: Option<u64>,
     pub(in crate::runtime::channel) encodings: Vec<&'a SourceEncodingDescriptor>,
 }
@@ -156,7 +156,7 @@ impl<'a> ReceiverVideoRouteInput<'a> {
             consumer_transport_media_id: parts.consumer_transport_media_id,
             current_selection: parts.current_selection,
             layout_intent: parts.layout_intent,
-            active_video_route_count: parts.active_video_route_count,
+            visible_camera_route_count: parts.visible_camera_route_count,
             receiver_bandwidth_bps: parts.receiver_bandwidth_bps,
             encodings: parts.encodings,
         }
@@ -212,8 +212,8 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         self.session_count
     }
 
-    pub(in crate::runtime::channel) const fn active_video_route_count(&self) -> usize {
-        self.active_video_route_count
+    pub(in crate::runtime::channel) const fn visible_camera_route_count(&self) -> usize {
+        self.visible_camera_route_count
     }
 
     pub(in crate::runtime::channel) const fn receiver_bandwidth_bps(&self) -> Option<u64> {
@@ -225,16 +225,16 @@ impl<'a> ReceiverVideoRouteInput<'a> {
     }
 }
 
-fn active_video_route_counts_by_consumer(state: &ChannelState) -> BTreeMap<SessionId, usize> {
+fn visible_camera_route_counts_by_consumer(
+    state: &ChannelState,
+    featured_camera_session_ids: &BTreeSet<SessionId>,
+) -> BTreeMap<SessionId, usize> {
     let mut counts = BTreeMap::new();
     for (consumer_key, consumer_state) in &state.consumer_index {
         let Some(source) = state.sources.get(&consumer_key.source_id) else {
             continue;
         };
-        if !matches!(
-            source.stream_type(),
-            StreamType::Camera | StreamType::Screen
-        ) {
+        if source.stream_type() != StreamType::Camera {
             continue;
         }
         let Some(producer_id) = state.producer_id_by_source_id.get(&consumer_key.source_id) else {
@@ -255,6 +255,14 @@ fn active_video_route_counts_by_consumer(state: &ChannelState) -> BTreeMap<Sessi
                 .get(consumer_key)
                 .is_none_or(|selection| selection.active())
         {
+            continue;
+        }
+        let layout_intent = state.receiver_video_layout_intent(
+            &consumer_key.consumer_session_id,
+            source,
+            featured_camera_session_ids,
+        );
+        if !layout_intent.counts_toward_visible_budget() {
             continue;
         }
         *counts

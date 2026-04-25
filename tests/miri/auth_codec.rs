@@ -253,6 +253,7 @@ fn signaling_codecs_round_trip_publish_subscribe_and_responses() {
             audio: Some(true),
             camera: Some(false),
             screen: None,
+            ..DownloadStates::default()
         },
     }));
     let answer = ClientEnvelope::Response {
