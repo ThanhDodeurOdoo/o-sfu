@@ -32,6 +32,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use o_sfu_protocol::shared::{SessionId, StreamType};
+use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{MediaFormat, MediaKind, Mid, Rid, Ssrc};
 use thiserror::Error;
 
@@ -105,6 +106,70 @@ impl Display for SourceEncodingId {
     }
 }
 
+/// Codec-native temporal layer id used by SVC operating points.
+///
+/// The current representation intentionally follows the RFC 9626 frame-marking
+/// temporal-id range. Spatial identity remains modeled by the source encoding,
+/// which keeps hybrid simulcast plus SVC as one selected encoding plus one
+/// temporal ceiling instead of a second parallel source graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SourceTemporalLayerId(u8);
+
+impl SourceTemporalLayerId {
+    #[must_use]
+    pub(crate) const fn new(value: u8) -> Option<Self> {
+        if frame_marking::is_valid_temporal_layer_id(value) {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn base() -> Self {
+        Self(frame_marking::BASE_LAYER_ID)
+    }
+
+    #[must_use]
+    pub(crate) const fn as_u8(self) -> u8 {
+        self.0
+    }
+}
+
+/// One source operating point selected by room or receiver policy.
+///
+/// The selected encoding carries the simulcast or spatial choice. The temporal
+/// layer ceiling carries the first codec-native SVC dimension that can be
+/// projected into transport packet gates when frame-marking metadata is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SourceOperatingPoint {
+    encoding_id: SourceEncodingId,
+    max_temporal_layer_id: SourceTemporalLayerId,
+}
+
+impl SourceOperatingPoint {
+    #[must_use]
+    pub(crate) const fn new(
+        encoding_id: SourceEncodingId,
+        max_temporal_layer_id: SourceTemporalLayerId,
+    ) -> Self {
+        Self {
+            encoding_id,
+            max_temporal_layer_id,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn encoding_id(self) -> SourceEncodingId {
+        self.encoding_id
+    }
+
+    #[must_use]
+    pub(crate) const fn max_temporal_layer_id(self) -> SourceTemporalLayerId {
+        self.max_temporal_layer_id
+    }
+}
+
 /// Publishing session authority attached to a source descriptor.
 ///
 /// The session identifies the logical owner visible to room policy. The
@@ -171,6 +236,8 @@ pub(crate) enum SourceSelector {
     Open,
     /// Select one source encoding by runtime identity.
     Encoding(SourceEncodingId),
+    /// Select one source encoding plus a codec-native temporal layer ceiling.
+    OperatingPoint(SourceOperatingPoint),
     /// Defer the concrete encoding choice to room-level policy.
     RoomPolicy(SourceRoomPolicySelector),
 }
@@ -180,7 +247,16 @@ impl SourceSelector {
     pub(crate) const fn selected_encoding(self) -> Option<SourceEncodingId> {
         match self {
             Self::Encoding(encoding_id) => Some(encoding_id),
+            Self::OperatingPoint(operating_point) => Some(operating_point.encoding_id()),
             Self::Open | Self::RoomPolicy(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn selected_operating_point(self) -> Option<SourceOperatingPoint> {
+        match self {
+            Self::OperatingPoint(operating_point) => Some(operating_point),
+            Self::Open | Self::Encoding(_) | Self::RoomPolicy(_) => None,
         }
     }
 }
@@ -418,6 +494,8 @@ pub(crate) struct SourceEncodingDescriptor {
     repair_ssrc: Option<Ssrc>,
     /// Sender-declared bitrate ceiling for this encoding.
     max_bitrate: Option<u64>,
+    /// Highest temporal layer advertised for codec-native layered forwarding.
+    max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated payload and codec information for this encoding.
     negotiated_format: Option<MediaFormat>,
     /// Current local or relayed transport realization.
@@ -439,6 +517,7 @@ impl SourceEncodingDescriptor {
             primary_ssrc: parts.primary_ssrc,
             repair_ssrc: parts.repair_ssrc,
             max_bitrate: parts.max_bitrate,
+            max_temporal_layer_id: parts.max_temporal_layer_id,
             negotiated_format: parts.negotiated_format,
             transport_binding: parts.transport_binding,
         }
@@ -475,6 +554,11 @@ impl SourceEncodingDescriptor {
     }
 
     #[must_use]
+    pub(crate) const fn max_temporal_layer_id(&self) -> Option<SourceTemporalLayerId> {
+        self.max_temporal_layer_id
+    }
+
+    #[must_use]
     pub(crate) fn negotiated_format(&self) -> Option<&MediaFormat> {
         self.negotiated_format.as_ref()
     }
@@ -504,6 +588,8 @@ pub(crate) struct SourceEncodingDescriptorParts {
     pub(crate) repair_ssrc: Option<Ssrc>,
     /// Optional bitrate ceiling advertised for this encoding.
     pub(crate) max_bitrate: Option<u64>,
+    /// Optional temporal-layer ceiling advertised for codec-native SVC.
+    pub(crate) max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated codec and payload information when available.
     pub(crate) negotiated_format: Option<MediaFormat>,
     /// Current transport attachment for this encoding.
@@ -569,6 +655,7 @@ mod tests {
             primary_ssrc: Some(Ssrc::new(100 + raw_encoding_id)),
             repair_ssrc: Some(Ssrc::new(200 + raw_encoding_id)),
             max_bitrate: Some(150_000 * encoding_id.as_u64()),
+            max_temporal_layer_id: None,
             negotiated_format: Some(video_format(96)),
             transport_binding: Some(SourceTransportBinding::new(transport_media_id)),
         })
@@ -614,6 +701,7 @@ mod tests {
         assert_eq!(encodings[0].primary_ssrc(), Some(Ssrc::new(101)));
         assert_eq!(encodings[0].repair_ssrc(), Some(Ssrc::new(201)));
         assert_eq!(encodings[0].max_bitrate(), Some(150_000));
+        assert_eq!(encodings[0].max_temporal_layer_id(), None);
         assert_eq!(
             encodings[0]
                 .negotiated_format()
@@ -668,14 +756,39 @@ mod tests {
     #[test]
     fn selector_targets_runtime_encoding_identity_not_transport_or_rid() {
         let encoding_id = SourceEncodingId::from_raw(3);
+        let temporal_layer = SourceTemporalLayerId::new(2)
+            .expect("test temporal layer should fit the RFC 9626 TID range");
+        let operating_point = SourceOperatingPoint::new(encoding_id, temporal_layer);
 
         assert_eq!(
             SourceSelector::Encoding(encoding_id).selected_encoding(),
             Some(encoding_id)
         );
+        assert_eq!(
+            SourceSelector::OperatingPoint(operating_point).selected_encoding(),
+            Some(encoding_id)
+        );
+        assert_eq!(
+            SourceSelector::OperatingPoint(operating_point).selected_operating_point(),
+            Some(operating_point)
+        );
         assert_eq!(SourceSelector::Open.selected_encoding(), None);
         assert_eq!(
             SourceSelector::RoomPolicy(SourceRoomPolicySelector::Thumbnail).selected_encoding(),
+            None
+        );
+    }
+
+    #[test]
+    fn temporal_layer_ids_follow_the_rfc_frame_marking_range() {
+        assert_eq!(SourceTemporalLayerId::base().as_u8(), 0);
+        assert_eq!(
+            SourceTemporalLayerId::new(frame_marking::TEMPORAL_LAYER_ID_MAX)
+                .map(SourceTemporalLayerId::as_u8),
+            Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
+        );
+        assert_eq!(
+            SourceTemporalLayerId::new(frame_marking::TEMPORAL_LAYER_ID_MAX + 1),
             None
         );
     }

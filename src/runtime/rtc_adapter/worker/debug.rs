@@ -318,6 +318,12 @@ fn into_debug_packet_gate(
         super::super::route_control::PacketLayerGate::Rid(rid) => {
             DebugPacketGate::Rid(rid.to_string())
         }
+        super::super::route_control::PacketLayerGate::OperatingPoint(operating_point) => {
+            DebugPacketGate::OperatingPoint {
+                rid: operating_point.rid().map(|rid| rid.to_string()),
+                max_temporal_layer_id: operating_point.max_temporal_layer_id(),
+            }
+        }
     }
 }
 

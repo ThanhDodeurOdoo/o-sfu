@@ -283,11 +283,13 @@ fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::
                 encoding_id: String::from("encoding-1"),
                 rid: Some(String::from("lo")),
                 max_bitrate: Some(150_000),
+                max_temporal_layer_id: Some(0),
             },
             SourceEncodingDescriptor {
                 encoding_id: String::from("encoding-2"),
                 rid: Some(String::from("hi")),
                 max_bitrate: Some(900_000),
+                max_temporal_layer_id: Some(2),
             },
         ],
     };
@@ -320,11 +322,13 @@ fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::
                             "encodingId": "encoding-1",
                             "rid": "lo",
                             "maxBitrate": 150_000,
+                            "maxTemporalLayerId": 0,
                         },
                         {
                             "encodingId": "encoding-2",
                             "rid": "hi",
                             "maxBitrate": 900_000,
+                            "maxTemporalLayerId": 2,
                         },
                     ],
                 },

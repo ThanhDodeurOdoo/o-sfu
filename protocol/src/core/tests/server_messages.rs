@@ -163,11 +163,13 @@ fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
                 encoding_id: String::from("encoding-1"),
                 rid: Some(String::from("lo")),
                 max_bitrate: Some(150_000),
+                max_temporal_layer_id: Some(0),
             },
             SourceEncodingDescriptor {
                 encoding_id: String::from("encoding-2"),
                 rid: Some(String::from("hi")),
                 max_bitrate: Some(900_000),
+                max_temporal_layer_id: Some(2),
             },
         ],
     };

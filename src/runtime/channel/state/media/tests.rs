@@ -165,6 +165,7 @@ fn install_test_source_graph(
                 primary_ssrc: None,
                 repair_ssrc: None,
                 max_bitrate: None,
+                max_temporal_layer_id: None,
                 negotiated_format: None,
                 transport_binding: Some(SourceTransportBinding::new(transport_media_id)),
             },

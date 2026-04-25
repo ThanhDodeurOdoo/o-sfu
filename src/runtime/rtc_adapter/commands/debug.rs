@@ -95,4 +95,8 @@ pub(crate) enum DebugPacketGate {
     Open,
     Block,
     Rid(String),
+    OperatingPoint {
+        rid: Option<String>,
+        max_temporal_layer_id: u8,
+    },
 }

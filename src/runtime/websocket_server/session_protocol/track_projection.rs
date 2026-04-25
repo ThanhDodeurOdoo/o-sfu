@@ -10,7 +10,7 @@ use o_sfu_protocol::{
 
 use crate::runtime::{
     channel::{ChannelEventMessage, RemoteTrackBootstrap, TrackBindingUpdate},
-    source_model::PublishedSourceDescriptor,
+    source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +202,9 @@ fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDes
             encoding_id: encoding.encoding_id().to_string(),
             rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
             max_bitrate: encoding.max_bitrate(),
+            max_temporal_layer_id: encoding
+                .max_temporal_layer_id()
+                .map(SourceTemporalLayerId::as_u8),
         })
         .collect()
 }

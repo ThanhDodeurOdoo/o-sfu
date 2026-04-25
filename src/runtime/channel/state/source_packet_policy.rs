@@ -28,7 +28,8 @@ use crate::runtime::{
         SourceEncodingDescriptor, SourceSelector,
     },
     transport_adapter::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SourcePacketGate, TransportMediaId,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SourcePacketGate,
+        SourcePacketOperatingPoint, TransportMediaId,
     },
 };
 
@@ -674,6 +675,20 @@ fn source_packet_gate_for_selector(
             .encoding(encoding_id)
             .and_then(SourceEncodingDescriptor::rid)
             .map(|rid| SourcePacketGate::Rid(rid.as_str().to_owned())),
+        SourceSelector::OperatingPoint(operating_point) => {
+            let encoding = source.encoding(operating_point.encoding_id())?;
+            if let Some(max_temporal_layer_id) = encoding.max_temporal_layer_id()
+                && operating_point.max_temporal_layer_id() > max_temporal_layer_id
+            {
+                return None;
+            }
+            Some(SourcePacketGate::OperatingPoint(
+                SourcePacketOperatingPoint::new(
+                    encoding.rid().map(|rid| rid.as_str().to_owned()),
+                    operating_point.max_temporal_layer_id().as_u8(),
+                ),
+            ))
+        }
         SourceSelector::RoomPolicy(_) => None,
     }
 }
@@ -726,7 +741,8 @@ mod tests {
     use super::*;
     use crate::runtime::source_model::{
         PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-        SourceEncodingDescriptorParts, SourceEncodingId,
+        SourceEncodingDescriptorParts, SourceEncodingId, SourceOperatingPoint,
+        SourceTemporalLayerId,
     };
 
     fn source_with_encodings(
@@ -756,6 +772,26 @@ mod tests {
             primary_ssrc: None,
             repair_ssrc: None,
             max_bitrate,
+            max_temporal_layer_id: None,
+            negotiated_format: None,
+            transport_binding: None,
+        })
+    }
+
+    fn layered_encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+        rid: Option<&str>,
+        max_temporal_layer_id: u8,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: rid.map(Rid::new),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: None,
+            max_temporal_layer_id: SourceTemporalLayerId::new(max_temporal_layer_id),
             negotiated_format: None,
             transport_binding: None,
         })
@@ -805,6 +841,53 @@ mod tests {
 
         assert_eq!(
             source_packet_gate_for_selector(&source, SourceSelector::Encoding(encoding_id)),
+            None
+        );
+    }
+
+    #[test]
+    fn source_selector_bridge_projects_operating_point_to_transport_layer_gate() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let encoding_id = SourceEncodingId::from_raw(1);
+        let source = source_with_encodings(vec![layered_encoding(
+            source_id,
+            encoding_id,
+            Some("hi"),
+            2,
+        )]);
+        let temporal_layer = SourceTemporalLayerId::new(1)
+            .expect("test temporal layer should fit the RFC 9626 TID range");
+
+        assert_eq!(
+            source_packet_gate_for_selector(
+                &source,
+                SourceSelector::OperatingPoint(SourceOperatingPoint::new(
+                    encoding_id,
+                    temporal_layer,
+                ))
+            ),
+            Some(SourcePacketGate::OperatingPoint(
+                SourcePacketOperatingPoint::new(Some(String::from("hi")), 1)
+            ))
+        );
+    }
+
+    #[test]
+    fn source_selector_bridge_rejects_operating_points_above_advertised_layer() {
+        let source_id = PublishedSourceId::from_raw(7);
+        let encoding_id = SourceEncodingId::from_raw(1);
+        let source = source_with_encodings(vec![layered_encoding(source_id, encoding_id, None, 1)]);
+        let temporal_layer = SourceTemporalLayerId::new(2)
+            .expect("test temporal layer should fit the RFC 9626 TID range");
+
+        assert_eq!(
+            source_packet_gate_for_selector(
+                &source,
+                SourceSelector::OperatingPoint(SourceOperatingPoint::new(
+                    encoding_id,
+                    temporal_layer,
+                ))
+            ),
             None
         );
     }

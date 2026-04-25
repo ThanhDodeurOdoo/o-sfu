@@ -354,6 +354,7 @@ impl ChannelState {
                     primary_ssrc: binding.ssrc().map(Ssrc::new),
                     repair_ssrc: None,
                     max_bitrate: binding.max_bitrate(),
+                    max_temporal_layer_id: None,
                     negotiated_format: negotiated_format_for_binding(
                         &pending.consumable_rtp_parameters,
                         binding.payload_type(),

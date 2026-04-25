@@ -590,6 +590,7 @@ fn worker_request_consumer_keyframe(
 fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
     match &destination.packet_gate {
         PacketLayerGate::Rid(rid) => Some(*rid),
+        PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
         PacketLayerGate::Open | PacketLayerGate::Block => None,
     }
 }

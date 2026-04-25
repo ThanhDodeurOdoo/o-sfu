@@ -41,10 +41,10 @@ pub(super) fn populate_forward_routes(
         };
         let route_entry = state.media_route_index.get(&source_transport_media_id);
         if has_routed_forward(relay_targets.as_deref(), route_entry) {
-            match state
-                .route_control
-                .decide_packet_route(source_transport_media_id, packet.route_control_rid())
-            {
+            match state.route_control.decide_packet_route(
+                source_transport_media_id,
+                packet.route_control_layer_metadata(),
+            ) {
                 PacketRouteDecision::Forward => {
                     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
                 }
@@ -131,8 +131,9 @@ mod tests {
             relay_registry::{
                 InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId,
             },
-            route_control::PacketLayerGate,
-            sample_forwarded_packet, sample_forwarded_packet_with_rid,
+            route_control::{PacketLayerGate, PacketOperatingPointGate},
+            sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+            sample_forwarded_packet_with_rid,
             test_support::test_transport_session_key,
         },
         transport_adapter::{TransportMediaId, TransportSessionKey},
@@ -704,6 +705,79 @@ mod tests {
             forwards.get(2).map(PacketForward::destination),
             Some(destination)
                 if destination.session_key() == Some(&open_consumer_session)
+        ));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
+        assert_eq!(snapshot.rtc_route_control_layer_allowed, 1);
+    }
+
+    #[test]
+    fn populate_forward_routes_applies_operating_point_packet_gates() {
+        let producer_session = test_transport_session_key(71, 0, 72, SessionId::Integer(73));
+        let consumer_session = test_transport_session_key(71, 0, 72, SessionId::Integer(74));
+        let mut state = RtcBootstrapState::default();
+        let media_tap = MediaTap::default();
+        let relay_registry = RelayRegistry::default();
+        let metrics = RuntimeMetrics::default();
+        let source_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Producer {
+                session_key: producer_session.clone(),
+                mid: Mid::from("cam-up"),
+            });
+        let consumer_transport_media_id =
+            state.register_media_handle(RegisteredMediaHandle::Consumer {
+                session_key: consumer_session.clone(),
+                mid: Mid::from("cam-down"),
+                source_transport_media_id,
+            });
+        state.media_route_index.insert(
+            source_transport_media_id,
+            MediaRouteEntry {
+                source_active: true,
+                destinations: vec![MediaRouteDestination {
+                    dest_session: consumer_session.clone(),
+                    dest_transport_media_id: consumer_transport_media_id,
+                    dest_mid: Mid::from("cam-down"),
+                    active: true,
+                    packet_gate: PacketLayerGate::Open,
+                }],
+            },
+        );
+        state.set_source_packet_gate(
+            source_transport_media_id,
+            PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),
+        );
+        let mut pending_packets = vec![
+            sample_forwarded_packet_with_frame_mark(
+                producer_session.clone(),
+                "cam-up",
+                Some("hi"),
+                2_u32 << 24,
+                b"high-temporal",
+            ),
+            sample_forwarded_packet_with_frame_mark(
+                producer_session,
+                "cam-up",
+                Some("hi"),
+                1_u32 << 24,
+                b"selected-temporal",
+            ),
+        ];
+        let mut forwards = Vec::new();
+
+        populate_forward_routes(
+            &state,
+            &media_tap,
+            &relay_registry,
+            &metrics,
+            &mut pending_packets,
+            &mut forwards,
+        );
+
+        assert_eq!(forwards.len(), 1);
+        assert!(matches!(
+            forwards.first().map(PacketForward::destination),
+            Some(destination) if destination.session_key() == Some(&consumer_session)
         ));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);

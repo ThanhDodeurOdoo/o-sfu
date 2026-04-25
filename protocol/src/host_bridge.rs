@@ -374,6 +374,7 @@ mod tests {
                         encoding_id: String::from("encoding-1"),
                         rid: Some(String::from("lo")),
                         max_bitrate: Some(150_000),
+                        max_temporal_layer_id: Some(1),
                     }],
                 }],
             },
@@ -392,7 +393,8 @@ mod tests {
                     "encodings": [{
                         "encodingId": "encoding-1",
                         "rid": "lo",
-                        "maxBitrate": 150_000
+                        "maxBitrate": 150_000,
+                        "maxTemporalLayerId": 1
                     }]
                 }]
             }])

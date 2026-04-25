@@ -131,6 +131,34 @@ impl ActiveSpeakerSource {
 pub(crate) enum SourcePacketGate {
     Open,
     Rid(String),
+    OperatingPoint(SourcePacketOperatingPoint),
+}
+
+/// Packet-facing layered operating point selected for one source route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourcePacketOperatingPoint {
+    rid: Option<String>,
+    max_temporal_layer_id: u8,
+}
+
+impl SourcePacketOperatingPoint {
+    #[must_use]
+    pub(crate) fn new(rid: Option<String>, max_temporal_layer_id: u8) -> Self {
+        Self {
+            rid,
+            max_temporal_layer_id,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn rid(&self) -> Option<&str> {
+        self.rid.as_deref()
+    }
+
+    #[must_use]
+    pub(crate) const fn max_temporal_layer_id(&self) -> u8 {
+        self.max_temporal_layer_id
+    }
 }
 
 /// Transitional server-authored SDP offer returned by the transport boundary.

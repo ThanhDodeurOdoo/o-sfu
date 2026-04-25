@@ -13,7 +13,7 @@ use crate::runtime::{
     },
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-        SourceEncodingDescriptor, SourceEncodingId,
+        SourceEncodingDescriptor, SourceEncodingId, SourceTemporalLayerId,
     },
     transport_adapter::TransportMediaId,
 };
@@ -243,6 +243,9 @@ fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> Diagnosti
         codec: negotiated_format.map(|format| format.codec_name().to_owned()),
         encoding_id: encoding.encoding_id().as_u64(),
         max_bitrate_bps: encoding.max_bitrate(),
+        max_temporal_layer_id: encoding
+            .max_temporal_layer_id()
+            .map(SourceTemporalLayerId::as_u8),
         payload_type: negotiated_format.map(o_sfu_router::MediaFormat::payload_type),
         primary_ssrc: encoding.primary_ssrc().map(o_sfu_router::Ssrc::value),
         repair_ssrc: encoding.repair_ssrc().map(o_sfu_router::Ssrc::value),
@@ -258,6 +261,10 @@ fn diagnostics_source_selection(
     selection: ConsumerSourceSelection,
 ) -> DiagnosticsSourceSelection {
     let selected_encoding_id = selection.selector().selected_encoding();
+    let selected_temporal_layer_id = selection
+        .selector()
+        .selected_operating_point()
+        .map(|operating_point| operating_point.max_temporal_layer_id().as_u8());
     DiagnosticsSourceSelection {
         active: selection.active(),
         pressure_observations: selection.pressure_observations(),
@@ -268,6 +275,7 @@ fn diagnostics_source_selection(
             .and_then(|encoding_id| source.encoding(encoding_id))
             .and_then(SourceEncodingDescriptor::rid)
             .map(|rid| rid.as_str().to_owned()),
+        selected_temporal_layer_id,
         upgrade_observations: selection.upgrade_observations(),
     }
 }

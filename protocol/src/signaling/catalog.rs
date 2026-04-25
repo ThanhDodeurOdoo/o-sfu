@@ -109,6 +109,8 @@ pub struct SourceEncodingDescriptor {
     pub rid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_bitrate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_temporal_layer_id: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

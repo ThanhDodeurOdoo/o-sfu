@@ -29,6 +29,7 @@ export interface SourceEncodingDescriptor {
     encodingId: SourceEncodingId;
     rid?: string;
     maxBitrate?: number;
+    maxTemporalLayerId?: number;
 }
 
 export interface SourceDescriptor {

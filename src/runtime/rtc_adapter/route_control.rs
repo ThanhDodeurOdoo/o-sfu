@@ -29,6 +29,71 @@ pub(super) enum PacketLayerGate {
     Open,
     Block,
     Rid(Rid),
+    OperatingPoint(PacketOperatingPointGate),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PacketOperatingPointGate {
+    rid: Option<Rid>,
+    max_temporal_layer_id: u8,
+}
+
+impl PacketOperatingPointGate {
+    pub(super) const fn new(rid: Option<Rid>, max_temporal_layer_id: u8) -> Self {
+        Self {
+            rid,
+            max_temporal_layer_id,
+        }
+    }
+
+    pub(super) const fn rid(self) -> Option<Rid> {
+        self.rid
+    }
+
+    pub(super) const fn max_temporal_layer_id(self) -> u8 {
+        self.max_temporal_layer_id
+    }
+
+    const fn with_rid(self, rid: Rid) -> Self {
+        Self {
+            rid: Some(rid),
+            max_temporal_layer_id: self.max_temporal_layer_id,
+        }
+    }
+
+    fn permits(self, metadata: PacketLayerMetadata) -> bool {
+        if let Some(selected_rid) = self.rid
+            && metadata.rid() != Some(selected_rid)
+        {
+            return false;
+        }
+        metadata
+            .temporal_layer_id()
+            .is_some_and(|layer_id| layer_id <= self.max_temporal_layer_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct PacketLayerMetadata {
+    rid: Option<Rid>,
+    temporal_layer_id: Option<u8>,
+}
+
+impl PacketLayerMetadata {
+    pub(super) const fn new(rid: Option<Rid>, temporal_layer_id: Option<u8>) -> Self {
+        Self {
+            rid,
+            temporal_layer_id,
+        }
+    }
+
+    const fn rid(self) -> Option<Rid> {
+        self.rid
+    }
+
+    const fn temporal_layer_id(self) -> Option<u8> {
+        self.temporal_layer_id
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +129,7 @@ impl RouteControlState {
     pub(super) fn decide_packet_route(
         &self,
         source_transport_media_id: TransportMediaId,
-        rid: Option<Rid>,
+        metadata: PacketLayerMetadata,
     ) -> PacketRouteDecision {
         let Some(source_control) = self.sources.get(&source_transport_media_id) else {
             return PacketRouteDecision::Forward;
@@ -75,12 +140,20 @@ impl RouteControlState {
         {
             PacketLayerGate::Open => PacketRouteDecision::Forward,
             PacketLayerGate::Block => PacketRouteDecision::Drop,
-            PacketLayerGate::Rid(selected_rid) => rid
-                .as_ref()
-                .filter(|packet_rid| *packet_rid == &selected_rid)
-                .map_or(PacketRouteDecision::Drop, |_rid| {
+            PacketLayerGate::Rid(selected_rid) => {
+                if metadata.rid() == Some(selected_rid) {
                     PacketRouteDecision::Forward
-                }),
+                } else {
+                    PacketRouteDecision::Drop
+                }
+            }
+            PacketLayerGate::OperatingPoint(operating_point) => {
+                if operating_point.permits(metadata) {
+                    PacketRouteDecision::Forward
+                } else {
+                    PacketRouteDecision::Drop
+                }
+            }
         }
     }
 
@@ -260,29 +333,58 @@ impl RouteControlState {
 pub(super) fn aggregate_packet_gates<'a>(
     packet_gates: impl IntoIterator<Item = &'a PacketLayerGate>,
 ) -> Option<PacketLayerGate> {
-    let mut saw_block = false;
-    let mut selected_rid: Option<&Rid> = None;
+    let mut aggregate = None;
     for packet_gate in packet_gates {
-        match packet_gate {
-            PacketLayerGate::Open => return Some(PacketLayerGate::Open),
-            PacketLayerGate::Block => {
-                saw_block = true;
-            }
-            PacketLayerGate::Rid(rid) => {
-                if let Some(current_rid) = selected_rid {
-                    if current_rid != rid {
-                        return Some(PacketLayerGate::Open);
-                    }
-                } else {
-                    selected_rid = Some(rid);
-                }
-            }
+        aggregate = Some(aggregate.map_or_else(
+            || packet_gate.clone(),
+            |current| union_packet_gates(current, packet_gate.clone()),
+        ));
+        if matches!(aggregate.as_ref(), Some(PacketLayerGate::Open)) {
+            return aggregate;
         }
     }
-    selected_rid
-        .copied()
-        .map(PacketLayerGate::Rid)
-        .or_else(|| saw_block.then_some(PacketLayerGate::Block))
+    aggregate
+}
+
+fn union_packet_gates(first: PacketLayerGate, second: PacketLayerGate) -> PacketLayerGate {
+    match (first, second) {
+        (PacketLayerGate::Open, _) | (_, PacketLayerGate::Open) => PacketLayerGate::Open,
+        (PacketLayerGate::Block, gate) | (gate, PacketLayerGate::Block) => gate,
+        (PacketLayerGate::Rid(first_rid), PacketLayerGate::Rid(second_rid)) => {
+            if first_rid == second_rid {
+                PacketLayerGate::Rid(first_rid)
+            } else {
+                PacketLayerGate::Open
+            }
+        }
+        (PacketLayerGate::Rid(rid), PacketLayerGate::OperatingPoint(operating_point))
+        | (PacketLayerGate::OperatingPoint(operating_point), PacketLayerGate::Rid(rid)) => {
+            if operating_point.rid() == Some(rid) {
+                PacketLayerGate::Rid(rid)
+            } else {
+                PacketLayerGate::Open
+            }
+        }
+        (
+            PacketLayerGate::OperatingPoint(first_operating_point),
+            PacketLayerGate::OperatingPoint(second_operating_point),
+        ) => union_operating_points(first_operating_point, second_operating_point),
+    }
+}
+
+fn union_operating_points(
+    first: PacketOperatingPointGate,
+    second: PacketOperatingPointGate,
+) -> PacketLayerGate {
+    if first.rid() != second.rid() {
+        return PacketLayerGate::Open;
+    }
+    PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
+        first.rid(),
+        first
+            .max_temporal_layer_id()
+            .max(second.max_temporal_layer_id()),
+    ))
 }
 
 fn intersect_packet_gates(
@@ -305,7 +407,51 @@ fn intersect_packet_gates(
                 Some(PacketLayerGate::Block)
             }
         }
+        (
+            Some(PacketLayerGate::Rid(rid)),
+            Some(PacketLayerGate::OperatingPoint(operating_point)),
+        )
+        | (
+            Some(PacketLayerGate::OperatingPoint(operating_point)),
+            Some(PacketLayerGate::Rid(rid)),
+        ) => Some(intersect_operating_point_with_rid(operating_point, rid)),
+        (
+            Some(PacketLayerGate::OperatingPoint(first_operating_point)),
+            Some(PacketLayerGate::OperatingPoint(second_operating_point)),
+        ) => Some(intersect_operating_points(
+            first_operating_point,
+            second_operating_point,
+        )),
     }
+}
+
+fn intersect_operating_point_with_rid(
+    operating_point: PacketOperatingPointGate,
+    rid: Rid,
+) -> PacketLayerGate {
+    match operating_point.rid() {
+        Some(point_rid) if point_rid == rid => PacketLayerGate::OperatingPoint(operating_point),
+        Some(_) => PacketLayerGate::Block,
+        None => PacketLayerGate::OperatingPoint(operating_point.with_rid(rid)),
+    }
+}
+
+fn intersect_operating_points(
+    first: PacketOperatingPointGate,
+    second: PacketOperatingPointGate,
+) -> PacketLayerGate {
+    let rid = match (first.rid(), second.rid()) {
+        (Some(first_rid), Some(second_rid)) if first_rid == second_rid => Some(first_rid),
+        (Some(_), Some(_)) => return PacketLayerGate::Block,
+        (Some(rid), None) | (None, Some(rid)) => Some(rid),
+        (None, None) => None,
+    };
+    PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
+        rid,
+        first
+            .max_temporal_layer_id()
+            .min(second.max_temporal_layer_id()),
+    ))
 }
 
 pub(super) fn coalesce_keyframe_kind(
@@ -448,8 +594,8 @@ mod tests {
     use str0m::media::KeyframeRequestKind;
 
     use super::{
-        KeyframeRequestDecision, PacketLayerGate, PacketRouteDecision, RouteControlState,
-        aggregate_packet_gates, coalesce_keyframe_kind,
+        KeyframeRequestDecision, PacketLayerGate, PacketLayerMetadata, PacketOperatingPointGate,
+        PacketRouteDecision, RouteControlState, aggregate_packet_gates, coalesce_keyframe_kind,
     };
     use crate::runtime::{
         rtc_adapter::relay_registry::RelayTargetId, transport_adapter::TransportMediaId,
@@ -506,7 +652,7 @@ mod tests {
         state.set_packet_gate(source_transport_media_id, PacketLayerGate::Block);
 
         assert_eq!(
-            state.decide_packet_route(source_transport_media_id, None),
+            state.decide_packet_route(source_transport_media_id, PacketLayerMetadata::default()),
             PacketRouteDecision::Drop
         );
     }
@@ -518,15 +664,60 @@ mod tests {
         state.set_packet_gate(source_transport_media_id, PacketLayerGate::Rid("hi".into()));
 
         assert_eq!(
-            state.decide_packet_route(source_transport_media_id, Some("hi".into())),
+            state.decide_packet_route(
+                source_transport_media_id,
+                PacketLayerMetadata::new(Some("hi".into()), None)
+            ),
             PacketRouteDecision::Forward
         );
         assert_eq!(
-            state.decide_packet_route(source_transport_media_id, Some("lo".into())),
+            state.decide_packet_route(
+                source_transport_media_id,
+                PacketLayerMetadata::new(Some("lo".into()), None)
+            ),
             PacketRouteDecision::Drop
         );
         assert_eq!(
-            state.decide_packet_route(source_transport_media_id, None),
+            state.decide_packet_route(source_transport_media_id, PacketLayerMetadata::default()),
+            PacketRouteDecision::Drop
+        );
+    }
+
+    #[test]
+    fn route_control_forwards_only_the_selected_operating_point() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(28);
+        state.set_packet_gate(
+            source_transport_media_id,
+            PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),
+        );
+
+        assert_eq!(
+            state.decide_packet_route(
+                source_transport_media_id,
+                PacketLayerMetadata::new(Some("hi".into()), Some(1))
+            ),
+            PacketRouteDecision::Forward
+        );
+        assert_eq!(
+            state.decide_packet_route(
+                source_transport_media_id,
+                PacketLayerMetadata::new(Some("hi".into()), Some(2))
+            ),
+            PacketRouteDecision::Drop
+        );
+        assert_eq!(
+            state.decide_packet_route(
+                source_transport_media_id,
+                PacketLayerMetadata::new(Some("lo".into()), Some(1))
+            ),
+            PacketRouteDecision::Drop
+        );
+        assert_eq!(
+            state.decide_packet_route(
+                source_transport_media_id,
+                PacketLayerMetadata::new(Some("hi".into()), None)
+            ),
             PacketRouteDecision::Drop
         );
     }
@@ -555,6 +746,35 @@ mod tests {
         assert_eq!(
             aggregate_packet_gates([&PacketLayerGate::Rid("hi".into()), &PacketLayerGate::Open]),
             Some(PacketLayerGate::Open)
+        );
+    }
+
+    #[test]
+    fn aggregate_packet_gates_widens_shared_operating_points() {
+        assert_eq!(
+            aggregate_packet_gates([
+                &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
+                    Some("hi".into()),
+                    0,
+                )),
+                &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
+                    Some("hi".into()),
+                    2,
+                )),
+            ]),
+            Some(PacketLayerGate::OperatingPoint(
+                PacketOperatingPointGate::new(Some("hi".into()), 2)
+            ))
+        );
+        assert_eq!(
+            aggregate_packet_gates([
+                &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
+                    Some("hi".into()),
+                    1,
+                )),
+                &PacketLayerGate::Rid("hi".into()),
+            ]),
+            Some(PacketLayerGate::Rid("hi".into()))
         );
     }
 
@@ -682,6 +902,42 @@ mod tests {
         assert_eq!(
             state.effective_packet_gate(source_transport_media_id),
             Some(PacketLayerGate::Rid("hi".into()))
+        );
+
+        state.set_source_packet_gate(
+            source_transport_media_id,
+            Some(PacketLayerGate::Rid("lo".into())),
+        );
+
+        assert_eq!(
+            state.effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::Block)
+        );
+    }
+
+    #[test]
+    fn route_control_source_packet_gate_intersects_operating_points() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(29);
+
+        state.set_local_packet_gate(
+            source_transport_media_id,
+            Some(PacketLayerGate::OperatingPoint(
+                PacketOperatingPointGate::new(Some("hi".into()), 2),
+            )),
+        );
+        state.set_source_packet_gate(
+            source_transport_media_id,
+            Some(PacketLayerGate::OperatingPoint(
+                PacketOperatingPointGate::new(Some("hi".into()), 1),
+            )),
+        );
+
+        assert_eq!(
+            state.effective_packet_gate(source_transport_media_id),
+            Some(PacketLayerGate::OperatingPoint(
+                PacketOperatingPointGate::new(Some("hi".into()), 1)
+            ))
         );
 
         state.set_source_packet_gate(

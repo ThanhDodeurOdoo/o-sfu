@@ -38,6 +38,7 @@ pub(crate) enum DiagnosticsRouteState {
 pub(crate) enum DiagnosticsSourceSelector {
     Open,
     Encoding,
+    OperatingPoint,
     RoomPolicyFeatured,
     RoomPolicyThumbnail,
 }
@@ -101,6 +102,8 @@ pub(crate) struct DiagnosticsSourceEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) max_bitrate_bps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) max_temporal_layer_id: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) payload_type: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) primary_ssrc: Option<u32>,
@@ -139,6 +142,8 @@ pub(crate) struct DiagnosticsSourceSelection {
     pub(crate) selected_encoding_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) selected_rid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_temporal_layer_id: Option<u8>,
     pub(crate) upgrade_observations: u8,
 }
 
@@ -279,6 +284,7 @@ impl From<SourceSelector> for DiagnosticsSourceSelector {
         match value {
             SourceSelector::Open => Self::Open,
             SourceSelector::Encoding(_) => Self::Encoding,
+            SourceSelector::OperatingPoint(_) => Self::OperatingPoint,
             SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
                 Self::RoomPolicyFeatured
             }
@@ -293,7 +299,9 @@ impl From<SourceSelector> for DiagnosticsSourceSelectionReason {
     fn from(value: SourceSelector) -> Self {
         match value {
             SourceSelector::Open => Self::Open,
-            SourceSelector::Encoding(_) => Self::ReceiverAdaptation,
+            SourceSelector::Encoding(_) | SourceSelector::OperatingPoint(_) => {
+                Self::ReceiverAdaptation
+            }
             SourceSelector::RoomPolicy(_) => Self::RoomPolicy,
         }
     }

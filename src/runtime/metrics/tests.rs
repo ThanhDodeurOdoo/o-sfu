@@ -101,6 +101,7 @@ fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapsh
 fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.source_selection_updates_open, 0);
     assert_eq!(snapshot.source_selection_updates_encoding, 1);
+    assert_eq!(snapshot.source_selection_updates_operating_point, 0);
     assert_eq!(snapshot.source_selection_updates_room_policy_featured, 0);
     assert_eq!(snapshot.source_selection_updates_room_policy_thumbnail, 0);
 }

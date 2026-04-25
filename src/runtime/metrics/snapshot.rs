@@ -156,6 +156,7 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub rtc_route_control_layer_dropped: u64,
     pub source_selection_updates_open: u64,
     pub source_selection_updates_encoding: u64,
+    pub source_selection_updates_operating_point: u64,
     pub source_selection_updates_room_policy_featured: u64,
     pub source_selection_updates_room_policy_thumbnail: u64,
 }
@@ -287,6 +288,7 @@ struct RtcRouteControlSnapshot {
 struct SourceSelectionSnapshot {
     open: u64,
     encoding: u64,
+    operating_point: u64,
     room_policy_featured: u64,
     room_policy_thumbnail: u64,
 }
@@ -442,6 +444,7 @@ impl RuntimeMetrics {
             rtc_route_control_layer_dropped: rtc_route_control.layer_dropped,
             source_selection_updates_open: source_selection.open,
             source_selection_updates_encoding: source_selection.encoding,
+            source_selection_updates_operating_point: source_selection.operating_point,
             source_selection_updates_room_policy_featured: source_selection.room_policy_featured,
             source_selection_updates_room_policy_thumbnail: source_selection.room_policy_thumbnail,
         }
@@ -756,6 +759,9 @@ impl RuntimeMetrics {
             encoding: self
                 .source_selection_updates
                 .load(SourceSelectionKind::Encoding),
+            operating_point: self
+                .source_selection_updates
+                .load(SourceSelectionKind::OperatingPoint),
             room_policy_featured: self
                 .source_selection_updates
                 .load(SourceSelectionKind::RoomPolicyFeatured),

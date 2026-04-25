@@ -348,12 +348,7 @@ impl RtcTransportMediaFacade<'_> {
         source_transport_media_id: TransportMediaId,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        let packet_gate = match packet_gate {
-            SourcePacketGate::Open => super::super::route_control::PacketLayerGate::Open,
-            SourcePacketGate::Rid(rid) => {
-                super::super::route_control::PacketLayerGate::Rid(rid.as_str().into())
-            }
-        };
+        let packet_gate = packet_layer_gate(packet_gate);
         self.adapter
             .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGate {
                 consumer_session_key: consumer_session_key.clone(),
@@ -424,9 +419,9 @@ impl RtcTransportMediaFacade<'_> {
     ) -> Result<(), TransportAdapterError> {
         let packet_gate = match packet_gate {
             SourcePacketGate::Open => None,
-            SourcePacketGate::Rid(rid) => Some(super::super::route_control::PacketLayerGate::Rid(
-                rid.as_str().into(),
-            )),
+            SourcePacketGate::Rid(_) | SourcePacketGate::OperatingPoint(_) => {
+                Some(packet_layer_gate(packet_gate))
+            }
         };
         self.set_route_control_source_packet_gate(
             source_session_key,
@@ -482,6 +477,25 @@ impl RtcTransportMediaFacade<'_> {
             target.relay_target_id,
             active,
         );
+    }
+}
+
+fn packet_layer_gate(
+    packet_gate: SourcePacketGate,
+) -> super::super::route_control::PacketLayerGate {
+    match packet_gate {
+        SourcePacketGate::Open => super::super::route_control::PacketLayerGate::Open,
+        SourcePacketGate::Rid(rid) => {
+            super::super::route_control::PacketLayerGate::Rid(rid.as_str().into())
+        }
+        SourcePacketGate::OperatingPoint(operating_point) => {
+            super::super::route_control::PacketLayerGate::OperatingPoint(
+                super::super::route_control::PacketOperatingPointGate::new(
+                    operating_point.rid().map(Into::into),
+                    operating_point.max_temporal_layer_id(),
+                ),
+            )
+        }
     }
 }
 

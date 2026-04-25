@@ -1,17 +1,19 @@
 use std::{mem::take, time::Instant};
 
+use o_sfu_rfc::rtp::frame_marking;
 use str0m::{
-    media::{ExtensionValues, Rid},
+    media::ExtensionValues,
     rtp::{RtpHeader, RtpPacket},
 };
 #[cfg(test)]
 use str0m::{
-    media::{Mid, Pt},
+    media::{Mid, Pt, Rid},
     rtp::Ssrc,
 };
 
 use super::{
-    local_forwarding::LocalForwardedRtp, shared_payload::SharedPayload, state::RtcBootstrapState,
+    local_forwarding::LocalForwardedRtp, route_control::PacketLayerMetadata,
+    shared_payload::SharedPayload, state::RtcBootstrapState,
 };
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
@@ -68,20 +70,12 @@ impl ForwardedPacket {
         &self.payload
     }
 
-    pub(super) fn route_control_rid(&self) -> Option<Rid> {
-        match &self.data {
-            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data
-                .rtp_packet
-                .header
-                .ext_vals
-                .rid
-                .or(rtp_data.rtp_packet.header.ext_vals.rid_repair),
-            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data
-                .header
-                .ext_vals
-                .rid
-                .or(rtp_data.header.ext_vals.rid_repair),
-        }
+    pub(super) fn route_control_layer_metadata(&self) -> PacketLayerMetadata {
+        let extensions = self.route_control_extension_values();
+        PacketLayerMetadata::new(
+            extensions.rid.or(extensions.rid_repair),
+            extensions.frame_mark.map(frame_mark_temporal_layer_id),
+        )
     }
 
     pub(super) fn route_control_audio_level(&self) -> Option<i8> {
@@ -181,6 +175,11 @@ impl ForwardedPacket {
     }
 }
 
+fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
+    let [first_octet, ..] = frame_mark.to_be_bytes();
+    frame_marking::temporal_layer_id(first_octet)
+}
+
 #[cfg(test)]
 pub(crate) fn sample_forwarded_packet(
     source_session_key: TransportSessionKey,
@@ -221,6 +220,26 @@ pub(crate) fn sample_forwarded_packet_with_audio_activity(
         ExtensionValues {
             audio_level,
             voice_activity,
+            ..ExtensionValues::default()
+        },
+        payload,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn sample_forwarded_packet_with_frame_mark(
+    source_session_key: TransportSessionKey,
+    mid: &str,
+    rid: Option<&str>,
+    frame_mark: u32,
+    payload: &[u8],
+) -> ForwardedPacket {
+    sample_forwarded_packet_with_extensions(
+        source_session_key,
+        mid,
+        rid,
+        ExtensionValues {
+            frame_mark: Some(frame_mark),
             ..ExtensionValues::default()
         },
         payload,
@@ -345,6 +364,27 @@ mod tests {
         assert_eq!(
             relay_packet.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(TransportMediaId::new(18))
+        );
+    }
+
+    #[test]
+    fn forwarded_packet_projects_rid_and_frame_marking_for_route_control() {
+        let session_key = test_transport_session_key(46, 0, 14, SessionId::Integer(12));
+        let frame_mark = u32::from(frame_marking::TEMPORAL_LAYER_ID_MAX) << 24;
+        let packet = sample_forwarded_packet_with_frame_mark(
+            session_key,
+            "cam-up",
+            Some("hi"),
+            frame_mark,
+            b"payload",
+        );
+
+        assert_eq!(
+            packet.route_control_layer_metadata(),
+            PacketLayerMetadata::new(
+                Some(Rid::from("hi")),
+                Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
+            )
         );
     }
 

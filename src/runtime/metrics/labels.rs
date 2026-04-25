@@ -148,6 +148,7 @@ pub(crate) enum RtcRouteControlOutcome {
 pub(crate) enum SourceSelectionKind {
     Open,
     Encoding,
+    OperatingPoint,
     RoomPolicyFeatured,
     RoomPolicyThumbnail,
 }
@@ -337,8 +338,9 @@ impl_metric_label!(RtcRouteControlOutcome {
 impl_metric_label!(SourceSelectionKind {
     Open => 0,
     Encoding => 1,
-    RoomPolicyFeatured => 2,
-    RoomPolicyThumbnail => 3,
+    OperatingPoint => 2,
+    RoomPolicyFeatured => 3,
+    RoomPolicyThumbnail => 4,
 });
 
 impl_metric_label!(TransportIceState {
@@ -377,6 +379,7 @@ impl From<SourceSelector> for SourceSelectionKind {
         match value {
             SourceSelector::Open => Self::Open,
             SourceSelector::Encoding(_) => Self::Encoding,
+            SourceSelector::OperatingPoint(_) => Self::OperatingPoint,
             SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
                 Self::RoomPolicyFeatured
             }
