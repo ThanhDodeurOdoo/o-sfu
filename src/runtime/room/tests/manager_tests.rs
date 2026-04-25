@@ -74,7 +74,7 @@ fn assert_consumer_packet_selection_update(
     events: &[FakeWebRtcEvent],
     consumer_user_id: &UserId,
     source_user_id: &UserId,
-    expected_rid: &str,
+    _expected_rid: &str,
 ) {
     assert!(events.iter().any(|event| {
         matches!(
@@ -82,10 +82,9 @@ fn assert_consumer_packet_selection_update(
             FakeWebRtcEvent::ConsumerPacketGateUpdated {
                 consumer_user_id: updated_consumer_user_id,
                 source_user_id: updated_source_user_id,
-                packet_gate: SourcePacketGate::Rid(rid),
+                packet_gate: SourcePacketGate::Open,
             } if updated_consumer_user_id == consumer_user_id
                 && updated_source_user_id == source_user_id
-                && rid == expected_rid
         )
     }));
 }

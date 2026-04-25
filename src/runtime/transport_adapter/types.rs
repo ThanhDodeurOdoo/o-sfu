@@ -252,6 +252,10 @@ impl ActiveSpeakerSourceDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourcePacketGate {
     Open,
+    #[allow(
+        dead_code,
+        reason = "strict RID packet gates are temporarily disabled until live simulcast layer detection can prove the selected RID is producing RTP"
+    )]
     Rid(String),
     OperatingPoint(SourcePacketOperatingPoint),
 }

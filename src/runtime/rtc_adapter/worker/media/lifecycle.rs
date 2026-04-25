@@ -522,9 +522,6 @@ fn worker_stage_native_send_media(
     Ok(mid)
 }
 
-/// Direct send declaration needs a concrete SSRC in the live RTC state. When
-/// the negotiated parameters do not provide one yet, the worker allocates a
-/// shard-local SSRC and treats any RID as metadata on that stream identity.
 fn declare_direct_send_media(
     session_state: &mut RtcSessionState,
     mid: Mid,
@@ -536,28 +533,20 @@ fn declare_direct_send_media(
     if !has_media {
         api.declare_media(mid, media_kind);
     }
-    let (ssrc, rid) = primary_encoding_identity(consumer_rtp_parameters)
-        .unwrap_or_else(|| (api.new_ssrc(), None));
-    api.declare_stream_tx(ssrc, None, mid, rid);
+    let mut declared_stream = false;
+    for encoding in consumer_rtp_parameters.encodings() {
+        let ssrc = encoding.ssrc().map_or_else(|| api.new_ssrc(), Ssrc::from);
+        api.declare_stream_tx(ssrc, None, mid, encoding.rid().map(Into::into));
+        declared_stream = true;
+    }
+    if !declared_stream {
+        let ssrc = api.new_ssrc();
+        api.declare_stream_tx(ssrc, None, mid, None);
+    }
 }
 
 fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
     rtp_parameters.mid().map(Into::into)
-}
-
-/// Return the first encoding identity that can be bound directly in the live
-/// RTC state.
-///
-/// RID-only encodings are intentionally ignored here because they are negotiable SDP
-/// metadata, but they do not identify a concrete inbound or outbound RTP stream
-/// until an SSRC exists.
-fn primary_encoding_identity(rtp_parameters: &RouterRtpParameters) -> Option<(Ssrc, Option<Rid>)> {
-    let encoding = rtp_parameters
-        .encodings()
-        .find(|encoding| encoding.ssrc().is_some() || encoding.rid().is_some())?;
-    let ssrc = encoding.ssrc().map(Ssrc::from)?;
-    let rid = encoding.rid().map(Into::into);
-    Some((ssrc, rid))
 }
 
 fn recv_encoding_identities(rtp_parameters: &RouterRtpParameters) -> Vec<(Ssrc, Option<Rid>)> {

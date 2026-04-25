@@ -88,6 +88,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) route_control: RouteControlState,
     pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
     pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
+    pub(super) producer_ssrc_rid_registry: BTreeMap<ProducerSsrcLookupKey, Rid>,
     pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
     pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,

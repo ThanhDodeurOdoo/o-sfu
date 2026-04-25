@@ -5,7 +5,7 @@ use std::{
 };
 
 use o_sfu_protocol::shared::UserId;
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
@@ -236,6 +236,82 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
                 dest_mid: consumer_mid,
                 active: true,
                 packet_gate: PacketLayerGate::Rid(selected_rid),
+            }],
+        },
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_request_consumer_keyframe(
+        &mut state,
+        &metrics,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+}
+
+#[test]
+fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
+    let source_session = test_transport_session_key(225, 0, 226, UserId::Integer(227));
+    let consumer_session = test_transport_session_key(225, 0, 228, UserId::Integer(229));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_201,
+        Some(Rid::from("lo")),
+    );
+    let Some(source_session_state) = state.users.get_mut(&source_session) else {
+        assert!(state.users.contains_key(&source_session));
+        return;
+    };
+    source_session_state.rtc.direct_api().expect_stream_rx(
+        Ssrc::from(88_202),
+        None,
+        source_mid,
+        Some(Rid::from("hi")),
+    );
+    source_session_state
+        .sdp_negotiation
+        .negotiated_producer_parameters
+        .insert(
+            source_mid,
+            RouterRtpParameters::new(
+                vec![],
+                vec![],
+                vec![
+                    StreamBinding::new().with_ssrc(88_201).with_rid("lo"),
+                    StreamBinding::new().with_ssrc(88_202).with_rid("hi"),
+                ],
+            )
+            .with_mid(source_mid.to_string()),
+        );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
             }],
         },
     );
@@ -591,6 +667,70 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
         state
             .remote_source_registration(source_transport_media_id)
             .is_none()
+    );
+}
+
+#[test]
+fn add_send_media_declares_every_simulcast_send_stream() {
+    let source_session = test_transport_session_key(151, 0, 156, UserId::Integer(157));
+    let consumer_session = test_transport_session_key(151, 0, 158, UserId::Integer(159));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id =
+        prepare_source_session(&mut state, &source_session, source_mid, 71_001);
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &consumer_session,
+            SocketAddr::from(([127, 0, 0, 1], 47_101)),
+            10_000_000,
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    let consumer_rtp_parameters = RouterRtpParameters::new(
+        vec![],
+        vec![],
+        vec![
+            StreamBinding::new().with_ssrc(72_001).with_rid("lo"),
+            StreamBinding::new().with_ssrc(72_002).with_rid("hi"),
+        ],
+    )
+    .with_mid(consumer_mid.to_string());
+    let (response_tx, response_rx) = oneshot::channel();
+
+    respond_add_send_media(
+        &mut state,
+        AddSendMediaRequest {
+            consumer_session_key: &consumer_session,
+            media_kind: MediaKind::Video,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            remote_source_control: None,
+            consumer_rtp_parameters: &consumer_rtp_parameters,
+        },
+        response_tx,
+    );
+
+    assert!(matches!(response_rx.blocking_recv(), Ok(Ok(_))));
+    if !state.users.contains_key(&consumer_session) {
+        assert!(state.users.contains_key(&consumer_session));
+        return;
+    }
+    let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
+        return;
+    };
+    let mut direct_api = consumer_session_state.rtc.direct_api();
+    assert!(
+        direct_api
+            .stream_tx_by_mid(consumer_mid, Some(Rid::from("lo")))
+            .is_some()
+    );
+    assert!(
+        direct_api
+            .stream_tx_by_mid(consumer_mid, Some(Rid::from("hi")))
+            .is_some()
     );
 }
 

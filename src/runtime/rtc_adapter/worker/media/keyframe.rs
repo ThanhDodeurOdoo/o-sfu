@@ -6,7 +6,8 @@
 
 use std::time::Instant;
 
-use str0m::media::{KeyframeRequestKind, Rid};
+use str0m::media::{KeyframeRequestKind, Mid, Rid};
+use tracing::debug;
 
 use super::{
     super::super::{
@@ -58,38 +59,247 @@ pub(crate) fn request_keyframe_for_source(
     kind: KeyframeRequestKind,
     now: Instant,
 ) {
-    let Some(mid) = owned_local_producer_mid(state, source_session_key, source_transport_media_id)
-    else {
+    let Some(mid) = local_keyframe_request_mid(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        rid,
+        kind,
+    ) else {
         return;
     };
-    let Some(session_state) = state.users.get_mut(source_session_key) else {
-        return;
-    };
-    if session_state
-        .rtc
-        .direct_api()
-        .stream_rx_by_mid(mid, rid)
-        .is_none()
-    {
+    let target_rids = producer_keyframe_target_rids(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        mid,
+        rid,
+        kind,
+    );
+    if target_rids.is_empty() {
         return;
     }
+    if should_absorb_keyframe_request(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        mid,
+        rid,
+        kind,
+        now,
+    ) {
+        metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+        return;
+    }
+    request_keyframe_from_producer(
+        state,
+        metrics,
+        source_session_key,
+        source_transport_media_id,
+        mid,
+        &target_rids,
+        kind,
+    );
+}
+
+fn local_keyframe_request_mid(
+    state: &RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+) -> Option<Mid> {
+    let mid = owned_local_producer_mid(state, source_session_key, source_transport_media_id);
+    if mid.is_none() {
+        log_ignored_keyframe_request(
+            source_session_key,
+            source_transport_media_id,
+            None,
+            rid,
+            kind,
+            "ignored keyframe request for unknown local producer",
+        );
+    }
+    mid
+}
+
+fn producer_keyframe_target_rids(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    mid: Mid,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+) -> Vec<Option<Rid>> {
+    let candidate_rids = producer_keyframe_candidate_rids(state, source_session_key, mid, rid);
+    let Some(session_state) = state.users.get_mut(source_session_key) else {
+        log_ignored_keyframe_request(
+            source_session_key,
+            source_transport_media_id,
+            Some(mid),
+            rid,
+            kind,
+            "ignored keyframe request for missing source session",
+        );
+        return Vec::new();
+    };
+    let mut direct_api = session_state.rtc.direct_api();
+    let mut target_rids = candidate_rids
+        .into_iter()
+        .filter(|candidate_rid| direct_api.stream_rx_by_mid(mid, *candidate_rid).is_some())
+        .collect::<Vec<_>>();
+    if target_rids.is_empty() && rid.is_none() && direct_api.stream_rx_by_mid(mid, None).is_some() {
+        target_rids.push(None);
+    }
+    if target_rids.is_empty() {
+        log_ignored_keyframe_request(
+            source_session_key,
+            source_transport_media_id,
+            Some(mid),
+            rid,
+            kind,
+            "ignored keyframe request for missing producer stream",
+        );
+    }
+    target_rids
+}
+
+fn producer_keyframe_candidate_rids(
+    state: &RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    mid: Mid,
+    rid: Option<Rid>,
+) -> Vec<Option<Rid>> {
+    if rid.is_some() {
+        return vec![rid];
+    }
+    let Some(session_state) = state.users.get(source_session_key) else {
+        return vec![None];
+    };
+    let mut rids = Vec::new();
+    if let Some(parameters) = session_state
+        .sdp_negotiation
+        .negotiated_producer_parameters
+        .get(&mid)
+    {
+        for rid in parameters
+            .bindings()
+            .filter_map(|binding| binding.rid().map(Rid::from))
+        {
+            push_unique_rid(&mut rids, rid);
+        }
+    }
+    if let Some(pending_streams) = session_state.sdp_negotiation.pending_recv_streams.get(&mid) {
+        for rid in pending_streams.iter().filter_map(|stream| stream.rid) {
+            push_unique_rid(&mut rids, rid);
+        }
+    }
+    if rids.is_empty() {
+        vec![None]
+    } else {
+        rids.into_iter().map(Some).collect()
+    }
+}
+
+fn push_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
+    if !rids.contains(&rid) {
+        rids.push(rid);
+    }
+}
+
+fn should_absorb_keyframe_request(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    mid: Mid,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+    now: Instant,
+) -> bool {
     if matches!(
         state
             .route_control
             .decide_keyframe_request(source_transport_media_id, now),
         KeyframeRequestDecision::Absorb
     ) {
-        metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-        return;
+        debug!(
+            ?source_session_key,
+            ?source_transport_media_id,
+            ?mid,
+            ?rid,
+            ?kind,
+            "absorbed duplicate local keyframe request"
+        );
+        return true;
     }
+    false
+}
+
+fn request_keyframe_from_producer(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    mid: Mid,
+    target_rids: &[Option<Rid>],
+    kind: KeyframeRequestKind,
+) {
     let Some(session_state) = state.users.get_mut(source_session_key) else {
+        log_ignored_keyframe_request(
+            source_session_key,
+            source_transport_media_id,
+            Some(mid),
+            None,
+            kind,
+            "ignored keyframe request for missing source session",
+        );
         return;
     };
     let mut direct_api = session_state.rtc.direct_api();
-    let Some(stream_rx) = direct_api.stream_rx_by_mid(mid, rid) else {
+    let mut requested_rids = Vec::with_capacity(target_rids.len());
+    for target_rid in target_rids {
+        if let Some(stream_rx) = direct_api.stream_rx_by_mid(mid, *target_rid) {
+            stream_rx.request_keyframe(kind);
+            requested_rids.push(*target_rid);
+        }
+    }
+    if requested_rids.is_empty() {
+        log_ignored_keyframe_request(
+            source_session_key,
+            source_transport_media_id,
+            Some(mid),
+            None,
+            kind,
+            "ignored keyframe request for missing producer stream",
+        );
         return;
-    };
-    stream_rx.request_keyframe(kind);
+    }
     state.mark_session_dirty(source_session_key);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+    debug!(
+        ?source_session_key,
+        ?source_transport_media_id,
+        ?mid,
+        ?requested_rids,
+        ?kind,
+        "requested local producer keyframe"
+    );
+}
+
+fn log_ignored_keyframe_request(
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    mid: Option<Mid>,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+    message: &'static str,
+) {
+    debug!(
+        ?source_session_key,
+        ?source_transport_media_id,
+        ?mid,
+        ?rid,
+        ?kind,
+        message
+    );
 }

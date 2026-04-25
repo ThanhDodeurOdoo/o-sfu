@@ -7,6 +7,8 @@
 
 use std::{cmp::Reverse, collections::BTreeMap, time::Instant};
 
+use tracing::debug;
+
 use super::{
     active_speaker::SourceAudioPolicyState,
     keyframe::{KeyframeRequestDecision, KeyframeRequestWindow},
@@ -56,7 +58,15 @@ impl RouteControlState {
             .unwrap_or(PacketLayerGate::Open)
         {
             gate if gate.permits(metadata) => PacketRouteDecision::Forward,
-            _ => PacketRouteDecision::Drop,
+            gate => {
+                debug!(
+                    ?source_transport_media_id,
+                    ?metadata,
+                    ?gate,
+                    "dropped RTP packet by source packet gate"
+                );
+                PacketRouteDecision::Drop
+            }
         }
     }
 
@@ -65,26 +75,37 @@ impl RouteControlState {
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<PacketLayerGate>,
     ) {
-        let should_remove =
-            if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
-                source_control.local_packet_gate = packet_gate;
-                source_control.is_empty()
-            } else {
-                let Some(packet_gate) = packet_gate else {
-                    return;
-                };
-                self.sources.insert(
-                    source_transport_media_id,
-                    SourceRouteControl {
-                        local_packet_gate: Some(packet_gate),
-                        ..Default::default()
-                    },
-                );
+        let should_remove = if let Some(source_control) =
+            self.sources.get_mut(&source_transport_media_id)
+        {
+            source_control.local_packet_gate = packet_gate;
+            source_control.is_empty()
+        } else {
+            let Some(packet_gate) = packet_gate else {
                 return;
             };
+            self.sources.insert(
+                source_transport_media_id,
+                SourceRouteControl {
+                    local_packet_gate: Some(packet_gate),
+                    ..Default::default()
+                },
+            );
+            debug!(
+                ?source_transport_media_id,
+                effective_packet_gate = ?self.effective_packet_gate_for_log(source_transport_media_id),
+                "updated source packet gate"
+            );
+            return;
+        };
         if should_remove {
             self.sources.remove(&source_transport_media_id);
         }
+        debug!(
+            ?source_transport_media_id,
+            effective_packet_gate = ?self.effective_packet_gate_for_log(source_transport_media_id),
+            "updated source packet gate"
+        );
     }
 
     pub(in crate::runtime::rtc_adapter) fn observe_audio_activity(
@@ -233,6 +254,15 @@ impl RouteControlState {
 
     #[cfg(test)]
     pub(in crate::runtime::rtc_adapter) fn effective_packet_gate(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<PacketLayerGate> {
+        self.sources
+            .get(&source_transport_media_id)
+            .and_then(SourceRouteControl::effective_packet_gate)
+    }
+
+    fn effective_packet_gate_for_log(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<PacketLayerGate> {

@@ -14,6 +14,10 @@ use crate::runtime::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SourcePacketGateProjectionError {
     MissingEncoding,
+    #[allow(
+        dead_code,
+        reason = "kept with the disabled RID projection path so re-enabling strict simulcast gates restores the original validation"
+    )]
     MissingRid,
     MissingTemporalMetadata,
     TemporalLayerExceedsAdvertised,
@@ -30,10 +34,13 @@ pub(super) fn source_packet_gate_for_selector(
             let encoding = source
                 .encoding(encoding_id)
                 .ok_or(SourcePacketGateProjectionError::MissingEncoding)?;
-            let rid = encoding
-                .rid()
-                .ok_or(SourcePacketGateProjectionError::MissingRid)?;
-            Ok(SourcePacketGate::Rid(rid.as_str().to_owned()))
+            // FIXME(simulcast): Re-enable RID packet gates after live-layer detection can prove the selected RID is actively producing frames for this source.
+            // let rid = encoding
+            //     .rid()
+            //     .ok_or(SourcePacketGateProjectionError::MissingRid)?;
+            // return Ok(SourcePacketGate::Rid(rid.as_str().to_owned()));
+            let _ = encoding;
+            Ok(SourcePacketGate::Open)
         }
         SourceSelector::OperatingPoint(operating_point) => {
             let encoding = source
@@ -148,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_projects_selected_encoding_to_transport_rid() {
+    fn source_selector_bridge_keeps_selected_encoding_transport_gate_open() {
         let source_id = PublishedSourceId::from_raw(7);
         let high_encoding_id = SourceEncodingId::from_raw(1);
         let low_encoding_id = SourceEncodingId::from_raw(2);
@@ -163,7 +170,7 @@ mod tests {
         assert_eq!(selector, SourceSelector::Encoding(low_encoding_id));
         assert_eq!(
             source_packet_gate_for_selector(&source, selector),
-            Ok(SourcePacketGate::Rid(String::from("lo")))
+            Ok(SourcePacketGate::Open)
         );
     }
 
@@ -184,14 +191,14 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_requires_rid_for_rid_packet_selection() {
+    fn source_selector_bridge_keeps_ridless_selected_encoding_open() {
         let source_id = PublishedSourceId::from_raw(7);
         let encoding_id = SourceEncodingId::from_raw(1);
         let source = source_with_encodings(vec![encoding(source_id, encoding_id, None, None)]);
 
         assert_eq!(
             source_packet_gate_for_selector(&source, SourceSelector::Encoding(encoding_id)),
-            Err(SourcePacketGateProjectionError::MissingRid)
+            Ok(SourcePacketGate::Open)
         );
     }
 

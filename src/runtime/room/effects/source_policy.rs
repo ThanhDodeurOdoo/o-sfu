@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::super::{
     Room,
@@ -91,51 +91,68 @@ impl SourcePolicyEffectPlan {
         media_port: &impl MediaPort,
         updates: Vec<ConsumerPacketSelectionUpdate>,
     ) -> Vec<ConsumerPacketSelectionUpdate> {
-        let mut packet_gate_updates = Vec::with_capacity(updates.len());
-        let mut update_indexes_with_packet_gates = Vec::with_capacity(updates.len());
-        for (index, update) in updates.iter().enumerate() {
-            let Some(packet_gate) = update.packet_gate() else {
-                continue;
-            };
-            packet_gate_updates.push(ConsumerPacketGateUpdate::new(
-                room.transport_user_key(update.consumer_user_id(), update.consumer_connection_id()),
-                update.consumer_transport_media_id(),
-                room.transport_user_key(update.source_user_id(), update.source_connection_id()),
-                update.source_transport_media_id(),
-                packet_gate.clone(),
-            ));
-            update_indexes_with_packet_gates.push(index);
-        }
+        let packet_gate_plan = Self::packet_gate_update_plan(room, &updates);
         let rejected_packet_gate_update_offsets =
-            Self::rejected_packet_gate_updates(media_port, &packet_gate_updates).await;
-        let rejected_packet_gate_updates = rejected_packet_gate_update_offsets
-            .into_iter()
-            .filter_map(|offset| update_indexes_with_packet_gates.get(offset).copied())
-            .collect::<BTreeSet<_>>();
+            Self::rejected_packet_gate_updates(media_port, packet_gate_plan.updates()).await;
+        let rejected_packet_gate_updates =
+            packet_gate_plan.rejected_update_indexes(rejected_packet_gate_update_offsets);
         let mut applied_updates = Vec::with_capacity(updates.len());
         for (index, update) in updates.into_iter().enumerate() {
             if rejected_packet_gate_updates.contains(&index) {
-                warn!(
-                    consumer_user_id = ?update.consumer_user_id(),
-                    source_user_id = ?update.source_user_id(),
-                    source_transport_media_id = ?update.source_transport_media_id(),
-                    consumer_transport_media_id = ?update.consumer_transport_media_id(),
-                    "transport adapter rejected the receiver-driven packet selection update"
-                );
+                Self::warn_rejected_packet_update(&update);
                 continue;
             }
-            if !Self::request_adaptation_keyframe(room, media_port, &update).await {
-                warn!(
-                    consumer_user_id = ?update.consumer_user_id(),
-                    source_user_id = ?update.source_user_id(),
-                    source_transport_media_id = ?update.source_transport_media_id(),
-                    consumer_transport_media_id = ?update.consumer_transport_media_id(),
-                    "transport adapter failed to request an adaptation keyframe refresh"
-                );
+            if let Some(update) = Self::accepted_packet_update(room, media_port, update).await {
+                applied_updates.push(update);
             }
-            applied_updates.push(update);
         }
         applied_updates
+    }
+
+    fn packet_gate_update_plan(
+        room: &Room,
+        updates: &[ConsumerPacketSelectionUpdate],
+    ) -> PacketGateUpdatePlan {
+        let mut plan = PacketGateUpdatePlan::with_capacity(updates.len());
+        for (index, update) in updates.iter().enumerate() {
+            Self::log_prepared_packet_update(update);
+            let Some(packet_gate) = update.packet_gate() else {
+                continue;
+            };
+            plan.push(
+                index,
+                ConsumerPacketGateUpdate::new(
+                    room.transport_user_key(
+                        update.consumer_user_id(),
+                        update.consumer_connection_id(),
+                    ),
+                    update.consumer_transport_media_id(),
+                    room.transport_user_key(update.source_user_id(), update.source_connection_id()),
+                    update.source_transport_media_id(),
+                    packet_gate.clone(),
+                ),
+            );
+        }
+        plan
+    }
+
+    async fn accepted_packet_update(
+        room: &Room,
+        media_port: &impl MediaPort,
+        update: ConsumerPacketSelectionUpdate,
+    ) -> Option<ConsumerPacketSelectionUpdate> {
+        Self::log_accepted_packet_update(&update);
+        if Self::request_adaptation_keyframe(room, media_port, &update).await {
+            return Some(update);
+        }
+        warn!(
+            consumer_user_id = ?update.consumer_user_id(),
+            source_user_id = ?update.source_user_id(),
+            source_transport_media_id = ?update.source_transport_media_id(),
+            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            "transport adapter failed to request an adaptation keyframe refresh"
+        );
+        Some(update)
     }
 
     async fn rejected_packet_gate_updates(
@@ -160,9 +177,23 @@ impl SourcePolicyEffectPlan {
         update: &ConsumerPacketSelectionUpdate,
     ) -> bool {
         if !update.request_keyframe() {
+            debug!(
+                consumer_user_id = ?update.consumer_user_id(),
+                source_user_id = ?update.source_user_id(),
+                source_transport_media_id = ?update.source_transport_media_id(),
+                consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                "receiver-driven packet selection did not request a keyframe refresh"
+            );
             return true;
         }
-        media_port
+        debug!(
+            consumer_user_id = ?update.consumer_user_id(),
+            source_user_id = ?update.source_user_id(),
+            source_transport_media_id = ?update.source_transport_media_id(),
+            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            "requesting adaptation keyframe refresh"
+        );
+        let accepted = media_port
             .request_consumer_keyframe(
                 &room
                     .transport_user_key(update.consumer_user_id(), update.consumer_connection_id()),
@@ -171,6 +202,82 @@ impl SourcePolicyEffectPlan {
                 update.source_transport_media_id(),
             )
             .await
-            .is_ok()
+            .is_ok();
+        if accepted {
+            debug!(
+                consumer_user_id = ?update.consumer_user_id(),
+                source_user_id = ?update.source_user_id(),
+                source_transport_media_id = ?update.source_transport_media_id(),
+                consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                "transport adapter accepted adaptation keyframe refresh"
+            );
+        }
+        accepted
+    }
+
+    fn log_prepared_packet_update(update: &ConsumerPacketSelectionUpdate) {
+        debug!(
+            consumer_user_id = ?update.consumer_user_id(),
+            source_user_id = ?update.source_user_id(),
+            source_transport_media_id = ?update.source_transport_media_id(),
+            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            selector = ?update.selector(),
+            packet_gate = ?update.packet_gate(),
+            request_keyframe = update.request_keyframe(),
+            "prepared receiver-driven packet selection update"
+        );
+    }
+
+    fn log_accepted_packet_update(update: &ConsumerPacketSelectionUpdate) {
+        debug!(
+            consumer_user_id = ?update.consumer_user_id(),
+            source_user_id = ?update.source_user_id(),
+            source_transport_media_id = ?update.source_transport_media_id(),
+            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            selector = ?update.selector(),
+            packet_gate = ?update.packet_gate(),
+            request_keyframe = update.request_keyframe(),
+            "transport adapter accepted receiver-driven packet selection update"
+        );
+    }
+
+    fn warn_rejected_packet_update(update: &ConsumerPacketSelectionUpdate) {
+        warn!(
+            consumer_user_id = ?update.consumer_user_id(),
+            source_user_id = ?update.source_user_id(),
+            source_transport_media_id = ?update.source_transport_media_id(),
+            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            "transport adapter rejected the receiver-driven packet selection update"
+        );
+    }
+}
+
+struct PacketGateUpdatePlan {
+    updates: Vec<ConsumerPacketGateUpdate>,
+    update_indexes: Vec<usize>,
+}
+
+impl PacketGateUpdatePlan {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            updates: Vec::with_capacity(capacity),
+            update_indexes: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn push(&mut self, update_index: usize, update: ConsumerPacketGateUpdate) {
+        self.update_indexes.push(update_index);
+        self.updates.push(update);
+    }
+
+    fn updates(&self) -> &[ConsumerPacketGateUpdate] {
+        &self.updates
+    }
+
+    fn rejected_update_indexes(&self, rejected_offsets: BTreeSet<usize>) -> BTreeSet<usize> {
+        rejected_offsets
+            .into_iter()
+            .filter_map(|offset| self.update_indexes.get(offset).copied())
+            .collect()
     }
 }

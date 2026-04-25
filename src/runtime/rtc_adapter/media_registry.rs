@@ -6,7 +6,10 @@
 
 use std::{collections::BTreeSet, time::Instant};
 
-use str0m::{media::Mid, rtp::Ssrc};
+use str0m::{
+    media::{Mid, Rid},
+    rtp::Ssrc,
+};
 
 use super::{commands::RemoteSourceControl, state::RtcBootstrapState};
 use crate::runtime::{
@@ -312,6 +315,19 @@ impl RtcBootstrapState {
             .copied()
     }
 
+    pub(super) fn source_rid_for_ssrc(
+        &self,
+        source_session_key: &TransportSessionKey,
+        source_ssrc: Ssrc,
+    ) -> Option<Rid> {
+        self.producer_ssrc_rid_registry
+            .get(&ProducerSsrcLookupKey::new(
+                source_session_key.clone(),
+                source_ssrc,
+            ))
+            .copied()
+    }
+
     pub(super) fn consumer_source_transport_media_id_for_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -371,9 +387,16 @@ impl RtcBootstrapState {
             return;
         };
         self.clear_producer_ssrc_bindings(transport_media_id, session_key);
-        let ssrcs = parameters
+        let bindings = parameters
             .bindings()
-            .filter_map(|binding| binding.ssrc().map(Ssrc::from))
+            .filter_map(|binding| {
+                let ssrc = binding.ssrc().map(Ssrc::from)?;
+                Some((ssrc, binding.rid().map(Rid::from)))
+            })
+            .collect::<Vec<_>>();
+        let ssrcs = bindings
+            .iter()
+            .map(|(ssrc, _rid)| *ssrc)
             .collect::<Vec<_>>();
         if ssrcs.is_empty() {
             self.producer_ssrcs_by_media
@@ -381,11 +404,13 @@ impl RtcBootstrapState {
                 .or_default();
             return;
         }
-        for ssrc in &ssrcs {
-            self.producer_ssrc_registry.insert(
-                ProducerSsrcLookupKey::new(session_key.clone(), *ssrc),
-                transport_media_id,
-            );
+        for (ssrc, rid) in &bindings {
+            let key = ProducerSsrcLookupKey::new(session_key.clone(), *ssrc);
+            self.producer_ssrc_registry
+                .insert(key.clone(), transport_media_id);
+            if let Some(rid) = rid {
+                self.producer_ssrc_rid_registry.insert(key, *rid);
+            }
         }
         self.producer_ssrcs_by_media
             .insert(transport_media_id, ssrcs);
@@ -416,8 +441,9 @@ impl RtcBootstrapState {
     ) {
         if let Some(ssrcs) = self.producer_ssrcs_by_media.remove(&transport_media_id) {
             for ssrc in ssrcs {
-                self.producer_ssrc_registry
-                    .remove(&ProducerSsrcLookupKey::new(session_key.clone(), ssrc));
+                let key = ProducerSsrcLookupKey::new(session_key.clone(), ssrc);
+                self.producer_ssrc_registry.remove(&key);
+                self.producer_ssrc_rid_registry.remove(&key);
             }
         }
     }

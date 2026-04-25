@@ -6,7 +6,10 @@
 //! RTC destinations, packet sinks such as recording, and relay mailboxes. It
 //! does not interpret room layout, receiver budget, or source-policy reasons.
 
+use tracing::debug;
+
 use super::{
+    demux::{MediaRouteDestination, MediaRouteEntry},
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
     relay_registry::{ActiveRelayTarget, RelayRegistry, RelayTargetId, RelayTargetTransport},
@@ -28,85 +31,214 @@ pub(super) fn populate_forward_routes(
     forwards: &mut Vec<PacketForward>,
 ) {
     for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
-        let Some(source_transport_media_id) = packet.resolve_source_transport_media_id(state)
-        else {
-            continue;
-        };
-        if packet.visits_origin_sinks()
-            && let Some(sink) =
-                packet_sink_registry.sink_for_room(packet.source_session_key().room_instance_id())
-        {
-            forwards.push(PacketForward::from_packet_sink(
-                packet_idx,
-                source_transport_media_id,
-                sink,
-            ));
+        populate_forward_routes_for_packet(
+            state,
+            packet_sink_registry,
+            relay_registry,
+            metrics,
+            packet_idx,
+            packet,
+            forwards,
+        );
+    }
+}
+
+fn populate_forward_routes_for_packet(
+    state: &RtcBootstrapState,
+    packet_sink_registry: &RoomPacketSinkRegistry,
+    relay_registry: &RelayRegistry,
+    metrics: &RuntimeMetrics,
+    packet_idx: usize,
+    packet: &mut ForwardedPacket,
+    forwards: &mut Vec<PacketForward>,
+) {
+    let Some(source_transport_media_id) = packet.resolve_source_transport_media_id(state) else {
+        return;
+    };
+    push_origin_sink_forward(
+        packet_sink_registry,
+        packet_idx,
+        packet,
+        source_transport_media_id,
+        forwards,
+    );
+    let relay_targets = packet
+        .visits_origin_sinks()
+        .then(|| relay_registry.targets_for_source(source_transport_media_id))
+        .flatten();
+    let route_entry = state.media_route_index.get(&source_transport_media_id);
+    if !has_routed_forward(relay_targets.as_deref(), route_entry) {
+        return;
+    }
+    let metadata = packet.route_control_layer_metadata(state);
+    if !source_packet_gate_permits(state, metrics, source_transport_media_id, metadata) {
+        return;
+    }
+    populate_relay_forwards(
+        state,
+        relay_targets.as_deref(),
+        packet_idx,
+        source_transport_media_id,
+        metadata,
+        forwards,
+    );
+    if let Some(route_entry) = route_entry {
+        populate_local_forwards(
+            route_entry,
+            packet_idx,
+            source_transport_media_id,
+            metadata,
+            forwards,
+        );
+    }
+}
+
+fn push_origin_sink_forward(
+    packet_sink_registry: &RoomPacketSinkRegistry,
+    packet_idx: usize,
+    packet: &ForwardedPacket,
+    source_transport_media_id: RouteTransportMediaId,
+    forwards: &mut Vec<PacketForward>,
+) {
+    if !packet.visits_origin_sinks() {
+        return;
+    }
+    let Some(sink) =
+        packet_sink_registry.sink_for_room(packet.source_session_key().room_instance_id())
+    else {
+        return;
+    };
+    forwards.push(PacketForward::from_packet_sink(
+        packet_idx,
+        source_transport_media_id,
+        sink,
+    ));
+}
+
+fn source_packet_gate_permits(
+    state: &RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_transport_media_id: RouteTransportMediaId,
+    metadata: PacketLayerMetadata,
+) -> bool {
+    match state
+        .route_control
+        .decide_packet_route(source_transport_media_id, metadata)
+    {
+        PacketRouteDecision::Forward => {
+            metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
+            true
         }
-        let relay_targets = if packet.visits_origin_sinks() {
-            relay_registry.targets_for_source(source_transport_media_id)
-        } else {
-            None
-        };
-        let route_entry = state.media_route_index.get(&source_transport_media_id);
-        if has_routed_forward(relay_targets.as_deref(), route_entry) {
-            let metadata = packet.route_control_layer_metadata();
-            match state
-                .route_control
-                .decide_packet_route(source_transport_media_id, metadata)
-            {
-                PacketRouteDecision::Forward => {
-                    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
-                }
-                PacketRouteDecision::Drop => {
-                    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
-                    continue;
-                }
-            }
-            if let Some(relay_targets) = relay_targets {
-                for relay_target in relay_targets.iter() {
-                    if !relay_target_gate_permits(
-                        state,
-                        source_transport_media_id,
-                        relay_target.target_id(),
-                        metadata,
-                    ) {
-                        continue;
-                    }
-                    match relay_target.target().clone() {
-                        RelayTargetTransport::IntraNodeMailbox(mailbox) => {
-                            forwards.push(PacketForward::from_intra_node_relay_sink(
-                                packet_idx,
-                                source_transport_media_id,
-                                mailbox,
-                            ));
-                        }
-                        RelayTargetTransport::InterNodeSender(sender) => {
-                            forwards.push(PacketForward::from_inter_node_relay_sink(
-                                packet_idx,
-                                source_transport_media_id,
-                                sender,
-                            ));
-                        }
-                    }
-                }
-            }
-            let Some(route_entry) = route_entry else {
-                continue;
-            };
-            if !route_entry.source_active {
-                continue;
-            }
-            for destination in &route_entry.destinations {
-                if !destination.active || !destination.packet_gate.permits(metadata) {
-                    continue;
-                }
-                forwards.push(PacketForward::from_local_route_destination(
-                    packet_idx,
-                    destination,
-                ));
-            }
+        PacketRouteDecision::Drop => {
+            metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+            false
         }
     }
+}
+
+fn populate_relay_forwards(
+    state: &RtcBootstrapState,
+    relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
+    packet_idx: usize,
+    source_transport_media_id: RouteTransportMediaId,
+    metadata: PacketLayerMetadata,
+    forwards: &mut Vec<PacketForward>,
+) {
+    let Some(relay_targets) = relay_targets else {
+        return;
+    };
+    for relay_target in relay_targets {
+        if !relay_target_gate_permits(
+            state,
+            source_transport_media_id,
+            relay_target.target_id(),
+            metadata,
+        ) {
+            continue;
+        }
+        push_relay_forward(
+            packet_idx,
+            source_transport_media_id,
+            relay_target,
+            forwards,
+        );
+    }
+}
+
+fn push_relay_forward(
+    packet_idx: usize,
+    source_transport_media_id: RouteTransportMediaId,
+    relay_target: &ActiveRelayTarget<RelayTargetId, RelayTargetTransport>,
+    forwards: &mut Vec<PacketForward>,
+) {
+    match relay_target.target().clone() {
+        RelayTargetTransport::IntraNodeMailbox(mailbox) => {
+            forwards.push(PacketForward::from_intra_node_relay_sink(
+                packet_idx,
+                source_transport_media_id,
+                mailbox,
+            ));
+        }
+        RelayTargetTransport::InterNodeSender(sender) => {
+            forwards.push(PacketForward::from_inter_node_relay_sink(
+                packet_idx,
+                source_transport_media_id,
+                sender,
+            ));
+        }
+    }
+}
+
+fn populate_local_forwards(
+    route_entry: &MediaRouteEntry,
+    packet_idx: usize,
+    source_transport_media_id: RouteTransportMediaId,
+    metadata: PacketLayerMetadata,
+    forwards: &mut Vec<PacketForward>,
+) {
+    if !route_entry.source_active {
+        debug!(
+            ?source_transport_media_id,
+            "skipped forwarding because source route is inactive"
+        );
+        return;
+    }
+    for destination in &route_entry.destinations {
+        if destination_packet_gate_permits(source_transport_media_id, destination, metadata) {
+            forwards.push(PacketForward::from_local_route_destination(
+                packet_idx,
+                destination,
+            ));
+        }
+    }
+}
+
+fn destination_packet_gate_permits(
+    source_transport_media_id: RouteTransportMediaId,
+    destination: &MediaRouteDestination,
+    metadata: PacketLayerMetadata,
+) -> bool {
+    if !destination.active {
+        debug!(
+            ?source_transport_media_id,
+            consumer_session_key = ?destination.dest_session,
+            consumer_transport_media_id = ?destination.dest_transport_media_id,
+            "skipped forwarding because destination route is inactive"
+        );
+        return false;
+    }
+    if destination.packet_gate.permits(metadata) {
+        return true;
+    }
+    debug!(
+        ?source_transport_media_id,
+        consumer_session_key = ?destination.dest_session,
+        consumer_transport_media_id = ?destination.dest_transport_media_id,
+        ?metadata,
+        packet_gate = ?destination.packet_gate,
+        "dropped RTP packet by destination packet gate"
+    );
+    false
 }
 
 fn relay_target_gate_permits(
@@ -123,7 +255,7 @@ fn relay_target_gate_permits(
 
 fn has_routed_forward(
     relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
-    route_entry: Option<&super::demux::MediaRouteEntry>,
+    route_entry: Option<&MediaRouteEntry>,
 ) -> bool {
     relay_targets.is_some_and(|targets| !targets.is_empty())
         || route_entry.is_some_and(|entry| {

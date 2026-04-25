@@ -2,7 +2,7 @@ use std::{mem::take, time::Instant};
 
 use o_sfu_rfc::rtp::frame_marking;
 use str0m::{
-    media::ExtensionValues,
+    media::{ExtensionValues, Rid},
     rtp::{RtpHeader, RtpPacket},
 };
 
@@ -68,12 +68,16 @@ impl ForwardedPacket {
         &self.payload
     }
 
-    pub(super) fn route_control_layer_metadata(&self) -> PacketLayerMetadata {
+    pub(super) fn route_control_layer_metadata(
+        &self,
+        state: &RtcBootstrapState,
+    ) -> PacketLayerMetadata {
         let extensions = self.route_control_extension_values();
-        PacketLayerMetadata::new(
-            extensions.rid.or(extensions.rid_repair),
-            extensions.frame_mark.map(frame_mark_temporal_layer_id),
-        )
+        let rid = extensions
+            .rid
+            .or(extensions.rid_repair)
+            .or_else(|| self.route_control_rid_from_ssrc(state));
+        PacketLayerMetadata::new(rid, extensions.frame_mark.map(frame_mark_temporal_layer_id))
     }
 
     pub(super) fn route_control_audio_level(&self) -> Option<i8> {
@@ -171,6 +175,14 @@ impl ForwardedPacket {
             ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.header.ext_vals,
         }
     }
+
+    fn route_control_rid_from_ssrc(&self, state: &RtcBootstrapState) -> Option<Rid> {
+        let source_ssrc = match &self.data {
+            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data.rtp_packet.header.ssrc,
+            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data.header.ssrc,
+        };
+        state.source_rid_for_ssrc(&self.source_session_key, source_ssrc)
+    }
 }
 
 fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
@@ -248,11 +260,39 @@ mod tests {
         );
 
         assert_eq!(
-            packet.route_control_layer_metadata(),
+            packet.route_control_layer_metadata(&RtcBootstrapState::default()),
             PacketLayerMetadata::new(
                 Some(Rid::from("hi")),
                 Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
             )
+        );
+    }
+
+    #[test]
+    fn forwarded_packet_recovers_rid_from_ssrc_binding_when_extension_is_absent() {
+        let session_key = test_transport_session_key(47, 0, 15, UserId::Integer(13));
+        let producer_mid = Mid::from("cam-up");
+        let producer_ssrc = 76_543_u32;
+        let mut state = RtcBootstrapState::default();
+        state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: session_key.clone(),
+            mid: producer_mid,
+        });
+        state.refresh_producer_ssrc_bindings(
+            &session_key,
+            producer_mid,
+            &RouterRtpParameters::new(
+                vec![],
+                vec![],
+                vec![StreamBinding::new().with_ssrc(producer_ssrc).with_rid("hi")],
+            )
+            .with_mid(producer_mid.to_string()),
+        );
+        let packet = sample_forwarded_packet_without_mid(session_key, producer_ssrc, b"payload");
+
+        assert_eq!(
+            packet.route_control_layer_metadata(&state),
+            PacketLayerMetadata::new(Some(Rid::from("hi")), None)
         );
     }
 

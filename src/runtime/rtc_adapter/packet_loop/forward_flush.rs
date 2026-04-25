@@ -1,3 +1,6 @@
+use std::time::Instant;
+
+use str0m::media::{KeyframeRequestKind, MediaKind};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -5,11 +8,16 @@ use super::{
     super::{
         forwarded_packet::ForwardedPacket,
         forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
+        media_registry::RegisteredMediaHandle,
         state::RtcBootstrapState,
+        worker::request_keyframe_for_source,
     },
     buffers::PacketLoopBuffers,
 };
-use crate::runtime::{metrics::RuntimeMetrics, transport_adapter::SourcePolicySignal};
+use crate::runtime::{
+    metrics::RuntimeMetrics,
+    transport_adapter::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
+};
 
 pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,
@@ -47,11 +55,61 @@ pub(super) fn record_incoming_stats(
                     payload_bytes = payload_len,
                     "observed first RTP ingress for published media"
                 );
+                request_first_video_keyframe(
+                    state,
+                    metrics,
+                    packet.source_session_key(),
+                    transport_media_id,
+                    packet.received_at(),
+                );
             }
             metrics.record_rtp_ingress(payload_len);
         }
     }
     buffers.flush_source_policy_dirty(source_policy_signal);
+}
+
+fn request_first_video_keyframe(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    now: Instant,
+) {
+    if !source_is_video(state, source_session_key, transport_media_id) {
+        return;
+    }
+    // FIXME(simulcast): replace this first-RTP retry with a pending per-RID
+    // keyframe refresh queue once live layer detection owns RID readiness.
+    request_keyframe_for_source(
+        state,
+        metrics,
+        source_session_key,
+        transport_media_id,
+        None,
+        KeyframeRequestKind::Pli,
+        now,
+    );
+}
+
+fn source_is_video(
+    state: &RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+) -> bool {
+    let Some(RegisteredMediaHandle::Producer { session_key, mid }) =
+        state.media_handle(transport_media_id)
+    else {
+        return false;
+    };
+    if session_key != source_session_key {
+        return false;
+    }
+    state
+        .users
+        .get(source_session_key)
+        .and_then(|session_state| session_state.rtc.media(*mid))
+        .is_some_and(|media| matches!(media.kind(), MediaKind::Video))
 }
 
 pub(super) fn drain_relay_packets(

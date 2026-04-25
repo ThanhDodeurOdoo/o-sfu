@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
+use tracing::debug;
 
 use super::{
     super::{
@@ -133,15 +134,24 @@ fn flush_coalesced_keyframe_request(
     now: Instant,
 ) {
     match coalesced_request.route {
-        ResolvedKeyframeRoute::Local { source_session_key } => request_keyframe_for_source(
-            state,
-            metrics,
-            &source_session_key,
-            coalesced_request.source_transport_media_id,
-            coalesced_request.rid,
-            coalesced_request.kind,
-            now,
-        ),
+        ResolvedKeyframeRoute::Local { source_session_key } => {
+            debug!(
+                ?source_session_key,
+                source_transport_media_id = ?coalesced_request.source_transport_media_id,
+                rid = ?coalesced_request.rid,
+                kind = ?coalesced_request.kind,
+                "forwarding local keyframe request to source"
+            );
+            request_keyframe_for_source(
+                state,
+                metrics,
+                &source_session_key,
+                coalesced_request.source_transport_media_id,
+                coalesced_request.rid,
+                coalesced_request.kind,
+                now,
+            );
+        }
         ResolvedKeyframeRoute::Remote {
             source_session_key,
             source_control,
@@ -151,6 +161,13 @@ fn flush_coalesced_keyframe_request(
                 .decide_keyframe_request(coalesced_request.source_transport_media_id, now)
             {
                 KeyframeRequestDecision::Forward => {
+                    debug!(
+                        ?source_session_key,
+                        source_transport_media_id = ?coalesced_request.source_transport_media_id,
+                        rid = ?coalesced_request.rid,
+                        kind = ?coalesced_request.kind,
+                        "forwarding remote keyframe request to source control"
+                    );
                     source_control.request_keyframe(
                         source_session_key,
                         coalesced_request.source_transport_media_id,
@@ -160,6 +177,13 @@ fn flush_coalesced_keyframe_request(
                     metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
                 }
                 KeyframeRequestDecision::Absorb => {
+                    debug!(
+                        ?source_session_key,
+                        source_transport_media_id = ?coalesced_request.source_transport_media_id,
+                        rid = ?coalesced_request.rid,
+                        kind = ?coalesced_request.kind,
+                        "absorbed duplicate keyframe request"
+                    );
                     metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
                 }
             }

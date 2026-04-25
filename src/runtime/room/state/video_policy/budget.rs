@@ -114,6 +114,9 @@ fn consumer_adaptation_plan(
     visible_camera_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
 ) -> Option<ConsumerAdaptationPlan> {
+    if stream_type == StreamType::Screen {
+        return screen_share_adaptation_plan(encodings, current);
+    }
     if stream_type != StreamType::Camera {
         return None;
     }
@@ -129,12 +132,13 @@ fn consumer_adaptation_plan(
         encodings,
     );
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
+    let selector_changed = target_selector != current.selector();
     if target_index == current_index {
         return Some(ConsumerAdaptationPlan {
             selector: target_selector,
             pressure_observations: 0,
             upgrade_observations: 0,
-            request_keyframe: false,
+            request_keyframe: selector_changed,
         });
     }
     if receiver_bandwidth_bps.is_none() {
@@ -142,7 +146,7 @@ fn consumer_adaptation_plan(
             selector: target_selector,
             pressure_observations: 0,
             upgrade_observations: 0,
-            request_keyframe: target_index > current_index,
+            request_keyframe: true,
         });
     }
     if target_index < current_index {
@@ -155,7 +159,7 @@ fn consumer_adaptation_plan(
                 selector: target_selector,
                 pressure_observations: 0,
                 upgrade_observations: 0,
-                request_keyframe: false,
+                request_keyframe: true,
             });
         }
         return Some(ConsumerAdaptationPlan {
@@ -190,6 +194,23 @@ fn consumer_adaptation_plan(
         pressure_observations: 0,
         upgrade_observations: 0,
         request_keyframe: false,
+    })
+}
+
+fn screen_share_adaptation_plan(
+    encodings: &[&SourceEncodingDescriptor],
+    current: ConsumerSourceSelection,
+) -> Option<ConsumerAdaptationPlan> {
+    if encodings.len() < 2 {
+        return None;
+    }
+    let target_index = encodings.len().saturating_sub(1);
+    let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
+    Some(ConsumerAdaptationPlan {
+        selector: target_selector,
+        pressure_observations: 0,
+        upgrade_observations: 0,
+        request_keyframe: target_selector != current.selector(),
     })
 }
 

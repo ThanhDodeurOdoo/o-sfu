@@ -299,6 +299,11 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
         &UserId::Integer(1),
         "hi",
     );
+    assert_consumer_keyframe_request(
+        &fake.snapshot_events(),
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+    );
 }
 
 #[tokio::test]
@@ -346,6 +351,11 @@ async fn joining_a_third_user_lowers_existing_thumbnail_consumers() {
         &UserId::Integer(2),
         &UserId::Integer(1),
         "lo",
+    );
+    assert_consumer_keyframe_request(
+        &events[baseline_event_count..],
+        &UserId::Integer(2),
+        &UserId::Integer(1),
     );
 }
 
@@ -406,16 +416,11 @@ async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
         &UserId::Integer(1),
         "hi",
     );
-    assert!(events[baseline_event_count..].iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
-                consumer_user_id,
-                source_user_id,
-            } if *consumer_user_id == UserId::Integer(2)
-                && *source_user_id == UserId::Integer(1)
-        )
-    }));
+    assert_consumer_keyframe_request(
+        &events[baseline_event_count..],
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+    );
 }
 
 #[tokio::test]
@@ -455,6 +460,11 @@ async fn receiver_bandwidth_pressure_downswitches_after_sustained_observations()
         &UserId::Integer(2),
         &UserId::Integer(1),
         "lo",
+    );
+    assert_consumer_keyframe_request(
+        &events[baseline_event_count..],
+        &UserId::Integer(2),
+        &UserId::Integer(1),
     );
 }
 
@@ -500,16 +510,7 @@ async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
         &UserId::Integer(1),
         "hi",
     );
-    assert!(recovery_events.iter().any(|event| {
-        matches!(
-            event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
-                consumer_user_id,
-                source_user_id,
-            } if *consumer_user_id == UserId::Integer(2)
-                && *source_user_id == UserId::Integer(1)
-        )
-    }));
+    assert_consumer_keyframe_request(recovery_events, &UserId::Integer(2), &UserId::Integer(1));
 }
 
 async fn setup_ready_users_with_fake(
@@ -659,7 +660,7 @@ fn assert_consumer_packet_selection_update(
     events: &[FakeWebRtcEvent],
     consumer_user_id: &UserId,
     source_user_id: &UserId,
-    expected_rid: &str,
+    _expected_rid: &str,
 ) {
     assert!(events.iter().any(|event| {
         matches!(
@@ -667,10 +668,26 @@ fn assert_consumer_packet_selection_update(
             FakeWebRtcEvent::ConsumerPacketGateUpdated {
                 consumer_user_id: updated_consumer_user_id,
                 source_user_id: updated_source_user_id,
-                packet_gate: SourcePacketGate::Rid(rid),
+                packet_gate: SourcePacketGate::Open,
             } if updated_consumer_user_id == consumer_user_id
                 && updated_source_user_id == source_user_id
-                && rid == expected_rid
+        )
+    }));
+}
+
+fn assert_consumer_keyframe_request(
+    events: &[FakeWebRtcEvent],
+    expected_consumer_user_id: &UserId,
+    expected_source_user_id: &UserId,
+) {
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerKeyframeRequested {
+                consumer_user_id,
+                source_user_id,
+            } if consumer_user_id == expected_consumer_user_id
+                && source_user_id == expected_source_user_id
         )
     }));
 }
