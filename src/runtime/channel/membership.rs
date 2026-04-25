@@ -20,7 +20,7 @@ use crate::runtime::{
 #[derive(Clone, Copy)]
 pub(in crate::runtime::channel) struct SessionCleanup<'a> {
     transport_adapter: Option<&'a RuntimeTransportAdapter>,
-    remove_transport_media: bool,
+    clean_transport_state: bool,
 }
 
 impl<'a> SessionCleanup<'a> {
@@ -29,7 +29,7 @@ impl<'a> SessionCleanup<'a> {
     ) -> Self {
         Self {
             transport_adapter: Some(transport_adapter),
-            remove_transport_media: true,
+            clean_transport_state: true,
         }
     }
 
@@ -39,7 +39,7 @@ impl<'a> SessionCleanup<'a> {
     ) -> Self {
         Self {
             transport_adapter,
-            remove_transport_media: false,
+            clean_transport_state: false,
         }
     }
 
@@ -49,8 +49,8 @@ impl<'a> SessionCleanup<'a> {
         self.transport_adapter
     }
 
-    const fn removes_transport_media(self) -> bool {
-        self.remove_transport_media
+    const fn cleans_transport_state(self) -> bool {
+        self.clean_transport_state
     }
 }
 
@@ -257,7 +257,7 @@ impl Channel {
         let Some(transport_adapter) = cleanup.transport_adapter() else {
             return;
         };
-        if !cleanup.removes_transport_media() {
+        if !cleanup.cleans_transport_state() {
             return;
         }
         for removal in removals {
@@ -277,6 +277,22 @@ impl Channel {
                 );
             }
         }
+    }
+
+    async fn close_transport_session_for_cleanup(
+        &self,
+        session_id: &SessionId,
+        connection_id: ConnectionId,
+        cleanup: SessionCleanup<'_>,
+    ) {
+        let Some(transport_adapter) = cleanup.transport_adapter() else {
+            return;
+        };
+        if !cleanup.cleans_transport_state() {
+            return;
+        }
+        self.close_transport_session(session_id, connection_id, transport_adapter)
+            .await;
     }
 
     async fn close_transport_session(
@@ -393,10 +409,8 @@ impl Channel {
                         .await;
                     Self::emit_lifecycle_effects(outcome.effects);
                 }
-                if let Some(transport_adapter) = cleanup.transport_adapter() {
-                    self.close_transport_session(&session_id, connection_id, transport_adapter)
-                        .await;
-                }
+                self.close_transport_session_for_cleanup(&session_id, connection_id, cleanup)
+                    .await;
                 if had_state {
                     self.diagnostics.record(
                         DiagnosticsEventData::for_session(
@@ -421,16 +435,25 @@ impl Channel {
             SessionTransitionOutcome::Disconnect(outcome) => {
                 self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
                     .await;
-                for session_id in &outcome.disconnected_session_ids {
+                for disconnected_session in &outcome.disconnected_sessions {
+                    self.close_transport_session_for_cleanup(
+                        &disconnected_session.session_id,
+                        disconnected_session.connection_id,
+                        cleanup,
+                    )
+                    .await;
+                }
+                for disconnected_session in &outcome.disconnected_sessions {
                     self.diagnostics.record(
                         DiagnosticsEventData::for_session(
                             self.uuid(),
-                            session_id,
+                            &disconnected_session.session_id,
                             telemetry_event::SESSION_DISCONNECTED,
                         )
                         .with_media_worker_id(self.media_worker_id()),
                     );
-                    self.diagnostics.forget_session(self.uuid(), session_id);
+                    self.diagnostics
+                        .forget_session(self.uuid(), &disconnected_session.session_id);
                 }
                 if let Some(transport_adapter) = cleanup.transport_adapter() {
                     self.sync_source_packet_selection_policy(

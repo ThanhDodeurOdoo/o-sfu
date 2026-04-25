@@ -1,3 +1,5 @@
+use std::slice;
+
 use super::fixtures::*;
 use crate::runtime::rtc_adapter::TransportSessionHealth;
 
@@ -379,5 +381,56 @@ async fn disconnect_cleanup_still_closes_transport_adapter_session_state() {
         Some(&FakeWebRtcEvent::SessionClosed {
             session_id: SessionId::Integer(1)
         })
+    );
+}
+
+#[tokio::test]
+async fn disconnect_cleanup_closes_transport_session_before_empty_channel_removal() {
+    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let transport_adapter =
+        RuntimeTransportAdapter::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
+    let server = spawn_test_server_with_adapter(1_000, 10, transport_adapter).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let channel = create_channel(&server, "issuer-a", None, CreateChannelQuery::default()).await;
+    let session_id = SessionId::Integer(1);
+
+    let socket = setup_negotiated_session(&server, &channel, session_id.clone()).await;
+    assert!(socket.is_some());
+    let Some(mut socket) = socket else {
+        return;
+    };
+
+    server
+        .channel_manager
+        .disconnect_sessions(
+            channel.uuid(),
+            slice::from_ref(&session_id),
+            &server.state.transport_adapter,
+        )
+        .await;
+
+    assert!(
+        server
+            .channel_manager
+            .get_by_uuid(channel.uuid())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        read_close_code(&mut socket).await,
+        Some(CloseCode::Library(4003))
+    );
+
+    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
+    assert!(events.is_some());
+    let Some(events) = events else {
+        return;
+    };
+    assert_eq!(
+        events.last(),
+        Some(&FakeWebRtcEvent::SessionClosed { session_id })
     );
 }

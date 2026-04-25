@@ -71,8 +71,14 @@ impl SessionInfoUpdateOutcome {
 }
 
 #[derive(Debug)]
+pub(in crate::runtime::channel) struct DisconnectedSession {
+    pub(in crate::runtime::channel) session_id: SessionId,
+    pub(in crate::runtime::channel) connection_id: ConnectionId,
+}
+
+#[derive(Debug)]
 pub(in crate::runtime::channel) struct DisconnectSessionsOutcome {
-    pub(in crate::runtime::channel) disconnected_session_ids: Vec<SessionId>,
+    pub(in crate::runtime::channel) disconnected_sessions: Vec<DisconnectedSession>,
     pub(in crate::runtime::channel) effects: LifecycleEffects,
     pub(in crate::runtime::channel) transport_removals: Vec<TransportMediaRemoval>,
 }
@@ -361,7 +367,7 @@ impl ChannelState {
     ) -> DisconnectSessionsOutcome {
         let mut transport_removals = Vec::new();
         let mut close_requests = Vec::new();
-        let mut disconnected_session_ids = Vec::new();
+        let mut disconnected_sessions = Vec::new();
         let mut fanouts = Vec::new();
         for session_id in session_ids {
             if !self.sessions.contains_key(session_id) {
@@ -379,8 +385,12 @@ impl ChannelState {
                 self.collect_session_transport_removals(&BTreeSet::from([session_id.clone()])),
             );
             if let Some(session) = self.sessions.remove(session_id) {
+                let connection_id = session.connection_id;
                 self.purge_session_media_state(session_id);
-                disconnected_session_ids.push(session_id.clone());
+                disconnected_sessions.push(DisconnectedSession {
+                    session_id: session_id.clone(),
+                    connection_id,
+                });
                 close_requests.push(SessionCloseRequest {
                     sender: session.sender,
                     reason: SessionCloseReason::RemovedByRuntime,
@@ -391,7 +401,7 @@ impl ChannelState {
             }
         }
         DisconnectSessionsOutcome {
-            disconnected_session_ids,
+            disconnected_sessions,
             effects: LifecycleEffects {
                 close_requests,
                 fanouts,
@@ -573,6 +583,15 @@ mod tests {
             state.apply_disconnect_sessions(&[SessionId::Integer(1), SessionId::Integer(2)]);
 
         assert_eq!(state.sessions.len(), 0);
+        assert_eq!(outcome.disconnected_sessions.len(), 2);
+        assert!(outcome.disconnected_sessions.iter().any(|session| {
+            session.session_id == SessionId::Integer(1)
+                && session.connection_id == ConnectionId::from_raw(0)
+        }));
+        assert!(outcome.disconnected_sessions.iter().any(|session| {
+            session.session_id == SessionId::Integer(2)
+                && session.connection_id == ConnectionId::from_raw(1)
+        }));
         assert_eq!(outcome.effects.close_requests.len(), 2);
         assert_eq!(outcome.effects.fanouts.len(), 2);
     }
