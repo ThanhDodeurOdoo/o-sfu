@@ -181,7 +181,25 @@ test("default browser runtime negotiates and emits remote track updates", async 
             JSON.stringify([
                 {
                     t: "tracks",
-                    p: [{ active: true, mid: "0", sessionId: 42, type: "camera" }]
+                    p: [
+                        {
+                            active: true,
+                            mid: "0",
+                            sessionId: 42,
+                            type: "camera",
+                            source: {
+                                active: true,
+                                encodings: [
+                                    { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
+                                    { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
+                                ],
+                                mid: "0",
+                                sessionId: 42,
+                                sourceId: "source-1",
+                                type: "camera"
+                            }
+                        }
+                    ]
                 }
             ])
         );
@@ -238,6 +256,24 @@ test("default browser runtime negotiates and emits remote track updates", async 
     await expect
         .poll(async () => page.evaluate(() => globalThis.__browserHarness.events))
         .toEqual([
+            {
+                name: "source",
+                payload: {
+                    sources: [
+                        {
+                            active: true,
+                            encodings: [
+                                { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
+                                { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
+                            ],
+                            mid: "0",
+                            sessionId: 42,
+                            sourceId: "source-1",
+                            type: "camera"
+                        }
+                    ]
+                }
+            },
             {
                 name: "track",
                 payload: {

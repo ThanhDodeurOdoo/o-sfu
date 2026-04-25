@@ -539,7 +539,10 @@ class FakeProtocolCore {
             case "source-descriptors":
                 this.sourceDescriptors.set("source-1", {
                     active: true,
-                    encodings: [{ encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" }],
+                    encodings: [
+                        { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
+                        { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
+                    ],
                     mid: "0",
                     sessionId: 42,
                     sourceId: "source-1",
@@ -1091,7 +1094,10 @@ test("source descriptor updates are exposed as additive client state", async () 
     const expectedSources = [
         {
             active: true,
-            encodings: [{ encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" }],
+            encodings: [
+                { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
+                { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
+            ],
             mid: "0",
             sessionId: 42,
             sourceId: "source-1",

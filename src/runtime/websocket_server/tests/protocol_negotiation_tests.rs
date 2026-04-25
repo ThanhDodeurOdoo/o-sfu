@@ -2,7 +2,7 @@ use o_sfu_protocol::signaling::{ServerMessage, ServerRequest, TrackBinding};
 use o_sfu_router::MediaKind;
 
 use super::fixtures::*;
-use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
+use crate::runtime::test_rtp_samples::sample_simulcast_video_rtp_parameters;
 
 #[tokio::test]
 async fn protocol_session_serializes_topology_renegotiations() {
@@ -162,7 +162,14 @@ async fn assert_track_snapshot(
         assert_eq!(source.stream_type, expected.stream_type);
         assert_eq!(source.active, expected.active);
         assert_eq!(source.mid.as_deref(), Some(expected.mid.as_str()));
-        assert_eq!(source.encodings.len(), 1);
+        assert_eq!(
+            source
+                .encodings
+                .iter()
+                .filter_map(|encoding| encoding.rid.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["lo", "hi"],
+        );
     }
     Some(())
 }
@@ -187,5 +194,5 @@ fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
 }
 
 fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::MediaStream {
-    router_sample_video_rtp_parameters(Some(mid), 22_222)
+    sample_simulcast_video_rtp_parameters(Some(mid))
 }
