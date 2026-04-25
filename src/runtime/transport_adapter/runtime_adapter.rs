@@ -10,9 +10,9 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
-        ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
+        ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -42,6 +42,27 @@ impl RuntimeTransportAdapter {
     #[must_use]
     pub(crate) fn rtc(config: &RtcTransportAdapterShardSetConfig) -> Self {
         Self::Rtc(Arc::new(RtcTransportAdapterShardSet::new(config)))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn negotiated_producer_parameters(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) -> Result<RouterRtpParameters, TransportAdapterError> {
+        match self {
+            Self::Rtc(shards) => {
+                shards
+                    .shard_for_session(session_key)
+                    .media()
+                    .negotiated_producer_parameters(session_key, transport_media_id)
+                    .await
+            }
+            Self::Test(fake) => {
+                fake.negotiated_producer_parameters(session_key, transport_media_id)
+                    .await
+            }
+        }
     }
 }
 
@@ -86,7 +107,7 @@ impl NegotiationPort for RuntimeTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
-    ) -> Result<(), TransportAdapterError> {
+    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         let result = dispatch_transport_backend!(self, |backend| {
             backend.apply_session_answer(session_key, answer_sdp).await
         });
@@ -157,18 +178,6 @@ impl MediaPort for RuntimeTransportAdapter {
             );
         }
         result
-    }
-
-    async fn negotiated_producer_parameters(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        dispatch_transport_backend!(self, |backend| {
-            backend
-                .negotiated_producer_parameters(session_key, transport_media_id)
-                .await
-        })
     }
 
     async fn publish_media(

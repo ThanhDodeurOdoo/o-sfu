@@ -98,6 +98,18 @@ pub(super) fn publish_recv_simulcast(
     (layers.len() >= 2).then(|| recv_simulcast_from_specs(&layers))
 }
 
+pub(super) fn publish_recv_simulcast_or_default(
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+    codec_flags: MediaCodecFlags,
+) -> Option<Str0mSimulcast> {
+    publish_recv_simulcast(media_kind, rtp_parameters).or_else(|| {
+        publish_uses_default_profile(rtp_parameters)
+            .then(|| bootstrap_recv_simulcast(media_kind, codec_flags))
+            .flatten()
+    })
+}
+
 pub(super) fn publish_upload_encodings(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
@@ -128,6 +140,18 @@ pub(super) fn publish_upload_encodings(
     upload_encodings_from_specs(&layers)
 }
 
+pub(super) fn publish_upload_encodings_or_default(
+    media_kind: MediaKind,
+    rtp_parameters: &RouterRtpParameters,
+    codec_flags: MediaCodecFlags,
+) -> Vec<SessionUploadEncoding> {
+    let encodings = publish_upload_encodings(media_kind, rtp_parameters);
+    if !encodings.is_empty() || !publish_uses_default_profile(rtp_parameters) {
+        return encodings;
+    }
+    bootstrap_upload_encodings(media_kind, codec_flags)
+}
+
 fn bootstrap_simulcast_enabled(media_kind: MediaKind, codec_flags: MediaCodecFlags) -> bool {
     media_kind.is_video() && codec_flags.vp8_enabled()
 }
@@ -137,6 +161,10 @@ fn publish_simulcast_enabled(media_kind: MediaKind, rtp_parameters: &RouterRtpPa
         && rtp_parameters
             .formats()
             .any(|format| format.codec() == &rfc_rtp::CodecName::Vp8)
+}
+
+fn publish_uses_default_profile(rtp_parameters: &RouterRtpParameters) -> bool {
+    rtp_parameters.formats().next().is_none() && rtp_parameters.encodings().next().is_none()
 }
 
 pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {

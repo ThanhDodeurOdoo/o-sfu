@@ -12,7 +12,8 @@ use str0m::{
 use super::fixtures::*;
 use crate::runtime::{
     rtc_adapter::client_rtp_capabilities_from_answer,
-    test_rtp_samples::sample_simulcast_video_rtp_parameters, transport_adapter::TransportMediaId,
+    test_rtp_samples::sample_simulcast_video_rtp_parameters,
+    transport_adapter::{SessionUploadKind, TransportMediaId},
 };
 
 #[tokio::test]
@@ -47,11 +48,11 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
         return;
     };
 
-    assert_eq!(
+    assert!(
         adapter
             .apply_session_answer(&session_key, &answer.to_sdp_string())
-            .await,
-        Ok(())
+            .await
+            .is_ok()
     );
     assert_eq!(
         adapter.create_initial_session_offer(&session_key).await,
@@ -293,11 +294,15 @@ async fn rtc_simulcast_publish_offer_and_answer_preserve_encoding_facts() {
         .await
         .expect("transport media should resolve to the server-assigned mid");
     let answer_sdp = add_answer_simulcast_for_mid(&raw_answer_sdp, &format!("{negotiated_mid}"));
-    assert_eq!(
-        adapter
-            .apply_session_answer(&session_key, &answer_sdp)
-            .await,
-        Ok(())
+    let applied_answer = adapter
+        .apply_session_answer(&session_key, &answer_sdp)
+        .await
+        .expect("simulcast answer should apply");
+    assert!(
+        applied_answer
+            .negotiated_producer_parameters(transport_media_id)
+            .is_some(),
+        "answer application should return the producer parameters projected during the same pass"
     );
 
     let negotiated_parameters = adapter
@@ -440,11 +445,32 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         )
         .await
         .expect("protocol publish intent should stage a recv-only media line");
-    let renegotiation_offer = adapter
+    let (renegotiation_sdp, upload_slots) = adapter
         .create_session_renegotiation_offer(&session_key)
         .await
-        .expect("protocol publish should stage a follow-up offer");
-    let renegotiation_sdp = renegotiation_offer.into_sdp();
+        .expect("protocol publish should stage a follow-up offer")
+        .into_parts();
+    let Some(video_upload_slot) = upload_slots
+        .iter()
+        .find(|slot| slot.kind == SessionUploadKind::Video)
+    else {
+        panic!("protocol publish should advertise a video upload slot");
+    };
+    assert!(
+        video_upload_slot
+            .codecs
+            .iter()
+            .any(|codec| codec.as_str() == "VP8"),
+        "empty protocol publish intent should use the server-owned VP8 upload profile"
+    );
+    assert_eq!(video_upload_slot.simulcast_encodings.len(), 2);
+    assert!(
+        renegotiation_sdp.contains(&sdp_simulcast_line(
+            webrtc::sdp::simulcast::DIRECTION_RECV,
+            &["lo", "hi"]
+        )),
+        "empty protocol publish intent should still emit the server-owned RID ladder"
+    );
     let negotiated_mid = resolve_mid(&adapter, transport_media_id)
         .await
         .expect("transport media should expose its negotiated mid");
@@ -1053,11 +1079,11 @@ async fn apply_offer_answer(
                 .expect("adapter should return parseable SDP offer"),
         )
         .expect("remote answer should build");
-    assert_eq!(
+    assert!(
         adapter
             .apply_session_answer(session_key, &answer.to_sdp_string())
-            .await,
-        Ok(())
+            .await
+            .is_ok()
     );
 }
 

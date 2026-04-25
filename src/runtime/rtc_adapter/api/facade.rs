@@ -43,9 +43,9 @@ use crate::{
         metrics::RuntimeMetrics,
         packet_sink_registry::ChannelPacketSinkRegistry,
         transport_adapter::{
-            ConsumerPacketGateUpdate, RtcTransportAdapterConfig, SessionOffer, SourcePacketGate,
-            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportResult,
-            TransportSessionKey,
+            AppliedSessionAnswer, ConsumerPacketGateUpdate, RtcTransportAdapterConfig,
+            SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
+            TransportMediaId, TransportResult, TransportSessionKey,
         },
     },
 };
@@ -184,7 +184,7 @@ impl RtcTransportNegotiationFacade<'_> {
         self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
-    ) -> Result<(), TransportAdapterError> {
+    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         self.adapter
             .request_worker(|response| RtcWorkerCommand::ApplySessionAnswer {
                 session_key: session_key.clone(),
@@ -238,6 +238,7 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn negotiated_producer_parameters(
         self,
         session_key: &TransportSessionKey,
@@ -349,11 +350,11 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
-    pub(crate) async fn set_consumer_packet_gates(
+    pub(crate) async fn set_consumer_packet_gates<'a>(
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        updates: Vec<ConsumerPacketGateUpdate>,
+        updates: impl IntoIterator<Item = &'a ConsumerPacketGateUpdate>,
     ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
         let updates = updates
             .into_iter()

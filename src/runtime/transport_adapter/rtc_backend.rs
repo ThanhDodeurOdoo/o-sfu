@@ -7,9 +7,9 @@ use super::{
     ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort},
     shard_set::RtcTransportAdapterShardSet,
     types::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
-        ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
+        ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
     },
 };
 use crate::runtime::{
@@ -43,7 +43,7 @@ impl NegotiationPort for RtcTransportAdapterShardSet {
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
-    ) -> Result<(), TransportAdapterError> {
+    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         self.shard_for_session(session_key)
             .negotiation()
             .apply_session_answer(session_key, answer_sdp)
@@ -90,17 +90,6 @@ impl MediaPort for RtcTransportAdapterShardSet {
             self.release_relay_cleanup(&session_shard, &relay_cleanup);
         }
         Ok(())
-    }
-
-    async fn negotiated_producer_parameters(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        self.shard_for_session(session_key)
-            .media()
-            .negotiated_producer_parameters(session_key, transport_media_id)
-            .await
     }
 
     async fn publish_media(

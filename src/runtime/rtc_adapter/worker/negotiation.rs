@@ -7,6 +7,7 @@
 //! invalidates.
 
 use std::{
+    collections::BTreeMap,
     mem,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
@@ -33,8 +34,8 @@ use crate::{
     runtime::{
         metrics::RuntimeMetrics,
         transport_adapter::{
-            SessionOffer, SessionUploadKind, SessionUploadSlot, TransportAdapterError,
-            TransportSessionKey,
+            AppliedSessionAnswer, SessionOffer, SessionUploadKind, SessionUploadSlot,
+            TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -82,7 +83,7 @@ pub(super) fn respond_apply_session_answer(
     max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
-    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+    response: oneshot::Sender<Result<AppliedSessionAnswer, TransportAdapterError>>,
 ) {
     let _ = response.send(worker_apply_session_answer(
         state,
@@ -169,17 +170,23 @@ fn worker_apply_session_answer(
     max_bitrate_in_bps: u64,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
-) -> Result<(), TransportAdapterError> {
-    let producer_mids = state
+) -> Result<AppliedSessionAnswer, TransportAdapterError> {
+    let producer_handles = state
         .mid_registry
-        .values()
-        .filter_map(|handle| match handle {
+        .iter()
+        .filter_map(|(transport_media_id, handle)| match handle {
             super::super::media_registry::RegisteredMediaHandle::Producer {
                 session_key: owner_session_key,
                 mid,
-            } if owner_session_key == session_key => Some(*mid),
+            } if owner_session_key == session_key => {
+                Some((TransportMediaId::new(*transport_media_id), *mid))
+            }
             _ => None,
         })
+        .collect::<Vec<_>>();
+    let producer_mids = producer_handles
+        .iter()
+        .map(|(_transport_media_id, mid)| *mid)
         .collect::<Vec<_>>();
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
@@ -205,13 +212,14 @@ fn worker_apply_session_answer(
     let local_ice_ufrag = session_state.local_ice_ufrag.clone();
     session_state.dtls_started = true;
     let _ = session_state;
-    refresh_negotiated_producer_parameters(
+    let refreshed_parameters = refresh_negotiated_producer_parameters(
         state,
         session_key,
         &producer_mids,
         answer_sdp,
         max_bitrate_in_bps,
     );
+    let refreshed_by_mid = refreshed_parameters.into_iter().collect::<BTreeMap<_, _>>();
     if let Some(session_state) = state.sessions.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
     }
@@ -230,7 +238,16 @@ fn worker_apply_session_answer(
         remote_candidate_addrs = ?remote_candidate_addrs,
         "registered answered remote candidate addresses for rtc session"
     );
-    Ok(())
+    Ok(AppliedSessionAnswer::from_negotiated_producers(
+        producer_handles
+            .into_iter()
+            .filter_map(|(transport_media_id, mid)| {
+                refreshed_by_mid
+                    .get(&mid)
+                    .cloned()
+                    .map(|parameters| (transport_media_id, parameters))
+            }),
+    ))
 }
 
 fn answer_remote_candidate_addrs(answer: &SdpAnswer) -> Vec<SocketAddr> {

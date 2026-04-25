@@ -16,6 +16,7 @@ pub(super) use control::{
 pub(crate) use keyframe::request_keyframe_for_source;
 pub(super) use keyframe::respond_request_remote_keyframe;
 pub(super) use lifecycle::{
-    respond_add_recv_media, respond_add_send_media, respond_remove_media, respond_resolve_media_mid,
+    RecvMediaPolicy, respond_add_recv_media, respond_add_send_media, respond_remove_media,
+    respond_resolve_media_mid,
 };
 pub(super) use types::{AddSendMediaRequest, RemoteKeyframeRequest};

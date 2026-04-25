@@ -12,8 +12,8 @@ pub(crate) use super::fake::FakeWebRtcEvent;
 use super::shard_set::RtcTransportAdapterShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{
-    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
+    ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use super::types::{SessionOffer, SourcePacketGate, TransportAdapterError};
@@ -50,7 +50,7 @@ impl NegotiationPort for FakeWebRtcAdapter {
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
-    ) -> Result<(), TransportAdapterError> {
+    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         Self::apply_session_answer(self, session_key, answer_sdp).await
     }
 
@@ -81,14 +81,6 @@ impl MediaPort for FakeWebRtcAdapter {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         Self::remove_media(self, session_key, transport_media_id).await
-    }
-
-    async fn negotiated_producer_parameters(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        Self::negotiated_producer_parameters(self, session_key, transport_media_id).await
     }
 
     async fn publish_media(

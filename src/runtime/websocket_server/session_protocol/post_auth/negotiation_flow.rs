@@ -17,8 +17,8 @@ use super::{
 use crate::runtime::{
     telemetry::schema::event as telemetry_event,
     transport_adapter::{
-        NegotiationPort, SessionOffer, SessionUploadEncoding, SessionUploadKind, SessionUploadSlot,
-        TransportAdapterError, TransportSessionKey,
+        AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
+        SessionUploadKind, SessionUploadSlot, TransportAdapterError, TransportSessionKey,
     },
     websocket_server::WsWriter,
 };
@@ -152,12 +152,13 @@ impl PostAuthSessionProtocol {
         let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
             return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         };
-        if let Err(outcome) = self
+        let applied_answer = match self
             .apply_transport_negotiation_answer(&response_to, &answer.sdp, &resolved)
             .await
         {
-            return outcome;
-        }
+            Ok(applied_answer) => applied_answer,
+            Err(outcome) => return outcome,
+        };
         if self
             .apply_negotiation_action(&resolved.pending, &answer.sdp)
             .await
@@ -172,7 +173,7 @@ impl PostAuthSessionProtocol {
             ?response_to,
             "applied negotiation answer"
         );
-        self.commit_staged_publishes().await;
+        self.commit_staged_publishes(&applied_answer).await;
         if let Err(outcome) = self
             .send_follow_up_renegotiation_if_needed(writer, &resolved)
             .await
@@ -230,28 +231,27 @@ impl PostAuthSessionProtocol {
         response_to: &RequestId,
         answer_sdp: &str,
         resolved: &ResolvedFlowState,
-    ) -> Result<(), SessionProtocolOutcome> {
+    ) -> Result<AppliedSessionAnswer, SessionProtocolOutcome> {
         let session_key = self
             .channel
             .transport_session_key(&self.session_id, self.connection_id);
-        if let Err(error) =
-            apply_transport_answer(&self.transport_adapter, &session_key, answer_sdp).await
-        {
-            warn!(
-                event = telemetry_event::NEGOTIATION_FAILED,
-                operation = "answer_apply",
-                outcome = "transport_error",
-                session_id = ?self.session_id,
-                connection_id = ?self.connection_id,
-                remote_address = self.remote_address.as_ref(),
-                ?response_to,
-                request = ?resolved.pending.request,
-                ?error,
-                "failed to apply negotiation answer to the transport session"
-            );
-            return Err(SessionProtocolOutcome::Close(WebSocketCloseCode::Error));
-        }
-        Ok(())
+        apply_transport_answer(&self.transport_adapter, &session_key, answer_sdp)
+            .await
+            .map_err(|error| {
+                warn!(
+                    event = telemetry_event::NEGOTIATION_FAILED,
+                    operation = "answer_apply",
+                    outcome = "transport_error",
+                    session_id = ?self.session_id,
+                    connection_id = ?self.connection_id,
+                    remote_address = self.remote_address.as_ref(),
+                    ?response_to,
+                    request = ?resolved.pending.request,
+                    ?error,
+                    "failed to apply negotiation answer to the transport session"
+                );
+                SessionProtocolOutcome::Close(WebSocketCloseCode::Error)
+            })
     }
 
     async fn send_follow_up_renegotiation_if_needed(
@@ -369,7 +369,7 @@ async fn apply_transport_answer(
     negotiation_port: &impl NegotiationPort,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
-) -> Result<(), TransportAdapterError> {
+) -> Result<AppliedSessionAnswer, TransportAdapterError> {
     negotiation_port
         .apply_session_answer(session_key, answer_sdp)
         .await
@@ -530,11 +530,11 @@ mod tests {
         let Some(answer_sdp) = answer_sdp else {
             return;
         };
-        assert_eq!(
+        assert!(
             transport_adapter
                 .apply_session_answer(&session_key, &answer_sdp)
-                .await,
-            Ok(())
+                .await
+                .is_ok()
         );
 
         let renegotiation_request =

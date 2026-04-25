@@ -25,8 +25,8 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         transport_adapter::{
-            RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer, SourcePolicySignal,
-            TransportAdapterError, TransportMediaId, TransportSessionKey,
+            AppliedSessionAnswer, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
+            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -54,7 +54,7 @@ impl RtcTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
-    ) -> Result<(), TransportAdapterError> {
+    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         self.negotiation()
             .apply_session_answer(session_key, answer_sdp)
             .await
@@ -77,6 +77,7 @@ impl RtcTransportAdapter {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn negotiated_producer_parameters(
         &self,
         session_key: &TransportSessionKey,

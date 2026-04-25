@@ -1,9 +1,11 @@
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use o_sfu_protocol::shared::SessionId;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
 use crate::runtime::{ChannelInstanceId, ConnectionId};
@@ -64,6 +66,38 @@ pub(crate) enum TransportAdapterError {
     InvalidInput,
     #[error("unsupported transport feature")]
     UnsupportedFeature,
+}
+
+/// Transport facts materialized while applying one negotiated SDP answer.
+///
+/// Producer RTP parameters are answer-derived because the browser owns the
+/// final SSRC and RID acceptance details. Returning them with the accepted
+/// answer lets room state commit staged publishes from the same projection
+/// pass instead of issuing a second transport lookup.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AppliedSessionAnswer {
+    negotiated_producer_parameters: BTreeMap<TransportMediaId, RouterRtpParameters>,
+}
+
+impl AppliedSessionAnswer {
+    #[must_use]
+    pub(crate) fn from_negotiated_producers(
+        negotiated_producer_parameters: impl IntoIterator<
+            Item = (TransportMediaId, RouterRtpParameters),
+        >,
+    ) -> Self {
+        Self {
+            negotiated_producer_parameters: negotiated_producer_parameters.into_iter().collect(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn negotiated_producer_parameters(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> Option<&RouterRtpParameters> {
+        self.negotiated_producer_parameters.get(&transport_media_id)
+    }
 }
 
 /// Point-in-time bitrate measurement aggregated across one or more transport sessions.

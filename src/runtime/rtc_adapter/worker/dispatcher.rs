@@ -18,6 +18,8 @@ use tokio::sync::oneshot;
 use super::super::commands::debug::DebugRtcWorkerCommand;
 #[cfg(test)]
 use super::debug;
+#[cfg(test)]
+use super::publication;
 use super::{
     super::{
         bitrate::RtcBitrateState,
@@ -27,7 +29,7 @@ use super::{
     },
     media,
     negotiation::{self, OfferBootstrapConfig},
-    publication, session,
+    session,
 };
 use crate::{
     config::{MediaCodecFlags, RtcPortRange},
@@ -82,6 +84,7 @@ pub(crate) fn handle_worker_command(
             context.metrics,
             response,
         ),
+        #[cfg(test)]
         RtcWorkerCommand::ResolveNegotiatedProducerParameters {
             session_key,
             transport_media_id,
@@ -110,7 +113,10 @@ pub(crate) fn handle_worker_command(
             handle_media_command(
                 state,
                 context.bitrate_state,
-                context.max_bitrate_in_bps,
+                media::RecvMediaPolicy {
+                    max_bitrate_in_bps: context.max_bitrate_in_bps,
+                    codec_flags: context.codec_flags,
+                },
                 context.metrics,
                 context.relay_registry,
                 command,
@@ -226,7 +232,7 @@ fn respond_expired_active_speaker_channel_instance_ids(
 fn handle_media_command(
     state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    max_bitrate_in_bps: u64,
+    recv_media_policy: media::RecvMediaPolicy,
     metrics: &RuntimeMetrics,
     relay_registry: &RelayRegistry,
     command: RtcWorkerCommand,
@@ -251,7 +257,7 @@ fn handle_media_command(
         } => media::respond_add_recv_media(
             state,
             bitrate_state,
-            max_bitrate_in_bps,
+            recv_media_policy,
             &session_key,
             media_kind,
             &rtp_parameters,

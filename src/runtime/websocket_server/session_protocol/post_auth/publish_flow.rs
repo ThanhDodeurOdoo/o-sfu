@@ -8,7 +8,10 @@ use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
 use tracing::{info, instrument};
 
 use super::{super::controller::SessionProtocolOutcome, controller::PostAuthSessionProtocol};
-use crate::runtime::{telemetry::schema::event as telemetry_event, websocket_server::WsWriter};
+use crate::runtime::{
+    telemetry::schema::event as telemetry_event, transport_adapter::AppliedSessionAnswer,
+    websocket_server::WsWriter,
+};
 
 impl PostAuthSessionProtocol {
     #[instrument(
@@ -168,7 +171,7 @@ impl PostAuthSessionProtocol {
             connection_id = ?self.connection_id
         )
     )]
-    pub(super) async fn commit_staged_publishes(&self) {
+    pub(super) async fn commit_staged_publishes(&self, applied_answer: &AppliedSessionAnswer) {
         // Answer handling already proved that the transport layer accepted the
         // negotiated session update. The channel-side transaction now finishes
         // every staged publish that belongs to this connection.
@@ -176,6 +179,7 @@ impl PostAuthSessionProtocol {
             .commit_staged_publishes(
                 &self.session_id,
                 self.connection_id,
+                applied_answer,
                 &self.transport_adapter,
                 &self.transport_adapter,
             )

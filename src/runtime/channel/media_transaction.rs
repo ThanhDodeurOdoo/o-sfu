@@ -42,7 +42,7 @@ use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{MediaPort, ObservabilityPort, TransportMediaId},
+    transport_adapter::{AppliedSessionAnswer, MediaPort, ObservabilityPort, TransportMediaId},
 };
 
 #[cfg(test)]
@@ -301,6 +301,7 @@ impl PendingPublishTransaction {
     pub(super) async fn commit(
         self,
         channel: &Channel,
+        applied_answer: &AppliedSessionAnswer,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) -> Option<String> {
@@ -308,29 +309,24 @@ impl PendingPublishTransaction {
         let owner_connection_id = self.descriptor.owner_connection_id();
         let stream_type = self.descriptor.stream_type();
         let transport_media_id = self.reservation.transport_media_id();
-        let session_key = channel.transport_session_key(&owner_session_id, owner_connection_id);
-        let negotiated_parameters = match media_port
-            .negotiated_producer_parameters(&session_key, transport_media_id)
-            .await
-        {
-            Ok(rtp_parameters) => rtp_parameters,
-            Err(error) => {
-                self.cleanup_reserved_media(
-                    channel,
-                    media_port,
-                    "transport adapter failed to remove staged publish media after negotiated parameter lookup failed",
-                )
-                .await;
-                warn!(
-                    session_id = ?owner_session_id,
-                    connection_id = ?owner_connection_id,
-                    ?stream_type,
-                    ?transport_media_id,
-                    ?error,
-                    "failed to load negotiated publish parameters during channel commit"
-                );
-                return None;
-            }
+        let Some(negotiated_parameters) = applied_answer
+            .negotiated_producer_parameters(transport_media_id)
+            .cloned()
+        else {
+            self.cleanup_reserved_media(
+                channel,
+                media_port,
+                "transport adapter failed to remove staged publish media after answered negotiation omitted producer parameters",
+            )
+            .await;
+            warn!(
+                session_id = ?owner_session_id,
+                connection_id = ?owner_connection_id,
+                ?stream_type,
+                ?transport_media_id,
+                "answered negotiation did not include staged publish parameters during channel commit"
+            );
+            return None;
         };
         self.commit_with_parameters(
             channel,
@@ -611,7 +607,11 @@ impl Channel {
         }
         let session_key = self.transport_session_key(session_id, connection_id);
         let transport_media_id = match media_port
-            .publish_media(&session_key, media_kind, &pending_publish_parameters())
+            .publish_media(
+                &session_key,
+                media_kind,
+                &answer_derived_publish_parameters(),
+            )
             .await
         {
             Ok(transport_media_id) => transport_media_id,
@@ -723,6 +723,7 @@ impl Channel {
         &self,
         session_id: &SessionId,
         connection_id: ConnectionId,
+        applied_answer: &AppliedSessionAnswer,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
     ) {
@@ -733,7 +734,7 @@ impl Channel {
             .take_for_connection(session_id, connection_id);
         for staged_publish in staged_publishes {
             let _producer_id = staged_publish
-                .commit(self, observability_port, media_port)
+                .commit(self, applied_answer, observability_port, media_port)
                 .await;
         }
     }
@@ -868,7 +869,9 @@ fn media_kind_for_stream_type(stream_type: StreamType) -> o_sfu_router::MediaKin
     }
 }
 
-fn pending_publish_parameters() -> RouterRtpParameters {
+/// Marker parameters for a protocol publish whose concrete SSRC/RID bindings
+/// are projected from the accepted SDP answer.
+fn answer_derived_publish_parameters() -> RouterRtpParameters {
     RouterRtpParameters::new(vec![], vec![], vec![])
 }
 

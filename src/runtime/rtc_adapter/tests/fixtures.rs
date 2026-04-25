@@ -34,8 +34,7 @@ pub(super) use crate::{
         recording::MediaTap,
         transport_adapter::{
             ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
-            SessionUploadKind, SourcePolicySignal, TransportAdapterError, TransportMediaId,
-            TransportSessionKey,
+            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
     },
 };

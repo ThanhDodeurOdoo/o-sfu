@@ -3018,11 +3018,11 @@ async fn apply_offer_answer(
                 .expect("adapter should return parseable SDP offer"),
         )
         .expect("remote answer should build");
-    assert_eq!(
+    assert!(
         adapter
             .apply_session_answer(session_key, &answer.to_sdp_string())
-            .await,
-        Ok(())
+            .await
+            .is_ok()
     );
 }
 

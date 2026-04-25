@@ -14,7 +14,7 @@
 //!     let _offer = negotiation
 //!         .create_initial_session_offer(session_key)
 //!         .await?;
-//!     negotiation.apply_session_answer(session_key, answer_sdp).await?;
+//!     let _applied_answer = negotiation.apply_session_answer(session_key, answer_sdp).await?;
 //!     negotiation.negotiated_client_rtp_capabilities(
 //!         answer_sdp,
 //!         offered_capabilities,
@@ -36,9 +36,9 @@ use crate::runtime::{
     transport_adapter::{
         SourcePolicyUpdateSubscription,
         types::{
-            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
-            ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
-            TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
+            ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -59,7 +59,7 @@ pub(crate) trait NegotiationPort {
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
-    ) -> Result<(), TransportAdapterError>;
+    ) -> Result<AppliedSessionAnswer, TransportAdapterError>;
 
     fn negotiated_client_rtp_capabilities(
         &self,
@@ -82,12 +82,6 @@ pub(crate) trait MediaPort {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError>;
-
-    async fn negotiated_producer_parameters(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<RouterRtpParameters, TransportAdapterError>;
 
     async fn publish_media(
         &self,

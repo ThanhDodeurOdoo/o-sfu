@@ -160,8 +160,7 @@ impl RtcTransportAdapterShardSet {
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
         let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
-        let mut batches =
-            BTreeMap::<ConsumerPacketGateBatchKey, Vec<(usize, ConsumerPacketGateUpdate)>>::new();
+        let mut batches = BTreeMap::<ConsumerPacketGateBatchKey, Vec<usize>>::new();
         for (index, update) in updates.iter().enumerate() {
             if update.consumer_session_key().channel_instance_id()
                 != update.source_session_key().channel_instance_id()
@@ -176,28 +175,21 @@ impl RtcTransportAdapterShardSet {
                 source_session_key: update.source_session_key().clone(),
                 source_transport_media_id: update.source_transport_media_id(),
             };
-            batches
-                .entry(key)
-                .or_default()
-                .push((index, update.clone()));
+            batches.entry(key).or_default().push(index);
         }
         for (key, batch) in batches {
             let shard = self.shard_for_index(key.shard_index);
             let update_count = batch.len();
-            let batch_updates = batch
-                .iter()
-                .map(|(_index, update)| update.clone())
-                .collect::<Vec<_>>();
             let batch_results = shard
                 .media()
                 .set_consumer_packet_gates(
                     &key.source_session_key,
                     key.source_transport_media_id,
-                    batch_updates,
+                    batch.iter().filter_map(|index| updates.get(*index)),
                 )
                 .await
                 .unwrap_or_else(|error| vec![Err(error); update_count]);
-            for ((index, _update), result) in batch.into_iter().zip(batch_results) {
+            for (index, result) in batch.into_iter().zip(batch_results) {
                 if let Some(stored_result) = results.get_mut(index) {
                     *stored_result = result;
                 }

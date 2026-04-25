@@ -11,8 +11,8 @@ use super::{relay_registry::RelayTargetId, route_control::PacketLayerGate};
 use crate::runtime::{
     ChannelInstanceId,
     transport_adapter::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SessionOffer, TransportMediaId,
-        TransportResult, TransportSessionKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, SessionOffer,
+        TransportMediaId, TransportResult, TransportSessionKey,
     },
 };
 
@@ -216,7 +216,7 @@ pub(super) enum RtcWorkerCommand {
     ApplySessionAnswer {
         session_key: TransportSessionKey,
         answer_sdp: String,
-        response: RtcWorkerResponse<()>,
+        response: RtcWorkerResponse<AppliedSessionAnswer>,
     },
     CloseSession {
         session_key: TransportSessionKey,
@@ -227,6 +227,7 @@ pub(super) enum RtcWorkerCommand {
         transport_media_id: TransportMediaId,
         response: RtcWorkerResponse<RemoveMediaOutcome>,
     },
+    #[cfg(test)]
     ResolveNegotiatedProducerParameters {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,

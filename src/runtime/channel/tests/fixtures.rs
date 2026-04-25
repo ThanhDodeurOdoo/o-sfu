@@ -17,7 +17,7 @@ pub(super) use super::super::{
 pub(super) use crate::runtime::{
     ConnectionId,
     transport_adapter::{
-        ActiveSpeakerSource, RuntimeTransportAdapter, TransportMediaId,
+        ActiveSpeakerSource, NegotiationPort, RuntimeTransportAdapter, TransportMediaId,
         test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
     },
 };
@@ -262,10 +262,16 @@ pub(super) async fn commit_staged_publishes(
     connection_id: ConnectionId,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
+    let session_key = channel.transport_session_key(session_id, connection_id);
+    let applied_answer = transport_adapter
+        .apply_session_answer(&session_key, "")
+        .await
+        .unwrap_or_default();
     channel
         .commit_staged_publishes(
             session_id,
             connection_id,
+            &applied_answer,
             transport_adapter,
             transport_adapter,
         )

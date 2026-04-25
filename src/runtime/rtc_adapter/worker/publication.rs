@@ -20,18 +20,25 @@ use str0m::{
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
     rtp::Extension,
 };
+#[cfg(test)]
 use tokio::sync::oneshot;
+#[cfg(test)]
 use tracing::warn;
 
+#[cfg(test)]
+use super::super::media_registry::RegisteredMediaHandle;
 use super::super::{
-    media_registry::RegisteredMediaHandle,
     sdp_simulcast,
     state::{RtcBootstrapState, RtcSessionState},
 };
+#[cfg(not(test))]
+use crate::runtime::transport_adapter::TransportSessionKey;
+#[cfg(test)]
 use crate::runtime::transport_adapter::{
     TransportAdapterError, TransportMediaId, TransportSessionKey,
 };
 
+#[cfg(test)]
 pub(super) fn respond_resolve_negotiated_producer_parameters(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -51,19 +58,19 @@ pub(super) fn refresh_negotiated_producer_parameters(
     producer_mids: &[Mid],
     answer_sdp: &str,
     max_bitrate_in_bps: u64,
-) {
+) -> Vec<(Mid, RouterRtpParameters)> {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
     {
         let Some(session_state) = state.sessions.get_mut(session_key) else {
-            return;
+            return refreshed_parameters;
         };
         session_state
             .sdp_negotiation
             .negotiated_producer_parameters
             .retain(|mid, _parameters| !producer_mid_set.contains(mid));
         let Ok(answer) = SdpAnswer::from_sdp_string(answer_sdp) else {
-            return;
+            return refreshed_parameters;
         };
         for media_line in answer
             .media_lines
@@ -139,9 +146,10 @@ pub(super) fn refresh_negotiated_producer_parameters(
     for producer_mid in producer_mids {
         state.clear_producer_ssrc_bindings_for_mid(session_key, *producer_mid);
     }
-    for (mid, parameters) in refreshed_parameters {
-        state.refresh_producer_ssrc_bindings(session_key, mid, &parameters);
+    for (mid, parameters) in &refreshed_parameters {
+        state.refresh_producer_ssrc_bindings(session_key, *mid, parameters);
     }
+    refreshed_parameters
 }
 
 fn apply_projected_recv_streams(
@@ -175,6 +183,7 @@ fn apply_projected_recv_streams(
 
 /// Resolve the router-native RTP parameters for one producer after answer-side
 /// projection has populated them for the owning session.
+#[cfg(test)]
 fn worker_resolve_negotiated_producer_parameters(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
