@@ -68,9 +68,9 @@ impl<'a> Arbitrary<'a> for Scenario {
 
 #[derive(Debug, Arbitrary)]
 struct ConnectInput {
-    room: Label,
+    url_room: Label,
     jwt: Label,
-    room: Option<Label>,
+    auth_room: Option<Label>,
 }
 
 #[derive(Debug)]
@@ -405,11 +405,11 @@ fn connect_core(core: &mut ProtocolCore, connect: &ConnectInput) {
     let _ = core.connect(
         format!(
             "wss://{}.example.test{CHANNEL_PATH}",
-            connect.room.prefixed("room-")
+            connect.url_room.prefixed("room-")
         ),
         connect.jwt.prefixed("jwt-"),
         connect
-            .room
+            .auth_room
             .as_ref()
             .map(|room| room.prefixed("room-")),
     );
