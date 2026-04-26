@@ -1,63 +1,9 @@
 use std::{net::IpAddr, num::NonZeroUsize};
 
 use anyhow::{Context, Result, anyhow, ensure};
+use o_sfu_core::RtcPortRange;
 
 use super::parsing::parse_optional_env;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RtcPortRange {
-    min: u16,
-    max: u16,
-}
-
-impl RtcPortRange {
-    #[must_use]
-    pub const fn new(min: u16, max: u16) -> Self {
-        Self { min, max }
-    }
-
-    #[must_use]
-    pub const fn min(self) -> u16 {
-        self.min
-    }
-
-    #[must_use]
-    pub const fn max(self) -> u16 {
-        self.max
-    }
-
-    #[must_use]
-    pub const fn port_count(self) -> u16 {
-        self.max - self.min + 1
-    }
-
-    pub fn ports(self) -> impl Iterator<Item = u16> {
-        self.min..=self.max
-    }
-
-    #[must_use]
-    pub fn split_for_workers(self, worker_count: usize) -> Option<Vec<Self>> {
-        if worker_count == 0 || worker_count > usize::from(self.port_count()) {
-            return None;
-        }
-        let total_ports = usize::from(self.port_count());
-        let base_ports_per_worker = total_ports / worker_count;
-        let extra_ports = total_ports % worker_count;
-        let mut next_min = u32::from(self.min);
-        let mut ranges = Vec::with_capacity(worker_count);
-        for worker_idx in 0..worker_count {
-            let worker_port_count = base_ports_per_worker + usize::from(worker_idx < extra_ports);
-            let worker_port_count = u32::try_from(worker_port_count).ok()?;
-            let max_inclusive = next_min + worker_port_count - 1;
-            ranges.push(Self::new(
-                u16::try_from(next_min).ok()?,
-                u16::try_from(max_inclusive).ok()?,
-            ));
-            next_min = max_inclusive + 1;
-        }
-        Some(ranges)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LoadedTransportConfig {

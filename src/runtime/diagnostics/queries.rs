@@ -11,7 +11,7 @@
 //! data, and attach the relevant recent-event history from `DiagnosticsStore`.
 
 use super::{
-    store::DiagnosticsStore,
+    DiagnosticsStore,
     types::{
         DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse,
         DiagnosticsTransportCounts, DiagnosticsTransportHealth, DiagnosticsUserDetail,

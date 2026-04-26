@@ -14,7 +14,7 @@ use crate::{
         rooms::{RoomHandle, UserCloseReasonEvent, UserOutboundEvent},
         users::{RoomEvent, User, UserIntent},
     },
-    core::SfuCore,
+    core::RuntimeSfuCore,
     runtime::{
         ConnectionId,
         metrics::RuntimeMetrics,
@@ -47,7 +47,7 @@ impl SessionProtocol {
         connection_id: ConnectionId,
         remote_address: Arc<str>,
         room: RoomHandle,
-        media_core: SfuCore,
+        media_core: RuntimeSfuCore,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {

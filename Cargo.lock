@@ -1073,6 +1073,7 @@ dependencies = [
  "bitflags",
  "futures-util",
  "hmac",
+ "o-sfu-core",
  "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",
@@ -1095,6 +1096,25 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "o-sfu-core"
+version = "0.3.0"
+dependencies = [
+ "bitflags",
+ "futures-util",
+ "o-sfu-protocol",
+ "o-sfu-rfc",
+ "o-sfu-router",
+ "serde",
+ "serde_json",
+ "str0m",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

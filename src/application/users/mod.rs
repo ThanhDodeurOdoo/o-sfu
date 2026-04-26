@@ -20,7 +20,7 @@ use crate::{
         outcomes::{CallOutcome, UserEndReason, UserError, UserSignal},
         rooms::RoomHandle,
     },
-    core::{MediaEndpointHealth, SfuCore},
+    core::{MediaEndpointHealth, RuntimeSfuCore},
     runtime::{
         ConnectionId,
         room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
@@ -63,7 +63,7 @@ pub(crate) struct User {
     connection_id: ConnectionId,
     remote_address: Arc<str>,
     room: Arc<Room>,
-    media_core: SfuCore,
+    media_core: RuntimeSfuCore,
     request_ids: ServerRequestIdState,
     flow_state: SessionFlowState,
     track_projection: RemoteTrackProjection,
@@ -76,7 +76,7 @@ impl User {
         connection_id: ConnectionId,
         remote_address: Arc<str>,
         room: RoomHandle,
-        media_core: SfuCore,
+        media_core: RuntimeSfuCore,
     ) -> Self {
         Self {
             id: user_id,
@@ -93,7 +93,7 @@ impl User {
 
     pub(crate) fn end_reason(&self) -> Option<UserEndReason> {
         self.media_core
-            .endpoint_health(&self.room, &self.id, self.connection_id)
+            .endpoint_health(self.room.as_ref(), &self.id, self.connection_id)
             .and_then(|health| match health {
                 MediaEndpointHealth::Disconnected => Some(UserEndReason::TransportDisconnected),
                 MediaEndpointHealth::Connected => None,
@@ -126,7 +126,7 @@ impl User {
 
     pub(crate) async fn finish(&mut self) {
         self.media_core
-            .rollback_connection_publishes(&self.room, &self.id, self.connection_id)
+            .rollback_connection_publishes(self.room.as_ref(), &self.id, self.connection_id)
             .await;
         self.cleanup_finished = true;
     }
@@ -187,7 +187,7 @@ impl Drop for User {
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
                 media_core
-                    .rollback_connection_publishes(&room, &user_id, connection_id)
+                    .rollback_connection_publishes(room.as_ref(), &user_id, connection_id)
                     .await;
             });
         }

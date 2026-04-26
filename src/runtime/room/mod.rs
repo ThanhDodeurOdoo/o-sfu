@@ -27,6 +27,7 @@ mod factory;
 mod lifecycle;
 mod manager;
 mod media;
+mod media_core;
 mod media_transaction;
 mod membership;
 mod outbound;

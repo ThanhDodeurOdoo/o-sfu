@@ -38,40 +38,36 @@ use crate::{
 pub(crate) mod auth;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
-mod ids;
-mod metrics;
 mod metrics_export;
-mod packet_sink_registry;
 mod recording;
 mod request_origin;
 pub(crate) mod room;
-mod rtc_adapter;
-pub(crate) mod source_model;
 pub(crate) mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_rtp_samples;
 #[doc(hidden)]
 pub mod testing;
-mod transport_adapter;
 pub(crate) mod websocket_server;
 
 pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
-pub(crate) use ids::{ConnectionId, RoomInstanceId};
 pub(crate) use metrics::RuntimeMetrics;
+pub(crate) use o_sfu_core::{
+    ConnectionId, RoomInstanceId,
+    runtime::{metrics, packet_sink_registry, rtc_adapter, source_model, transport_adapter},
+};
 use packet_sink_registry::RoomPacketSinkRegistry;
 pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
 use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy};
+pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
 pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
-pub(crate) use rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
 use telemetry::init_tracing;
 use transport_adapter::SourcePolicyPort;
 pub use transport_adapter::TransportSessionKey;
 pub(crate) use transport_adapter::{
-    AppliedSessionAnswer, MediaPort, NegotiationPort, ObservabilityPort,
-    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits, SessionOffer,
-    SessionUploadEncoding, SessionUploadSlot, TransportAdapterError,
+    MediaPort, ObservabilityPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+    SessionBitrateLimits,
 };
 
 /// Process-global application shell for the server process.

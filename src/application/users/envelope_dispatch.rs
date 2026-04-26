@@ -28,7 +28,13 @@ impl User {
 
     async fn handle_info_message(&self, info: UserInfo) {
         self.media_core
-            .update_user_info(&self.room, &self.id, self.connection_id, info, false)
+            .update_user_info(
+                self.room.as_ref(),
+                &self.id,
+                self.connection_id,
+                info,
+                false,
+            )
             .await;
     }
 
@@ -51,7 +57,7 @@ impl User {
         );
         self.media_core
             .update_subscription(
-                &self.room,
+                self.room.as_ref(),
                 &self.id,
                 self.connection_id,
                 target_session_id,

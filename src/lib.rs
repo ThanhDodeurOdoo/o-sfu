@@ -1,6 +1,6 @@
 pub mod application;
 pub mod config;
-pub mod core;
+pub use o_sfu_core as core;
 mod runtime;
 #[doc(hidden)] // so we dont expose testing apis
 pub mod testing;

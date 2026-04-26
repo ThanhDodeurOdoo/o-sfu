@@ -18,43 +18,7 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 
 ## Architecture
 
-```mermaid
-flowchart TD
-  Odoo[Odoo Server]
-  Client[Browser Client]
-  CB[Client Bundle]
-  subgraph s1["o-sfu"]
-    HTTP
-    WS[WebSocket]
-    RT[Runtime]
-    RM[Room Manager]
-    Room
-    R[Pure Router Core]
-    TRA[Transport Adapter]
-    RTCS[RTC Adapter Shards]
-    WRTC[WebRTC / RTP / UDP]
-    REC[Recording Service / Media Tap]
-    MET[Metrics Export]
-    TEL[Telemetry / Tracing]
-    
-  end
-  Odoo <--> Client
-  Odoo --> HTTP
-  HTTP --> RT
-  WS --> RT
-  RT --> RM
-  RM --> Room
-  Room --> R
-  Room --> TRA
-  TRA --> RTCS
-  RTCS --> WRTC
-  Room --> REC
-  RT --> MET
-  RT --> TEL
-  Client --> CB
-  CB --> WS
-  CB --> WRTC
-```
+TODO
 
 Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.
 

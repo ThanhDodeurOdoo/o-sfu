@@ -19,18 +19,19 @@
 //!   views when an operator requests them
 
 mod queries;
-mod store;
-pub(crate) mod types;
+pub(crate) mod types {
+    pub(crate) use o_sfu_core::runtime::diagnostics::types::*;
+}
 
+pub(crate) use o_sfu_core::runtime::diagnostics::{DiagnosticsEventData, DiagnosticsStore};
 pub(crate) use queries::{
     room_detail_response, rooms_response, summary_response, user_detail_response,
 };
-pub(crate) use store::{DiagnosticsEventData, DiagnosticsStore};
 pub(crate) use types::{
     DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
     DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSource,
     DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
     DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection, DiagnosticsUserLookup,
     DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
-    DiagnosticsVideoRoutePriority, health_json_value, maybe_health_json_value,
+    DiagnosticsVideoRoutePriority,
 };

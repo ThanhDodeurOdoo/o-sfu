@@ -1,0 +1,29 @@
+[package]
+description = "o-sfu media core"
+name = "o-sfu-core"
+
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+testing-transport = []
+
+[dependencies]
+bitflags.workspace = true
+futures-util.workspace = true
+o-sfu-protocol.workspace = true
+o-sfu-rfc.workspace = true
+o-sfu-router.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+str0m.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

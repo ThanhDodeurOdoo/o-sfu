@@ -4,7 +4,8 @@ use crate::{
     application::rooms::Room,
     config::{Config, DiagnosticsConfig, RuntimeFeatureFlags},
     core::{
-        CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions, SfuCore,
+        CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions,
+        RuntimeSfuCore,
     },
     runtime::SessionBitrateLimits,
 };
@@ -13,7 +14,7 @@ use crate::{
 pub(crate) struct CallApplication {
     _options: CallOptions,
     rooms: Room,
-    media_core: SfuCore,
+    media_core: RuntimeSfuCore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +144,7 @@ impl ProgramOptions {
 
 impl CallApplication {
     #[must_use]
-    pub(crate) fn new(options: CallOptions, rooms: Room, media_core: SfuCore) -> Self {
+    pub(crate) fn new(options: CallOptions, rooms: Room, media_core: RuntimeSfuCore) -> Self {
         Self {
             _options: options,
             rooms,
@@ -157,7 +158,7 @@ impl CallApplication {
     }
 
     #[must_use]
-    pub(crate) fn media_core(&self) -> SfuCore {
+    pub(crate) fn media_core(&self) -> RuntimeSfuCore {
         self.media_core.clone()
     }
 }

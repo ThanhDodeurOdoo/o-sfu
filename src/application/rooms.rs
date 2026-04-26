@@ -12,15 +12,18 @@ use o_sfu_protocol::{
 };
 use tokio::sync::mpsc;
 
-use crate::runtime::{
-    ConnectionId, DiagnosticsStore, RuntimeTransportAdapter,
-    diagnostics::{
-        self, DiagnosticsUserLookup,
-        types::{DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse},
-    },
-    room::{
-        JoinUserRequest, Room as RuntimeRoom, RoomConfig, RoomManager, RoomManagerJoinError,
-        RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
+use crate::{
+    core::RuntimeTransportAdapter,
+    runtime::{
+        ConnectionId, DiagnosticsStore,
+        diagnostics::{
+            self, DiagnosticsUserLookup,
+            types::{DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse},
+        },
+        room::{
+            JoinUserRequest, Room as RuntimeRoom, RoomConfig, RoomManager, RoomManagerJoinError,
+            RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
+        },
     },
 };
 

@@ -8,12 +8,12 @@ mod settings;
 mod telemetry;
 mod transport;
 
+pub use o_sfu_core::{MediaCodecFlags, RtcPortRange};
+
 pub(crate) use self::log_view::ConfigLogView;
 pub use self::{
-    codec_flags::MediaCodecFlags,
     diagnostics::DiagnosticsConfig,
     feature_flags::RuntimeFeatureFlags,
     settings::Config,
     telemetry::{TelemetryConfig, TelemetryLogFormat, TelemetryResource, TraceExportConfig},
-    transport::RtcPortRange,
 };
