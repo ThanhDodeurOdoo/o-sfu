@@ -8,18 +8,18 @@ use o_sfu_protocol::{
 use tokio::runtime::Handle;
 use tracing::warn;
 
-use super::super::{
-    controller::SessionProtocolOutcome, flow_state::SessionFlowState,
-    frame_codec::send_server_messages, track_projection::RemoteTrackProjection,
-};
-use crate::runtime::{
-    ConnectionId,
-    metrics::RuntimeMetrics,
-    room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
-    rtc_adapter::TransportSessionHealth,
-    transport_adapter::{ObservabilityPort, RuntimeTransportAdapter},
-    websocket_server::{
-        ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, WsWriter, decode_client_batch,
+use super::super::{flow_state::SessionFlowState, track_projection::RemoteTrackProjection};
+use crate::{
+    application::outcomes::{CallOutcome, UserSignal},
+    runtime::{
+        ConnectionId,
+        metrics::RuntimeMetrics,
+        room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
+        rtc_adapter::TransportSessionHealth,
+        transport_adapter::{ObservabilityPort, RuntimeTransportAdapter},
+        websocket_server::{
+            ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
+        },
     },
 };
 
@@ -34,6 +34,13 @@ impl ServerRequestIdState {
         self.next_request_counter = self.next_request_counter.saturating_add(1);
         request_id
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::websocket_server) enum PostAuthProtocolOutcome {
+    Continue(CallOutcome),
+    Break,
+    Close(WebSocketCloseCode),
 }
 
 /// The main orchestrator for an authenticated user.
@@ -92,29 +99,26 @@ impl PostAuthSessionProtocol {
 
     pub(in crate::runtime::websocket_server) async fn handle_frame(
         &mut self,
-        writer: &mut WsWriter,
         message: Message,
-    ) -> SessionProtocolOutcome {
+    ) -> PostAuthProtocolOutcome {
         match message {
-            Message::Text(payload) => self.handle_text_payload(writer, &payload).await,
-            Message::Binary(payload) => self.handle_binary_payload(writer, &payload).await,
+            Message::Text(payload) => self.handle_text_payload(&payload).await,
+            Message::Binary(payload) => self.handle_binary_payload(&payload).await,
             Message::Close(frame) => {
                 tracing::info!(
                     remote_address = self.remote_address.as_ref(),
                     ?frame,
                     "websocket peer sent close frame"
                 );
-                SessionProtocolOutcome::Break
+                PostAuthProtocolOutcome::Break
             }
-            Message::Ping(_) | Message::Pong(_) => SessionProtocolOutcome::Continue,
+            Message::Ping(_) | Message::Pong(_) => {
+                PostAuthProtocolOutcome::Continue(CallOutcome::new())
+            }
         }
     }
 
-    async fn handle_binary_payload(
-        &mut self,
-        writer: &mut WsWriter,
-        payload: &[u8],
-    ) -> SessionProtocolOutcome {
+    async fn handle_binary_payload(&mut self, payload: &[u8]) -> PostAuthProtocolOutcome {
         if payload.len() > MAX_CLIENT_FRAME_BYTES {
             self.metrics.record_ws_bus_invalid_input_failure();
             warn!(
@@ -125,10 +129,10 @@ impl PostAuthSessionProtocol {
                 max_len = MAX_CLIENT_FRAME_BYTES,
                 "received oversized websocket binary frame"
             );
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+            return PostAuthProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
         }
         match String::from_utf8(payload.to_vec()) {
-            Ok(payload) => self.handle_text_payload(writer, &payload).await,
+            Ok(payload) => self.handle_text_payload(&payload).await,
             Err(_error) => {
                 self.metrics.record_ws_bus_invalid_input_failure();
                 warn!(
@@ -137,16 +141,12 @@ impl PostAuthSessionProtocol {
                     remote_address = self.remote_address.as_ref(),
                     "received websocket binary frame with invalid UTF-8"
                 );
-                SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
+                PostAuthProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
             }
         }
     }
 
-    async fn handle_text_payload(
-        &mut self,
-        writer: &mut WsWriter,
-        payload: &str,
-    ) -> SessionProtocolOutcome {
+    async fn handle_text_payload(&mut self, payload: &str) -> PostAuthProtocolOutcome {
         let batch = match decode_client_batch(payload) {
             Ok(batch) => batch,
             Err(error) => {
@@ -170,71 +170,66 @@ impl PostAuthSessionProtocol {
                         );
                     }
                 }
-                return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+                return PostAuthProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
             }
         };
         self.metrics.record_ws_bus_batch_received(batch.len());
+        let mut call_outcome = CallOutcome::new();
         for envelope in batch {
             match &envelope {
                 ClientEnvelope::Request { .. } => self.metrics.record_ws_bus_client_request(),
                 ClientEnvelope::Message(_) => self.metrics.record_ws_bus_client_message(),
                 ClientEnvelope::Response { .. } => {}
             }
-            let outcome = self.dispatch_client_envelope(writer, envelope).await;
-            if !matches!(outcome, SessionProtocolOutcome::Continue) {
-                return outcome;
+            match self.dispatch_client_envelope(envelope).await {
+                Ok(outcome) => call_outcome.extend(outcome),
+                Err(code) => return PostAuthProtocolOutcome::Close(code),
             }
         }
-        SessionProtocolOutcome::Continue
+        PostAuthProtocolOutcome::Continue(call_outcome)
     }
 
     pub(in crate::runtime::websocket_server) async fn send_outbound_message(
         &mut self,
-        writer: &mut WsWriter,
         message: RoomEventMessage,
-    ) -> Result<usize, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         let translated = self.track_projection.translate_server_message(message);
-        let mut batch_len = send_server_messages(writer, translated.messages).await?;
-        if translated.needs_renegotiation && self.request_renegotiation(writer).await? {
-            batch_len += 1;
+        let mut call_outcome =
+            CallOutcome::new().with_signals(translated.messages.into_iter().map(UserSignal::from));
+        if translated.needs_renegotiation {
+            call_outcome.extend(self.request_renegotiation().await?);
         }
-        Ok(batch_len)
+        Ok(call_outcome)
     }
 
     pub(in crate::runtime::websocket_server) async fn send_outbound_request(
         &mut self,
-        writer: &mut WsWriter,
         request: RoomEventRequest,
-    ) -> Result<usize, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         match request {
             RoomEventRequest::BootstrapRemoteTrack(payload) => {
                 self.track_projection.apply_remote_track_bootstrap(&payload);
-                let mut batch_len = send_server_messages(
-                    writer,
-                    vec![ServerMessage::Tracks(self.track_projection.snapshot())],
-                )
-                .await?;
-                if self.request_renegotiation(writer).await? {
-                    batch_len += 1;
-                }
-                Ok(batch_len)
+                let mut call_outcome = CallOutcome::new()
+                    .with_signal(ServerMessage::Tracks(self.track_projection.snapshot()).into());
+                call_outcome.extend(self.request_renegotiation().await?);
+                Ok(call_outcome)
             }
         }
     }
 
     pub(in crate::runtime::websocket_server) async fn send_track_binding_update(
         &mut self,
-        writer: &mut WsWriter,
         update: TrackBindingUpdate,
-    ) -> Result<usize, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         let translated = self
             .track_projection
             .translate_track_binding_update(&update);
-        let mut batch_len = send_server_messages(writer, translated.messages).await?;
-        if translated.needs_renegotiation && self.request_renegotiation(writer).await? {
-            batch_len += 1;
+        let mut call_outcome =
+            CallOutcome::new().with_signals(translated.messages.into_iter().map(UserSignal::from));
+        if translated.needs_renegotiation {
+            call_outcome.extend(self.request_renegotiation().await?);
         }
-        Ok(batch_len)
+        Ok(call_outcome)
     }
 }
 

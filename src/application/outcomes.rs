@@ -22,6 +22,19 @@ impl CallOutcome {
     }
 
     #[must_use]
+    pub fn with_signals(mut self, signals: impl IntoIterator<Item = UserSignal>) -> Self {
+        self.signals.extend(signals);
+        self
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.signals.extend(other.signals);
+        if other.end_user.is_some() {
+            self.end_user = other.end_user;
+        }
+    }
+
+    #[must_use]
     pub fn with_end_user(mut self, reason: UserEndReason) -> Self {
         self.end_user = Some(reason);
         self
@@ -30,6 +43,11 @@ impl CallOutcome {
     #[must_use]
     pub fn signals(&self) -> &[UserSignal] {
         &self.signals
+    }
+
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        self.signals.len()
     }
 
     #[must_use]
@@ -153,6 +171,38 @@ mod tests {
                 response_to: RequestId::new("client-1"),
                 response,
             }]
+        );
+    }
+
+    #[test]
+    fn call_outcome_extends_ordered_signal_batches() {
+        let first = ServerMessage::Welcome(WelcomePayload {
+            peers: Vec::new(),
+            features: AvailableFeatures {
+                rtc: true,
+                transcription: false,
+                audio_recording: false,
+                video_recording: false,
+            },
+            recording: RecordingState::default(),
+        });
+        let second = ServerResponse::StopRecording(RecordingActionResult { ok: true });
+
+        let mut outcome = CallOutcome::new().with_signal(first.clone().into());
+        outcome.extend(CallOutcome::new().with_signal(UserSignal::response(
+            RequestId::new("client-1"),
+            second.clone(),
+        )));
+
+        assert_eq!(
+            outcome.into_signals(),
+            vec![
+                UserSignal::Message(first),
+                UserSignal::Response {
+                    response_to: RequestId::new("client-1"),
+                    response: second,
+                },
+            ]
         );
     }
 }

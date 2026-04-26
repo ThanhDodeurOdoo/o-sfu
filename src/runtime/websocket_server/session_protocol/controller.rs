@@ -3,7 +3,11 @@ use std::sync::Arc;
 use axum::extract::ws::Message;
 use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
 
-use super::{super::WsWriter, post_auth::PostAuthSessionProtocol};
+use super::{
+    super::WsWriter,
+    frame_codec::send_call_outcome,
+    post_auth::{PostAuthProtocolOutcome, PostAuthSessionProtocol},
+};
 use crate::runtime::{
     ConnectionId,
     metrics::RuntimeMetrics,
@@ -48,7 +52,11 @@ impl SessionProtocol {
         &mut self,
         writer: &mut WsWriter,
     ) -> Result<(), ()> {
-        self.0.send_initial_offer(writer).await.map_err(|_error| ())
+        let outcome = self.0.send_initial_offer().await.map_err(|_error| ())?;
+        send_call_outcome(writer, outcome)
+            .await
+            .map(|_sent| ())
+            .map_err(|_error| ())
     }
 
     pub(in crate::runtime::websocket_server) fn transport_close_code(
@@ -62,7 +70,8 @@ impl SessionProtocol {
         writer: &mut WsWriter,
         message: Message,
     ) -> SessionProtocolOutcome {
-        self.0.handle_frame(writer, message).await
+        let outcome = self.0.handle_frame(message).await;
+        Self::render_post_auth_outcome(writer, outcome).await
     }
 
     pub(in crate::runtime::websocket_server) async fn send_outbound(
@@ -72,11 +81,34 @@ impl SessionProtocol {
     ) -> Result<usize, WebSocketCloseCode> {
         match outbound {
             UserOutbound::Close(reason) => Err(map_session_close_reason(reason)),
-            UserOutbound::Message(message) => self.0.send_outbound_message(writer, message).await,
-            UserOutbound::Request(request) => self.0.send_outbound_request(writer, *request).await,
-            UserOutbound::TrackBindingUpdate(update) => {
-                self.0.send_track_binding_update(writer, update).await
+            UserOutbound::Message(message) => {
+                let outcome = self.0.send_outbound_message(message).await?;
+                send_call_outcome(writer, outcome).await
             }
+            UserOutbound::Request(request) => {
+                let outcome = self.0.send_outbound_request(*request).await?;
+                send_call_outcome(writer, outcome).await
+            }
+            UserOutbound::TrackBindingUpdate(update) => {
+                let outcome = self.0.send_track_binding_update(update).await?;
+                send_call_outcome(writer, outcome).await
+            }
+        }
+    }
+
+    async fn render_post_auth_outcome(
+        writer: &mut WsWriter,
+        outcome: PostAuthProtocolOutcome,
+    ) -> SessionProtocolOutcome {
+        match outcome {
+            PostAuthProtocolOutcome::Continue(call_outcome) => {
+                match send_call_outcome(writer, call_outcome).await {
+                    Ok(_sent) => SessionProtocolOutcome::Continue,
+                    Err(code) => SessionProtocolOutcome::Close(code),
+                }
+            }
+            PostAuthProtocolOutcome::Break => SessionProtocolOutcome::Break,
+            PostAuthProtocolOutcome::Close(code) => SessionProtocolOutcome::Close(code),
         }
     }
 }

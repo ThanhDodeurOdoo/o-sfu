@@ -7,14 +7,11 @@ use o_sfu_protocol::{
 };
 use tracing::{debug, info, instrument};
 
-use super::{
-    super::{
-        controller::SessionProtocolOutcome, flow_state::FlowChange,
-        frame_codec::send_server_response,
-    },
-    controller::PostAuthSessionProtocol,
+use super::{super::flow_state::FlowChange, controller::PostAuthSessionProtocol};
+use crate::{
+    application::outcomes::{CallOutcome, UserSignal},
+    runtime::telemetry::schema::event as telemetry_event,
 };
-use crate::runtime::{telemetry::schema::event as telemetry_event, websocket_server::WsWriter};
 
 impl PostAuthSessionProtocol {
     async fn reject_stale_connection(&self) -> bool {
@@ -91,10 +88,9 @@ impl PostAuthSessionProtocol {
     )]
     async fn handle_start_recording_request(
         &self,
-        writer: &mut WsWriter,
         request_id: RequestId,
         payload: RecordingOptions,
-    ) -> SessionProtocolOutcome {
+    ) -> CallOutcome {
         let ok = self
             .room
             .start_recording_runtime(&self.user_id, self.connection_id, payload)
@@ -105,16 +101,10 @@ impl PostAuthSessionProtocol {
             outcome = if ok { "accepted" } else { "rejected" },
             "processed recording start request"
         );
-        match send_server_response(
-            writer,
+        CallOutcome::new().with_signal(UserSignal::response(
             request_id,
             ServerResponse::StartRecording(RecordingActionResult { ok }),
-        )
-        .await
-        {
-            Ok(()) => SessionProtocolOutcome::Continue,
-            Err(code) => SessionProtocolOutcome::Close(code),
-        }
+        ))
     }
 
     #[instrument(
@@ -127,11 +117,7 @@ impl PostAuthSessionProtocol {
             request_id = ?request_id
         )
     )]
-    async fn handle_stop_recording_request(
-        &self,
-        writer: &mut WsWriter,
-        request_id: RequestId,
-    ) -> SessionProtocolOutcome {
+    async fn handle_stop_recording_request(&self, request_id: RequestId) -> CallOutcome {
         let ok = self
             .room
             .stop_recording_runtime(&self.user_id, self.connection_id)
@@ -142,54 +128,41 @@ impl PostAuthSessionProtocol {
             outcome = if ok { "accepted" } else { "rejected" },
             "processed recording stop request"
         );
-        match send_server_response(
-            writer,
+        CallOutcome::new().with_signal(UserSignal::response(
             request_id,
             ServerResponse::StopRecording(RecordingActionResult { ok }),
-        )
-        .await
-        {
-            Ok(()) => SessionProtocolOutcome::Continue,
-            Err(code) => SessionProtocolOutcome::Close(code),
-        }
+        ))
     }
 
     async fn dispatch_flow_change(
         &mut self,
-        writer: &mut WsWriter,
         change: FlowChange,
-    ) -> SessionProtocolOutcome {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         match change {
-            FlowChange::Publish(stream_type) => {
-                self.handle_publish_intent(writer, stream_type).await
-            }
-            FlowChange::Unpublish(stream_type) => {
-                self.handle_unpublish_intent_with_writer(stream_type, Some(writer))
-                    .await
-            }
+            FlowChange::Publish(stream_type) => self.handle_publish_intent(stream_type).await,
+            FlowChange::Unpublish(stream_type) => self.handle_unpublish_intent(stream_type).await,
             FlowChange::Subscribe {
                 target_session_id,
                 states,
             } => {
                 self.handle_subscribe_intent(&target_session_id, &states)
                     .await;
-                SessionProtocolOutcome::Continue
+                Ok(CallOutcome::new())
             }
         }
     }
 
     pub(super) async fn dispatch_client_envelope(
         &mut self,
-        writer: &mut WsWriter,
         envelope: ClientEnvelope,
-    ) -> SessionProtocolOutcome {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         if self.reject_stale_connection().await {
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::Kicked);
+            return Err(WebSocketCloseCode::Kicked);
         }
         match envelope {
             ClientEnvelope::Message(ClientMessage::Info(info)) => {
                 self.handle_info_message(info).await;
-                SessionProtocolOutcome::Continue
+                Ok(CallOutcome::new())
             }
             ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload {
                 message,
@@ -197,46 +170,39 @@ impl PostAuthSessionProtocol {
                 self.room
                     .broadcast_runtime(&self.user_id, self.connection_id, message)
                     .await;
-                SessionProtocolOutcome::Continue
+                Ok(CallOutcome::new())
             }
             ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
-                self.dispatch_flow_change(
-                    writer,
-                    FlowChange::Subscribe {
-                        target_session_id: payload.user_id,
-                        states: payload.states,
-                    },
-                )
+                self.dispatch_flow_change(FlowChange::Subscribe {
+                    target_session_id: payload.user_id,
+                    states: payload.states,
+                })
                 .await
             }
             ClientEnvelope::Message(ClientMessage::Publish(payload)) => {
-                self.dispatch_flow_change(writer, FlowChange::Publish(payload.stream_type))
+                self.dispatch_flow_change(FlowChange::Publish(payload.stream_type))
                     .await
             }
             ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
-                self.dispatch_flow_change(writer, FlowChange::Unpublish(payload.stream_type))
+                self.dispatch_flow_change(FlowChange::Unpublish(payload.stream_type))
                     .await
             }
             ClientEnvelope::Response {
                 response_to,
                 response: ClientResponse::Offer(answer) | ClientResponse::Renegotiate(answer),
-            } => {
-                self.handle_negotiation_response(writer, response_to, answer)
-                    .await
-            }
+            } => self.handle_negotiation_response(response_to, answer).await,
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StartRecording(payload),
-            } => {
-                self.handle_start_recording_request(writer, request_id, payload)
-                    .await
-            }
+            } => Ok(self
+                .handle_start_recording_request(request_id, payload)
+                .await),
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StopRecording,
-            } => self.handle_stop_recording_request(writer, request_id).await,
+            } => Ok(self.handle_stop_recording_request(request_id).await),
             ClientEnvelope::Message(ClientMessage::Auth(_)) => {
-                SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError)
+                Err(WebSocketCloseCode::ProtocolError)
             }
         }
     }

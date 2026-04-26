@@ -19,4 +19,6 @@ mod envelope_dispatch;
 mod negotiation_flow;
 mod publish_flow;
 
-pub(in crate::runtime::websocket_server) use controller::PostAuthSessionProtocol;
+pub(in crate::runtime::websocket_server) use controller::{
+    PostAuthProtocolOutcome, PostAuthSessionProtocol,
+};

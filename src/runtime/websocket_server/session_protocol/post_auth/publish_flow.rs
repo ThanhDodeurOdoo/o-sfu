@@ -7,10 +7,12 @@
 use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
 use tracing::{info, instrument};
 
-use super::{super::controller::SessionProtocolOutcome, controller::PostAuthSessionProtocol};
-use crate::runtime::{
-    telemetry::schema::event as telemetry_event, transport_adapter::AppliedSessionAnswer,
-    websocket_server::WsWriter,
+use super::controller::PostAuthSessionProtocol;
+use crate::{
+    application::outcomes::CallOutcome,
+    runtime::{
+        telemetry::schema::event as telemetry_event, transport_adapter::AppliedSessionAnswer,
+    },
 };
 
 impl PostAuthSessionProtocol {
@@ -26,9 +28,8 @@ impl PostAuthSessionProtocol {
     )]
     pub(super) async fn handle_publish_intent(
         &mut self,
-        writer: &mut WsWriter,
         stream_type: StreamType,
-    ) -> SessionProtocolOutcome {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         // If the same stream is already queued or staged, treat the new intent
         // as idempotent. The room transaction layer is strict about one
         // staged publish per `(user, connection, stream_type)`
@@ -38,7 +39,7 @@ impl PostAuthSessionProtocol {
                 .has_staged_publish(&self.user_id, self.connection_id, stream_type)
                 .await
         {
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
         if self
             .room
@@ -57,7 +58,7 @@ impl PostAuthSessionProtocol {
                     &self.transport_adapter,
                 )
                 .await;
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
         if self.flow_state.awaiting_answer() {
             // A publish intent that arrive while another answer is in flight
@@ -65,26 +66,22 @@ impl PostAuthSessionProtocol {
             // renegotiation stages it against the latest user state.
             self.flow_state.queue_publish_stream(stream_type);
             let _disposition = self.flow_state.request_renegotiation();
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
         if !self.stage_publish_stream(stream_type).await {
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
-        match self.request_renegotiation(writer).await {
-            Ok(_sent) => SessionProtocolOutcome::Continue,
-            Err(code) => SessionProtocolOutcome::Close(code),
-        }
+        self.request_renegotiation().await
     }
 
-    pub(super) async fn handle_unpublish_intent_with_writer(
+    pub(super) async fn handle_unpublish_intent(
         &mut self,
         stream_type: StreamType,
-        writer: Option<&mut WsWriter>,
-    ) -> SessionProtocolOutcome {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         // Queued publish means the stream never staged transport media, so
         // clearing the queued intent is enough.
         if self.flow_state.clear_queued_publish(stream_type) {
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
         // If a publish was staged but not committed yet, unpublish becomes a
         // pure rollback of the staged transaction.
@@ -99,7 +96,7 @@ impl PostAuthSessionProtocol {
             .await
         {
             let _disposition = self.flow_state.request_renegotiation();
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
         if !self
             .room
@@ -111,12 +108,9 @@ impl PostAuthSessionProtocol {
             )
             .await
         {
-            return SessionProtocolOutcome::Continue;
+            return Ok(CallOutcome::new());
         }
-        let Some(writer) = writer else {
-            return SessionProtocolOutcome::Continue;
-        };
-        handle_unpublish_renegotiation_result(self.request_renegotiation(writer).await)
+        self.request_renegotiation().await
     }
 
     async fn stage_publish_stream(&self, stream_type: StreamType) -> bool {
@@ -190,14 +184,5 @@ impl PostAuthSessionProtocol {
             outcome = "applied",
             "committed staged publish streams"
         );
-    }
-}
-
-fn handle_unpublish_renegotiation_result(
-    result: Result<bool, WebSocketCloseCode>,
-) -> SessionProtocolOutcome {
-    match result {
-        Ok(_sent) => SessionProtocolOutcome::Continue,
-        Err(code) => SessionProtocolOutcome::Close(code),
     }
 }

@@ -5,22 +5,20 @@ use o_sfu_protocol::signaling::{
 use tracing::{info, instrument, warn};
 
 use super::{
-    super::{
-        controller::SessionProtocolOutcome,
-        flow_state::{
-            PendingFlowAction, PendingFlowRequest, RenegotiationDisposition, ResolvedFlowState,
-        },
-        frame_codec::send_server_request,
+    super::flow_state::{
+        PendingFlowAction, PendingFlowRequest, RenegotiationDisposition, ResolvedFlowState,
     },
     controller::PostAuthSessionProtocol,
 };
-use crate::runtime::{
-    telemetry::schema::event as telemetry_event,
-    transport_adapter::{
-        AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
-        SessionUploadSlot, TransportAdapterError, TransportSessionKey,
+use crate::{
+    application::outcomes::{CallOutcome, UserSignal},
+    runtime::{
+        telemetry::schema::event as telemetry_event,
+        transport_adapter::{
+            AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
+            SessionUploadSlot, TransportAdapterError, TransportSessionKey,
+        },
     },
-    websocket_server::WsWriter,
 };
 
 impl PostAuthSessionProtocol {
@@ -35,8 +33,7 @@ impl PostAuthSessionProtocol {
     )]
     pub(in crate::runtime::websocket_server) async fn send_initial_offer(
         &mut self,
-        writer: &mut WsWriter,
-    ) -> Result<(), WebSocketCloseCode> {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         let router_capabilities = self.room.router_rtp_capabilities().await;
         let session_key = self
             .room
@@ -63,46 +60,32 @@ impl PostAuthSessionProtocol {
             "created initial transport offer"
         );
         let offer_request = ServerRequest::Offer(session_description_payload(offer));
-        self.issue_negotiation_request(
-            writer,
-            offer_request,
-            PendingFlowAction::EstablishSession {
-                offered_router_rtp_capabilities: router_capabilities,
-            },
+        Ok(
+            CallOutcome::new().with_signal(self.issue_negotiation_request(
+                offer_request,
+                PendingFlowAction::EstablishSession {
+                    offered_router_rtp_capabilities: router_capabilities,
+                },
+            )),
         )
-        .await
     }
 
-    async fn issue_negotiation_request(
+    fn issue_negotiation_request(
         &mut self,
-        writer: &mut WsWriter,
         request: ServerRequest,
         action: PendingFlowAction,
-    ) -> Result<(), WebSocketCloseCode> {
+    ) -> UserSignal {
         let request_id = self.request_ids.next_request_id();
-        if let Err(code) = send_server_request(writer, request_id.clone(), request.clone()).await {
-            warn!(
-                event = telemetry_event::NEGOTIATION_FAILED,
-                operation = negotiation_operation_name(&action),
-                outcome = "request_send_failed",
-                user_id = ?self.user_id,
-                connection_id = ?self.connection_id,
-                remote_address = self.remote_address.as_ref(),
-                ?request_id,
-                close_code = u16::from(code),
-                "failed to send negotiation request over websocket"
-            );
-            return Err(code);
-        }
+        let signal = UserSignal::request(request_id.clone(), request.clone());
         info!(
             event = telemetry_event::NEGOTIATION_STARTED,
             operation = negotiation_operation_name(&action),
-            outcome = "request_sent",
+            outcome = "request_prepared",
             ?request_id,
-            "sent negotiation request"
+            "prepared negotiation request"
         );
         self.flow_state.issue(request_id, request, action);
-        Ok(())
+        signal
     }
 
     #[instrument(
@@ -116,10 +99,11 @@ impl PostAuthSessionProtocol {
     )]
     pub(super) async fn request_renegotiation(
         &mut self,
-        writer: &mut WsWriter,
-    ) -> Result<bool, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         match self.flow_state.request_renegotiation() {
-            RenegotiationDisposition::Skip | RenegotiationDisposition::QueueOnly => Ok(false),
+            RenegotiationDisposition::Skip | RenegotiationDisposition::QueueOnly => {
+                Ok(CallOutcome::new())
+            }
             RenegotiationDisposition::SendNow => {
                 let session_key = self
                     .room
@@ -131,40 +115,37 @@ impl PostAuthSessionProtocol {
                 )
                 .await?
                 else {
-                    return Ok(false);
+                    return Ok(CallOutcome::new());
                 };
-                self.issue_negotiation_request(writer, request, PendingFlowAction::RefreshSession)
-                    .await?;
-                Ok(true)
+                Ok(CallOutcome::new().with_signal(
+                    self.issue_negotiation_request(request, PendingFlowAction::RefreshSession),
+                ))
             }
         }
     }
 
     pub(super) async fn handle_negotiation_response(
         &mut self,
-        writer: &mut WsWriter,
         response_to: RequestId,
         answer: SessionDescriptionPayload,
-    ) -> SessionProtocolOutcome {
-        if let Err(outcome) = self.validate_negotiation_answer(&response_to, &answer) {
-            return outcome;
-        }
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
+        self.validate_negotiation_answer(&response_to, &answer)?;
         let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+            return Err(WebSocketCloseCode::ProtocolError);
         };
         let applied_answer = match self
             .apply_transport_negotiation_answer(&response_to, &answer.sdp, &resolved)
             .await
         {
             Ok(applied_answer) => applied_answer,
-            Err(outcome) => return outcome,
+            Err(outcome) => return Err(outcome),
         };
         if self
             .apply_negotiation_action(&resolved.pending, &answer.sdp)
             .await
             .is_err()
         {
-            return SessionProtocolOutcome::Close(WebSocketCloseCode::ProtocolError);
+            return Err(WebSocketCloseCode::ProtocolError);
         }
         info!(
             event = telemetry_event::NEGOTIATION_SUCCEEDED,
@@ -174,20 +155,14 @@ impl PostAuthSessionProtocol {
             "applied negotiation answer"
         );
         self.commit_staged_publishes(&applied_answer).await;
-        if let Err(outcome) = self
-            .send_follow_up_renegotiation_if_needed(writer, &resolved)
-            .await
-        {
-            return outcome;
-        }
-        SessionProtocolOutcome::Continue
+        self.send_follow_up_renegotiation_if_needed(&resolved).await
     }
 
     fn validate_negotiation_answer(
         &self,
         response_to: &RequestId,
         answer: &SessionDescriptionPayload,
-    ) -> Result<(), SessionProtocolOutcome> {
+    ) -> Result<(), WebSocketCloseCode> {
         if answer.sdp.is_empty() {
             warn!(
                 user_id = ?self.user_id,
@@ -196,9 +171,7 @@ impl PostAuthSessionProtocol {
                 ?response_to,
                 "received empty SDP answer for negotiation request"
             );
-            return Err(SessionProtocolOutcome::Close(
-                WebSocketCloseCode::ProtocolError,
-            ));
+            return Err(WebSocketCloseCode::ProtocolError);
         }
         Ok(())
     }
@@ -231,7 +204,7 @@ impl PostAuthSessionProtocol {
         response_to: &RequestId,
         answer_sdp: &str,
         resolved: &ResolvedFlowState,
-    ) -> Result<AppliedSessionAnswer, SessionProtocolOutcome> {
+    ) -> Result<AppliedSessionAnswer, WebSocketCloseCode> {
         let session_key = self
             .room
             .transport_user_key(&self.user_id, self.connection_id);
@@ -250,24 +223,20 @@ impl PostAuthSessionProtocol {
                     ?error,
                     "failed to apply negotiation answer to the transport user"
                 );
-                SessionProtocolOutcome::Close(WebSocketCloseCode::Error)
+                WebSocketCloseCode::Error
             })
     }
 
     async fn send_follow_up_renegotiation_if_needed(
         &mut self,
-        writer: &mut WsWriter,
         resolved: &ResolvedFlowState,
-    ) -> Result<(), SessionProtocolOutcome> {
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
         let needs_follow_up =
             self.stage_queued_publish_streams().await || resolved.queued_renegotiation;
         if !needs_follow_up {
-            return Ok(());
+            return Ok(CallOutcome::new());
         }
-        self.request_renegotiation(writer)
-            .await
-            .map(|_sent| ())
-            .map_err(SessionProtocolOutcome::Close)
+        self.request_renegotiation().await
     }
 
     async fn apply_negotiation_action(

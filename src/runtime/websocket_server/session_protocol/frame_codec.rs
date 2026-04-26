@@ -1,38 +1,17 @@
 use axum::extract::ws::Message;
 use futures_util::SinkExt;
-use o_sfu_protocol::signaling::{
-    Envelope, EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-    ServerResponse, WebSocketCloseCode,
+use o_sfu_protocol::signaling::{Envelope, EnvelopeBatch, ServerEnvelope, WebSocketCloseCode};
+
+use crate::{
+    application::outcomes::{CallOutcome, UserSignal},
+    runtime::websocket_server::WsWriter,
 };
 
-use crate::{application::outcomes::UserSignal, runtime::websocket_server::WsWriter};
-
-pub(super) async fn send_server_messages(
+pub(super) async fn send_call_outcome(
     writer: &mut WsWriter,
-    messages: Vec<ServerMessage>,
+    outcome: CallOutcome,
 ) -> Result<usize, WebSocketCloseCode> {
-    let signals = messages.into_iter().map(UserSignal::from).collect();
-    send_user_signals(writer, signals).await
-}
-
-pub(super) async fn send_server_request(
-    writer: &mut WsWriter,
-    request_id: RequestId,
-    request: ServerRequest,
-) -> Result<(), WebSocketCloseCode> {
-    send_user_signals(writer, vec![UserSignal::request(request_id, request)])
-        .await
-        .map(|_sent| ())
-}
-
-pub(super) async fn send_server_response(
-    writer: &mut WsWriter,
-    response_to: RequestId,
-    response: ServerResponse,
-) -> Result<(), WebSocketCloseCode> {
-    send_user_signals(writer, vec![UserSignal::response(response_to, response)])
-        .await
-        .map(|_sent| ())
+    send_user_signals(writer, outcome.into_signals()).await
 }
 
 async fn send_user_signals(
@@ -42,12 +21,51 @@ async fn send_user_signals(
     if signals.is_empty() {
         return Ok(0);
     }
-    let mut batch = Vec::with_capacity(signals.len());
+    let signal_count = signals.len();
+    let mut pending_messages = Vec::new();
     for signal in signals {
-        batch.push(user_signal_envelope(signal)?);
+        match signal {
+            UserSignal::Message(message) => {
+                pending_messages.push(user_signal_envelope(UserSignal::Message(message))?);
+            }
+            UserSignal::Request {
+                request_id,
+                request,
+            } => {
+                send_pending_messages(writer, &mut pending_messages).await?;
+                let envelope = user_signal_envelope(UserSignal::Request {
+                    request_id,
+                    request,
+                })?;
+                send_serialized_batch(writer, &[envelope]).await?;
+            }
+            UserSignal::Response {
+                response_to,
+                response,
+            } => {
+                send_pending_messages(writer, &mut pending_messages).await?;
+                let envelope = user_signal_envelope(UserSignal::Response {
+                    response_to,
+                    response,
+                })?;
+                send_serialized_batch(writer, &[envelope]).await?;
+            }
+        }
     }
-    send_serialized_batch(writer, &batch).await?;
-    Ok(batch.len())
+    send_pending_messages(writer, &mut pending_messages).await?;
+    Ok(signal_count)
+}
+
+async fn send_pending_messages(
+    writer: &mut WsWriter,
+    pending_messages: &mut EnvelopeBatch,
+) -> Result<(), WebSocketCloseCode> {
+    if pending_messages.is_empty() {
+        return Ok(());
+    }
+    send_serialized_batch(writer, pending_messages).await?;
+    pending_messages.clear();
+    Ok(())
 }
 
 fn user_signal_envelope(signal: UserSignal) -> Result<Envelope, WebSocketCloseCode> {
@@ -75,7 +93,7 @@ fn user_signal_envelope(signal: UserSignal) -> Result<Envelope, WebSocketCloseCo
 
 async fn send_serialized_batch(
     writer: &mut WsWriter,
-    batch: &EnvelopeBatch,
+    batch: &[Envelope],
 ) -> Result<(), WebSocketCloseCode> {
     let frame = serde_json::to_string(batch).map_err(|_error| WebSocketCloseCode::Error)?;
     writer
