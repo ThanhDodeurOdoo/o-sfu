@@ -5,9 +5,8 @@ use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
     MediaCapabilities, MediaKind as RouterMediaKind, Producer as RouterProducer,
     ProducerId as RouterProducerId, Router, RouterError, RouterId, Session as RouterSession,
-    SessionId as RouterSessionId, SessionPermissions as RouterSessionPermissions,
-    Transport as RouterTransport, TransportDirection as RouterTransportDirection,
-    TransportId as RouterTransportId,
+    SessionId as RouterSessionId, Transport as RouterTransport,
+    TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
 };
 
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
@@ -84,14 +83,13 @@ impl RoomRouterState {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-        permissions: RouterSessionPermissions,
     ) -> Result<(), RoomRouterStateError> {
         if self.router_user_ids_by_user_id.contains_key(user_id) {
-            return self.update_session_permissions(user_id, permissions);
+            return Ok(());
         }
         let router_user_id = RouterSessionId(router_session_seed);
         self.router
-            .join_session(RouterSession::new(router_user_id, permissions))
+            .join_session(RouterSession::new(router_user_id))
             .map_err(RoomRouterStateError::from)?;
         self.router_user_ids_by_user_id
             .insert(user_id.clone(), router_user_id);
@@ -183,23 +181,6 @@ impl RoomRouterState {
             )
             .map_err(RoomRouterStateError::from)?;
         Ok(consumer_id)
-    }
-
-    /// # Errors
-    ///
-    /// Returns the underlying [`RouterError`] if the signaling/user map and router
-    /// state ever diverge.
-    pub(super) fn update_session_permissions(
-        &mut self,
-        user_id: &UserId,
-        permissions: RouterSessionPermissions,
-    ) -> Result<(), RoomRouterStateError> {
-        let Some(router_user_id) = self.router_user_ids_by_user_id.get(user_id).copied() else {
-            return Ok(());
-        };
-        self.router
-            .update_session_permissions(router_user_id, permissions)
-            .map_err(RoomRouterStateError::from)
     }
 
     /// Update the pause state of a producer in the pure router.

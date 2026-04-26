@@ -12,11 +12,12 @@ use o_sfu_protocol::{
 };
 
 use crate::{
-    OfferedMediaCapabilities,
-    runtime::{
-        room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
-        source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
+    application::call_policy::CallPublicationSlot,
+    core::{
+        OfferedMediaCapabilities,
+        runtime::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
     },
+    runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
 };
 
 #[derive(Debug, Default)]
@@ -76,14 +77,14 @@ pub(super) struct ResolvedUserNegotiation {
 #[derive(Debug)]
 pub(super) enum UserNegotiationState {
     BeforeInitialOffer {
-        queued_publish_streams: BTreeSet<StreamType>,
+        queued_publish_slots: BTreeSet<CallPublicationSlot>,
     },
     Stable {
-        queued_publish_streams: BTreeSet<StreamType>,
+        queued_publish_slots: BTreeSet<CallPublicationSlot>,
     },
     Negotiating {
         pending: PendingUserRequest,
-        queued_publish_streams: BTreeSet<StreamType>,
+        queued_publish_slots: BTreeSet<CallPublicationSlot>,
         queued_renegotiation: bool,
     },
 }
@@ -91,7 +92,7 @@ pub(super) enum UserNegotiationState {
 impl Default for UserNegotiationState {
     fn default() -> Self {
         Self::BeforeInitialOffer {
-            queued_publish_streams: BTreeSet::default(),
+            queued_publish_slots: BTreeSet::default(),
         }
     }
 }
@@ -101,22 +102,22 @@ impl UserNegotiationState {
         matches!(self, Self::Negotiating { .. })
     }
 
-    pub(super) fn has_queued_publish(&self, stream_type: StreamType) -> bool {
-        self.queued_publish_streams().contains(&stream_type)
+    pub(super) fn has_queued_publish(&self, slot: CallPublicationSlot) -> bool {
+        self.queued_publish_slots().contains(&slot)
     }
 
-    pub(super) fn queue_publish_stream(&mut self, stream_type: StreamType) {
-        self.queued_publish_streams_mut().insert(stream_type);
+    pub(super) fn queue_publish_slot(&mut self, slot: CallPublicationSlot) {
+        self.queued_publish_slots_mut().insert(slot);
     }
 
-    pub(super) fn clear_queued_publish(&mut self, stream_type: StreamType) -> bool {
-        self.queued_publish_streams_mut().remove(&stream_type)
+    pub(super) fn clear_queued_publish(&mut self, slot: CallPublicationSlot) -> bool {
+        self.queued_publish_slots_mut().remove(&slot)
     }
 
-    pub(super) fn take_queued_publish_streams(&mut self) -> Vec<StreamType> {
-        let queued_publish_streams = self.queued_publish_streams().iter().copied().collect();
-        self.queued_publish_streams_mut().clear();
-        queued_publish_streams
+    pub(super) fn take_queued_publish_slots(&mut self) -> Vec<CallPublicationSlot> {
+        let queued_publish_slots = self.queued_publish_slots().iter().copied().collect();
+        self.queued_publish_slots_mut().clear();
+        queued_publish_slots
     }
 
     pub(super) fn issue(
@@ -125,14 +126,14 @@ impl UserNegotiationState {
         request: ServerRequest,
         action: PendingUserAction,
     ) {
-        let queued_publish_streams = self.take_phase_queue();
+        let queued_publish_slots = self.take_phase_queue();
         *self = Self::Negotiating {
             pending: PendingUserRequest {
                 request_id,
                 request,
                 action,
             },
-            queued_publish_streams,
+            queued_publish_slots,
             queued_renegotiation: false,
         };
     }
@@ -159,11 +160,11 @@ impl UserNegotiationState {
         match previous {
             Self::Negotiating {
                 pending,
-                queued_publish_streams,
+                queued_publish_slots,
                 queued_renegotiation,
             } if pending.request_id == *response_to => {
                 *self = Self::Stable {
-                    queued_publish_streams,
+                    queued_publish_slots,
                 };
                 Some(ResolvedUserNegotiation {
                     pending,
@@ -177,48 +178,48 @@ impl UserNegotiationState {
         }
     }
 
-    fn queued_publish_streams(&self) -> &BTreeSet<StreamType> {
+    fn queued_publish_slots(&self) -> &BTreeSet<CallPublicationSlot> {
         match self {
             Self::BeforeInitialOffer {
-                queued_publish_streams,
+                queued_publish_slots,
             }
             | Self::Stable {
-                queued_publish_streams,
+                queued_publish_slots,
             }
             | Self::Negotiating {
-                queued_publish_streams,
+                queued_publish_slots,
                 ..
-            } => queued_publish_streams,
+            } => queued_publish_slots,
         }
     }
 
-    fn queued_publish_streams_mut(&mut self) -> &mut BTreeSet<StreamType> {
+    fn queued_publish_slots_mut(&mut self) -> &mut BTreeSet<CallPublicationSlot> {
         match self {
             Self::BeforeInitialOffer {
-                queued_publish_streams,
+                queued_publish_slots,
             }
             | Self::Stable {
-                queued_publish_streams,
+                queued_publish_slots,
             }
             | Self::Negotiating {
-                queued_publish_streams,
+                queued_publish_slots,
                 ..
-            } => queued_publish_streams,
+            } => queued_publish_slots,
         }
     }
 
-    fn take_phase_queue(&mut self) -> BTreeSet<StreamType> {
+    fn take_phase_queue(&mut self) -> BTreeSet<CallPublicationSlot> {
         match take(self) {
             Self::BeforeInitialOffer {
-                queued_publish_streams,
+                queued_publish_slots,
             }
             | Self::Stable {
-                queued_publish_streams,
+                queued_publish_slots,
             }
             | Self::Negotiating {
-                queued_publish_streams,
+                queued_publish_slots,
                 ..
-            } => queued_publish_streams,
+            } => queued_publish_slots,
         }
     }
 }
@@ -457,29 +458,32 @@ mod tests {
     use o_sfu_router::{MediaKind, Mid, Rid};
 
     use super::*;
-    use crate::runtime::source_model::{
-        PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-        SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+    use crate::{
+        application::call_policy::CallPublicationSlot,
+        core::runtime::source_model::{
+            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+        },
     };
 
     #[test]
-    fn queued_publish_streams_are_unique() {
+    fn queued_publish_slots_are_unique() {
         let mut state = UserNegotiationState::default();
 
-        state.queue_publish_stream(StreamType::Camera);
-        state.queue_publish_stream(StreamType::Camera);
+        state.queue_publish_slot(CallPublicationSlot::from_stream_type(StreamType::Camera));
+        state.queue_publish_slot(CallPublicationSlot::from_stream_type(StreamType::Camera));
 
         assert_eq!(
-            state.take_queued_publish_streams(),
-            vec![StreamType::Camera]
+            state.take_queued_publish_slots(),
+            vec![CallPublicationSlot::from_stream_type(StreamType::Camera)]
         );
     }
 
     #[test]
-    fn resolving_answer_keeps_queued_publish_streams_for_follow_up_staging() {
+    fn resolving_answer_keeps_queued_publish_slots_for_follow_up_staging() {
         let request_id = RequestId::new(String::from("server-1"));
         let mut state = UserNegotiationState::default();
-        state.queue_publish_stream(StreamType::Camera);
+        state.queue_publish_slot(CallPublicationSlot::from_stream_type(StreamType::Camera));
         state.issue(
             request_id.clone(),
             ServerRequest::Offer(SessionDescriptionPayload {
@@ -499,8 +503,8 @@ mod tests {
             RenegotiationDisposition::SendNow
         ));
         assert_eq!(
-            state.take_queued_publish_streams(),
-            vec![StreamType::Camera]
+            state.take_queued_publish_slots(),
+            vec![CallPublicationSlot::from_stream_type(StreamType::Camera)]
         );
     }
 

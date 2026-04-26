@@ -971,7 +971,7 @@ async fn room_maps_string_user_ids_into_router_users() {
 }
 
 #[tokio::test]
-async fn room_keeps_router_user_permissions_in_sync() {
+async fn room_keeps_user_permissions_above_router_state() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
@@ -988,19 +988,16 @@ async fn room_keeps_router_user_permissions_in_sync() {
         .join_user(UserId::Integer(1), None, permissions.clone(), first_tx)
         .await;
     assert!(joined.is_ok());
-    assert_eq!(
-        room.test_api()
-            .inspect()
-            .router_session_permissions(&UserId::Integer(1))
-            .await,
-        Some(RouterSessionPermissions::from_flags(
-            o_sfu_router::SessionPermissionFlags {
-                transcription: true,
-                audio_recording: false,
-                video_recording: true,
-            },
-        ))
-    );
+    let stored_permissions = room
+        .test_api()
+        .inspect()
+        .room_user_permissions(&UserId::Integer(1))
+        .await;
+    assert!(stored_permissions.is_some_and(|permissions| {
+        permissions.transcription()
+            && !permissions.audio_recording()
+            && permissions.video_recording()
+    }));
 
     let replacement_permissions = UserPermissions {
         transcription: Some(false),
@@ -1014,17 +1011,14 @@ async fn room_keeps_router_user_permissions_in_sync() {
         .join_user(UserId::Integer(1), None, replacement_permissions, second_tx)
         .await;
     assert!(replaced.is_ok());
-    assert_eq!(
-        room.test_api()
-            .inspect()
-            .router_session_permissions(&UserId::Integer(1))
-            .await,
-        Some(RouterSessionPermissions::from_flags(
-            o_sfu_router::SessionPermissionFlags {
-                transcription: false,
-                audio_recording: true,
-                video_recording: false,
-            },
-        ))
-    );
+    let stored_permissions = room
+        .test_api()
+        .inspect()
+        .room_user_permissions(&UserId::Integer(1))
+        .await;
+    assert!(stored_permissions.is_some_and(|permissions| {
+        !permissions.transcription()
+            && permissions.audio_recording()
+            && !permissions.video_recording()
+    }));
 }

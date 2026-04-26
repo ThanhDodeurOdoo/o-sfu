@@ -11,16 +11,23 @@ use tokio::runtime::Handle;
 use tracing::{debug, info, instrument, warn};
 
 use crate::{
-    ConnectionId, MediaEndpointHealth, MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot,
-    RuntimeSfuCore, SfuCoreError,
+    application::call_policy::{CallPresence, CallPublicationSlot},
+    core::{
+        MediaEndpointHealth, MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot,
+        RuntimeSfuCore, SfuCoreError,
+    },
     runtime::{
+        ConnectionId,
         room::{RemoteTrackBootstrap, Room, RoomEventMessage, TrackBindingUpdate},
         telemetry::schema::event as telemetry_event,
     },
-    user_state::{
-        PendingUserAction, PendingUserRequest, RenegotiationDisposition, ResolvedUserNegotiation,
-        UserState,
-    },
+};
+
+mod state;
+
+use state::{
+    PendingUserAction, PendingUserRequest, RenegotiationDisposition, ResolvedUserNegotiation,
+    UserState,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -50,11 +57,6 @@ impl UserOutput {
 
     pub fn extend(&mut self, other: Self) {
         self.signals.extend(other.signals);
-    }
-
-    #[must_use]
-    pub fn signal_count(&self) -> usize {
-        self.signals.len()
     }
 
     #[must_use]
@@ -177,6 +179,8 @@ impl User {
 
     pub async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
+        let presence = CallPresence::from_user_info(&info);
+        debug_assert!(!presence.affects_media_routing());
         self.media_core
             .update_user_info(
                 self.room.as_ref(),
@@ -209,7 +213,8 @@ impl User {
     )]
     pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        if self.state.negotiation.has_queued_publish(stream_type)
+        let slot = CallPublicationSlot::from_stream_type(stream_type);
+        if self.state.negotiation.has_queued_publish(slot)
             || self
                 .media_core
                 .has_staged_publish(
@@ -239,11 +244,11 @@ impl User {
             return Ok(UserOutput::new());
         }
         if self.state.negotiation.awaiting_answer() {
-            self.state.negotiation.queue_publish_stream(stream_type);
+            self.state.negotiation.queue_publish_slot(slot);
             let _disposition = self.state.negotiation.request_renegotiation();
             return Ok(UserOutput::new());
         }
-        if !self.stage_publish_stream(stream_type).await {
+        if !self.stage_publish_slot(slot).await {
             return Ok(UserOutput::new());
         }
         self.request_renegotiation().await
@@ -251,7 +256,8 @@ impl User {
 
     pub async fn unpublish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        if self.state.negotiation.clear_queued_publish(stream_type) {
+        let slot = CallPublicationSlot::from_stream_type(stream_type);
+        if self.state.negotiation.clear_queued_publish(slot) {
             return Ok(UserOutput::new());
         }
         if self
@@ -561,7 +567,7 @@ impl User {
         resolved: &ResolvedUserNegotiation,
     ) -> Result<UserOutput, UserError> {
         let needs_follow_up =
-            self.stage_queued_publish_streams().await || resolved.queued_renegotiation;
+            self.stage_queued_publish_slots().await || resolved.queued_renegotiation;
         if !needs_follow_up {
             return Ok(UserOutput::new());
         }
@@ -667,7 +673,11 @@ impl User {
         );
     }
 
-    async fn stage_publish_stream(&self, stream_type: StreamType) -> bool {
+    async fn stage_publish_slot(&self, slot: CallPublicationSlot) -> bool {
+        let media_kind = slot.media_kind();
+        let Some(stream_type) = slot.compatibility_stream_type() else {
+            return false;
+        };
         let staged = self
             .media_core
             .stage_publish(
@@ -682,6 +692,7 @@ impl User {
                 event = telemetry_event::PUBLISH_PREPARED,
                 operation = "publish_prepare",
                 outcome = "staged",
+                media_kind = ?media_kind,
                 stream_type = ?stream_type,
                 "staged publish stream for negotiation"
             );
@@ -690,6 +701,7 @@ impl User {
                 event = telemetry_event::PUBLISH_ABORTED,
                 operation = "publish_prepare",
                 outcome = "ignored",
+                media_kind = ?media_kind,
                 stream_type = ?stream_type,
                 "publish intent did not stage new media"
             );
@@ -697,11 +709,11 @@ impl User {
         staged
     }
 
-    async fn stage_queued_publish_streams(&mut self) -> bool {
-        let queued_publish_streams = self.state.negotiation.take_queued_publish_streams();
+    async fn stage_queued_publish_slots(&mut self) -> bool {
+        let queued_publish_slots = self.state.negotiation.take_queued_publish_slots();
         let mut staged_any = false;
-        for stream_type in queued_publish_streams {
-            if self.stage_publish_stream(stream_type).await {
+        for slot in queued_publish_slots {
+            if self.stage_publish_slot(slot).await {
                 staged_any = true;
             }
         }

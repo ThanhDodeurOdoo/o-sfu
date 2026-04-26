@@ -8,16 +8,7 @@ fn topology_assigns_the_primary_router_to_joined_users() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
 
-    assert!(
-        topology
-            .apply_client_join(
-                &user_id,
-                42,
-                super::super::RoomUserPermissions::from(UserPermissions::default())
-                    .router_permissions(),
-            )
-            .is_ok()
-    );
+    assert!(topology.apply_client_join(&user_id, 42).is_ok());
 
     assert_eq!(
         topology.home_router_id_for_user(&user_id),
@@ -27,46 +18,14 @@ fn topology_assigns_the_primary_router_to_joined_users() {
 }
 
 #[test]
-fn topology_rejoin_updates_permissions_without_duplicating_router_users() {
+fn topology_rejoin_does_not_duplicate_router_users() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
-    let initial_permissions = UserPermissions::default();
-    let replacement_permissions = UserPermissions {
-        video_recording: Some(true),
-        ..UserPermissions::default()
-    };
 
-    assert!(
-        topology
-            .apply_client_join(
-                &user_id,
-                42,
-                super::super::RoomUserPermissions::from(initial_permissions).router_permissions(),
-            )
-            .is_ok()
-    );
-    assert!(
-        topology
-            .apply_client_join(
-                &user_id,
-                43,
-                super::super::RoomUserPermissions::from(replacement_permissions)
-                    .router_permissions(),
-            )
-            .is_ok()
-    );
+    assert!(topology.apply_client_join(&user_id, 42).is_ok());
+    assert!(topology.apply_client_join(&user_id, 43).is_ok());
 
     assert_eq!(topology.user_count(), 1);
-    assert_eq!(
-        topology.session_permissions(&user_id),
-        Some(o_sfu_router::SessionPermissions::from_flags(
-            o_sfu_router::SessionPermissionFlags {
-                transcription: false,
-                audio_recording: false,
-                video_recording: true,
-            },
-        ))
-    );
 }
 
 #[test]
@@ -76,16 +35,7 @@ fn topology_returns_router_scoped_entity_handles() {
     let consumer_user_id = UserId::Integer(20);
 
     for (seed, user_id) in [(10, &producer_user_id), (20, &consumer_user_id)] {
-        assert!(
-            topology
-                .apply_client_join(
-                    user_id,
-                    seed,
-                    super::super::RoomUserPermissions::from(UserPermissions::default())
-                        .router_permissions(),
-                )
-                .is_ok()
-        );
+        assert!(topology.apply_client_join(user_id, seed).is_ok());
     }
 
     let producer = topology
@@ -117,16 +67,7 @@ fn topology_returns_router_scoped_entity_handles() {
 fn topology_reports_missing_router_for_user_lookup() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
-    assert!(
-        topology
-            .apply_client_join(
-                &user_id,
-                42,
-                super::super::RoomUserPermissions::from(UserPermissions::default())
-                    .router_permissions(),
-            )
-            .is_ok()
-    );
+    assert!(topology.apply_client_join(&user_id, 42).is_ok());
     topology.remove_router_for_test(RouterId(7));
 
     assert_eq!(
@@ -142,16 +83,7 @@ fn topology_reports_missing_router_for_user_lookup() {
 fn topology_reports_missing_user_mapping_from_router_state() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
-    assert!(
-        topology
-            .apply_client_join(
-                &user_id,
-                42,
-                super::super::RoomUserPermissions::from(UserPermissions::default())
-                    .router_permissions(),
-            )
-            .is_ok()
-    );
+    assert!(topology.apply_client_join(&user_id, 42).is_ok());
     topology.remove_session_mapping_for_test(&user_id);
     topology.remove_transport_mapping_for_test(&user_id);
 

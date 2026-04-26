@@ -35,6 +35,6 @@ pub use self::{
         RtpNegotiationError, can_consume, derive_consumable_rtp_parameters,
         negotiate_consumer_rtp_parameters,
     },
-    session::{Session, SessionPermissionFlags, SessionPermissions, SessionState},
+    session::{Session, SessionState},
     transport::{Transport, TransportDirection},
 };

@@ -88,15 +88,10 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        permissions: RoomUserPermissions,
         is_new: bool,
     ) -> Result<(), RoomJoinError> {
         let mut topology = self.topology.clone();
-        if let Err(error) = topology.apply_client_join(
-            user_id,
-            connection_id.as_u64(),
-            permissions.router_permissions(),
-        ) {
+        if let Err(error) = topology.apply_client_join(user_id, connection_id.as_u64()) {
             error!(
                 ?user_id,
                 ?error,
@@ -178,7 +173,7 @@ impl RoomState {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
-        self.apply_join_topology(user_id, connection_id, permissions, is_new)?;
+        self.apply_join_topology(user_id, connection_id, is_new)?;
         let transport_removals = self.join_transport_removals(user_id, is_new);
 
         let previous_sender =

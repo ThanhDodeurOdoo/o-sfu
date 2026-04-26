@@ -1,6 +1,6 @@
 use o_sfu_protocol::shared::{StreamType, UserId, UserInfo};
 
-use super::super::super::Room;
+use super::super::super::{Room, RoomUserPermissions};
 use crate::runtime::{
     ConnectionId, source_model::SourceEncodingId, transport_adapter::TransportMediaId,
 };
@@ -17,10 +17,7 @@ impl RoomTestInspect<'_> {
         usize::try_from(count).unwrap_or(usize::MAX)
     }
 
-    pub async fn router_session_permissions(
-        self,
-        user_id: &UserId,
-    ) -> Option<o_sfu_router::SessionPermissions> {
+    pub async fn room_user_permissions(self, user_id: &UserId) -> Option<RoomUserPermissions> {
         self.room.state.read().await.session_permissions(user_id)
     }
 

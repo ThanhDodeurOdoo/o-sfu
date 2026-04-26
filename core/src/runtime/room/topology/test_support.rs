@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use o_sfu_protocol::shared::UserId;
-use o_sfu_router::{RouterId, SessionPermissions as RouterSessionPermissions};
+use o_sfu_router::RouterId;
 
 use super::{RoomRouterObserverFactory, RoomTopology};
 use crate::{
@@ -40,14 +40,6 @@ impl RoomTopology {
         user_id: &UserId,
     ) -> Option<RouterId> {
         self.session_home_router.get(user_id).copied()
-    }
-
-    pub(in crate::runtime::room) fn session_permissions(
-        &self,
-        user_id: &UserId,
-    ) -> Option<RouterSessionPermissions> {
-        let router_id = self.session_home_router.get(user_id).copied()?;
-        self.routers.get(&router_id)?.session_permissions(user_id)
     }
 
     pub(in crate::runtime::room) fn remove_router_for_test(&mut self, router_id: RouterId) {

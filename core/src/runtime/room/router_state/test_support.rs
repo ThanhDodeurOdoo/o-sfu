@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use o_sfu_protocol::shared::UserId;
-use o_sfu_router::{RouterId, SessionPermissions as RouterSessionPermissions};
+use o_sfu_router::RouterId;
 
 use super::RoomRouterState;
 use crate::{
@@ -30,17 +30,6 @@ impl RoomRouterState {
 
     pub(in crate::runtime::room) fn user_count(&self) -> u64 {
         u64::try_from(self.router.session_count()).unwrap_or(u64::MAX)
-    }
-
-    pub(in crate::runtime::room) fn session_permissions(
-        &self,
-        user_id: &UserId,
-    ) -> Option<RouterSessionPermissions> {
-        let router_user_id = self.router_user_ids_by_user_id.get(user_id)?;
-        self.router
-            .sessions()
-            .find(|user| user.id() == *router_user_id)
-            .map(o_sfu_router::Session::permissions)
     }
 
     pub(in crate::runtime::room) fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {

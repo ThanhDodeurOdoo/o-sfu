@@ -1,6 +1,6 @@
 //! This node turns an upgraded socket into an authenticated RTC user. It owns the
 //! transport-specific mechanics of the WebSocket connection and then delegates the
-//! business meaning of authenticated messages to `o-sfu-core::User`.
+//! business meaning of authenticated messages to `application::user_session::User`.
 //!
 //! ```text
 //! websocket_server

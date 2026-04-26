@@ -7,12 +7,11 @@ use o_sfu_protocol::{
 };
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterId,
-    Session, SessionId as RouterSessionId, SessionPermissions, Transport, TransportDirection,
-    TransportId,
+    Session, SessionId as RouterSessionId, Transport, TransportDirection, TransportId,
 };
 
 fn user(id: RouterSessionId) -> Session {
-    Session::new(id, SessionPermissions::default())
+    Session::new(id)
 }
 
 fn sent_frames(commands: &[Command]) -> Vec<&str> {
@@ -71,10 +70,6 @@ fn router_session_teardown_keeps_remaining_routing_consistent() {
     assert_eq!(router.remove_session(RouterSessionId(10)), Ok(()));
     assert_eq!(router.session_count(), 1);
     assert_eq!(router.sessions().count(), 1);
-    assert_eq!(
-        router.update_session_permissions(RouterSessionId(20), SessionPermissions::default(),),
-        Ok(())
-    );
     assert_eq!(
         router.open_transport(Transport::new(
             TransportId(200),

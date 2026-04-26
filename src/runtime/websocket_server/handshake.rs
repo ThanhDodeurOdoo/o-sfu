@@ -37,10 +37,8 @@ use super::{
     io::send_user_output,
 };
 use crate::{
-    core::{
-        User,
-        runtime::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
-    },
+    application::user_session::User,
+    core::runtime::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},

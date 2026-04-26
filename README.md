@@ -28,9 +28,10 @@ flowchart TD
       Runtime
       Http
       Ws
+      UserSession
+      CallPolicy
     end
     subgraph "core"
-      User
       Sfu["SfuCore Facade"]
       Room
       Recording
@@ -41,10 +42,11 @@ flowchart TD
     Browser --> Ws["WebSocket"]
     Http --> Runtime["Runtime Shell"]
     Ws --> Runtime
+    Runtime --> UserSession["Application User Session"]
+    UserSession --> CallPolicy["Call Policy"]
     Runtime --> Room
-    Runtime --> User
-    User <--> Room
-    User --> Sfu
+    UserSession <--> Room
+    UserSession --> Sfu
     Sfu --> Transport["Transport Adapter"]
     Transport --> Rtc["str0m RTC Adapter"]
     Room --> Router["o-sfu-router"]
@@ -55,9 +57,10 @@ flowchart TD
 ```
 
 The server crate is the orchestration shell: it loads config, exposes HTTP and
-WebSocket edges, maps edge errors, admits users into core rooms, serializes user
-output, and delegates recording requests outside the user. Media-heavy room
-state, user negotiation, routing topology, recording capture, transport
+WebSocket edges, maps edge errors, admits users into rooms, serializes user
+output, owns post-auth user-session orchestration, and keeps compatibility call
+policy such as default publication slots and presence flags above the media
+engine. Media-heavy room state, routing topology, recording capture, transport
 adapters, diagnostics storage, and metrics live in `o-sfu-core`.
 
 Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.

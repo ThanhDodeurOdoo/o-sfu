@@ -1,8 +1,4 @@
 use o_sfu_protocol::shared::UserPermissions;
-use o_sfu_router::{
-    SessionPermissionFlags as RouterSessionPermissionFlags,
-    SessionPermissions as RouterSessionPermissions,
-};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoomUserPermissions {
@@ -25,15 +21,6 @@ impl RoomUserPermissions {
     #[must_use]
     pub(crate) const fn video_recording(self) -> bool {
         self.video_recording
-    }
-
-    #[must_use]
-    pub(crate) fn router_permissions(self) -> RouterSessionPermissions {
-        RouterSessionPermissions::from_flags(RouterSessionPermissionFlags {
-            transcription: self.transcription,
-            audio_recording: self.audio_recording,
-            video_recording: self.video_recording,
-        })
     }
 }
 

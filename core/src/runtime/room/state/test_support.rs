@@ -4,6 +4,7 @@ use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 use super::shared::{RoomState, SourceKey};
 use crate::runtime::{
     ConnectionId,
+    room::RoomUserPermissions,
     source_model::{PublishedSourceId, SourceEncodingId},
     transport_adapter::TransportMediaId,
 };
@@ -12,10 +13,8 @@ impl RoomState {
     pub(in crate::runtime::room) fn session_permissions(
         &self,
         user_id: &UserId,
-    ) -> Option<o_sfu_router::SessionPermissions> {
-        self.users
-            .get(user_id)
-            .map(|user| user.permissions.router_permissions())
+    ) -> Option<RoomUserPermissions> {
+        self.users.get(user_id).map(|user| user.permissions)
     }
 
     pub(in crate::runtime::room) fn session_has_parsed_client_rtp_capabilities(

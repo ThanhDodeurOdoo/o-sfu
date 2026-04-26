@@ -1,6 +1,6 @@
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
-    SessionId, SessionPermissions, Transport, TransportDirection, TransportId,
+    SessionId, Transport, TransportDirection, TransportId,
 };
 
 use super::ProofRouterModel;
@@ -10,7 +10,7 @@ type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;
 type TeardownProofRouter = ProofRouterModel<2, 3, 1, 2>;
 
 fn user(id: SessionId) -> Session {
-    Session::new(id, SessionPermissions::default())
+    Session::new(id)
 }
 
 fn all_consumers_shadow_pause<

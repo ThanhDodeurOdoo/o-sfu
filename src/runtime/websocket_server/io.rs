@@ -5,7 +5,7 @@ use o_sfu_protocol::signaling::{
     WebSocketCloseCode,
 };
 
-use crate::core::{UserOutput, UserSignal};
+use crate::application::user_session::{UserOutput, UserSignal};
 
 pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
 

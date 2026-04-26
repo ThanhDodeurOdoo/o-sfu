@@ -253,21 +253,6 @@ impl<
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the user does not exist.
-    pub(crate) fn update_session_permissions(
-        &mut self,
-        user_id: SessionId,
-        permissions: o_sfu_router::SessionPermissions,
-    ) -> Result<(), ProofRouterError> {
-        let Some(user) = self.session_by_id_mut(user_id) else {
-            return Err(RouterError::MissingSession(user_id).into());
-        };
-        user.set_permissions(permissions);
-        Ok(())
-    }
-
-    /// # Errors
-    ///
     /// Returns [`RouterError::MissingSession`] when the owning user does not exist,
     /// [`RouterError::DuplicateTransport`] when the transport already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.

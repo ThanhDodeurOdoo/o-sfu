@@ -3,12 +3,12 @@ use std::{cell::RefCell, rc::Rc};
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError,
-    RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionPermissionFlags,
-    SessionPermissions, SessionState, Transport, TransportDirection, TransportId,
+    RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionState, Transport,
+    TransportDirection, TransportId,
 };
 
 fn session(id: SessionId) -> Session {
-    Session::new(id, SessionPermissions::default())
+    Session::new(id)
 }
 
 #[test]
@@ -806,18 +806,10 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
 }
 
 #[test]
-fn joined_sessions_store_permissions_and_active_state() {
+fn joined_sessions_store_only_router_lifecycle_state() {
     let mut router = Router::new(RouterId(1));
-    let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
-        transcription: true,
-        audio_recording: false,
-        video_recording: true,
-    });
 
-    assert_eq!(
-        router.join_session(Session::new(SessionId(10), permissions)),
-        Ok(())
-    );
+    assert_eq!(router.join_session(Session::new(SessionId(10))), Ok(()));
 
     let session = router.sessions().next();
     assert!(session.is_some());
@@ -825,30 +817,6 @@ fn joined_sessions_store_permissions_and_active_state() {
         return;
     };
     assert_eq!(session.state(), SessionState::Active);
-    assert_eq!(session.permissions(), permissions);
-}
-
-#[test]
-fn router_updates_session_permissions() {
-    let mut router = Router::new(RouterId(1));
-
-    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
-    let permissions = SessionPermissions::from_flags(SessionPermissionFlags {
-        transcription: true,
-        audio_recording: true,
-        video_recording: false,
-    });
-    assert_eq!(
-        router.update_session_permissions(SessionId(10), permissions),
-        Ok(())
-    );
-
-    let session = router.sessions().next();
-    assert!(session.is_some());
-    let Some(session) = session else {
-        return;
-    };
-    assert_eq!(session.permissions(), permissions);
     assert_router_is_consistent(&router);
 }
 

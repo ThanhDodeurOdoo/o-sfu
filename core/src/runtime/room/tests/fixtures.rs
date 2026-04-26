@@ -10,7 +10,7 @@ use o_sfu_router::test_sample::{
 };
 pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
-    RouterId, SessionPermissions as RouterSessionPermissions,
+    RouterId,
 };
 pub(super) use tokio::{sync::mpsc, task::yield_now, time::timeout};
 

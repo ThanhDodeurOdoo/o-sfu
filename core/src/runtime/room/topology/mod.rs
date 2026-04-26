@@ -7,7 +7,6 @@ use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
     MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
-    SessionPermissions as RouterSessionPermissions,
 };
 
 use super::router_state::{RoomRouterState, RoomRouterStateError};
@@ -151,7 +150,6 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-        permissions: RouterSessionPermissions,
     ) -> Result<(), RoomTopologyError> {
         let router_id = self
             .session_home_router
@@ -159,7 +157,7 @@ impl RoomTopology {
             .copied()
             .unwrap_or(self.primary_router);
         let router = self.router_mut_for_user(user_id, router_id)?;
-        router.ensure_session(user_id, router_session_seed, permissions)?;
+        router.ensure_session(user_id, router_session_seed)?;
         self.session_home_router.insert(user_id.clone(), router_id);
         Ok(())
     }
@@ -178,9 +176,8 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-        permissions: RouterSessionPermissions,
     ) -> Result<(), RoomTopologyError> {
-        self.ensure_session(user_id, router_session_seed, permissions)?;
+        self.ensure_session(user_id, router_session_seed)?;
         self.ensure_session_transports(user_id)?;
         Ok(())
     }

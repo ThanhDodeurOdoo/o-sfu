@@ -88,21 +88,6 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// # Errors
-    ///
-    /// Returns [`RouterError::MissingSession`] when the session does not exist.
-    pub fn update_session_permissions(
-        &mut self,
-        session_id: SessionId,
-        permissions: super::SessionPermissions,
-    ) -> Result<(), RouterError> {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            return Err(RouterError::MissingSession(session_id));
-        };
-        session.set_permissions(permissions);
-        Ok(())
-    }
-
     /// Register a transport under an existing session.
     ///
     /// The router only records ownership and direction here. Transport-specific
