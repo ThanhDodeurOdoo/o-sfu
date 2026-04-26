@@ -131,7 +131,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let first_join = room
-        .join_session_runtime(
+        .add_user(
             UserId::Integer(1),
             None,
             UserPermissions::default(),
@@ -140,7 +140,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
         )
         .await;
     let second_join = room
-        .join_session_runtime(
+        .add_user(
             UserId::Integer(2),
             None,
             UserPermissions::default(),
@@ -211,7 +211,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
     let (tx2, mut bob_old_rx) = test_sender();
     let (tx3, _bob_new_rx) = test_sender();
     assert!(
-        room.join_session_runtime(
+        room.add_user(
             UserId::Integer(1),
             None,
             UserPermissions::default(),
@@ -222,7 +222,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
         .is_ok()
     );
     assert!(
-        room.join_session_runtime(
+        room.add_user(
             UserId::Integer(2),
             None,
             UserPermissions::default(),
@@ -239,7 +239,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
     ));
 
     assert!(
-        room.join_session_runtime(
+        room.add_user(
             UserId::Integer(2),
             None,
             UserPermissions::default(),
@@ -456,7 +456,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
 
     let (replacement_tx, _replacement_rx) = test_sender();
     assert!(
-        room.join_session_runtime(
+        room.add_user(
             UserId::Integer(1),
             None,
             UserPermissions::default(),

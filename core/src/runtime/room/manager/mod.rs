@@ -267,7 +267,7 @@ impl RoomManager {
                 let user_count_before = room.user_count().await;
                 let media_counts_before = room.media_counts().await;
                 let join_result = room
-                    .join_session_runtime(
+                    .add_user(
                         request.user_id,
                         request.label,
                         request.permissions,
@@ -309,7 +309,7 @@ impl RoomManager {
                 let user_count_before = room.user_count().await;
                 let media_counts_before = room.media_counts().await;
                 let did_remove_active_session = room
-                    .close_session_runtime(user_id, connection_id, transport_adapter)
+                    .remove_user(user_id, connection_id, transport_adapter)
                     .await;
                 (
                     room,

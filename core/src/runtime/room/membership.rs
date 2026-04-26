@@ -87,7 +87,7 @@ enum UserTransitionOutcome {
 }
 
 impl Room {
-    pub(crate) async fn join_session_runtime(
+    pub(crate) async fn add_user(
         &self,
         user_id: UserId,
         label: Option<String>,
@@ -135,7 +135,7 @@ impl Room {
         Ok(connection_id)
     }
 
-    pub(crate) async fn close_session_runtime(
+    pub(crate) async fn remove_user(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -152,7 +152,7 @@ impl Room {
         .is_ok_and(|result| !matches!(result, UserTransitionResult::Missing))
     }
 
-    pub async fn broadcast_runtime(
+    pub async fn broadcast(
         &self,
         sender_id: &UserId,
         connection_id: ConnectionId,

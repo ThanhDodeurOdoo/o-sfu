@@ -112,9 +112,7 @@ impl RoomTestLifecycle<'_> {
         let Some(connection_id) = self.room.state.read().await.user_connection_id(sender_id) else {
             return;
         };
-        self.room
-            .broadcast_runtime(sender_id, connection_id, message)
-            .await;
+        self.room.broadcast(sender_id, connection_id, message).await;
     }
 
     pub async fn update_user_info(self, user_id: &UserId, info: UserInfo, need_refresh: bool) {

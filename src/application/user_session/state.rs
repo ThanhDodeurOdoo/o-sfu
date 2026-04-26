@@ -12,7 +12,6 @@ use o_sfu_protocol::{
 };
 
 use crate::{
-    application::call_policy::CallPublicationSlot,
     core::{
         OfferedMediaCapabilities,
         runtime::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
@@ -77,14 +76,14 @@ pub(super) struct ResolvedUserNegotiation {
 #[derive(Debug)]
 pub(super) enum UserNegotiationState {
     BeforeInitialOffer {
-        queued_publish_slots: BTreeSet<CallPublicationSlot>,
+        queued_publish_slots: BTreeSet<StreamType>,
     },
     Stable {
-        queued_publish_slots: BTreeSet<CallPublicationSlot>,
+        queued_publish_slots: BTreeSet<StreamType>,
     },
     Negotiating {
         pending: PendingUserRequest,
-        queued_publish_slots: BTreeSet<CallPublicationSlot>,
+        queued_publish_slots: BTreeSet<StreamType>,
         queued_renegotiation: bool,
     },
 }
@@ -102,19 +101,19 @@ impl UserNegotiationState {
         matches!(self, Self::Negotiating { .. })
     }
 
-    pub(super) fn has_queued_publish(&self, slot: CallPublicationSlot) -> bool {
-        self.queued_publish_slots().contains(&slot)
+    pub(super) fn has_queued_publish(&self, stream_type: StreamType) -> bool {
+        self.queued_publish_slots().contains(&stream_type)
     }
 
-    pub(super) fn queue_publish_slot(&mut self, slot: CallPublicationSlot) {
-        self.queued_publish_slots_mut().insert(slot);
+    pub(super) fn queue_publish_slot(&mut self, stream_type: StreamType) {
+        self.queued_publish_slots_mut().insert(stream_type);
     }
 
-    pub(super) fn clear_queued_publish(&mut self, slot: CallPublicationSlot) -> bool {
-        self.queued_publish_slots_mut().remove(&slot)
+    pub(super) fn clear_queued_publish(&mut self, stream_type: StreamType) -> bool {
+        self.queued_publish_slots_mut().remove(&stream_type)
     }
 
-    pub(super) fn take_queued_publish_slots(&mut self) -> Vec<CallPublicationSlot> {
+    pub(super) fn take_queued_publish_slots(&mut self) -> Vec<StreamType> {
         let queued_publish_slots = self.queued_publish_slots().iter().copied().collect();
         self.queued_publish_slots_mut().clear();
         queued_publish_slots
@@ -178,7 +177,7 @@ impl UserNegotiationState {
         }
     }
 
-    fn queued_publish_slots(&self) -> &BTreeSet<CallPublicationSlot> {
+    fn queued_publish_slots(&self) -> &BTreeSet<StreamType> {
         match self {
             Self::BeforeInitialOffer {
                 queued_publish_slots,
@@ -193,7 +192,7 @@ impl UserNegotiationState {
         }
     }
 
-    fn queued_publish_slots_mut(&mut self) -> &mut BTreeSet<CallPublicationSlot> {
+    fn queued_publish_slots_mut(&mut self) -> &mut BTreeSet<StreamType> {
         match self {
             Self::BeforeInitialOffer {
                 queued_publish_slots,
@@ -208,7 +207,7 @@ impl UserNegotiationState {
         }
     }
 
-    fn take_phase_queue(&mut self) -> BTreeSet<CallPublicationSlot> {
+    fn take_phase_queue(&mut self) -> BTreeSet<StreamType> {
         match take(self) {
             Self::BeforeInitialOffer {
                 queued_publish_slots,
@@ -280,7 +279,19 @@ impl UserWireState {
                 }
             }
             RoomEventMessage::UserInfoChanged(snapshot) => {
-                self.messages_for_user_info_snapshot(snapshot)
+                let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
+                let mut track_snapshot_changed = false;
+                for (user_id, info) in snapshot {
+                    track_snapshot_changed |= self.apply_user_info_to_tracks(&user_id, &info);
+                    messages.push(ServerMessage::PeerInfo(PeerInfoPayload { user_id, info }));
+                }
+                if track_snapshot_changed {
+                    messages.push(ServerMessage::Tracks(self.snapshot()));
+                }
+                UserWireMessages {
+                    messages,
+                    needs_renegotiation: false,
+                }
             }
             RoomEventMessage::RecordingStateChanged(state) => {
                 UserWireMessages::messages(vec![ServerMessage::RecordingChange(state)])
@@ -344,25 +355,6 @@ impl UserWireState {
                 )),
             },
         );
-    }
-
-    fn messages_for_user_info_snapshot(
-        &mut self,
-        snapshot: BTreeMap<UserId, UserInfo>,
-    ) -> UserWireMessages {
-        let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
-        let mut track_snapshot_changed = false;
-        for (user_id, info) in snapshot {
-            track_snapshot_changed |= self.apply_user_info_to_tracks(&user_id, &info);
-            messages.push(ServerMessage::PeerInfo(PeerInfoPayload { user_id, info }));
-        }
-        if track_snapshot_changed {
-            messages.push(ServerMessage::Tracks(self.snapshot()));
-        }
-        UserWireMessages {
-            messages,
-            needs_renegotiation: false,
-        }
     }
 
     fn apply_user_info_to_tracks(&mut self, user_id: &UserId, info: &UserInfo) -> bool {
@@ -465,35 +457,26 @@ mod tests {
     use o_sfu_router::{MediaKind, Mid, Rid};
 
     use super::*;
-    use crate::{
-        application::call_policy::CallPublicationSlot,
-        core::runtime::{
-            StreamType as CoreStreamType, UserId as CoreUserId,
-            source_model::{
-                PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-                SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            },
-        },
+    use crate::core::runtime::source_model::{
+        PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+        SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
     };
 
     #[test]
     fn queued_publish_slots_are_unique() {
         let mut state = UserNegotiationState::default();
 
-        state.queue_publish_slot(CallPublicationSlot::from_stream_type(StreamType::Camera));
-        state.queue_publish_slot(CallPublicationSlot::from_stream_type(StreamType::Camera));
+        state.queue_publish_slot(StreamType::Camera);
+        state.queue_publish_slot(StreamType::Camera);
 
-        assert_eq!(
-            state.take_queued_publish_slots(),
-            vec![CallPublicationSlot::from_stream_type(StreamType::Camera)]
-        );
+        assert_eq!(state.take_queued_publish_slots(), vec![StreamType::Camera]);
     }
 
     #[test]
     fn resolving_answer_keeps_queued_publish_slots_for_follow_up_staging() {
         let request_id = RequestId::new(String::from("server-1"));
         let mut state = UserNegotiationState::default();
-        state.queue_publish_slot(CallPublicationSlot::from_stream_type(StreamType::Camera));
+        state.queue_publish_slot(StreamType::Camera);
         state.issue(
             request_id.clone(),
             ServerRequest::Offer(SessionDescriptionPayload {
@@ -512,10 +495,7 @@ mod tests {
             state.request_renegotiation(),
             RenegotiationDisposition::SendNow
         ));
-        assert_eq!(
-            state.take_queued_publish_slots(),
-            vec![CallPublicationSlot::from_stream_type(StreamType::Camera)]
-        );
+        assert_eq!(state.take_queued_publish_slots(), vec![StreamType::Camera]);
     }
 
     #[test]
@@ -582,8 +562,8 @@ mod tests {
         });
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(CoreUserId::Integer(7)),
-            stream_type: CoreStreamType::Camera,
+            owner: PublishedSourceOwner::new(UserId::Integer(7)),
+            stream_type: StreamType::Camera,
             media_kind: MediaKind::Video,
             mid: Some(Mid::new(mid)),
             encodings: vec![encoding],

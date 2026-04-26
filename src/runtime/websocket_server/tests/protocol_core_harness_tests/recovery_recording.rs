@@ -204,7 +204,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
 
     assert!(
         bob.subscribe(
-            protocol_user_id(&alice_user_id),
+            alice_user_id.clone(),
             ProtocolDownloadStates {
                 camera: Some(false),
                 ..ProtocolDownloadStates::default()

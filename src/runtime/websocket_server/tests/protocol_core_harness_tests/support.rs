@@ -426,7 +426,7 @@ pub(super) async fn assert_real_rtc_subscribe_activity(
     active: bool,
 ) -> Option<()> {
     bob.subscribe(
-        protocol_user_id(&source_user_id),
+        source_user_id.clone(),
         ProtocolDownloadStates {
             camera: Some(active),
             ..ProtocolDownloadStates::default()
@@ -478,7 +478,7 @@ pub(super) async fn publish_camera_and_bootstrap_subscriber(
     assert!(track_snapshot.is_some(), "{snapshot_context}");
     let track_snapshot = track_snapshot?;
     let track_binding = track_snapshot.first()?;
-    assert_eq!(track_binding.user_id, protocol_user_id(publisher_user_id));
+    assert_eq!(track_binding.user_id, publisher_user_id.clone());
     assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
     assert!(track_binding.active);
     assert!(
@@ -522,7 +522,7 @@ pub(super) async fn recover_subscriber_and_replay_track(
     let replayed_track_snapshot = replayed_track_snapshot?;
     assert_track_snapshot_contains(
         &replayed_track_snapshot,
-        &protocol_user_id(publisher_user_id),
+        &publisher_user_id.clone(),
         ProtocolStreamType::Camera,
     );
     let replayed_track = replayed_track_snapshot.first()?;
@@ -563,7 +563,7 @@ pub(super) async fn setup_fake_protocol_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
-    consume_peer_joined_update(&mut alice, protocol_user_id(&bob_user_id)).await?;
+    consume_peer_joined_update(&mut alice, bob_user_id.clone()).await?;
     Some((server, room, alice, bob))
 }
 
@@ -580,13 +580,6 @@ pub(super) async fn read_single_protocol_server_message(
     let commands = peer.core.on_ws_message(&payload);
     peer.run_commands(commands).await?;
     Some(message)
-}
-
-pub(super) fn protocol_user_id(user_id: &UserId) -> ProtocolSessionId {
-    match user_id {
-        UserId::Integer(value) => ProtocolSessionId::Integer(*value),
-        UserId::String(value) => ProtocolSessionId::String(value.clone()),
-    }
 }
 
 pub(super) async fn consume_peer_joined_update(
@@ -642,7 +635,7 @@ pub(super) async fn setup_real_rtc_protocol_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
-    consume_peer_joined_update(&mut alice, protocol_user_id(&bob_user_id)).await?;
+    consume_peer_joined_update(&mut alice, bob_user_id.clone()).await?;
 
     Some((server, room, alice, bob))
 }
@@ -800,7 +793,7 @@ pub(super) async fn setup_protocol_recovery_peers(
         .await?;
     bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
         .await?;
-    consume_peer_joined_update(&mut alice, protocol_user_id(&bob_user_id)).await?;
+    consume_peer_joined_update(&mut alice, bob_user_id.clone()).await?;
     Some((server, room, alice, bob))
 }
 
