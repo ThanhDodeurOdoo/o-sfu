@@ -27,14 +27,8 @@ impl User {
     }
 
     async fn handle_info_message(&self, info: UserInfo) {
-        self.room
-            .update_user_info_runtime_for_connection(
-                &self.id,
-                self.connection_id,
-                info,
-                false,
-                &self.transport_adapter,
-            )
+        self.media_core
+            .update_user_info(&self.id, self.connection_id, info, false)
             .await;
     }
 
@@ -55,14 +49,8 @@ impl User {
             outcome = "request_received",
             "received subscribe intent"
         );
-        self.room
-            .update_subscription_runtime(
-                &self.id,
-                self.connection_id,
-                target_session_id,
-                states,
-                &self.transport_adapter,
-            )
+        self.media_core
+            .update_subscription(&self.id, self.connection_id, target_session_id, states)
             .await;
         info!(
             event = telemetry_event::SUBSCRIBE_SUCCEEDED,

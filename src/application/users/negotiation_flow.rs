@@ -12,11 +12,8 @@ use super::{
 };
 use crate::{
     application::outcomes::{CallOutcome, UserSignal},
-    runtime::{
-        AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
-        SessionUploadSlot, TransportAdapterError, TransportSessionKey,
-        telemetry::schema::event as telemetry_event,
-    },
+    core::{MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot, SfuCoreError},
+    runtime::telemetry::schema::event as telemetry_event,
 };
 
 impl User {
@@ -30,9 +27,9 @@ impl User {
         )
     )]
     pub(super) async fn send_initial_offer(&mut self) -> Result<CallOutcome, WebSocketCloseCode> {
-        let router_capabilities = self.room.router_rtp_capabilities().await;
-        let session_key = self.room.transport_user_key(&self.id, self.connection_id);
-        let offer = create_initial_offer(&self.transport_adapter, &session_key)
+        let (offer, offered_capabilities) = self
+            .media_core
+            .create_initial_offer(&self.id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(
@@ -58,7 +55,7 @@ impl User {
             CallOutcome::new().with_signal(self.issue_negotiation_request(
                 offer_request,
                 PendingFlowAction::EstablishSession {
-                    offered_router_rtp_capabilities: router_capabilities,
+                    offered_capabilities,
                 },
             )),
         )
@@ -99,16 +96,10 @@ impl User {
                 Ok(CallOutcome::new())
             }
             RenegotiationDisposition::SendNow => {
-                let session_key = self.room.transport_user_key(&self.id, self.connection_id);
-                let Some(request) = staged_renegotiation_request(
-                    &self.transport_adapter,
-                    &session_key,
-                    self.remote_address.as_ref(),
-                )
-                .await?
-                else {
+                let Some(offer) = self.create_renegotiation_offer().await? else {
                     return Ok(CallOutcome::new());
                 };
+                let request = ServerRequest::Renegotiate(session_description_payload(offer));
                 Ok(CallOutcome::new().with_signal(
                     self.issue_negotiation_request(request, PendingFlowAction::RefreshSession),
                 ))
@@ -125,20 +116,8 @@ impl User {
         let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
             return Err(WebSocketCloseCode::ProtocolError);
         };
-        let applied_answer = match self
-            .apply_transport_negotiation_answer(&response_to, &answer.sdp, &resolved)
-            .await
-        {
-            Ok(applied_answer) => applied_answer,
-            Err(outcome) => return Err(outcome),
-        };
-        if self
-            .apply_negotiation_action(&resolved.pending, &answer.sdp)
-            .await
-            .is_err()
-        {
-            return Err(WebSocketCloseCode::ProtocolError);
-        }
+        self.apply_negotiation_action(&resolved.pending, &answer.sdp, &response_to)
+            .await?;
         info!(
             event = telemetry_event::NEGOTIATION_SUCCEEDED,
             operation = negotiation_operation_name(&resolved.pending.action),
@@ -146,7 +125,7 @@ impl User {
             ?response_to,
             "applied negotiation answer"
         );
-        self.commit_staged_publishes(&applied_answer).await;
+        Self::record_staged_publishes_committed();
         self.send_follow_up_renegotiation_if_needed(&resolved).await
     }
 
@@ -182,41 +161,6 @@ impl User {
         Some(resolved)
     }
 
-    #[instrument(
-        name = "transport.answer.apply",
-        skip_all,
-        fields(
-            room_id = %self.room.uuid(),
-            user_id = ?self.id,
-            connection_id = ?self.connection_id
-        )
-    )]
-    async fn apply_transport_negotiation_answer(
-        &self,
-        response_to: &RequestId,
-        answer_sdp: &str,
-        resolved: &ResolvedFlowState,
-    ) -> Result<AppliedSessionAnswer, WebSocketCloseCode> {
-        let session_key = self.room.transport_user_key(&self.id, self.connection_id);
-        apply_transport_answer(&self.transport_adapter, &session_key, answer_sdp)
-            .await
-            .map_err(|error| {
-                warn!(
-                    event = telemetry_event::NEGOTIATION_FAILED,
-                    operation = "answer_apply",
-                    outcome = "transport_error",
-                    user_id = ?self.id,
-                    connection_id = ?self.connection_id,
-                    remote_address = self.remote_address.as_ref(),
-                    ?response_to,
-                    request = ?resolved.pending.request,
-                    ?error,
-                    "failed to apply negotiation answer to the transport user"
-                );
-                WebSocketCloseCode::Error
-            })
-    }
-
     async fn send_follow_up_renegotiation_if_needed(
         &mut self,
         resolved: &ResolvedFlowState,
@@ -233,151 +177,110 @@ impl User {
         &self,
         pending: &PendingFlowRequest,
         answer_sdp: &str,
-    ) -> Result<(), ()> {
-        match &pending.action {
+        response_to: &RequestId,
+    ) -> Result<(), WebSocketCloseCode> {
+        let result = match &pending.action {
             PendingFlowAction::EstablishSession {
-                offered_router_rtp_capabilities,
+                offered_capabilities,
             } => {
-                let client_rtp_capabilities = self
-                    .project_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
-                    .map_err(|error| {
-                        warn!(
-                            event = telemetry_event::NEGOTIATION_FAILED,
-                            operation = "answer_apply",
-                            outcome = "capability_projection_failed",
-                            user_id = ?self.id,
-                            connection_id = ?self.connection_id,
-                            remote_address = self.remote_address.as_ref(),
-                            ?error,
-                            "failed to project client RTP capabilities from the answered SDP"
-                        );
-                    })?;
-                if !self
-                    .room
-                    .apply_session_negotiated(
+                self.media_core
+                    .apply_initial_answer(
                         &self.id,
                         self.connection_id,
-                        client_rtp_capabilities,
-                        &self.transport_adapter,
+                        answer_sdp,
+                        offered_capabilities,
                     )
                     .await
-                {
-                    warn!(
-                        event = telemetry_event::NEGOTIATION_FAILED,
-                        operation = "answer_apply",
-                        outcome = "channel_commit_failed",
-                        user_id = ?self.id,
-                        connection_id = ?self.connection_id,
-                        remote_address = self.remote_address.as_ref(),
-                        "failed to commit negotiated user state after initial answer"
-                    );
-                    return Err(());
-                }
             }
             PendingFlowAction::RefreshSession => {
-                if !self
-                    .room
-                    .apply_session_refreshed(&self.id, self.connection_id, &self.transport_adapter)
+                self.media_core
+                    .apply_renegotiation_answer(&self.id, self.connection_id, answer_sdp)
                     .await
-                {
-                    warn!(
-                        event = telemetry_event::NEGOTIATION_FAILED,
-                        operation = "renegotiation_apply",
-                        outcome = "channel_refresh_failed",
-                        user_id = ?self.id,
-                        connection_id = ?self.connection_id,
-                        remote_address = self.remote_address.as_ref(),
-                        "failed to refresh user state after renegotiation answer"
-                    );
-                    return Err(());
-                }
             }
+        };
+        if let Err(error) = result {
+            self.log_negotiation_apply_error(response_to, pending, error);
+            return Err(map_core_negotiation_error(error));
         }
         Ok(())
     }
-}
 
-impl User {
-    fn project_client_rtp_capabilities(
+    async fn create_renegotiation_offer(
         &self,
-        answer_sdp: &str,
-        offered_router_rtp_capabilities: &o_sfu_router::MediaCapabilities,
-    ) -> Result<o_sfu_router::MediaCapabilities, TransportAdapterError> {
-        project_client_rtp_capabilities(
-            &self.transport_adapter,
-            answer_sdp,
-            offered_router_rtp_capabilities,
-        )
+    ) -> Result<Option<MediaNegotiationOffer>, WebSocketCloseCode> {
+        self.media_core
+            .create_renegotiation_offer(&self.id, self.connection_id)
+            .await
+            .map_err(|error| {
+                warn!(
+                    event = telemetry_event::NEGOTIATION_FAILED,
+                    operation = "renegotiation_offer_create",
+                    outcome = "transport_error",
+                    user_id = ?self.id,
+                    connection_id = ?self.connection_id,
+                    remote_address = self.remote_address.as_ref(),
+                    ?error,
+                    "failed to build a staged renegotiation offer"
+                );
+                WebSocketCloseCode::Error
+            })
+    }
+
+    fn log_negotiation_apply_error(
+        &self,
+        response_to: &RequestId,
+        pending: &PendingFlowRequest,
+        error: SfuCoreError,
+    ) {
+        let (operation, outcome, message) = match error {
+            SfuCoreError::Transport(_) => (
+                "answer_apply",
+                "transport_error",
+                "failed to apply negotiation answer to the transport user",
+            ),
+            SfuCoreError::CapabilityProjection(_) => (
+                "answer_apply",
+                "capability_projection_failed",
+                "failed to project client RTP capabilities from the answered SDP",
+            ),
+            SfuCoreError::UserStateCommitRejected => (
+                "answer_apply",
+                "room_commit_failed",
+                "failed to commit negotiated user state after initial answer",
+            ),
+            SfuCoreError::UserStateRefreshRejected => (
+                "renegotiation_apply",
+                "room_refresh_failed",
+                "failed to refresh user state after renegotiation answer",
+            ),
+        };
+        warn!(
+            event = telemetry_event::NEGOTIATION_FAILED,
+            operation,
+            outcome,
+            user_id = ?self.id,
+            connection_id = ?self.connection_id,
+            remote_address = self.remote_address.as_ref(),
+            ?response_to,
+            request = ?pending.request,
+            ?error,
+            "{message}"
+        );
     }
 }
 
-async fn create_initial_offer(
-    negotiation_port: &impl NegotiationPort,
-    session_key: &TransportSessionKey,
-) -> Result<SessionOffer, TransportAdapterError> {
-    negotiation_port
-        .create_initial_session_offer(session_key)
-        .await
-}
-
-async fn apply_transport_answer(
-    negotiation_port: &impl NegotiationPort,
-    session_key: &TransportSessionKey,
-    answer_sdp: &str,
-) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-    negotiation_port
-        .apply_session_answer(session_key, answer_sdp)
-        .await
-}
-
-fn project_client_rtp_capabilities(
-    negotiation_port: &impl NegotiationPort,
-    answer_sdp: &str,
-    offered_router_rtp_capabilities: &o_sfu_router::MediaCapabilities,
-) -> Result<o_sfu_router::MediaCapabilities, TransportAdapterError> {
-    negotiation_port.negotiated_client_rtp_capabilities(answer_sdp, offered_router_rtp_capabilities)
-}
-
-async fn staged_renegotiation_request(
-    transport_port: &impl NegotiationPort,
-    session_key: &TransportSessionKey,
-    remote_address: &str,
-) -> Result<Option<ServerRequest>, WebSocketCloseCode> {
-    match transport_port
-        .create_session_renegotiation_offer(session_key)
-        .await
-    {
-        Ok(offer) => Ok(Some(ServerRequest::Renegotiate(
-            session_description_payload(offer),
-        ))),
-        Err(TransportAdapterError::UnsupportedFeature) => Ok(None),
-        Err(
-            error @ (TransportAdapterError::TransportUnavailable
-            | TransportAdapterError::InvalidInput),
-        ) => {
-            warn!(
-                ?session_key,
-                event = telemetry_event::NEGOTIATION_FAILED,
-                operation = "renegotiation_offer_create",
-                outcome = "transport_error",
-                remote_address,
-                ?error,
-                "failed to build a staged renegotiation offer"
-            );
-            Err(WebSocketCloseCode::Error)
-        }
-    }
-}
-
-fn session_description_payload(offer: SessionOffer) -> SessionDescriptionPayload {
-    let (sdp, upload_slots) = offer.into_parts();
+fn session_description_payload(offer: MediaNegotiationOffer) -> SessionDescriptionPayload {
     SessionDescriptionPayload {
-        sdp,
-        upload_slots: upload_slots.into_iter().map(protocol_upload_slot).collect(),
+        sdp: offer.sdp,
+        upload_slots: offer
+            .upload_slots
+            .into_iter()
+            .map(protocol_upload_slot)
+            .collect(),
     }
 }
 
-fn protocol_upload_slot(slot: SessionUploadSlot) -> NegotiationUploadSlot {
+fn protocol_upload_slot(slot: MediaUploadSlot) -> NegotiationUploadSlot {
     NegotiationUploadSlot {
         mid: slot.mid,
         kind: slot.kind,
@@ -390,7 +293,7 @@ fn protocol_upload_slot(slot: SessionUploadSlot) -> NegotiationUploadSlot {
     }
 }
 
-fn protocol_upload_encoding(encoding: SessionUploadEncoding) -> NegotiationUploadEncoding {
+fn protocol_upload_encoding(encoding: MediaUploadEncoding) -> NegotiationUploadEncoding {
     NegotiationUploadEncoding {
         rid: encoding.rid,
         max_bitrate: encoding.max_bitrate,
@@ -404,97 +307,11 @@ fn negotiation_operation_name(action: &PendingFlowAction) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
-        sync::Arc,
-        time::Instant,
-    };
-
-    use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
-    use str0m::{Candidate, Rtc, change::SdpOffer};
-
-    use super::staged_renegotiation_request;
-    use crate::{
-        config::{MediaCodecFlags, RtcPortRange},
-        runtime::{
-            DiagnosticsStore, MediaTap, NegotiationPort, RtcTransportAdapterShardSetConfig,
-            RuntimeMetrics, RuntimeTransportAdapter, SessionBitrateLimits,
-            test_transport_session_key,
-        },
-    };
-
-    fn build_real_rtc_transport_adapter(port_min: u16) -> RuntimeTransportAdapter {
-        RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            SessionBitrateLimits::new(8_000_000, 10_000_000),
-            RtcPortRange::new(port_min, port_min.saturating_add(99)),
-            1,
-            MediaCodecFlags::default(),
-            Arc::new(DiagnosticsStore::default()),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ))
-    }
-
-    fn answer_offer(offer_sdp: &str, port: u16) -> Option<String> {
-        let mut rtc = Rtc::new(Instant::now());
-        rtc.add_local_candidate(
-            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp").ok()?,
-        )?;
-        let answer = rtc
-            .sdp_api()
-            .accept_offer(SdpOffer::from_sdp_string(offer_sdp).ok()?)
-            .ok()?;
-        Some(answer.to_sdp_string())
-    }
-
-    #[tokio::test]
-    async fn staged_renegotiation_request_returns_none_without_pending_offer() {
-        let transport_adapter = build_real_rtc_transport_adapter(58_100);
-        let session_key = test_transport_session_key(7, 0, 11, UserId::Integer(19));
-        let initial_offer_result = transport_adapter
-            .create_initial_session_offer(&session_key)
-            .await;
-        assert!(
-            initial_offer_result.is_ok(),
-            "expected initial rtc offer, got {initial_offer_result:?}"
-        );
-        let Ok(initial_offer) = initial_offer_result else {
-            return;
-        };
-        let initial_offer_sdp = initial_offer.into_sdp();
-        let answer_sdp = answer_offer(&initial_offer_sdp, 58_300);
-        assert!(
-            answer_sdp.is_some(),
-            "expected answerer to accept the initial rtc offer"
-        );
-        let Some(answer_sdp) = answer_sdp else {
-            return;
-        };
-        assert!(
-            transport_adapter
-                .apply_session_answer(&session_key, &answer_sdp)
-                .await
-                .is_ok()
-        );
-
-        let renegotiation_request =
-            staged_renegotiation_request(&transport_adapter, &session_key, "127.0.0.1").await;
-
-        assert_eq!(renegotiation_request, Ok(None));
-    }
-
-    #[tokio::test]
-    async fn staged_renegotiation_request_keeps_transport_errors_fatal() {
-        let transport_adapter = build_real_rtc_transport_adapter(58_400);
-        let missing_session_key = test_transport_session_key(8, 0, 12, UserId::Integer(20));
-
-        let renegotiation_request =
-            staged_renegotiation_request(&transport_adapter, &missing_session_key, "127.0.0.1")
-                .await;
-
-        assert_eq!(renegotiation_request, Err(WebSocketCloseCode::Error));
+fn map_core_negotiation_error(error: SfuCoreError) -> WebSocketCloseCode {
+    match error {
+        SfuCoreError::Transport(_) => WebSocketCloseCode::Error,
+        SfuCoreError::CapabilityProjection(_)
+        | SfuCoreError::UserStateCommitRejected
+        | SfuCoreError::UserStateRefreshRejected => WebSocketCloseCode::ProtocolError,
     }
 }

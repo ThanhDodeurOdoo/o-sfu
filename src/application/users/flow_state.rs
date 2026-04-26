@@ -13,7 +13,8 @@ use o_sfu_protocol::{
     shared::{DownloadStates, StreamType, UserId},
     signaling::{RequestId, ServerRequest},
 };
-use o_sfu_router::MediaCapabilities;
+
+use crate::core::OfferedMediaCapabilities;
 
 /// Describes what the in-flight negotiation request is trying to achieve once
 /// the matching answer is accepted.
@@ -23,7 +24,7 @@ pub(super) enum PendingFlowAction {
         /// the server offer's router view must be kept so the answer can be
         /// projected back into client RTP capabilities without falling back to
         /// router defaults
-        offered_router_rtp_capabilities: MediaCapabilities,
+        offered_capabilities: OfferedMediaCapabilities,
     },
     RefreshSession,
 }
@@ -264,9 +265,10 @@ mod tests {
         shared::StreamType,
         signaling::{RequestId, ServerRequest, SessionDescriptionPayload},
     };
-    use o_sfu_router::MediaCapabilities;
 
-    use super::{PendingFlowAction, RenegotiationDisposition, SessionFlowState};
+    use super::{
+        OfferedMediaCapabilities, PendingFlowAction, RenegotiationDisposition, SessionFlowState,
+    };
 
     #[test]
     fn queued_publish_streams_are_unique() {
@@ -305,7 +307,7 @@ mod tests {
                 upload_slots: Vec::new(),
             }),
             PendingFlowAction::EstablishSession {
-                offered_router_rtp_capabilities: MediaCapabilities::default(),
+                offered_capabilities: OfferedMediaCapabilities::default(),
             },
         );
 

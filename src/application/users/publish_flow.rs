@@ -9,8 +9,7 @@ use tracing::{info, instrument};
 
 use super::User;
 use crate::{
-    application::outcomes::CallOutcome,
-    runtime::{AppliedSessionAnswer, telemetry::schema::event as telemetry_event},
+    application::outcomes::CallOutcome, runtime::telemetry::schema::event as telemetry_event,
 };
 
 impl User {
@@ -33,24 +32,22 @@ impl User {
         // staged publish per `(user, connection, stream_type)`
         if self.flow_state.has_queued_publish(stream_type)
             || self
-                .room
+                .media_core
                 .has_staged_publish(&self.id, self.connection_id, stream_type)
                 .await
         {
             return Ok(CallOutcome::new());
         }
-        if self.room.is_stream_published(&self.id, stream_type).await {
+        if self
+            .media_core
+            .is_stream_published(&self.id, stream_type)
+            .await
+        {
             // Once a stream is already live publish intent is just a resume of
             // producer activity. No new transport media or renegotiation is
             // needed here
-            self.room
-                .set_publication_active_runtime(
-                    &self.id,
-                    self.connection_id,
-                    stream_type,
-                    true,
-                    &self.transport_adapter,
-                )
+            self.media_core
+                .set_publication_active(&self.id, self.connection_id, stream_type, true)
                 .await;
             return Ok(CallOutcome::new());
         }
@@ -80,26 +77,16 @@ impl User {
         // If a publish was staged but not committed yet, unpublish becomes a
         // pure rollback of the staged transaction.
         if self
-            .room
-            .rollback_staged_publish(
-                &self.id,
-                self.connection_id,
-                stream_type,
-                &self.transport_adapter,
-            )
+            .media_core
+            .rollback_staged_publish(&self.id, self.connection_id, stream_type)
             .await
         {
             let _disposition = self.flow_state.request_renegotiation();
             return Ok(CallOutcome::new());
         }
         if !self
-            .room
-            .unpublish_track(
-                &self.id,
-                self.connection_id,
-                stream_type,
-                &self.transport_adapter,
-            )
+            .media_core
+            .unpublish(&self.id, self.connection_id, stream_type)
             .await
         {
             return Ok(CallOutcome::new());
@@ -109,13 +96,8 @@ impl User {
 
     async fn stage_publish_stream(&self, stream_type: StreamType) -> bool {
         let staged = self
-            .room
-            .stage_negotiated_publish(
-                &self.id,
-                self.connection_id,
-                stream_type,
-                &self.transport_adapter,
-            )
+            .media_core
+            .stage_publish(&self.id, self.connection_id, stream_type)
             .await;
         if staged {
             info!(
@@ -150,28 +132,7 @@ impl User {
         staged_any
     }
 
-    #[instrument(
-        name = "publish.commit",
-        skip_all,
-        fields(
-            room_id = %self.room.uuid(),
-            user_id = ?self.id,
-            connection_id = ?self.connection_id
-        )
-    )]
-    pub(super) async fn commit_staged_publishes(&self, applied_answer: &AppliedSessionAnswer) {
-        // Answer handling already proved that the transport layer accepted the
-        // negotiated user update. The room-side transaction now finishes
-        // every staged publish that belongs to this connection.
-        self.room
-            .commit_staged_publishes(
-                &self.id,
-                self.connection_id,
-                applied_answer,
-                &self.transport_adapter,
-                &self.transport_adapter,
-            )
-            .await;
+    pub(super) fn record_staged_publishes_committed() {
         info!(
             event = telemetry_event::PUBLISH_COMMITTED,
             operation = "publish_commit",

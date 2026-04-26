@@ -59,13 +59,13 @@ use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolic
 pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
 pub(crate) use rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
 use telemetry::init_tracing;
+use transport_adapter::SourcePolicyPort;
 pub use transport_adapter::TransportSessionKey;
 pub(crate) use transport_adapter::{
-    AppliedSessionAnswer, NegotiationPort, ObservabilityPort, RtcTransportAdapterShardSetConfig,
-    RuntimeTransportAdapter, SessionBitrateLimits, SessionOffer, SessionUploadEncoding,
-    SessionUploadSlot, TransportAdapterError,
+    AppliedSessionAnswer, MediaPort, NegotiationPort, ObservabilityPort,
+    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits, SessionOffer,
+    SessionUploadEncoding, SessionUploadSlot, TransportAdapterError,
 };
-use transport_adapter::{MediaPort, SourcePolicyPort};
 
 /// Process-global application shell for the server process.
 ///

@@ -17,8 +17,9 @@ use track_projection::RemoteTrackProjection;
 
 use crate::{
     application::outcomes::{CallOutcome, UserEndReason, UserSignal},
+    core::{MediaEndpointHealth, SfuCore},
     runtime::{
-        ConnectionId, ObservabilityPort, RuntimeTransportAdapter, TransportSessionHealth,
+        ConnectionId, RuntimeTransportAdapter,
         room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
     },
 };
@@ -59,7 +60,7 @@ pub(crate) struct User {
     connection_id: ConnectionId,
     remote_address: Arc<str>,
     room: Arc<Room>,
-    transport_adapter: RuntimeTransportAdapter,
+    media_core: SfuCore,
     request_ids: ServerRequestIdState,
     flow_state: SessionFlowState,
     track_projection: RemoteTrackProjection,
@@ -78,8 +79,8 @@ impl User {
             id: user_id,
             connection_id,
             remote_address,
+            media_core: SfuCore::new(Arc::clone(&room), transport_adapter),
             room,
-            transport_adapter,
             request_ids: ServerRequestIdState::default(),
             flow_state: SessionFlowState::default(),
             track_projection: RemoteTrackProjection::default(),
@@ -88,12 +89,11 @@ impl User {
     }
 
     pub(crate) fn end_reason(&self) -> Option<UserEndReason> {
-        let session_key = self.room.transport_user_key(&self.id, self.connection_id);
-        self.transport_adapter
-            .session_transport_health(&session_key)
+        self.media_core
+            .endpoint_health(&self.id, self.connection_id)
             .and_then(|health| match health {
-                TransportSessionHealth::Disconnected => Some(UserEndReason::TransportDisconnected),
-                TransportSessionHealth::Connected => None,
+                MediaEndpointHealth::Disconnected => Some(UserEndReason::TransportDisconnected),
+                MediaEndpointHealth::Connected => None,
             })
     }
 
@@ -122,12 +122,8 @@ impl User {
     }
 
     pub(crate) async fn finish(&mut self) {
-        self.room
-            .rollback_staged_publishes_for_connection(
-                &self.id,
-                self.connection_id,
-                &self.transport_adapter,
-            )
+        self.media_core
+            .rollback_connection_publishes(&self.id, self.connection_id)
             .await;
         self.cleanup_finished = true;
     }
@@ -181,18 +177,14 @@ impl Drop for User {
         if self.cleanup_finished {
             return;
         }
-        let room = Arc::clone(&self.room);
-        let transport_adapter = self.transport_adapter.clone();
+        let media_core = self.media_core.clone();
         let user_id = self.id.clone();
         let connection_id = self.connection_id;
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
-                room.rollback_staged_publishes_for_connection(
-                    &user_id,
-                    connection_id,
-                    &transport_adapter,
-                )
-                .await;
+                media_core
+                    .rollback_connection_publishes(&user_id, connection_id)
+                    .await;
             });
         }
     }
