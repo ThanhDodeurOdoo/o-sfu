@@ -124,9 +124,16 @@ impl NegotiationPort for RuntimeTransportAdapter {
         answer_sdp: &str,
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        let result = dispatch_transport_backend!(self, |backend| {
-            backend.negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
-        });
+        let result = match self {
+            Self::Rtc(_) => RtcTransportAdapterShardSet::negotiated_client_rtp_capabilities(
+                answer_sdp,
+                offered_router_capabilities,
+            ),
+            #[cfg(any(test, feature = "testing-transport"))]
+            Self::Test(backend) => {
+                backend.negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 answer_len = answer_sdp.len(),

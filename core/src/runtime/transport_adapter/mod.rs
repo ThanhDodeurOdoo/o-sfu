@@ -2,7 +2,6 @@
 mod fake;
 
 mod config;
-mod rtc_backend;
 mod runtime_adapter;
 mod shard_set;
 #[cfg(any(test, feature = "testing-transport"))]
