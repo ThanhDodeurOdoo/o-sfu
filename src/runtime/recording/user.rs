@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use o_sfu_router::{MediaKind, ProducerId, SessionId as UserId, StreamType, TransportId};
+use o_sfu_router::{MediaKind, ProducerId, SessionId as UserId, TransportId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrackedProducer {
     pub(crate) transport_id: TransportId,
     pub(crate) media_kind: MediaKind,
-    pub(crate) stream_type: StreamType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,14 +31,12 @@ impl RecordingSession {
         producer_id: ProducerId,
         transport_id: TransportId,
         media_kind: MediaKind,
-        stream_type: StreamType,
     ) {
         self.producers.insert(
             producer_id,
             TrackedProducer {
                 transport_id,
                 media_kind,
-                stream_type,
             },
         );
     }

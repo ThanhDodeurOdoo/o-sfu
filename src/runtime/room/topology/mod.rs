@@ -7,7 +7,7 @@ use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
     MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
-    SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
+    SessionPermissions as RouterSessionPermissions,
 };
 
 use super::router_state::{RoomRouterState, RoomRouterStateError};
@@ -193,14 +193,11 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         media_kind: RouterMediaKind,
-        stream_type: RouterStreamType,
     ) -> Result<RoutedProducerId, RoomTopologyError> {
         let router_id = self.router_id_for_user(user_id);
-        let producer_id = self.router_mut_for_user(user_id, router_id)?.add_producer(
-            user_id,
-            media_kind,
-            stream_type,
-        )?;
+        let producer_id = self
+            .router_mut_for_user(user_id, router_id)?
+            .add_producer(user_id, media_kind)?;
         Ok(RoutedProducerId::new(router_id, producer_id))
     }
 
@@ -209,14 +206,12 @@ impl RoomTopology {
         consumer_user_id: &UserId,
         producer_id: RoutedProducerId,
         media_kind: RouterMediaKind,
-        stream_type: RouterStreamType,
         capability: ConsumerCapability,
     ) -> Result<RoutedConsumerId, RoomTopologyError> {
         let consumer_id = self.router_mut(producer_id.router_id())?.add_consumer(
             consumer_user_id,
             producer_id.producer_id(),
             media_kind,
-            stream_type,
             capability,
         )?;
         Ok(RoutedConsumerId::new(producer_id.router_id(), consumer_id))

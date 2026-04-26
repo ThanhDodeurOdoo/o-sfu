@@ -307,10 +307,7 @@ impl<
         for consumer in &self.consumers {
             if consumer.is_some_and(|consumer| {
                 self.producer_by_id(consumer.producer_id())
-                    .is_some_and(|producer| {
-                        consumer.media_kind() != producer.media_kind()
-                            || consumer.stream_type() != producer.stream_type()
-                    })
+                    .is_some_and(|producer| consumer.media_kind() != producer.media_kind())
             }) {
                 return false;
             }

@@ -324,8 +324,7 @@ impl<
     /// consumers, [`RouterError::IncompatibleCapabilities`] when `capability` is
     /// [`o_sfu_router::ConsumerCapability::Incompatible`],
     /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
-    /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
-    /// stream type does not match its source producer,
+    /// match its source producer,
     /// [`RouterError::DuplicateConsumer`] when the consumer already exists,
     /// or [`ProofRouterError::CapacityExceeded`] when the proof model has no free slot.
     pub(crate) fn add_consumer(
@@ -353,14 +352,6 @@ impl<
                 producer_id: consumer.producer_id(),
                 expected: producer.media_kind(),
                 actual: consumer.media_kind(),
-            }
-            .into());
-        }
-        if consumer.stream_type() != producer.stream_type() {
-            return Err(RouterError::ConsumerStreamTypeMismatch {
-                producer_id: consumer.producer_id(),
-                expected: producer.stream_type(),
-                actual: consumer.stream_type(),
             }
             .into());
         }

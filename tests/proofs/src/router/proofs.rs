@@ -1,6 +1,6 @@
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
-    SessionId, SessionPermissions, StreamType, Transport, TransportDirection, TransportId,
+    SessionId, SessionPermissions, Transport, TransportDirection, TransportId,
 };
 
 use super::ProofRouterModel;
@@ -73,7 +73,6 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
         producer_id,
         receive_transport,
         MediaKind::Audio,
-        StreamType::Audio,
     ));
     let _ = router.add_consumer(
         Consumer::new(
@@ -81,7 +80,6 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
             producer_id,
             shared_send_transport,
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -91,7 +89,6 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
             producer_id,
             survivor_send_transport,
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -167,7 +164,6 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
         producer_id,
         receive_transport,
         MediaKind::Audio,
-        StreamType::Audio,
     ));
     let _ = router.add_consumer(
         Consumer::new(
@@ -175,7 +171,6 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
             producer_id,
             same_session_send_transport,
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -185,7 +180,6 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
             producer_id,
             remote_send_transport,
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -253,7 +247,6 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
         producer_id,
         receive_transport,
         MediaKind::Audio,
-        StreamType::Audio,
     ));
     let _ = router.add_consumer(
         Consumer::new(
@@ -261,7 +254,6 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
             producer_id,
             removed_consumer_transport,
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -271,7 +263,6 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
             producer_id,
             surviving_consumer_transport,
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -331,7 +322,6 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
         ProducerId(30),
         TransportId(10),
         MediaKind::Audio,
-        StreamType::Audio,
     ));
     let _ = router.set_producer_paused(ProducerId(30), true);
     let _ = router.add_consumer(
@@ -340,7 +330,6 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
             ProducerId(30),
             TransportId(20),
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );
@@ -379,7 +368,6 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
         ProducerId(30),
         TransportId(10),
         MediaKind::Video,
-        StreamType::Camera,
     ));
     let _ = router.add_consumer(
         Consumer::new(
@@ -387,7 +375,6 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             ProducerId(30),
             TransportId(20),
             MediaKind::Video,
-            StreamType::Camera,
         ),
         ConsumerCapability::Compatible,
     );
@@ -397,7 +384,6 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             ProducerId(30),
             TransportId(21),
             MediaKind::Video,
-            StreamType::Camera,
         ),
         ConsumerCapability::Compatible,
     );
@@ -438,7 +424,6 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
         ProducerId(30),
         TransportId(10),
         MediaKind::Video,
-        StreamType::Camera,
     ));
     let _ = router.add_consumer(
         Consumer::new(
@@ -446,7 +431,6 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             ProducerId(30),
             TransportId(20),
             MediaKind::Video,
-            StreamType::Camera,
         ),
         ConsumerCapability::Compatible,
     );
@@ -456,7 +440,6 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             ProducerId(30),
             TransportId(21),
             MediaKind::Video,
-            StreamType::Camera,
         ),
         ConsumerCapability::Compatible,
     );
@@ -492,7 +475,6 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
         ProducerId(30),
         TransportId(10),
         MediaKind::Audio,
-        StreamType::Audio,
     ));
     let _ = router.add_consumer(
         Consumer::new(
@@ -500,7 +482,6 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
             ProducerId(30),
             TransportId(20),
             MediaKind::Audio,
-            StreamType::Audio,
         ),
         ConsumerCapability::Compatible,
     );

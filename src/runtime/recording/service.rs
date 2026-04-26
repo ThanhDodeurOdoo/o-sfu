@@ -235,14 +235,12 @@ impl RecordingService {
                 transport_id,
                 producer_id,
                 media_kind,
-                stream_type,
             } => add_tracked_producer(
                 &mut state.users,
                 user_id,
                 producer_id,
                 transport_id,
                 media_kind,
-                stream_type,
             ),
             RouterEvent::ProducerRemoved {
                 session_id: user_id,
@@ -287,12 +285,11 @@ fn add_tracked_producer(
     producer_id: ProducerId,
     transport_id: TransportId,
     media_kind: o_sfu_router::MediaKind,
-    stream_type: o_sfu_router::StreamType,
 ) {
     users
         .entry(user_id)
         .or_insert_with_key(|id| RecordingSession::new(*id))
-        .add_producer(producer_id, transport_id, media_kind, stream_type);
+        .add_producer(producer_id, transport_id, media_kind);
 }
 
 #[derive(Clone)]

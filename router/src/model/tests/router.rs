@@ -4,7 +4,7 @@ use super::router_invariants::assert_router_is_consistent;
 use crate::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError,
     RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionPermissionFlags,
-    SessionPermissions, SessionState, StreamType, Transport, TransportDirection, TransportId,
+    SessionPermissions, SessionState, Transport, TransportDirection, TransportId,
 };
 
 fn session(id: SessionId) -> Session {
@@ -38,7 +38,6 @@ fn router_accepts_a_basic_publish_and_subscribe_flow() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -49,7 +48,6 @@ fn router_accepts_a_basic_publish_and_subscribe_flow() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -76,7 +74,6 @@ fn router_rejects_orphan_resources() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Err(RouterError::MissingTransport(TransportId(100)))
     );
@@ -110,7 +107,6 @@ fn removing_a_session_cleans_dependent_resources() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -121,7 +117,6 @@ fn removing_a_session_cleans_dependent_resources() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -171,7 +166,6 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -182,7 +176,6 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
                 ProducerId(300),
                 TransportId(101),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -195,7 +188,6 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -251,7 +243,6 @@ fn removing_a_consumer_preserves_other_routes() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -262,7 +253,6 @@ fn removing_a_consumer_preserves_other_routes() {
                 ProducerId(300),
                 TransportId(101),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -275,7 +265,6 @@ fn removing_a_consumer_preserves_other_routes() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -337,7 +326,6 @@ fn removing_a_session_clears_cross_session_reverse_indices() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -348,7 +336,6 @@ fn removing_a_session_clears_cross_session_reverse_indices() {
                 ProducerId(300),
                 TransportId(101),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -361,7 +348,6 @@ fn removing_a_session_clears_cross_session_reverse_indices() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -407,7 +393,6 @@ fn producers_must_use_receive_transports() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Err(RouterError::ProducerRequiresReceiveTransport(TransportId(
             100
@@ -443,7 +428,6 @@ fn consumers_must_use_send_transports() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Video,
-            StreamType::Camera,
         )),
         Ok(())
     );
@@ -455,7 +439,6 @@ fn consumers_must_use_send_transports() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Video,
-                StreamType::Camera,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -491,7 +474,6 @@ fn consumers_must_match_their_producer_media_kind() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -503,7 +485,6 @@ fn consumers_must_match_their_producer_media_kind() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Video,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -511,58 +492,6 @@ fn consumers_must_match_their_producer_media_kind() {
             producer_id: ProducerId(300),
             expected: MediaKind::Audio,
             actual: MediaKind::Video,
-        })
-    );
-    assert_router_is_consistent(&router);
-}
-
-#[test]
-fn consumers_must_match_their_producer_stream_type() {
-    let mut router = Router::new(RouterId(1));
-
-    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
-    assert_eq!(router.join_session(session(SessionId(20))), Ok(()));
-    assert_eq!(
-        router.open_transport(Transport::new(
-            TransportId(100),
-            SessionId(10),
-            TransportDirection::Receive,
-        )),
-        Ok(())
-    );
-    assert_eq!(
-        router.open_transport(Transport::new(
-            TransportId(200),
-            SessionId(20),
-            TransportDirection::Send,
-        )),
-        Ok(())
-    );
-    assert_eq!(
-        router.add_producer(Producer::new(
-            ProducerId(300),
-            TransportId(100),
-            MediaKind::Video,
-            StreamType::Camera,
-        )),
-        Ok(())
-    );
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                ConsumerId(400),
-                ProducerId(300),
-                TransportId(200),
-                MediaKind::Video,
-                StreamType::Screen,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Err(RouterError::ConsumerStreamTypeMismatch {
-            producer_id: ProducerId(300),
-            expected: StreamType::Camera,
-            actual: StreamType::Screen,
         })
     );
     assert_router_is_consistent(&router);
@@ -595,7 +524,6 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -607,7 +535,6 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Incompatible,
         ),
@@ -645,7 +572,6 @@ fn new_consumers_inherit_their_producer_pause_state() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -658,7 +584,6 @@ fn new_consumers_inherit_their_producer_pause_state() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -711,7 +636,6 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Video,
-            StreamType::Camera,
         )),
         Ok(())
     );
@@ -722,7 +646,6 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Video,
-                StreamType::Camera,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -735,7 +658,6 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
                 ProducerId(300),
                 TransportId(201),
                 MediaKind::Video,
-                StreamType::Camera,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -792,7 +714,6 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -803,7 +724,6 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -855,7 +775,6 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            StreamType::Audio,
         )),
         Ok(())
     );
@@ -866,7 +785,6 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                StreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),
@@ -980,7 +898,6 @@ fn router_emits_session_and_producer_lifecycle_events() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Video,
-            StreamType::Camera,
         )),
         Ok(())
     );
@@ -1001,14 +918,12 @@ fn router_emits_session_and_producer_lifecycle_events() {
                 transport_id: TransportId(100),
                 producer_id: ProducerId(300),
                 media_kind: MediaKind::Video,
-                stream_type: StreamType::Camera,
             },
             RouterEvent::ProducerRemoved {
                 session_id: SessionId(10),
                 transport_id: TransportId(100),
                 producer_id: ProducerId(300),
                 media_kind: MediaKind::Video,
-                stream_type: StreamType::Camera,
             },
             RouterEvent::SessionLeft {
                 session_id: SessionId(10),

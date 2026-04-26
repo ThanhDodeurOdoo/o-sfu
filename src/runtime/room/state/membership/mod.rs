@@ -726,7 +726,7 @@ mod tests {
         let transport_media_id = TransportMediaId::new(30);
         let routed_producer_id = state
             .topology
-            .add_producer(&user_id, MediaKind::Video, o_sfu_router::StreamType::Camera)
+            .add_producer(&user_id, MediaKind::Video)
             .expect("replacement test producer route should be added");
         install_test_published_producer(
             &mut state,

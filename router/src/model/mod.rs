@@ -22,7 +22,7 @@ pub use self::{
     diagnostic::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference},
     error::RouterError,
     ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId},
-    media::{MediaKind, StreamType},
+    media::MediaKind,
     observer::{NoopRouterObserver, RouterEvent, RouterObserver},
     producer::Producer,
     router::Router,

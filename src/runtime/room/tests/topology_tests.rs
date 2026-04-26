@@ -89,11 +89,7 @@ fn topology_returns_router_scoped_entity_handles() {
     }
 
     let producer = topology
-        .add_producer(
-            &producer_user_id,
-            RouterMediaKind::Audio,
-            RouterStreamType::Audio,
-        )
+        .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .ok();
     assert!(producer.is_some());
     let Some(producer) = producer else {
@@ -105,7 +101,6 @@ fn topology_returns_router_scoped_entity_handles() {
             &consumer_user_id,
             producer,
             RouterMediaKind::Audio,
-            RouterStreamType::Audio,
             ConsumerCapability::Compatible,
         )
         .ok();

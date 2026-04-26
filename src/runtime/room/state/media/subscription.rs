@@ -5,13 +5,10 @@ use o_sfu_router::{
 };
 use tracing::{error, warn};
 
-use super::{
-    super::{
-        super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
-        ids::{ConsumerRuntimeId, ProducerRuntimeId},
-        shared::{ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey},
-    },
-    router_stream_type::to_router_stream_type,
+use super::super::{
+    super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
+    ids::{ConsumerRuntimeId, ProducerRuntimeId},
+    shared::{ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey},
 };
 use crate::runtime::{
     ConnectionId,
@@ -428,7 +425,6 @@ impl RoomState {
             &target.consumer_user_id,
             pending.producer.routed_producer_id?,
             pending.producer.media_kind,
-            to_router_stream_type(pending.producer.stream_type),
             ConsumerCapability::Compatible,
         ) {
             Ok(id) => id,

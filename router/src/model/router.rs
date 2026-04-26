@@ -143,7 +143,6 @@ impl<O: RouterObserver> Router<O> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
         let media_kind = producer.media_kind();
-        let stream_type = producer.stream_type();
         let Some(transport) = self.transports.get(&transport_id) else {
             return Err(RouterError::MissingTransport(transport_id));
         };
@@ -164,7 +163,6 @@ impl<O: RouterObserver> Router<O> {
             transport_id,
             producer_id,
             media_kind,
-            stream_type,
         });
         Ok(())
     }
@@ -183,8 +181,7 @@ impl<O: RouterObserver> Router<O> {
     /// consumers, [`RouterError::IncompatibleCapabilities`] when the external capability
     /// negotiation determined that the consumer cannot consume the producer,
     /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
-    /// match its source producer, [`RouterError::ConsumerStreamTypeMismatch`] when the consumer
-    /// stream type does not match its source producer,
+    /// match its source producer,
     /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
     pub fn add_consumer(
         &mut self,
@@ -211,13 +208,6 @@ impl<O: RouterObserver> Router<O> {
                 producer_id,
                 expected: producer.media_kind(),
                 actual: consumer.media_kind(),
-            });
-        }
-        if consumer.stream_type() != producer.stream_type() {
-            return Err(RouterError::ConsumerStreamTypeMismatch {
-                producer_id,
-                expected: producer.stream_type(),
-                actual: consumer.stream_type(),
             });
         }
         if self.consumers.contains_key(&consumer_id) {
@@ -367,7 +357,6 @@ impl<O: RouterObserver> Router<O> {
             transport_id,
             producer_id,
             media_kind: producer.media_kind(),
-            stream_type: producer.stream_type(),
         });
     }
 

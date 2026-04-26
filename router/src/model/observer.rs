@@ -1,4 +1,4 @@
-use super::{MediaKind, ProducerId, SessionId, StreamType, TransportId};
+use super::{MediaKind, ProducerId, SessionId, TransportId};
 
 /// Observer contract for router lifecycle notifications.
 ///
@@ -39,14 +39,12 @@ pub enum RouterEvent {
         transport_id: TransportId,
         producer_id: ProducerId,
         media_kind: MediaKind,
-        stream_type: StreamType,
     },
     ProducerRemoved {
         session_id: SessionId,
         transport_id: TransportId,
         producer_id: ProducerId,
         media_kind: MediaKind,
-        stream_type: StreamType,
     },
 }
 

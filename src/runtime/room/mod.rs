@@ -35,6 +35,7 @@ mod router_state;
 pub(crate) mod rtp_capabilities;
 mod source_policy_sync;
 mod state;
+mod stream_role;
 #[cfg(test)]
 mod tests;
 mod topology;

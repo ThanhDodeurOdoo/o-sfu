@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use o_sfu_protocol::shared::UserId as SignalingSessionId;
-use o_sfu_router::{
-    MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, StreamType, TransportId,
-};
+use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, TransportId};
 
 use crate::runtime::{
     RoomInstanceId,
@@ -101,7 +99,6 @@ fn recording_service_tracks_router_observer_inventory() {
         transport_id: TransportId(3),
         producer_id: ProducerId(4),
         media_kind: MediaKind::Video,
-        stream_type: StreamType::Camera,
     });
 
     let snapshot = service.snapshot();
@@ -113,7 +110,6 @@ fn recording_service_tracks_router_observer_inventory() {
         transport_id: TransportId(3),
         producer_id: ProducerId(4),
         media_kind: MediaKind::Video,
-        stream_type: StreamType::Camera,
     });
     service.handle_router_event(RouterEvent::SessionLeft {
         session_id: user_id,

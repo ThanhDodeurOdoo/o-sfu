@@ -1,17 +1,16 @@
-use super::{ConsumerId, MediaKind, ProducerId, StreamType, TransportId};
+use super::{ConsumerId, MediaKind, ProducerId, TransportId};
 
 /// Media sink attached to a send transport.
 ///
 /// `producer_id` binds the consumer to its source, `transport_id` selects the
-/// downstream transport, `media_kind` plus `stream_type` mirror the expected
-/// source identity, `paused` is the local pause selected by the owner
+/// downstream transport, `media_kind` mirrors the expected source identity,
+/// and `paused` is the local pause selected by the owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Consumer {
     id: ConsumerId,
     producer_id: ProducerId,
     transport_id: TransportId,
     media_kind: MediaKind,
-    stream_type: StreamType,
     paused: bool,
     producer_paused: bool,
 }
@@ -23,14 +22,12 @@ impl Consumer {
         producer_id: ProducerId,
         transport_id: TransportId,
         media_kind: MediaKind,
-        stream_type: StreamType,
     ) -> Self {
         Self {
             id,
             producer_id,
             transport_id,
             media_kind,
-            stream_type,
             paused: false,
             producer_paused: false,
         }
@@ -54,11 +51,6 @@ impl Consumer {
     #[must_use]
     pub fn media_kind(&self) -> MediaKind {
         self.media_kind
-    }
-
-    #[must_use]
-    pub fn stream_type(&self) -> StreamType {
-        self.stream_type
     }
 
     #[must_use]

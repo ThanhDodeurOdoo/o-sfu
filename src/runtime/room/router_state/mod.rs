@@ -6,8 +6,8 @@ use o_sfu_router::{
     MediaCapabilities, MediaKind as RouterMediaKind, Producer as RouterProducer,
     ProducerId as RouterProducerId, Router, RouterError, RouterId, Session as RouterSession,
     SessionId as RouterSessionId, SessionPermissions as RouterSessionPermissions,
-    StreamType as RouterStreamType, Transport as RouterTransport,
-    TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
+    Transport as RouterTransport, TransportDirection as RouterTransportDirection,
+    TransportId as RouterTransportId,
 };
 
 use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
@@ -150,7 +150,6 @@ impl RoomRouterState {
         &mut self,
         user_id: &UserId,
         media_kind: RouterMediaKind,
-        stream_type: RouterStreamType,
     ) -> Result<RouterProducerId, RoomRouterStateError> {
         let transport_ids = self.ensure_session_transport_ids(user_id)?;
         let producer_id = self.allocate_producer_id();
@@ -159,7 +158,6 @@ impl RoomRouterState {
                 producer_id,
                 transport_ids.upload,
                 media_kind,
-                stream_type,
             ))
             .map_err(RoomRouterStateError::from)?;
         Ok(producer_id)
@@ -174,20 +172,13 @@ impl RoomRouterState {
         consumer_user_id: &UserId,
         producer_id: RouterProducerId,
         media_kind: RouterMediaKind,
-        stream_type: RouterStreamType,
         capability: ConsumerCapability,
     ) -> Result<RouterConsumerId, RoomRouterStateError> {
         let transport_ids = self.ensure_session_transport_ids(consumer_user_id)?;
         let consumer_id = self.allocate_consumer_id();
         self.router
             .add_consumer(
-                RouterConsumer::new(
-                    consumer_id,
-                    producer_id,
-                    transport_ids.download,
-                    media_kind,
-                    stream_type,
-                ),
+                RouterConsumer::new(consumer_id, producer_id, transport_ids.download, media_kind),
                 capability,
             )
             .map_err(RoomRouterStateError::from)?;

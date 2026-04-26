@@ -10,6 +10,6 @@ pub use self::model::{
     ParseDiagnosticSpec, PayloadType, Producer, ProducerId, RfcReference, Rid, Router, RouterError,
     RouterEvent, RouterId, RouterObserver, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError,
     Session, SessionId, SessionPermissionFlags, SessionPermissions, SessionState, Ssrc,
-    StreamBinding, StreamType, Transport, TransportDirection, TransportId, can_consume,
+    StreamBinding, Transport, TransportDirection, TransportId, can_consume,
     derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };

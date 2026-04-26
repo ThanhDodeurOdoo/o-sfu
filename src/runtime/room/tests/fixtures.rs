@@ -5,7 +5,7 @@ pub(super) use o_sfu_protocol::shared::{
 };
 pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
-    RouterId, SessionPermissions as RouterSessionPermissions, StreamType as RouterStreamType,
+    RouterId, SessionPermissions as RouterSessionPermissions,
 };
 pub(super) use tokio::{sync::mpsc, task::yield_now, time::timeout};
 

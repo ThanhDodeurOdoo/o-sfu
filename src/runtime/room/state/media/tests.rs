@@ -11,7 +11,7 @@ use std::sync::Arc;
 use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, UserPermissions};
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
-    StreamType as RouterStreamType, derive_consumable_rtp_parameters,
+    derive_consumable_rtp_parameters,
 };
 use tokio::sync::mpsc;
 
@@ -81,11 +81,7 @@ fn install_test_consumer_route(
         .expect("consumer user should have a connection id");
     let routed_producer_id = state
         .topology
-        .add_producer(
-            producer_user_id,
-            RouterMediaKind::Video,
-            RouterStreamType::Camera,
-        )
+        .add_producer(producer_user_id, RouterMediaKind::Video)
         .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
     let routed_consumer_id = state
         .topology
@@ -93,7 +89,6 @@ fn install_test_consumer_route(
             consumer_user_id,
             routed_producer_id,
             RouterMediaKind::Video,
-            RouterStreamType::Camera,
             ConsumerCapability::Compatible,
         )
         .unwrap_or_else(|error| panic!("failed to create test consumer route: {error:?}"));
@@ -325,11 +320,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
 
     let routed_producer_id = state
         .topology
-        .add_producer(
-            &publisher_user_id,
-            RouterMediaKind::Video,
-            RouterStreamType::Camera,
-        )
+        .add_producer(&publisher_user_id, RouterMediaKind::Video)
         .expect("publisher route should be added");
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let producer_rtp_parameters = sample_video_rtp_parameters(None, 22_222);

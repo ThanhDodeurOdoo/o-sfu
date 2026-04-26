@@ -7,8 +7,8 @@ use o_sfu_protocol::{
 };
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterId,
-    Session, SessionId as RouterSessionId, SessionPermissions, StreamType as RouterStreamType,
-    Transport, TransportDirection, TransportId,
+    Session, SessionId as RouterSessionId, SessionPermissions, Transport, TransportDirection,
+    TransportId,
 };
 
 fn user(id: RouterSessionId) -> Session {
@@ -52,7 +52,6 @@ fn router_session_teardown_keeps_remaining_routing_consistent() {
             ProducerId(300),
             TransportId(100),
             MediaKind::Audio,
-            RouterStreamType::Audio,
         )),
         Ok(())
     );
@@ -63,7 +62,6 @@ fn router_session_teardown_keeps_remaining_routing_consistent() {
                 ProducerId(300),
                 TransportId(200),
                 MediaKind::Audio,
-                RouterStreamType::Audio,
             ),
             ConsumerCapability::Compatible,
         ),

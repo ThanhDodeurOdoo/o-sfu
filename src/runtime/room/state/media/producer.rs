@@ -26,7 +26,6 @@ use super::{
             TransportMediaRemoval,
         },
     },
-    router_stream_type::to_router_stream_type,
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
 use crate::runtime::{
@@ -275,11 +274,10 @@ impl RoomState {
         &mut self,
         pending: &PreparedPublishedTrack,
     ) -> Option<RoutedProducerId> {
-        match self.topology.add_producer(
-            &pending.owner_user_id,
-            pending.media_kind,
-            to_router_stream_type(pending.stream_type),
-        ) {
+        match self
+            .topology
+            .add_producer(&pending.owner_user_id, pending.media_kind)
+        {
             Ok(producer_id) => Some(producer_id),
             Err(error) => {
                 error!(
