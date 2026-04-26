@@ -13,11 +13,11 @@ use crate::{
         outcomes::{CallOutcome, UserEndReason},
         users::{RoomEvent, User, UserIntent},
     },
+    core::SfuCore,
     runtime::{
         ConnectionId,
         metrics::RuntimeMetrics,
         room::{Room, UserCloseReason, UserOutbound},
-        transport_adapter::RuntimeTransportAdapter,
         websocket_server::{
             ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
         },
@@ -47,17 +47,11 @@ impl SessionProtocol {
         connection_id: ConnectionId,
         remote_address: Arc<str>,
         room: Arc<Room>,
-        transport_adapter: RuntimeTransportAdapter,
+        media_core: SfuCore,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
-            user: User::new(
-                user_id,
-                connection_id,
-                remote_address,
-                room,
-                transport_adapter,
-            ),
+            user: User::new(user_id, connection_id, remote_address, room, media_core),
             metrics,
         }
     }

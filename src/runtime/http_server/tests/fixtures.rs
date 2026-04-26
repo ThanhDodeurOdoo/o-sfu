@@ -16,7 +16,6 @@ pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
 pub(super) use crate::{
-    application::rooms::Room as ApplicationRoom,
     config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TelemetryConfig,
@@ -24,6 +23,7 @@ pub(super) use crate::{
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
+        build_runtime_state,
         diagnostics::{
             DiagnosticsStore,
             types::{
@@ -87,17 +87,13 @@ pub(super) fn test_state() -> RuntimeState {
         Arc::clone(&metrics),
     ));
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
-    RuntimeState {
-        rooms: ApplicationRoom::new(
-            Arc::clone(&room_manager),
-            Arc::clone(&diagnostics),
-            transport_adapter.clone(),
-        ),
+    build_runtime_state(
+        &config,
         room_manager,
-        config,
+        diagnostics,
         metrics,
         transport_adapter,
-    }
+    )
 }
 
 pub(super) fn signed_room_claims(issuer: Option<&str>, key: Option<&str>) -> Option<String> {

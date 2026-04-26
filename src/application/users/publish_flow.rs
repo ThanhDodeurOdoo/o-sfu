@@ -33,21 +33,21 @@ impl User {
         if self.flow_state.has_queued_publish(stream_type)
             || self
                 .media_core
-                .has_staged_publish(&self.id, self.connection_id, stream_type)
+                .has_staged_publish(&self.room, &self.id, self.connection_id, stream_type)
                 .await
         {
             return Ok(CallOutcome::new());
         }
         if self
             .media_core
-            .is_stream_published(&self.id, stream_type)
+            .is_stream_published(&self.room, &self.id, stream_type)
             .await
         {
             // Once a stream is already live publish intent is just a resume of
             // producer activity. No new transport media or renegotiation is
             // needed here
             self.media_core
-                .set_publication_active(&self.id, self.connection_id, stream_type, true)
+                .set_publication_active(&self.room, &self.id, self.connection_id, stream_type, true)
                 .await;
             return Ok(CallOutcome::new());
         }
@@ -78,7 +78,7 @@ impl User {
         // pure rollback of the staged transaction.
         if self
             .media_core
-            .rollback_staged_publish(&self.id, self.connection_id, stream_type)
+            .rollback_staged_publish(&self.room, &self.id, self.connection_id, stream_type)
             .await
         {
             let _disposition = self.flow_state.request_renegotiation();
@@ -86,7 +86,7 @@ impl User {
         }
         if !self
             .media_core
-            .unpublish(&self.id, self.connection_id, stream_type)
+            .unpublish(&self.room, &self.id, self.connection_id, stream_type)
             .await
         {
             return Ok(CallOutcome::new());
@@ -97,7 +97,7 @@ impl User {
     async fn stage_publish_stream(&self, stream_type: StreamType) -> bool {
         let staged = self
             .media_core
-            .stage_publish(&self.id, self.connection_id, stream_type)
+            .stage_publish(&self.room, &self.id, self.connection_id, stream_type)
             .await;
         if staged {
             info!(

@@ -1,12 +1,13 @@
-use std::sync::Arc;
-
 use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, UserInfo};
 use o_sfu_router::MediaCapabilities;
 
-use crate::runtime::{
-    AppliedSessionAnswer, ConnectionId, NegotiationPort, ObservabilityPort,
-    RuntimeTransportAdapter, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
-    TransportAdapterError, TransportSessionHealth, room::Room,
+use crate::{
+    core::CoreOptions,
+    runtime::{
+        AppliedSessionAnswer, ConnectionId, NegotiationPort, ObservabilityPort,
+        RuntimeTransportAdapter, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
+        TransportAdapterError, TransportSessionHealth, room::Room,
+    },
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,24 +49,25 @@ pub(crate) enum SfuCoreError {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SfuCore {
-    room: Arc<Room>,
+    _options: CoreOptions,
     transport_adapter: RuntimeTransportAdapter,
 }
 
 impl SfuCore {
-    pub(crate) fn new(room: Arc<Room>, transport_adapter: RuntimeTransportAdapter) -> Self {
+    pub(crate) fn new(options: CoreOptions, transport_adapter: RuntimeTransportAdapter) -> Self {
         Self {
-            room,
+            _options: options,
             transport_adapter,
         }
     }
 
     pub(crate) fn endpoint_health(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<MediaEndpointHealth> {
-        let session_key = self.room.transport_user_key(user_id, connection_id);
+        let session_key = room.transport_user_key(user_id, connection_id);
         self.transport_adapter
             .session_transport_health(&session_key)
             .map(|health| match health {
@@ -76,12 +78,12 @@ impl SfuCore {
 
     pub(crate) async fn create_initial_offer(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Result<(MediaNegotiationOffer, OfferedMediaCapabilities), SfuCoreError> {
-        let offered_capabilities =
-            OfferedMediaCapabilities(self.room.router_rtp_capabilities().await);
-        let session_key = self.room.transport_user_key(user_id, connection_id);
+        let offered_capabilities = OfferedMediaCapabilities(room.router_rtp_capabilities().await);
+        let session_key = room.transport_user_key(user_id, connection_id);
         let offer = self
             .transport_adapter
             .create_initial_session_offer(&session_key)
@@ -92,10 +94,11 @@ impl SfuCore {
 
     pub(crate) async fn create_renegotiation_offer(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Result<Option<MediaNegotiationOffer>, SfuCoreError> {
-        let session_key = self.room.transport_user_key(user_id, connection_id);
+        let session_key = room.transport_user_key(user_id, connection_id);
         match self
             .transport_adapter
             .create_session_renegotiation_offer(&session_key)
@@ -109,20 +112,20 @@ impl SfuCore {
 
     pub(crate) async fn apply_initial_answer(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         answer_sdp: &str,
         offered_capabilities: &OfferedMediaCapabilities,
     ) -> Result<(), SfuCoreError> {
         let applied_answer = self
-            .apply_transport_answer(user_id, connection_id, answer_sdp)
+            .apply_transport_answer(room, user_id, connection_id, answer_sdp)
             .await?;
         let client_capabilities = self
             .transport_adapter
             .negotiated_client_rtp_capabilities(answer_sdp, &offered_capabilities.0)
             .map_err(SfuCoreError::CapabilityProjection)?;
-        if !self
-            .room
+        if !room
             .apply_session_negotiated(
                 user_id,
                 connection_id,
@@ -133,159 +136,161 @@ impl SfuCore {
         {
             return Err(SfuCoreError::UserStateCommitRejected);
         }
-        self.commit_staged_publishes(user_id, connection_id, &applied_answer)
+        self.commit_staged_publishes(room, user_id, connection_id, &applied_answer)
             .await;
         Ok(())
     }
 
     pub(crate) async fn apply_renegotiation_answer(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         answer_sdp: &str,
     ) -> Result<(), SfuCoreError> {
         let applied_answer = self
-            .apply_transport_answer(user_id, connection_id, answer_sdp)
+            .apply_transport_answer(room, user_id, connection_id, answer_sdp)
             .await?;
-        if !self
-            .room
+        if !room
             .apply_session_refreshed(user_id, connection_id, &self.transport_adapter)
             .await
         {
             return Err(SfuCoreError::UserStateRefreshRejected);
         }
-        self.commit_staged_publishes(user_id, connection_id, &applied_answer)
+        self.commit_staged_publishes(room, user_id, connection_id, &applied_answer)
             .await;
         Ok(())
     }
 
     pub(crate) async fn has_staged_publish(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
-        self.room
-            .has_staged_publish(user_id, connection_id, stream_type)
+        room.has_staged_publish(user_id, connection_id, stream_type)
             .await
     }
 
     pub(crate) async fn is_stream_published(
         &self,
+        room: &Room,
         user_id: &UserId,
         stream_type: StreamType,
     ) -> bool {
-        self.room.is_stream_published(user_id, stream_type).await
+        room.is_stream_published(user_id, stream_type).await
     }
 
     pub(crate) async fn set_publication_active(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: StreamType,
         active: bool,
     ) {
-        self.room
-            .set_publication_active_runtime(
-                user_id,
-                connection_id,
-                stream_type,
-                active,
-                &self.transport_adapter,
-            )
-            .await;
+        room.set_publication_active_runtime(
+            user_id,
+            connection_id,
+            stream_type,
+            active,
+            &self.transport_adapter,
+        )
+        .await;
     }
 
     pub(crate) async fn update_subscription(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         target_user_id: &UserId,
         states: &DownloadStates,
     ) {
-        self.room
-            .update_subscription_runtime(
-                user_id,
-                connection_id,
-                target_user_id,
-                states,
-                &self.transport_adapter,
-            )
-            .await;
+        room.update_subscription_runtime(
+            user_id,
+            connection_id,
+            target_user_id,
+            states,
+            &self.transport_adapter,
+        )
+        .await;
     }
 
     pub(crate) async fn update_user_info(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         info: UserInfo,
         need_refresh: bool,
     ) {
-        self.room
-            .update_user_info_runtime_for_connection(
-                user_id,
-                connection_id,
-                info,
-                need_refresh,
-                &self.transport_adapter,
-            )
-            .await;
+        room.update_user_info_runtime_for_connection(
+            user_id,
+            connection_id,
+            info,
+            need_refresh,
+            &self.transport_adapter,
+        )
+        .await;
     }
 
     pub(crate) async fn stage_publish(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
-        self.room
-            .stage_negotiated_publish(user_id, connection_id, stream_type, &self.transport_adapter)
+        room.stage_negotiated_publish(user_id, connection_id, stream_type, &self.transport_adapter)
             .await
     }
 
     pub(crate) async fn rollback_staged_publish(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
-        self.room
-            .rollback_staged_publish(user_id, connection_id, stream_type, &self.transport_adapter)
+        room.rollback_staged_publish(user_id, connection_id, stream_type, &self.transport_adapter)
             .await
     }
 
     pub(crate) async fn rollback_connection_publishes(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) {
-        self.room
-            .rollback_staged_publishes_for_connection(
-                user_id,
-                connection_id,
-                &self.transport_adapter,
-            )
-            .await;
+        room.rollback_staged_publishes_for_connection(
+            user_id,
+            connection_id,
+            &self.transport_adapter,
+        )
+        .await;
     }
 
     pub(crate) async fn unpublish(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> bool {
-        self.room
-            .unpublish_track(user_id, connection_id, stream_type, &self.transport_adapter)
+        room.unpublish_track(user_id, connection_id, stream_type, &self.transport_adapter)
             .await
     }
 
     async fn apply_transport_answer(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, SfuCoreError> {
-        let session_key = self.room.transport_user_key(user_id, connection_id);
+        let session_key = room.transport_user_key(user_id, connection_id);
         self.transport_adapter
             .apply_session_answer(&session_key, answer_sdp)
             .await
@@ -294,19 +299,19 @@ impl SfuCore {
 
     async fn commit_staged_publishes(
         &self,
+        room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
         applied_answer: &AppliedSessionAnswer,
     ) {
-        self.room
-            .commit_staged_publishes(
-                user_id,
-                connection_id,
-                applied_answer,
-                &self.transport_adapter,
-                &self.transport_adapter,
-            )
-            .await;
+        room.commit_staged_publishes(
+            user_id,
+            connection_id,
+            applied_answer,
+            &self.transport_adapter,
+            &self.transport_adapter,
+        )
+        .await;
     }
 }
 

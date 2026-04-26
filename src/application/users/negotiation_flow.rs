@@ -29,7 +29,7 @@ impl User {
     pub(super) async fn send_initial_offer(&mut self) -> Result<CallOutcome, WebSocketCloseCode> {
         let (offer, offered_capabilities) = self
             .media_core
-            .create_initial_offer(&self.id, self.connection_id)
+            .create_initial_offer(&self.room, &self.id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(
@@ -185,6 +185,7 @@ impl User {
             } => {
                 self.media_core
                     .apply_initial_answer(
+                        &self.room,
                         &self.id,
                         self.connection_id,
                         answer_sdp,
@@ -194,7 +195,12 @@ impl User {
             }
             PendingFlowAction::RefreshSession => {
                 self.media_core
-                    .apply_renegotiation_answer(&self.id, self.connection_id, answer_sdp)
+                    .apply_renegotiation_answer(
+                        &self.room,
+                        &self.id,
+                        self.connection_id,
+                        answer_sdp,
+                    )
                     .await
             }
         };
@@ -209,7 +215,7 @@ impl User {
         &self,
     ) -> Result<Option<MediaNegotiationOffer>, WebSocketCloseCode> {
         self.media_core
-            .create_renegotiation_offer(&self.id, self.connection_id)
+            .create_renegotiation_offer(&self.room, &self.id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(

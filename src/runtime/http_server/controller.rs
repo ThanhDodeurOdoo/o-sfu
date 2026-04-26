@@ -14,8 +14,7 @@ use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
 use crate::{
-    application::rooms::RoomStats as ApplicationRoomStats,
-    config::Config,
+    application::{program::HttpOptions, rooms::RoomStats as ApplicationRoomStats},
     runtime::{
         RuntimeState,
         diagnostics::DiagnosticsUserLookup,
@@ -39,13 +38,13 @@ use crate::{
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
 
 pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
-    let listener = TcpListener::bind(state.config.bind_address).await?;
+    let listener = TcpListener::bind(state.http_options.bind_address).await?;
     let local_address = listener.local_addr()?;
     info!(
         event = telemetry::schema::event::HTTP_LISTENER_READY,
-        bind_address = %state.config.bind_address,
+        bind_address = %state.http_options.bind_address,
         local_address = %local_address,
-        trust_proxy_headers = state.config.trust_proxy_headers,
+        trust_proxy_headers = state.http_options.trust_proxy_headers,
         "booted HTTP and WebSocket listener"
     );
     axum::serve(
@@ -101,7 +100,8 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     async {
         axum::Json(
             state
-                .rooms
+                .application
+                .rooms()
                 .stats()
                 .await
                 .into_iter()
@@ -201,7 +201,7 @@ async fn room(
 )]
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
     async {
-        match disconnect_users(&state.rooms, &state.config, &body).await {
+        match disconnect_users(state.application.rooms(), &state.http_options, &body).await {
             Ok(()) => {
                 state.metrics.record_http_disconnect_success();
                 StatusCode::OK.into_response()
@@ -222,24 +222,24 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
 
 async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config) {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        axum::Json(state.rooms.diagnostics_summary().await).into_response()
+        axum::Json(state.application.rooms().diagnostics_summary().await).into_response()
     }
     .await
 }
 
 async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config) {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        axum::Json(state.rooms.diagnostics_rooms().await).into_response()
+        axum::Json(state.application.rooms().diagnostics_rooms().await).into_response()
     }
     .await
 }
@@ -250,12 +250,17 @@ async fn diagnostics_room_detail(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config) {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        let Some(payload) = state.rooms.diagnostics_room_detail(&room_id).await else {
+        let Some(payload) = state
+            .application
+            .rooms()
+            .diagnostics_room_detail(&room_id)
+            .await
+        else {
             return StatusCode::NOT_FOUND.into_response();
         };
         axum::Json(payload).into_response()
@@ -269,12 +274,17 @@ async fn diagnostics_user_detail(
     Path(user_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config) {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        match state.rooms.diagnostics_user_detail(&user_id).await {
+        match state
+            .application
+            .rooms()
+            .diagnostics_user_detail(&user_id)
+            .await
+        {
             DiagnosticsUserLookup::Missing => StatusCode::NOT_FOUND.into_response(),
             DiagnosticsUserLookup::Found(payload) => axum::Json(payload).into_response(),
             DiagnosticsUserLookup::Conflict(payload) => {
@@ -292,8 +302,8 @@ enum DiagnosticsAccess {
     Disabled,
 }
 
-fn ensure_diagnostics_access(headers: &HeaderMap, config: &Config) -> DiagnosticsAccess {
-    if let Some(expected_token) = config.diagnostics.auth_token.as_deref() {
+fn ensure_diagnostics_access(headers: &HeaderMap, options: &HttpOptions) -> DiagnosticsAccess {
+    if let Some(expected_token) = options.diagnostics.auth_token.as_deref() {
         return match authorization_token(headers) {
             Some(actual_token)
                 if actual_token
@@ -308,7 +318,7 @@ fn ensure_diagnostics_access(headers: &HeaderMap, config: &Config) -> Diagnostic
     }
     // Without an explicit token we only allow diagnostics on loopback listeners.
     // for example if a reverse proxy is the network boundary we expect it handle that
-    if config.bind_address.ip().is_loopback() {
+    if options.bind_address.ip().is_loopback() {
         DiagnosticsAccess::Allowed
     } else {
         DiagnosticsAccess::Disabled

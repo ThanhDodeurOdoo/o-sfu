@@ -24,7 +24,6 @@ pub(super) use tokio_tungstenite::{
 };
 
 pub(super) use crate::{
-    application::rooms::Room as ApplicationRoom,
     config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TelemetryConfig,
@@ -32,6 +31,7 @@ pub(super) use crate::{
     runtime::{
         RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
+        build_runtime_state,
         diagnostics::DiagnosticsStore,
         http_server::app,
         metrics::RuntimeMetrics,
@@ -161,19 +161,16 @@ async fn spawn_test_server_impl(
         Arc::clone(&diagnostics),
         Arc::clone(&metrics),
     ));
-    let state = RuntimeState {
-        config,
-        rooms: ApplicationRoom::new(
-            Arc::clone(&room_manager),
-            Arc::clone(&diagnostics),
-            transport_adapter.clone(),
-        ),
-        room_manager: Arc::clone(&room_manager),
+    let bind_address = config.bind_address;
+    let state = build_runtime_state(
+        &config,
+        Arc::clone(&room_manager),
+        Arc::clone(&diagnostics),
         metrics,
         transport_adapter,
-    };
+    );
     let state_for_server = state.clone();
-    let listener = TcpListener::bind(state.config.bind_address).await.ok()?;
+    let listener = TcpListener::bind(bind_address).await.ok()?;
     let addr = listener.local_addr().ok()?;
     let handle = tokio::spawn(async move {
         let result = axum::serve(listener, app(state_for_server)).await;

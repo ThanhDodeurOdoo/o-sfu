@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use super::{
-    RuntimeState, build_transport_adapter,
+    build_runtime_state, build_transport_adapter,
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
@@ -22,7 +22,7 @@ use super::{
         rtp_capabilities::router_rtp_capabilities,
     },
 };
-use crate::{application::rooms::Room as ApplicationRoom, config::Config};
+use crate::{application::program::ProgramOptions, config::Config};
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
@@ -166,16 +166,17 @@ impl Drop for TestServer {
 ///
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
+    let options = ProgramOptions::from_config(&config);
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
     let room_manager = Arc::new(RoomManager::new(
         RoomManagerConfig::new(
-            config.rtc_media_worker_count,
+            options.core.routing.media_worker_count,
             RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(config.room_size),
-                config.feature_flags,
-                router_rtp_capabilities(config.codec_flags),
+                RoomAdmissionPolicy::new(options.call.room.max_users),
+                options.call.feature_flags(),
+                router_rtp_capabilities(options.core.codecs.flags),
             ),
         ),
         Arc::clone(&recording_media_tap),
@@ -183,23 +184,20 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         Arc::clone(&metrics),
     ));
     let transport_adapter = build_transport_adapter(
-        &config,
+        &options.core,
         Arc::clone(&diagnostics),
         recording_media_tap,
         Arc::clone(&metrics),
     );
-    let state = RuntimeState {
-        config,
-        rooms: ApplicationRoom::new(
-            Arc::clone(&room_manager),
-            Arc::clone(&diagnostics),
-            transport_adapter.clone(),
-        ),
-        room_manager: Arc::clone(&room_manager),
+    let bind_address = config.bind_address;
+    let state = build_runtime_state(
+        &config,
+        Arc::clone(&room_manager),
+        Arc::clone(&diagnostics),
         metrics,
         transport_adapter,
-    };
-    let listener = TcpListener::bind(state.config.bind_address).await?;
+    );
+    let listener = TcpListener::bind(bind_address).await?;
     let addr = listener
         .local_addr()
         .map_err(|error| anyhow!("failed to read test listener address: {error}"))?;

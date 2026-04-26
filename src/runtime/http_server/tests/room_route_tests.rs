@@ -197,7 +197,7 @@ async fn room_uses_forwarded_headers_when_proxy_trust_is_enabled() {
         return;
     };
     let mut state = test_state();
-    state.config.trust_proxy_headers = true;
+    state.http_options.trust_proxy_headers = true;
     let create_response = app(state.clone()).oneshot(create_request).await;
     assert!(
         create_response.is_ok(),

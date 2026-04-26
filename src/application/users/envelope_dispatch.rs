@@ -28,7 +28,7 @@ impl User {
 
     async fn handle_info_message(&self, info: UserInfo) {
         self.media_core
-            .update_user_info(&self.id, self.connection_id, info, false)
+            .update_user_info(&self.room, &self.id, self.connection_id, info, false)
             .await;
     }
 
@@ -50,7 +50,13 @@ impl User {
             "received subscribe intent"
         );
         self.media_core
-            .update_subscription(&self.id, self.connection_id, target_session_id, states)
+            .update_subscription(
+                &self.room,
+                &self.id,
+                self.connection_id,
+                target_session_id,
+                states,
+            )
             .await;
         info!(
             event = telemetry_event::SUBSCRIBE_SUCCEEDED,
@@ -136,7 +142,7 @@ impl User {
         }
     }
 
-    pub(super) async fn dispatch_client_envelope(
+    pub(super) async fn handle_client_envelope(
         &mut self,
         envelope: ClientEnvelope,
     ) -> Result<CallOutcome, WebSocketCloseCode> {

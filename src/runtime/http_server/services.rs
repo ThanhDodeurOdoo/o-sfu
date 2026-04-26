@@ -6,8 +6,10 @@ use axum::{
 };
 
 use crate::{
-    application::rooms::{CreateRoomRequest, Room},
-    config::Config,
+    application::{
+        program::HttpOptions,
+        rooms::{CreateRoomRequest, Room},
+    },
     runtime::{
         RuntimeState,
         auth::{self, HttpDisconnectClaims, HttpRoomClaims},
@@ -40,7 +42,7 @@ pub(super) async fn verify_and_get_room(
     let Some(token) = authorization_token(context.headers) else {
         return Err(CreateRoomError::Unauthorized);
     };
-    let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.config.auth_key) else {
+    let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.http_options.auth.key) else {
         return Err(CreateRoomError::Unauthorized);
     };
     let Some(issuer) = claims.registered.iss.as_deref() else {
@@ -49,10 +51,14 @@ pub(super) async fn verify_and_get_room(
     if context.query.recording_address.is_some() && claims.key.is_none() {
         return Err(CreateRoomError::BadRequest);
     }
-    let remote_address =
-        resolve_remote_address(context.headers, &state.config, context.connect_address);
+    let remote_address = resolve_remote_address(
+        context.headers,
+        state.http_options.trust_proxy_headers,
+        context.connect_address,
+    );
     let room = state
-        .rooms
+        .application
+        .rooms()
         .create_or_get(CreateRoomRequest {
             issuer,
             key: claims.key.as_deref(),
@@ -63,7 +69,7 @@ pub(super) async fn verify_and_get_room(
         .await;
     Ok(CreatedRoom {
         uuid: room.uuid,
-        base_url: request_base_url(context.headers, &state.config),
+        base_url: request_base_url(context.headers, &state.http_options),
     })
 }
 
@@ -74,13 +80,13 @@ pub(super) enum DisconnectError {
 
 pub(super) async fn disconnect_users(
     rooms: &Room,
-    config: &Config,
+    options: &HttpOptions,
     body: &Bytes,
 ) -> Result<(), DisconnectError> {
     let Ok(token) = str::from_utf8(body) else {
         return Err(DisconnectError::BadRequest);
     };
-    let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &config.auth_key) else {
+    let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &options.auth.key) else {
         return Err(DisconnectError::UnprocessableEntity);
     };
     rooms.disconnect_users(&claims.user_ids_by_room).await;
@@ -94,9 +100,11 @@ pub(super) fn authorization_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.split_once(' ').map(|(_, token)| token))
 }
 
-pub(crate) fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
-    let scheme = trusted_forwarded_header(headers, config, "x-forwarded-proto").unwrap_or("http");
-    let host = trusted_forwarded_header(headers, config, "x-forwarded-host")
+pub(crate) fn request_base_url(headers: &HeaderMap, options: &HttpOptions) -> String {
+    let scheme =
+        trusted_forwarded_header(headers, options.trust_proxy_headers, "x-forwarded-proto")
+            .unwrap_or("http");
+    let host = trusted_forwarded_header(headers, options.trust_proxy_headers, "x-forwarded-host")
         .map(str::to_owned)
         .or_else(|| {
             headers
@@ -104,6 +112,6 @@ pub(crate) fn request_base_url(headers: &HeaderMap, config: &Config) -> String {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned)
         })
-        .unwrap_or_else(|| config.bind_address.to_string());
+        .unwrap_or_else(|| options.bind_address.to_string());
     format!("{scheme}://{host}")
 }

@@ -26,7 +26,14 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::{application::rooms::Room as ApplicationRoom, config::Config};
+use crate::{
+    application::{
+        program::{CallApplication, HttpOptions, ProgramOptions, WebSocketOptions},
+        rooms::Room as ApplicationRoom,
+    },
+    config::Config,
+    core::{CoreOptions, SfuCore},
+};
 
 pub(crate) mod auth;
 pub(crate) mod diagnostics;
@@ -74,7 +81,7 @@ pub(crate) use transport_adapter::{
 /// cheap clones of these dependencies through [`RuntimeState`].
 #[derive(Debug)]
 pub struct Runtime {
-    pub config: Config,
+    options: ProgramOptions,
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
@@ -83,44 +90,46 @@ pub struct Runtime {
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
-    config: Config,
+    http_options: HttpOptions,
+    websocket_options: WebSocketOptions,
     room_manager: Arc<RoomManager>,
-    rooms: ApplicationRoom,
+    application: CallApplication,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
 }
 
 impl Runtime {
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: &Config) -> Self {
+        let options = ProgramOptions::from_config(config);
         let diagnostics = Arc::new(DiagnosticsStore::default());
         let metrics = Arc::new(RuntimeMetrics::default());
         let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
         let transport_adapter = build_transport_adapter(
-            &config,
+            &options.core,
             Arc::clone(&diagnostics),
             Arc::clone(&recording_media_tap),
             Arc::clone(&metrics),
         );
-        let rtc_media_worker_count = config.rtc_media_worker_count;
         let room_runtime_policy = RoomRuntimePolicy::new(
-            RoomAdmissionPolicy::new(config.room_size),
-            config.feature_flags,
-            room::rtp_capabilities::router_rtp_capabilities(config.codec_flags),
+            RoomAdmissionPolicy::new(options.call.room.max_users),
+            options.call.feature_flags(),
+            room::rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
         );
         info!("{}", config.log_view(process::id()));
         info!(
             event = telemetry::schema::event::RUNTIME_BOOT,
             "runtime configuration loaded"
         );
+        let room_manager = Arc::new(RoomManager::new(
+            RoomManagerConfig::new(options.core.routing.media_worker_count, room_runtime_policy),
+            recording_media_tap,
+            Arc::clone(&diagnostics),
+            Arc::clone(&metrics),
+        ));
         Self {
-            config,
-            room_manager: Arc::new(RoomManager::new(
-                RoomManagerConfig::new(rtc_media_worker_count, room_runtime_policy),
-                recording_media_tap,
-                Arc::clone(&diagnostics),
-                Arc::clone(&metrics),
-            )),
+            options,
+            room_manager,
             diagnostics,
             metrics,
             transport_adapter,
@@ -134,9 +143,12 @@ impl Runtime {
             subscribe_source_policy_updates(&self.transport_adapter),
             self.transport_adapter.clone(),
         );
+        let options = self.options.clone();
         let result = serve_http(RuntimeState {
-            config: self.config,
-            rooms: ApplicationRoom::new(
+            http_options: options.http.clone(),
+            websocket_options: options.websocket.clone(),
+            application: build_call_application(
+                &options,
                 Arc::clone(&self.room_manager),
                 Arc::clone(&self.diagnostics),
                 self.transport_adapter.clone(),
@@ -150,6 +162,42 @@ impl Runtime {
         let _ = source_packet_policy_sync.await;
         result
     }
+}
+
+fn build_runtime_state(
+    config: &Config,
+    room_manager: Arc<RoomManager>,
+    diagnostics: Arc<DiagnosticsStore>,
+    metrics: Arc<RuntimeMetrics>,
+    transport_adapter: RuntimeTransportAdapter,
+) -> RuntimeState {
+    let options = ProgramOptions::from_config(config);
+    RuntimeState {
+        http_options: options.http.clone(),
+        websocket_options: options.websocket.clone(),
+        application: build_call_application(
+            &options,
+            Arc::clone(&room_manager),
+            diagnostics,
+            transport_adapter.clone(),
+        ),
+        room_manager,
+        metrics,
+        transport_adapter,
+    }
+}
+
+fn build_call_application(
+    options: &ProgramOptions,
+    room_manager: Arc<RoomManager>,
+    diagnostics: Arc<DiagnosticsStore>,
+    transport_adapter: RuntimeTransportAdapter,
+) -> CallApplication {
+    CallApplication::new(
+        options.call.clone(),
+        ApplicationRoom::new(room_manager, diagnostics, transport_adapter.clone()),
+        SfuCore::new(options.core, transport_adapter),
+    )
 }
 
 /// Room state decides which producer layers should remain routable from room-level
@@ -234,17 +282,17 @@ async fn sync_source_packet_selection_policies(
 }
 
 fn build_transport_adapter(
-    config: &Config,
+    options: &CoreOptions,
     diagnostics: Arc<DiagnosticsStore>,
     recording_media_tap: Arc<MediaTap>,
     metrics: Arc<RuntimeMetrics>,
 ) -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        config.public_ip,
-        SessionBitrateLimits::new(config.max_bitrate_in_bps, config.max_bitrate_out_bps),
-        config.rtc_port_range,
-        config.rtc_media_worker_count,
-        config.codec_flags,
+        options.media.public_ip,
+        options.media.bitrate_limits,
+        options.media.rtc_port_range,
+        options.routing.media_worker_count,
+        options.codecs.flags,
         diagnostics,
         recording_media_tap,
         metrics,
@@ -259,7 +307,7 @@ fn build_transport_adapter(
 pub fn run() -> Result<()> {
     let config = Config::from_env()?;
     let _telemetry = init_tracing(&config.telemetry, process::id())?;
-    let runtime = Runtime::new(config);
+    let runtime = Runtime::new(&config);
     Builder::new_multi_thread()
         .enable_all()
         .build()?

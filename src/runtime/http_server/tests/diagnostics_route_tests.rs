@@ -67,7 +67,7 @@ async fn publish_media_stream(
 #[tokio::test]
 async fn diagnostics_routes_are_forbidden_without_token_on_public_listener() {
     let mut state = test_state();
-    state.config.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
+    state.http_options.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
 
     let request = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
     assert!(request.is_some());
@@ -85,8 +85,8 @@ async fn diagnostics_routes_are_forbidden_without_token_on_public_listener() {
 #[tokio::test]
 async fn diagnostics_routes_require_the_configured_bearer_token() {
     let mut state = test_state();
-    state.config.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
-    state.config.diagnostics.auth_token = Some(String::from("operator-secret"));
+    state.http_options.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
+    state.http_options.diagnostics.auth_token = Some(String::from("operator-secret"));
 
     let unauthorized = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
     assert!(unauthorized.is_some());

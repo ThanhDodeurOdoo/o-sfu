@@ -22,6 +22,7 @@ pub mod http {
         RoomResponse, STATS_PATH, StatsResponse,
     };
     use crate::{
+        application::program::ProgramOptions,
         config::{
             Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
             TelemetryConfig,
@@ -75,9 +76,10 @@ pub mod http {
         insert_header(&mut headers, "x-forwarded-for", forwarded_for);
 
         let config = testing_config(trust_proxy_headers);
+        let options = ProgramOptions::from_config(&config);
         (
-            request_base_url(&headers, &config),
-            resolve_remote_address(&headers, &config, connect_info),
+            request_base_url(&headers, &options.http),
+            resolve_remote_address(&headers, options.http.trust_proxy_headers, connect_info),
         )
     }
 }

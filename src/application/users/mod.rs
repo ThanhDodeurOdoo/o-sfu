@@ -19,7 +19,7 @@ use crate::{
     application::outcomes::{CallOutcome, UserEndReason, UserSignal},
     core::{MediaEndpointHealth, SfuCore},
     runtime::{
-        ConnectionId, RuntimeTransportAdapter,
+        ConnectionId,
         room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
     },
 };
@@ -73,13 +73,13 @@ impl User {
         connection_id: ConnectionId,
         remote_address: Arc<str>,
         room: Arc<Room>,
-        transport_adapter: RuntimeTransportAdapter,
+        media_core: SfuCore,
     ) -> Self {
         Self {
             id: user_id,
             connection_id,
             remote_address,
-            media_core: SfuCore::new(Arc::clone(&room), transport_adapter),
+            media_core,
             room,
             request_ids: ServerRequestIdState::default(),
             flow_state: SessionFlowState::default(),
@@ -90,7 +90,7 @@ impl User {
 
     pub(crate) fn end_reason(&self) -> Option<UserEndReason> {
         self.media_core
-            .endpoint_health(&self.id, self.connection_id)
+            .endpoint_health(&self.room, &self.id, self.connection_id)
             .and_then(|health| match health {
                 MediaEndpointHealth::Disconnected => Some(UserEndReason::TransportDisconnected),
                 MediaEndpointHealth::Connected => None,
@@ -106,7 +106,7 @@ impl User {
         intent: UserIntent,
     ) -> Result<CallOutcome, WebSocketCloseCode> {
         match intent {
-            UserIntent::ClientEnvelope(envelope) => self.dispatch_client_envelope(envelope).await,
+            UserIntent::ClientEnvelope(envelope) => self.handle_client_envelope(envelope).await,
         }
     }
 
@@ -123,7 +123,7 @@ impl User {
 
     pub(crate) async fn finish(&mut self) {
         self.media_core
-            .rollback_connection_publishes(&self.id, self.connection_id)
+            .rollback_connection_publishes(&self.room, &self.id, self.connection_id)
             .await;
         self.cleanup_finished = true;
     }
@@ -178,12 +178,13 @@ impl Drop for User {
             return;
         }
         let media_core = self.media_core.clone();
+        let room = Arc::clone(&self.room);
         let user_id = self.id.clone();
         let connection_id = self.connection_id;
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
                 media_core
-                    .rollback_connection_publishes(&user_id, connection_id)
+                    .rollback_connection_publishes(&room, &user_id, connection_id)
                     .await;
             });
         }
