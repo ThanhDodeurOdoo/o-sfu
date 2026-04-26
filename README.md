@@ -20,27 +20,38 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 
 ```mermaid
 flowchart TD
-    Odoo["Odoo Backend"] --> Http["HTTP API"]
-    Browser["Browser Client"] --> Ws["WebSocket Edge"]
+    subgraph "external"
+       Odoo["Odoo Backend"]
+       Browser["Browser Client"]
+    end
+    subgraph "runtime"
+      Runtime
+      Http
+      Ws
+    end
+    subgraph "core"
+      User
+      Sfu["SfuCore Facade"]
+      Room
+      Recording
+      Transport
+      Rtc
+    end
+    Odoo --> Http["HTTP"]
+    Browser --> Ws["WebSocket"]
     Http --> Runtime["Runtime Shell"]
     Ws --> Runtime
-    Runtime --> Rooms["Core Room Manager"]
-    Runtime --> User["Core User"]
-    User -- "belongs to" --> Rooms
-    User --> Sfu["SfuCore Facade"]
-    Runtime --> RecordingBoundary["Recording Boundary"]
-    RecordingBoundary --> Rooms
+    Runtime --> Room
+    Runtime --> User
+    User <--> Room
+    User --> Sfu
     Sfu --> Transport["Transport Adapter"]
     Transport --> Rtc["str0m RTC Adapter"]
-    Rooms --> Router["o-sfu-router"]
-    Rooms --> Recording["Core Recording Pipeline"]
+    Room --> Router["o-sfu-router"]
+    Room --> Recording["Core Recording Pipeline"]
     Rtc --> Router
-    Rtc --> Recording
-    Runtime --> MetricsExport["Prometheus Export"]
     Runtime --> Diagnostics["Diagnostics Queries"]
-    Diagnostics --> Rooms
-    Diagnostics --> Transport
-    MetricsExport --> CoreMetrics["Core Metrics"]
+    Runtime --> MetricsExport["Prometheus Export"]
 ```
 
 The server crate is the orchestration shell: it loads config, exposes HTTP and

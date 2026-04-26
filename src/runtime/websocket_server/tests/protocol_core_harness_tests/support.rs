@@ -21,6 +21,7 @@ use o_sfu_protocol::{
     signaling::RecordingOptions,
 };
 pub(super) use o_sfu_router::MediaKind;
+use o_sfu_router::test_sample::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 pub(super) use serde_json::json;
 use str0m::{
     Candidate, Rtc,
@@ -32,7 +33,6 @@ pub(super) use tokio::time::{sleep, timeout};
 pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 pub(super) use super::super::fixtures::*;
-use crate::runtime::test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 pub(super) use crate::{
     config::RuntimeFeatureFlags,
     runtime::{room::Room, transport_adapter::RuntimeTransportAdapter},

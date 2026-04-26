@@ -9,13 +9,15 @@
 use std::net::SocketAddr;
 
 use o_sfu_protocol::shared::StreamType;
-use o_sfu_router::{MediaKind, MediaStream};
+use o_sfu_router::{
+    MediaKind, MediaStream,
+    test_sample::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
+};
 
 use super::fixtures::*;
 use crate::runtime::{
     diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
     room::Room,
-    test_rtp_samples::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
 };
 
 fn test_simulcast_video_rtp_parameters() -> MediaStream {

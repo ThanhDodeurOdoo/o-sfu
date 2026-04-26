@@ -3,6 +3,11 @@ pub(super) use std::{sync::Arc, time::Duration};
 pub(super) use o_sfu_protocol::shared::{
     DownloadStates, StreamType, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
 };
+use o_sfu_router::test_sample::{
+    sample_audio_rtp_parameters, sample_client_rtp_capabilities,
+    sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
+    sample_video_rtp_parameters,
+};
 pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
     RouterId, SessionPermissions as RouterSessionPermissions,
@@ -14,19 +19,12 @@ pub(super) use super::super::{
     RoomJoinError, RoomManager, RoomManagerJoinError, UserCloseReason, UserOutbound,
     topology::RoomTopology,
 };
+use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::runtime::{
     ConnectionId,
     transport_adapter::{
         ActiveSpeakerSource, NegotiationPort, RuntimeTransportAdapter, TransportMediaId,
         test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
-    },
-};
-use crate::runtime::{
-    room::user_negotiation::{UserNegotiationUpdate, UserTransportReady},
-    test_rtp_samples::{
-        sample_audio_rtp_parameters, sample_client_rtp_capabilities,
-        sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
-        sample_video_rtp_parameters,
     },
 };
 

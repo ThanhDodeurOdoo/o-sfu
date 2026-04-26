@@ -1,7 +1,9 @@
 use std::time::Instant;
 
 use o_sfu_rfc::webrtc;
-use o_sfu_router::MediaKind as RouterMediaKind;
+use o_sfu_router::{
+    MediaKind as RouterMediaKind, test_sample::sample_simulcast_video_rtp_parameters,
+};
 use str0m::{
     Candidate, Rtc,
     change::SdpOffer,
@@ -11,8 +13,7 @@ use str0m::{
 
 use super::fixtures::*;
 use crate::runtime::{
-    rtc_adapter::client_rtp_capabilities_from_answer,
-    test_rtp_samples::sample_simulcast_video_rtp_parameters, transport_adapter::TransportMediaId,
+    rtc_adapter::client_rtp_capabilities_from_answer, transport_adapter::TransportMediaId,
 };
 
 #[tokio::test]

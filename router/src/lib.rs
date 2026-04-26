@@ -2,6 +2,8 @@
 //!
 //! This crate keep all the routing logic pure, independant from async runtime
 mod model;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_sample;
 
 pub use self::model::{
     CodecSetting, Consumer, ConsumerCapability, ConsumerId, HeaderExtension, HeaderExtensionId,

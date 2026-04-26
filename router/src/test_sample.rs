@@ -1,5 +1,6 @@
 use o_sfu_rfc::{rtp, webrtc};
-use o_sfu_router::{
+
+use crate::{
     CodecSetting, HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind,
     MediaStream, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
@@ -13,7 +14,8 @@ const HEADER_EXTENSION_ID_ABS_SEND_TIME: u8 = 4;
 const HEADER_EXTENSION_ID_TRANSPORT_WIDE_CC: u8 = 5;
 const HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL: u8 = 10;
 
-pub(crate) fn sample_client_rtp_capabilities() -> MediaCapabilities {
+#[must_use]
+pub fn sample_client_rtp_capabilities() -> MediaCapabilities {
     MediaCapabilities::new(
         vec![
             opus_codec_capability(),
@@ -24,7 +26,37 @@ pub(crate) fn sample_client_rtp_capabilities() -> MediaCapabilities {
     )
 }
 
-pub(crate) fn sample_video_rtp_parameters(mid: Option<&str>, ssrc: u32) -> MediaStream {
+#[must_use]
+pub fn sample_client_rtp_capabilities_without_video_rtx() -> MediaCapabilities {
+    MediaCapabilities::new(
+        vec![
+            opus_codec_capability(),
+            video_codec_capability_without_transport_cc(),
+        ],
+        vec![HeaderExtension::new(
+            webrtc::RtpHeaderExtensionUri::Mid,
+            HEADER_EXTENSION_ID_MID,
+        )],
+    )
+}
+
+#[must_use]
+pub fn sample_audio_rtp_parameters(ssrc: u32) -> MediaStream {
+    MediaStream::new(
+        vec![opus_codec_parameters()],
+        vec![
+            HeaderExtension::new(webrtc::RtpHeaderExtensionUri::Mid, HEADER_EXTENSION_ID_MID),
+            HeaderExtension::new(
+                webrtc::RtpHeaderExtensionUri::SsrcAudioLevel,
+                HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL,
+            ),
+        ],
+        vec![StreamBinding::new().with_ssrc(ssrc)],
+    )
+}
+
+#[must_use]
+pub fn sample_video_rtp_parameters(mid: Option<&str>, ssrc: u32) -> MediaStream {
     with_optional_mid(
         MediaStream::new(
             vec![video_codec_parameters(), video_rtx_codec_parameters()],
@@ -45,7 +77,8 @@ pub(crate) fn sample_video_rtp_parameters(mid: Option<&str>, ssrc: u32) -> Media
     )
 }
 
-pub(crate) fn sample_simulcast_video_rtp_parameters(mid: Option<&str>) -> MediaStream {
+#[must_use]
+pub fn sample_simulcast_video_rtp_parameters(mid: Option<&str>) -> MediaStream {
     with_optional_mid(
         MediaStream::new(
             vec![video_codec_parameters()],
@@ -73,6 +106,20 @@ fn with_optional_mid(parameters: MediaStream, mid: Option<&str>) -> MediaStream 
         Some(mid) => parameters.with_mid(mid.to_owned()),
         None => parameters,
     }
+}
+
+fn video_codec_parameters() -> MediaFormat {
+    MediaFormat::new(
+        MediaKind::Video,
+        rtp::CodecName::Vp8,
+        VIDEO_PAYLOAD_TYPE_VP8,
+        90_000,
+    )
+    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
+    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::CcmFir, None))
+    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
+    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
 }
 
 fn default_header_extensions() -> Vec<HeaderExtension> {
@@ -105,6 +152,11 @@ fn video_codec_capability() -> MediaCodecCapability {
     video_codec_capability_with_feedback(true)
 }
 
+fn video_codec_capability_without_transport_cc() -> MediaCodecCapability {
+    video_codec_capability_with_feedback(false)
+        .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
+}
+
 fn video_codec_capability_with_feedback(include_transport_cc: bool) -> MediaCodecCapability {
     let codec = MediaCodecCapability::new(MediaKind::Video, rtp::CodecName::Vp8, 90_000)
         .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8)
@@ -125,17 +177,15 @@ fn video_rtx_codec_capability() -> MediaCodecCapability {
         .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8.into()))
 }
 
-fn video_codec_parameters() -> MediaFormat {
+fn opus_codec_parameters() -> MediaFormat {
     MediaFormat::new(
-        MediaKind::Video,
-        rtp::CodecName::Vp8,
-        VIDEO_PAYLOAD_TYPE_VP8,
-        90_000,
+        MediaKind::Audio,
+        rtp::CodecName::Opus,
+        AUDIO_PAYLOAD_TYPE_OPUS,
+        48_000,
     )
-    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
-    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
-    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::CcmFir, None))
-    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
+    .with_channels(2)
+    .with_setting(CodecSetting::UseInBandFec(true))
     .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
 }
 

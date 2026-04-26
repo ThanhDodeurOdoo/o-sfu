@@ -3,7 +3,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_router::MediaKind;
+use o_sfu_router::{
+    MediaKind, test_sample::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
+};
 use str0m::{Candidate, Rtc, change::SdpOffer};
 
 use super::{api::NegotiatedPublish, fixtures::*};
@@ -16,7 +18,6 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::Room,
-        test_rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
         transport_adapter::{
             MediaPort, NegotiationPort, RtcTransportAdapterShardSetConfig, SessionBitrateLimits,
             SessionOffer, SessionPort, SourcePacketGate, TransportMediaId, TransportSessionKey,

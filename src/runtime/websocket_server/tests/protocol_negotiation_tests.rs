@@ -1,8 +1,7 @@
 use o_sfu_protocol::signaling::{ServerMessage, ServerRequest, TrackBinding};
-use o_sfu_router::MediaKind;
+use o_sfu_router::{MediaKind, test_sample::sample_simulcast_video_rtp_parameters};
 
 use super::fixtures::*;
-use crate::runtime::test_rtp_samples::sample_simulcast_video_rtp_parameters;
 
 #[tokio::test]
 async fn protocol_user_serializes_topology_renegotiations() {

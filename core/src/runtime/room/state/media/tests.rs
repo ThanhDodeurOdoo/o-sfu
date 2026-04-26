@@ -12,6 +12,10 @@ use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, UserPermissions
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
     derive_consumable_rtp_parameters,
+    test_sample::{
+        sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
+        sample_video_rtp_parameters,
+    },
 };
 use tokio::sync::mpsc;
 
@@ -36,10 +40,6 @@ use crate::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
             SourceEncodingId, SourceSelector,
-        },
-        test_rtp_samples::{
-            sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
-            sample_video_rtp_parameters,
         },
         transport_adapter::TransportMediaId,
     },

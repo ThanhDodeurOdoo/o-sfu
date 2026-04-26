@@ -28,3 +28,6 @@ uuid.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+o-sfu-router = { workspace = true, features = ["test-support"] }

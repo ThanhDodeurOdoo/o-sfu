@@ -33,8 +33,6 @@ mod metrics_export;
 pub(crate) mod options;
 mod request_origin;
 pub(crate) mod telemetry;
-#[cfg(test)]
-pub(crate) mod test_rtp_samples;
 #[doc(hidden)]
 pub mod testing;
 pub(crate) mod websocket_server;

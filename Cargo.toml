@@ -159,4 +159,5 @@ workspace = true
 
 [dev-dependencies]
 o-sfu-core = { workspace = true, features = ["testing-transport"] }
+o-sfu-router = { workspace = true, features = ["test-support"] }
 tower = { version = "0.5", features = ["util"] }
