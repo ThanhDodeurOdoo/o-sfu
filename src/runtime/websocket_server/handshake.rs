@@ -503,6 +503,7 @@ async fn initialize_session(
             outcome = "welcome_send_failed",
             "failed to send websocket welcome payload"
         );
+        session_protocol.finish().await;
         cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }
@@ -516,6 +517,7 @@ async fn initialize_session(
             "failed to initialize websocket user protocol"
         );
         state.metrics.record_ws_user_initialize_failure();
+        session_protocol.finish().await;
         cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }

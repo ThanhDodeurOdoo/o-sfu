@@ -5,39 +5,33 @@ use o_sfu_protocol::signaling::{
 use tracing::{info, instrument, warn};
 
 use super::{
-    super::flow_state::{
+    User,
+    flow_state::{
         PendingFlowAction, PendingFlowRequest, RenegotiationDisposition, ResolvedFlowState,
     },
-    controller::PostAuthSessionProtocol,
 };
 use crate::{
     application::outcomes::{CallOutcome, UserSignal},
     runtime::{
+        AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
+        SessionUploadSlot, TransportAdapterError, TransportSessionKey,
         telemetry::schema::event as telemetry_event,
-        transport_adapter::{
-            AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
-            SessionUploadSlot, TransportAdapterError, TransportSessionKey,
-        },
     },
 };
 
-impl PostAuthSessionProtocol {
+impl User {
     #[instrument(
         name = "transport.offer.create",
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id
         )
     )]
-    pub(in crate::runtime::websocket_server) async fn send_initial_offer(
-        &mut self,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    pub(super) async fn send_initial_offer(&mut self) -> Result<CallOutcome, WebSocketCloseCode> {
         let router_capabilities = self.room.router_rtp_capabilities().await;
-        let session_key = self
-            .room
-            .transport_user_key(&self.user_id, self.connection_id);
+        let session_key = self.room.transport_user_key(&self.id, self.connection_id);
         let offer = create_initial_offer(&self.transport_adapter, &session_key)
             .await
             .map_err(|error| {
@@ -45,7 +39,7 @@ impl PostAuthSessionProtocol {
                     event = telemetry_event::NEGOTIATION_FAILED,
                     operation = "initial_offer_create",
                     outcome = "transport_error",
-                    user_id = ?self.user_id,
+                    user_id = ?self.id,
                     connection_id = ?self.connection_id,
                     remote_address = self.remote_address.as_ref(),
                     ?error,
@@ -93,7 +87,7 @@ impl PostAuthSessionProtocol {
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id
         )
     )]
@@ -105,9 +99,7 @@ impl PostAuthSessionProtocol {
                 Ok(CallOutcome::new())
             }
             RenegotiationDisposition::SendNow => {
-                let session_key = self
-                    .room
-                    .transport_user_key(&self.user_id, self.connection_id);
+                let session_key = self.room.transport_user_key(&self.id, self.connection_id);
                 let Some(request) = staged_renegotiation_request(
                     &self.transport_adapter,
                     &session_key,
@@ -165,7 +157,7 @@ impl PostAuthSessionProtocol {
     ) -> Result<(), WebSocketCloseCode> {
         if answer.sdp.is_empty() {
             warn!(
-                user_id = ?self.user_id,
+                user_id = ?self.id,
                 connection_id = ?self.connection_id,
                 remote_address = self.remote_address.as_ref(),
                 ?response_to,
@@ -179,7 +171,7 @@ impl PostAuthSessionProtocol {
     fn resolve_negotiation_answer(&mut self, response_to: &RequestId) -> Option<ResolvedFlowState> {
         let Some(resolved) = self.flow_state.resolve_answer(response_to) else {
             warn!(
-                user_id = ?self.user_id,
+                user_id = ?self.id,
                 connection_id = ?self.connection_id,
                 remote_address = self.remote_address.as_ref(),
                 ?response_to,
@@ -195,7 +187,7 @@ impl PostAuthSessionProtocol {
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id
         )
     )]
@@ -205,9 +197,7 @@ impl PostAuthSessionProtocol {
         answer_sdp: &str,
         resolved: &ResolvedFlowState,
     ) -> Result<AppliedSessionAnswer, WebSocketCloseCode> {
-        let session_key = self
-            .room
-            .transport_user_key(&self.user_id, self.connection_id);
+        let session_key = self.room.transport_user_key(&self.id, self.connection_id);
         apply_transport_answer(&self.transport_adapter, &session_key, answer_sdp)
             .await
             .map_err(|error| {
@@ -215,7 +205,7 @@ impl PostAuthSessionProtocol {
                     event = telemetry_event::NEGOTIATION_FAILED,
                     operation = "answer_apply",
                     outcome = "transport_error",
-                    user_id = ?self.user_id,
+                    user_id = ?self.id,
                     connection_id = ?self.connection_id,
                     remote_address = self.remote_address.as_ref(),
                     ?response_to,
@@ -255,7 +245,7 @@ impl PostAuthSessionProtocol {
                             event = telemetry_event::NEGOTIATION_FAILED,
                             operation = "answer_apply",
                             outcome = "capability_projection_failed",
-                            user_id = ?self.user_id,
+                            user_id = ?self.id,
                             connection_id = ?self.connection_id,
                             remote_address = self.remote_address.as_ref(),
                             ?error,
@@ -265,7 +255,7 @@ impl PostAuthSessionProtocol {
                 if !self
                     .room
                     .apply_session_negotiated(
-                        &self.user_id,
+                        &self.id,
                         self.connection_id,
                         client_rtp_capabilities,
                         &self.transport_adapter,
@@ -276,7 +266,7 @@ impl PostAuthSessionProtocol {
                         event = telemetry_event::NEGOTIATION_FAILED,
                         operation = "answer_apply",
                         outcome = "channel_commit_failed",
-                        user_id = ?self.user_id,
+                        user_id = ?self.id,
                         connection_id = ?self.connection_id,
                         remote_address = self.remote_address.as_ref(),
                         "failed to commit negotiated user state after initial answer"
@@ -287,18 +277,14 @@ impl PostAuthSessionProtocol {
             PendingFlowAction::RefreshSession => {
                 if !self
                     .room
-                    .apply_session_refreshed(
-                        &self.user_id,
-                        self.connection_id,
-                        &self.transport_adapter,
-                    )
+                    .apply_session_refreshed(&self.id, self.connection_id, &self.transport_adapter)
                     .await
                 {
                     warn!(
                         event = telemetry_event::NEGOTIATION_FAILED,
                         operation = "renegotiation_apply",
                         outcome = "channel_refresh_failed",
-                        user_id = ?self.user_id,
+                        user_id = ?self.id,
                         connection_id = ?self.connection_id,
                         remote_address = self.remote_address.as_ref(),
                         "failed to refresh user state after renegotiation answer"
@@ -311,7 +297,7 @@ impl PostAuthSessionProtocol {
     }
 }
 
-impl PostAuthSessionProtocol {
+impl User {
     fn project_client_rtp_capabilities(
         &self,
         answer_sdp: &str,
@@ -433,14 +419,9 @@ mod tests {
     use crate::{
         config::{MediaCodecFlags, RtcPortRange},
         runtime::{
-            diagnostics::DiagnosticsStore,
-            metrics::RuntimeMetrics,
-            recording::MediaTap,
-            rtc_adapter::test_support::test_transport_session_key,
-            transport_adapter::{
-                NegotiationPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
-                SessionBitrateLimits,
-            },
+            DiagnosticsStore, MediaTap, NegotiationPort, RtcTransportAdapterShardSetConfig,
+            RuntimeMetrics, RuntimeTransportAdapter, SessionBitrateLimits,
+            test_transport_session_key,
         },
     };
 

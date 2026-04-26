@@ -129,6 +129,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             ?exit_reason,
             "closing websocket user"
         );
+        user.session_protocol.finish().await;
         let _ = state
             .room_manager
             .close_session(

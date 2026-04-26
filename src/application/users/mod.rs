@@ -1,0 +1,199 @@
+use std::sync::Arc;
+
+use o_sfu_protocol::{
+    shared::UserId,
+    signaling::{ClientEnvelope, RequestId, ServerMessage, WebSocketCloseCode},
+};
+use tokio::runtime::Handle;
+
+mod envelope_dispatch;
+mod flow_state;
+mod negotiation_flow;
+mod publish_flow;
+mod track_projection;
+
+use flow_state::SessionFlowState;
+use track_projection::RemoteTrackProjection;
+
+use crate::{
+    application::outcomes::{CallOutcome, UserEndReason, UserSignal},
+    runtime::{
+        ConnectionId, ObservabilityPort, RuntimeTransportAdapter, TransportSessionHealth,
+        room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
+    },
+};
+
+#[derive(Debug, Default)]
+struct ServerRequestIdState {
+    next_request_counter: u64,
+}
+
+impl ServerRequestIdState {
+    fn next_request_id(&mut self) -> RequestId {
+        let request_id = RequestId::new(format!("server-{}", self.next_request_counter));
+        self.next_request_counter = self.next_request_counter.saturating_add(1);
+        request_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UserIntent {
+    ClientEnvelope(ClientEnvelope),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum RoomEvent {
+    Message(RoomEventMessage),
+    Request(RoomEventRequest),
+    TrackBindingUpdate(TrackBindingUpdate),
+}
+
+/// The main orchestrator for an authenticated room user.
+///
+/// It centralizes envelope dispatch, renegotiation sequencing, and staged publish
+/// transitions behind one user-scoped owner. The websocket edge decodes and
+/// renders frames; this type owns the user-in-room business flow.
+#[derive(Debug)]
+pub(crate) struct User {
+    id: UserId,
+    connection_id: ConnectionId,
+    remote_address: Arc<str>,
+    room: Arc<Room>,
+    transport_adapter: RuntimeTransportAdapter,
+    request_ids: ServerRequestIdState,
+    flow_state: SessionFlowState,
+    track_projection: RemoteTrackProjection,
+    cleanup_finished: bool,
+}
+
+impl User {
+    pub(crate) fn new(
+        user_id: UserId,
+        connection_id: ConnectionId,
+        remote_address: Arc<str>,
+        room: Arc<Room>,
+        transport_adapter: RuntimeTransportAdapter,
+    ) -> Self {
+        Self {
+            id: user_id,
+            connection_id,
+            remote_address,
+            room,
+            transport_adapter,
+            request_ids: ServerRequestIdState::default(),
+            flow_state: SessionFlowState::default(),
+            track_projection: RemoteTrackProjection::default(),
+            cleanup_finished: false,
+        }
+    }
+
+    pub(crate) fn end_reason(&self) -> Option<UserEndReason> {
+        let session_key = self.room.transport_user_key(&self.id, self.connection_id);
+        self.transport_adapter
+            .session_transport_health(&session_key)
+            .and_then(|health| match health {
+                TransportSessionHealth::Disconnected => Some(UserEndReason::TransportDisconnected),
+                TransportSessionHealth::Connected => None,
+            })
+    }
+
+    pub(crate) async fn bootstrap(&mut self) -> Result<CallOutcome, WebSocketCloseCode> {
+        self.send_initial_offer().await
+    }
+
+    pub(crate) async fn handle_intent(
+        &mut self,
+        intent: UserIntent,
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
+        match intent {
+            UserIntent::ClientEnvelope(envelope) => self.dispatch_client_envelope(envelope).await,
+        }
+    }
+
+    pub(crate) async fn handle_room_event(
+        &mut self,
+        event: RoomEvent,
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
+        match event {
+            RoomEvent::Message(message) => self.handle_room_message(message).await,
+            RoomEvent::Request(request) => self.handle_room_request(request).await,
+            RoomEvent::TrackBindingUpdate(update) => self.handle_track_binding_update(update).await,
+        }
+    }
+
+    pub(crate) async fn finish(&mut self) {
+        self.room
+            .rollback_staged_publishes_for_connection(
+                &self.id,
+                self.connection_id,
+                &self.transport_adapter,
+            )
+            .await;
+        self.cleanup_finished = true;
+    }
+
+    async fn handle_room_message(
+        &mut self,
+        message: RoomEventMessage,
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
+        let translated = self.track_projection.translate_server_message(message);
+        let mut call_outcome =
+            CallOutcome::new().with_signals(translated.messages.into_iter().map(UserSignal::from));
+        if translated.needs_renegotiation {
+            call_outcome.extend(self.request_renegotiation().await?);
+        }
+        Ok(call_outcome)
+    }
+
+    async fn handle_room_request(
+        &mut self,
+        request: RoomEventRequest,
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
+        match request {
+            RoomEventRequest::BootstrapRemoteTrack(payload) => {
+                self.track_projection.apply_remote_track_bootstrap(&payload);
+                let mut call_outcome = CallOutcome::new()
+                    .with_signal(ServerMessage::Tracks(self.track_projection.snapshot()).into());
+                call_outcome.extend(self.request_renegotiation().await?);
+                Ok(call_outcome)
+            }
+        }
+    }
+
+    async fn handle_track_binding_update(
+        &mut self,
+        update: TrackBindingUpdate,
+    ) -> Result<CallOutcome, WebSocketCloseCode> {
+        let translated = self
+            .track_projection
+            .translate_track_binding_update(&update);
+        let mut call_outcome =
+            CallOutcome::new().with_signals(translated.messages.into_iter().map(UserSignal::from));
+        if translated.needs_renegotiation {
+            call_outcome.extend(self.request_renegotiation().await?);
+        }
+        Ok(call_outcome)
+    }
+}
+
+impl Drop for User {
+    fn drop(&mut self) {
+        if self.cleanup_finished {
+            return;
+        }
+        let room = Arc::clone(&self.room);
+        let transport_adapter = self.transport_adapter.clone();
+        let user_id = self.id.clone();
+        let connection_id = self.connection_id;
+        if let Ok(runtime_handle) = Handle::try_current() {
+            runtime_handle.spawn(async move {
+                room.rollback_staged_publishes_for_connection(
+                    &user_id,
+                    connection_id,
+                    &transport_adapter,
+                )
+                .await;
+            });
+        }
+    }
+}

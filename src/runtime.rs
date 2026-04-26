@@ -48,22 +48,24 @@ pub mod testing;
 mod transport_adapter;
 pub(crate) mod websocket_server;
 
-use diagnostics::DiagnosticsStore;
+pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
 pub(crate) use ids::{ConnectionId, RoomInstanceId};
-use metrics::RuntimeMetrics;
+pub(crate) use metrics::RuntimeMetrics;
 use packet_sink_registry::RoomPacketSinkRegistry;
-use recording::MediaTap;
+pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
 use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy};
-pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
 pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
+pub(crate) use rtc_adapter::{TransportSessionHealth, client_rtp_capabilities_from_answer};
 use telemetry::init_tracing;
 pub use transport_adapter::TransportSessionKey;
-use transport_adapter::{
-    MediaPort, ObservabilityPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
-    SessionBitrateLimits, SourcePolicyPort,
+pub(crate) use transport_adapter::{
+    AppliedSessionAnswer, NegotiationPort, ObservabilityPort, RtcTransportAdapterShardSetConfig,
+    RuntimeTransportAdapter, SessionBitrateLimits, SessionOffer, SessionUploadEncoding,
+    SessionUploadSlot, TransportAdapterError,
 };
+use transport_adapter::{MediaPort, SourcePolicyPort};
 
 /// Process-global application shell for the server process.
 ///

@@ -7,21 +7,19 @@
 use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
 use tracing::{info, instrument};
 
-use super::controller::PostAuthSessionProtocol;
+use super::User;
 use crate::{
     application::outcomes::CallOutcome,
-    runtime::{
-        telemetry::schema::event as telemetry_event, transport_adapter::AppliedSessionAnswer,
-    },
+    runtime::{AppliedSessionAnswer, telemetry::schema::event as telemetry_event},
 };
 
-impl PostAuthSessionProtocol {
+impl User {
     #[instrument(
         name = "publish.intent",
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id,
             stream_type = ?stream_type
         )
@@ -36,22 +34,18 @@ impl PostAuthSessionProtocol {
         if self.flow_state.has_queued_publish(stream_type)
             || self
                 .room
-                .has_staged_publish(&self.user_id, self.connection_id, stream_type)
+                .has_staged_publish(&self.id, self.connection_id, stream_type)
                 .await
         {
             return Ok(CallOutcome::new());
         }
-        if self
-            .room
-            .is_stream_published(&self.user_id, stream_type)
-            .await
-        {
+        if self.room.is_stream_published(&self.id, stream_type).await {
             // Once a stream is already live publish intent is just a resume of
             // producer activity. No new transport media or renegotiation is
             // needed here
             self.room
                 .set_publication_active_runtime(
-                    &self.user_id,
+                    &self.id,
                     self.connection_id,
                     stream_type,
                     true,
@@ -88,7 +82,7 @@ impl PostAuthSessionProtocol {
         if self
             .room
             .rollback_staged_publish(
-                &self.user_id,
+                &self.id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
@@ -101,7 +95,7 @@ impl PostAuthSessionProtocol {
         if !self
             .room
             .unpublish_track(
-                &self.user_id,
+                &self.id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
@@ -117,7 +111,7 @@ impl PostAuthSessionProtocol {
         let staged = self
             .room
             .stage_negotiated_publish(
-                &self.user_id,
+                &self.id,
                 self.connection_id,
                 stream_type,
                 &self.transport_adapter,
@@ -161,7 +155,7 @@ impl PostAuthSessionProtocol {
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id
         )
     )]
@@ -171,7 +165,7 @@ impl PostAuthSessionProtocol {
         // every staged publish that belongs to this connection.
         self.room
             .commit_staged_publishes(
-                &self.user_id,
+                &self.id,
                 self.connection_id,
                 applied_answer,
                 &self.transport_adapter,

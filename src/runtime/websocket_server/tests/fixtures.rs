@@ -9,7 +9,8 @@ pub(super) use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, StreamType, UserId, UserPermissions},
     signaling::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
-        ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload, WelcomePayload,
+        ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
+        StreamIntentPayload, WelcomePayload,
     },
 };
 pub(super) use tokio::{

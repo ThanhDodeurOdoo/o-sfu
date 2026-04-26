@@ -7,23 +7,19 @@ use o_sfu_protocol::{
 };
 use tracing::{debug, info, instrument};
 
-use super::{super::flow_state::FlowChange, controller::PostAuthSessionProtocol};
+use super::{User, flow_state::FlowChange};
 use crate::{
     application::outcomes::{CallOutcome, UserSignal},
     runtime::telemetry::schema::event as telemetry_event,
 };
 
-impl PostAuthSessionProtocol {
+impl User {
     async fn reject_stale_connection(&self) -> bool {
-        if self
-            .room
-            .has_connection(&self.user_id, self.connection_id)
-            .await
-        {
+        if self.room.has_connection(&self.id, self.connection_id).await {
             return false;
         }
         debug!(
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id,
             "rejecting client envelope from a stale websocket connection"
         );
@@ -33,7 +29,7 @@ impl PostAuthSessionProtocol {
     async fn handle_info_message(&self, info: UserInfo) {
         self.room
             .update_user_info_runtime_for_connection(
-                &self.user_id,
+                &self.id,
                 self.connection_id,
                 info,
                 false,
@@ -47,7 +43,7 @@ impl PostAuthSessionProtocol {
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id,
             target_session_id = ?target_session_id
         )
@@ -61,7 +57,7 @@ impl PostAuthSessionProtocol {
         );
         self.room
             .update_subscription_runtime(
-                &self.user_id,
+                &self.id,
                 self.connection_id,
                 target_session_id,
                 states,
@@ -81,7 +77,7 @@ impl PostAuthSessionProtocol {
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id,
             request_id = ?request_id
         )
@@ -93,7 +89,7 @@ impl PostAuthSessionProtocol {
     ) -> CallOutcome {
         let ok = self
             .room
-            .start_recording_runtime(&self.user_id, self.connection_id, payload)
+            .start_recording_runtime(&self.id, self.connection_id, payload)
             .await;
         info!(
             event = telemetry_event::RECORDING_STARTED,
@@ -112,7 +108,7 @@ impl PostAuthSessionProtocol {
         skip_all,
         fields(
             room_id = %self.room.uuid(),
-            user_id = ?self.user_id,
+            user_id = ?self.id,
             connection_id = ?self.connection_id,
             request_id = ?request_id
         )
@@ -120,7 +116,7 @@ impl PostAuthSessionProtocol {
     async fn handle_stop_recording_request(&self, request_id: RequestId) -> CallOutcome {
         let ok = self
             .room
-            .stop_recording_runtime(&self.user_id, self.connection_id)
+            .stop_recording_runtime(&self.id, self.connection_id)
             .await;
         info!(
             event = telemetry_event::RECORDING_STOPPED,
@@ -168,7 +164,7 @@ impl PostAuthSessionProtocol {
                 message,
             })) => {
                 self.room
-                    .broadcast_runtime(&self.user_id, self.connection_id, message)
+                    .broadcast_runtime(&self.id, self.connection_id, message)
                     .await;
                 Ok(CallOutcome::new())
             }

@@ -239,6 +239,84 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
 }
 
 #[tokio::test]
+async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
+    let server =
+        spawn_test_server_with_adapter(1_000, 100, RuntimeTransportAdapter::fake_for_testing())
+            .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let room = create_room(
+        &server,
+        "issuer-staged-publish-finish",
+        None,
+        CreateRoomQuery::default(),
+    )
+    .await;
+    let user_id = UserId::Integer(414);
+    let websocket = setup_negotiated_session(&server, &room, user_id.clone()).await;
+    assert!(websocket.is_some());
+    let Some(mut websocket) = websocket else {
+        return;
+    };
+    let connection_id = room.test_api().inspect().user_connection_id(&user_id).await;
+    assert!(connection_id.is_some());
+    let Some(connection_id) = connection_id else {
+        return;
+    };
+    let publish = ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
+        stream_type: StreamType::Camera,
+    }))
+    .into_envelope()
+    .ok();
+    assert!(publish.is_some());
+    let Some(publish) = publish else {
+        return;
+    };
+    let payload = serde_json::to_string(&vec![publish]).ok();
+    assert!(payload.is_some());
+    let Some(payload) = payload else {
+        return;
+    };
+    assert!(
+        websocket
+            .send(tungstenite::Message::Text(payload.into()))
+            .await
+            .is_ok()
+    );
+    assert!(
+        wait_for_protocol_server_request(&mut websocket)
+            .await
+            .is_some(),
+        "publish intent should stage media and request renegotiation"
+    );
+    assert!(
+        room.has_staged_publish(&user_id, connection_id, StreamType::Camera)
+            .await,
+        "publish should be staged before the user finishes"
+    );
+
+    assert!(websocket.close(None).await.is_ok());
+    let cleanup = timeout(Duration::from_secs(1), async {
+        loop {
+            if !room
+                .has_staged_publish(&user_id, connection_id, StreamType::Camera)
+                .await
+            {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        cleanup.is_ok(),
+        "user finish should explicitly roll back staged publishes"
+    );
+}
+
+#[tokio::test]
 async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let transport_adapter =

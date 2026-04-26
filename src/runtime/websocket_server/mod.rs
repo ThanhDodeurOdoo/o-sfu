@@ -8,7 +8,6 @@
 //! |- handshake        -> first-frame authentication and room admission
 //! |- session_loop     -> steady-state reader/writer loop after admission
 //! |- session_protocol -> authenticated signaling flow
-//! |  `- post_auth     -> envelope dispatch, negotiation, and publish sequencing
 //! `- io               -> socket writer boundary and close helpers
 //! ```
 //!
