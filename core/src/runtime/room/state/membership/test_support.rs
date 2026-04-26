@@ -1,11 +1,10 @@
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::MediaCapabilities;
 
 use super::super::{
     super::user_negotiation::{UserNegotiationUpdate, UserTransportReady},
     shared::RoomState,
 };
-use crate::runtime::ConnectionId;
+use crate::runtime::{ConnectionId, UserId};
 
 impl RoomState {
     pub(in crate::runtime::room) fn set_client_rtp_capabilities_for_test(

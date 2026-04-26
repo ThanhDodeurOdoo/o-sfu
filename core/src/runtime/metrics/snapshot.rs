@@ -1,5 +1,3 @@
-use o_sfu_protocol::signaling::WebSocketCloseCode;
-
 use super::{
     catalog::RuntimeMetrics,
     labels::{
@@ -11,6 +9,7 @@ use super::{
         WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
+use crate::runtime::WebSocketCloseCode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurationHistogramSnapshot {

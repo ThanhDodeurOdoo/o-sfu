@@ -1,10 +1,8 @@
-use o_sfu_protocol::shared::{RecordingState, RecordingStateUpdate, StopCode, UserId};
-
 use super::{
     super::{RoomEventMessage, RoomUserPermissions, outbound::MessageFanout},
     shared::RoomState,
 };
-use crate::runtime::ConnectionId;
+use crate::runtime::{ConnectionId, RecordingState, RecordingStateUpdate, StopCode, UserId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct RecordingRequestContext {

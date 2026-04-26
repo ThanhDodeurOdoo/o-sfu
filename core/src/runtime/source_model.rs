@@ -32,10 +32,11 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use o_sfu_protocol::shared::{StreamType, UserId};
 use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{MediaFormat, MediaKind, Mid, Rid, Ssrc};
 use thiserror::Error;
+
+use crate::runtime::{StreamType, UserId};
 
 /// Stable room-domain identity for one logical published source.
 ///

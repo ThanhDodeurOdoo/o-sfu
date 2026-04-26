@@ -1,8 +1,8 @@
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, UserInfo};
 use o_sfu_router::MediaCapabilities;
 
 use crate::{
     ConnectionId, CoreOptions, MediaRoom,
+    runtime::{DownloadStates, StreamType, UserId, UserInfo},
     transport::{
         AppliedSessionAnswer, MediaPort, NegotiationPort, ObservabilityPort, SessionOffer,
         SessionUploadEncoding, SessionUploadSlot, TransportAdapterError, TransportSessionHealth,

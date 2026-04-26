@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::shared::{JsonPayload, RecordingStateUpdate, UserId, UserInfo};
+use crate::runtime::{JsonPayload, RecordingStateUpdate, UserId, UserInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoomEventMessage {

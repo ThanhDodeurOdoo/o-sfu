@@ -277,12 +277,11 @@ mod tests {
         time::Instant,
     };
 
-    use o_sfu_protocol::shared::UserId;
     use str0m::media::Mid;
 
     use super::*;
     use crate::runtime::{
-        ConnectionId, RoomInstanceId,
+        ConnectionId, RoomInstanceId, UserId,
         metrics::{RtpForwardDestinationKind, RuntimeMetrics},
         packet_sink_registry::{
             PacketSink as MediaPacketSink, RoomPacketSinkRegistry as MediaTap, into_packet_sink,

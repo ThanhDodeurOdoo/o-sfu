@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
 };
 
-use o_sfu_protocol::shared::{DownloadStates, RecordingState, StreamType, UserId};
 use o_sfu_router::{
     MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, MediaKind, RouterId,
 };
@@ -20,7 +19,7 @@ use super::{
     presence::UserPresence,
 };
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, DownloadStates, RecordingState, StreamType, UserId,
     recording::RecordingService,
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,

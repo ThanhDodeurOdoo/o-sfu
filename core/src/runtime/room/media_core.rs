@@ -1,10 +1,12 @@
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, UserInfo};
 use o_sfu_router::MediaCapabilities;
 
 use super::Room;
 use crate::{
     MediaRoom,
-    runtime::{ConnectionId, transport_adapter::RuntimeTransportAdapter},
+    runtime::{
+        ConnectionId, DownloadStates, StreamType, UserId, UserInfo,
+        transport_adapter::RuntimeTransportAdapter,
+    },
     transport::{AppliedSessionAnswer, TransportSessionKey},
 };
 

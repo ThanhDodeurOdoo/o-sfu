@@ -34,10 +34,6 @@
 
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
-use o_sfu_protocol::{
-    shared::{AvailableFeatures, RecordingState, StreamType, UserId},
-    signaling::PeerSnapshot,
-};
 use o_sfu_router::RouterId;
 use tokio::sync::{Mutex, RwLock};
 
@@ -51,7 +47,8 @@ use super::{
 use crate::{
     RuntimeFeatureFlags,
     runtime::{
-        ConnectionId, RoomInstanceId,
+        AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, StreamType,
+        UserId,
         diagnostics::{
             DiagnosticsQualitySummary, DiagnosticsSource, DiagnosticsStore,
             DiagnosticsUserTransport, DiagnosticsUserView,

@@ -1,4 +1,3 @@
-use o_sfu_protocol::shared::{UserId, UserInfo, UserPermissions};
 use o_sfu_router::MediaCapabilities;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -12,7 +11,7 @@ use super::{
     user_negotiation::UserNegotiationUpdate,
 };
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, UserId, UserInfo, UserPermissions,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
     transport_adapter::{MediaPort, RuntimeTransportAdapter, SessionPort},

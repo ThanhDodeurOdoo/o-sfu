@@ -1,11 +1,7 @@
-use o_sfu_protocol::{
-    shared::{RecordingState, StopCode, UserId},
-    signaling::RecordingOptions,
-};
-
 use super::{Room, RoomUserPermissions};
 use crate::runtime::{
-    ConnectionId, diagnostics::DiagnosticsEventData, telemetry::schema::event as telemetry_event,
+    ConnectionId, RecordingOptions, RecordingState, StopCode, UserId,
+    diagnostics::DiagnosticsEventData, telemetry::schema::event as telemetry_event,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

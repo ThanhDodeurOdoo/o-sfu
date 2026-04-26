@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
     MediaCapabilities, MediaKind as RouterMediaKind, Producer as RouterProducer,
@@ -9,7 +8,10 @@ use o_sfu_router::{
     TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
 };
 
-use crate::runtime::recording::{RecordingRouterObserver, RecordingService};
+use crate::runtime::{
+    UserId,
+    recording::{RecordingRouterObserver, RecordingService},
+};
 
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;

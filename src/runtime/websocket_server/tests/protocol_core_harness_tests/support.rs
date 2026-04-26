@@ -34,6 +34,7 @@ pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCod
 
 pub(super) use super::super::fixtures::*;
 pub(super) use crate::{
+    application::room as call_room,
     config::RuntimeFeatureFlags,
     runtime::{room::Room, transport_adapter::RuntimeTransportAdapter},
 };
@@ -390,17 +391,20 @@ pub(super) async fn real_rtc_route_activity(
     consumer_user_id: UserId,
     mid: &str,
 ) -> Option<RealRtcRouteActivity> {
+    let core_source_user_id = call_room::core_user_id(&source_user_id);
+    let core_consumer_user_id = call_room::core_user_id(&consumer_user_id);
     let _source_connection_id = room
         .test_api()
         .inspect()
-        .user_connection_id(&source_user_id)
+        .user_connection_id(&core_source_user_id)
         .await?;
     let consumer_connection_id = room
         .test_api()
         .inspect()
-        .user_connection_id(&consumer_user_id)
+        .user_connection_id(&core_consumer_user_id)
         .await?;
-    let consumer_session_key = room.transport_user_key(&consumer_user_id, consumer_connection_id);
+    let consumer_session_key =
+        room.transport_user_key(&core_consumer_user_id, consumer_connection_id);
     let route_entry = server
         .transport_adapter
         .debug_route_entry_by_consumer_mid(&consumer_session_key, Mid::from(mid))

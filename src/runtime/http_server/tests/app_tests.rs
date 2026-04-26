@@ -1,11 +1,13 @@
-use o_sfu_protocol::shared::StreamType;
 use o_sfu_router::{
     MediaKind, MediaStream,
     test_sample::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
 
 use super::fixtures::*;
-use crate::runtime::room::Room;
+use crate::{
+    core::runtime::{StreamType, UserId, UserPermissions},
+    runtime::room::Room,
+};
 
 fn test_video_rtp_parameters(ssrc: u64) -> MediaStream {
     sample_video_rtp_parameters(None, u32::try_from(ssrc).unwrap_or(u32::MAX))

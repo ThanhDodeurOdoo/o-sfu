@@ -1,8 +1,5 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
-pub(super) use o_sfu_protocol::shared::{
-    DownloadStates, StreamType, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
-};
 use o_sfu_router::test_sample::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
     sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
@@ -21,7 +18,7 @@ pub(super) use super::super::{
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::runtime::{
-    ConnectionId,
+    ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
     transport_adapter::{
         ActiveSpeakerSource, NegotiationPort, RuntimeTransportAdapter, TransportMediaId,
         test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},

@@ -7,7 +7,6 @@
 
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
-use o_sfu_protocol::shared::{UserId, UserPermissions};
 use tokio::sync::{RwLock, mpsc};
 
 use super::{
@@ -17,7 +16,7 @@ use super::{
     factory::{RoomCreationIntent, RoomFactory},
 };
 use crate::runtime::{
-    ConnectionId, RoomInstanceId,
+    ConnectionId, RoomInstanceId, UserId, UserPermissions,
     diagnostics::{DiagnosticsEventData, DiagnosticsStore},
     metrics::RuntimeMetrics,
     recording::MediaTap,

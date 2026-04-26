@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::shared::{StreamType, UserId, UserInfo};
 use o_sfu_router::{
     MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc,
 };
@@ -29,7 +28,7 @@ use super::{
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, StreamType, UserId, UserInfo,
     source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,

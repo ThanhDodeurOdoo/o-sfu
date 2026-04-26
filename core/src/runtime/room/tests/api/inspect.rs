@@ -1,8 +1,7 @@
-use o_sfu_protocol::shared::{StreamType, UserId, UserInfo};
-
 use super::super::super::{Room, RoomUserPermissions};
 use crate::runtime::{
-    ConnectionId, source_model::SourceEncodingId, transport_adapter::TransportMediaId,
+    ConnectionId, StreamType, UserId, UserInfo, source_model::SourceEncodingId,
+    transport_adapter::TransportMediaId,
 };
 
 #[derive(Clone, Copy)]

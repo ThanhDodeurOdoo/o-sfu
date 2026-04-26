@@ -3,14 +3,13 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
     MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
 };
 
 use super::router_state::{RoomRouterState, RoomRouterStateError};
-use crate::runtime::recording::RecordingService;
+use crate::runtime::{UserId, recording::RecordingService};
 
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;

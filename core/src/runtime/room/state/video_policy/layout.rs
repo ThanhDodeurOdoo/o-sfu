@@ -7,8 +7,6 @@
 
 use std::collections::BTreeSet;
 
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, VideoLayoutIntent};
-
 use super::{
     super::shared::RoomState,
     action::FeaturedUserUpdate,
@@ -18,6 +16,7 @@ use super::{
     },
 };
 use crate::runtime::{
+    DownloadStates, StreamType, UserId, VideoLayoutIntent,
     source_model::{PublishedSourceDescriptor, SourceRoomPolicySelector, SourceRoutePriority},
     transport_adapter::ActiveSpeakerSource,
 };

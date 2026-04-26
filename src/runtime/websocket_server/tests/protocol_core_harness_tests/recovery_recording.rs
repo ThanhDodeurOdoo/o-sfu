@@ -53,8 +53,8 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
         .test_api()
         .media()
         .publish_track(
-            &UserId::Integer(61),
-            StreamType::Camera,
+            &call_room::core_user_id(&UserId::Integer(61)),
+            call_room::core_stream_type(StreamType::Camera),
             MediaKind::Video,
             sample_video_rtp_parameters("cam-1"),
             &server.transport_adapter,
@@ -85,8 +85,8 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
                         consumer_user_id,
                         source_user_id,
                         active: false,
-                    } if *consumer_user_id == UserId::Integer(62)
-                        && *source_user_id == UserId::Integer(61)
+                    } if *consumer_user_id == call_room::core_user_id(&UserId::Integer(62))
+                        && *source_user_id == call_room::core_user_id(&UserId::Integer(61))
                 )
             }) {
                 return true;
@@ -176,6 +176,8 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     let alice_user_id = UserId::Integer(83);
     let bob_user_id = UserId::Integer(84);
+    let core_alice_user_id = call_room::core_user_id(&alice_user_id);
+    let core_bob_user_id = call_room::core_user_id(&bob_user_id);
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_fake_protocol_peers(
         Arc::clone(&adapter),
         "issuer-protocol-subscribe-recovery",
@@ -240,8 +242,8 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
                             consumer_user_id,
                             source_user_id,
                             active: false,
-                        } if *consumer_user_id == bob_user_id
-                            && *source_user_id == alice_user_id
+                        } if *consumer_user_id == core_bob_user_id
+                            && *source_user_id == core_alice_user_id
                     )
                 })
             {

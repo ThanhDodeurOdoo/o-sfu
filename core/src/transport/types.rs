@@ -4,12 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_rfc::webrtc::MediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
-use crate::{ConnectionId, RoomInstanceId};
+use crate::{ConnectionId, RoomInstanceId, runtime::UserId};
 
 /// Room-scoped transport-adapter user identity.
 ///

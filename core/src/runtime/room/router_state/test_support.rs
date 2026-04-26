@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::RouterId;
 
 use super::RoomRouterState;
 use crate::{
     MediaCodecFlags,
     runtime::{
-        RoomInstanceId,
+        RoomInstanceId, UserId,
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
         room::rtp_capabilities::router_rtp_capabilities,

@@ -192,18 +192,20 @@ fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::UserId;
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
     use str0m::media::{Mid, Rid};
 
     use super::*;
-    use crate::runtime::rtc_adapter::{
-        forwarded_packet::test_support::{
-            sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-            sample_forwarded_packet_without_mid,
+    use crate::runtime::{
+        UserId,
+        rtc_adapter::{
+            forwarded_packet::test_support::{
+                sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+                sample_forwarded_packet_without_mid,
+            },
+            media_registry::RegisteredMediaHandle,
+            test_support::test_transport_session_key,
         },
-        media_registry::RegisteredMediaHandle,
-        test_support::test_transport_session_key,
     };
 
     #[test]

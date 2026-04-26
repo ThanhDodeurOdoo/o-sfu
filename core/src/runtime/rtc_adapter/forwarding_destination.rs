@@ -281,11 +281,11 @@ mod tests {
         time::Instant,
     };
 
-    use o_sfu_protocol::shared::UserId;
     use str0m::media::Mid;
 
     use super::*;
     use crate::runtime::{
+        UserId,
         packet_sink_registry::PacketSink as MediaPacketSink,
         rtc_adapter::{
             relay_registry::InterNodeRelaySender,

@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use o_sfu_protocol::signaling::WebSocketCloseCode;
-
 use super::counter::{HistogramBucketLabel, MetricLabel};
-use crate::runtime::source_model::{SourceRoomPolicySelector, SourceSelector};
+use crate::runtime::{
+    WebSocketCloseCode,
+    source_model::{SourceRoomPolicySelector, SourceSelector},
+};
 
 macro_rules! impl_metric_label {
     ($label:ty { $($variant:ident => $index:expr),+ $(,)? }) => {

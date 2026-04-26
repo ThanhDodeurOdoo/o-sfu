@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_protocol::{
-    shared::{DownloadStates, JsonPayload, RecordingStateUpdate, StreamType, UserId, UserInfo},
+    shared::{DownloadStates, JsonPayload, StreamType, UserId, UserInfo},
     signaling::{
         NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerMessage, ServerRequest,
         ServerResponse, SessionDescriptionPayload, WelcomePayload,
@@ -11,10 +11,17 @@ use tokio::runtime::Handle;
 use tracing::{debug, info, instrument, warn};
 
 use crate::{
-    application::call_policy::{CallPresence, CallPublicationSlot},
+    application::{
+        call_policy::{CallPresence, CallPublicationSlot},
+        room as call_room,
+    },
     core::{
         MediaEndpointHealth, MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot,
         RuntimeSfuCore, SfuCoreError,
+        runtime::{
+            RecordingStateUpdate as CoreRecordingStateUpdate, UserId as CoreUserId,
+            UserInfo as CoreUserInfo,
+        },
     },
     runtime::{
         ConnectionId,
@@ -147,8 +154,9 @@ impl User {
 
     #[must_use]
     pub fn disconnect_reason(&self) -> Option<UserDisconnectReason> {
+        let core_user_id = call_room::core_user_id(&self.id);
         self.media_core
-            .endpoint_health(self.room.as_ref(), &self.id, self.connection_id)
+            .endpoint_health(self.room.as_ref(), &core_user_id, self.connection_id)
             .and_then(|health| match health {
                 MediaEndpointHealth::Disconnected => {
                     Some(UserDisconnectReason::TransportDisconnected)
@@ -158,11 +166,18 @@ impl User {
     }
 
     pub async fn start(&mut self) -> Result<UserOutput, UserError> {
+        let core_user_id = call_room::core_user_id(&self.id);
         let mut output = UserOutput::new().with_signal(
             ServerMessage::Welcome(WelcomePayload {
-                features: self.room.available_features(),
-                recording: self.room.recording_state().await,
-                peers: self.room.user_snapshots_except(&self.id).await,
+                features: call_room::protocol_available_features(&self.room.available_features()),
+                recording: call_room::protocol_recording_state(&self.room.recording_state().await),
+                peers: self
+                    .room
+                    .user_snapshots_except(&core_user_id)
+                    .await
+                    .into_iter()
+                    .map(|peer| call_room::protocol_peer_snapshot(&peer))
+                    .collect(),
             })
             .into(),
         );
@@ -171,8 +186,9 @@ impl User {
     }
 
     pub async fn close(&mut self) {
+        let core_user_id = call_room::core_user_id(&self.id);
         self.media_core
-            .rollback_connection_publishes(self.room.as_ref(), &self.id, self.connection_id)
+            .rollback_connection_publishes(self.room.as_ref(), &core_user_id, self.connection_id)
             .await;
         self.cleanup_finished = true;
     }
@@ -181,12 +197,13 @@ impl User {
         self.reject_stale_connection().await?;
         let presence = CallPresence::from_user_info(&info);
         debug_assert!(!presence.affects_media_routing());
+        let core_user_id = call_room::core_user_id(&self.id);
         self.media_core
             .update_user_info(
                 self.room.as_ref(),
-                &self.id,
+                &core_user_id,
                 self.connection_id,
-                info,
+                call_room::core_user_info(&info),
                 false,
             )
             .await;
@@ -195,8 +212,9 @@ impl User {
 
     pub async fn broadcast(&self, message: JsonPayload) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
+        let core_user_id = call_room::core_user_id(&self.id);
         self.room
-            .broadcast_runtime(&self.id, self.connection_id, message)
+            .broadcast_runtime(&core_user_id, self.connection_id, message)
             .await;
         Ok(UserOutput::new())
     }
@@ -214,14 +232,16 @@ impl User {
     pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         let slot = CallPublicationSlot::from_stream_type(stream_type);
+        let core_user_id = call_room::core_user_id(&self.id);
+        let core_stream_type = call_room::core_stream_type(stream_type);
         if self.state.negotiation.has_queued_publish(slot)
             || self
                 .media_core
                 .has_staged_publish(
                     self.room.as_ref(),
-                    &self.id,
+                    &core_user_id,
                     self.connection_id,
-                    stream_type,
+                    core_stream_type,
                 )
                 .await
         {
@@ -229,15 +249,15 @@ impl User {
         }
         if self
             .media_core
-            .is_stream_published(self.room.as_ref(), &self.id, stream_type)
+            .is_stream_published(self.room.as_ref(), &core_user_id, core_stream_type)
             .await
         {
             self.media_core
                 .set_publication_active(
                     self.room.as_ref(),
-                    &self.id,
+                    &core_user_id,
                     self.connection_id,
-                    stream_type,
+                    core_stream_type,
                     true,
                 )
                 .await;
@@ -257,6 +277,8 @@ impl User {
     pub async fn unpublish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         let slot = CallPublicationSlot::from_stream_type(stream_type);
+        let core_user_id = call_room::core_user_id(&self.id);
+        let core_stream_type = call_room::core_stream_type(stream_type);
         if self.state.negotiation.clear_queued_publish(slot) {
             return Ok(UserOutput::new());
         }
@@ -264,9 +286,9 @@ impl User {
             .media_core
             .rollback_staged_publish(
                 self.room.as_ref(),
-                &self.id,
+                &core_user_id,
                 self.connection_id,
-                stream_type,
+                core_stream_type,
             )
             .await
         {
@@ -277,9 +299,9 @@ impl User {
             .media_core
             .unpublish(
                 self.room.as_ref(),
-                &self.id,
+                &core_user_id,
                 self.connection_id,
-                stream_type,
+                core_stream_type,
             )
             .await
         {
@@ -304,6 +326,9 @@ impl User {
         states: &DownloadStates,
     ) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
+        let core_user_id = call_room::core_user_id(&self.id);
+        let core_target_user_id = call_room::core_user_id(target_user_id);
+        let core_states = call_room::core_download_states(states);
         info!(
             event = telemetry_event::SUBSCRIBE_PREPARED,
             operation = "consume_prepare",
@@ -313,10 +338,10 @@ impl User {
         self.media_core
             .update_subscription(
                 self.room.as_ref(),
-                &self.id,
+                &core_user_id,
                 self.connection_id,
-                target_user_id,
-                states,
+                &core_target_user_id,
+                &core_states,
             )
             .await;
         info!(
@@ -353,7 +378,7 @@ impl User {
 
     pub async fn notify_broadcast(
         &mut self,
-        sender_id: UserId,
+        sender_id: CoreUserId,
         message: JsonPayload,
     ) -> Result<UserOutput, UserError> {
         self.apply_room_message(RoomEventMessage::Broadcast { sender_id, message })
@@ -362,21 +387,24 @@ impl User {
 
     pub async fn add_remote_user(
         &mut self,
-        user_id: UserId,
-        info: UserInfo,
+        user_id: CoreUserId,
+        info: CoreUserInfo,
     ) -> Result<UserOutput, UserError> {
         self.apply_room_message(RoomEventMessage::UserJoined { user_id, info })
             .await
     }
 
-    pub async fn remove_remote_user(&mut self, user_id: UserId) -> Result<UserOutput, UserError> {
+    pub async fn remove_remote_user(
+        &mut self,
+        user_id: CoreUserId,
+    ) -> Result<UserOutput, UserError> {
         self.apply_room_message(RoomEventMessage::UserDeparted { user_id })
             .await
     }
 
     pub async fn update_remote_users(
         &mut self,
-        snapshot: BTreeMap<UserId, UserInfo>,
+        snapshot: BTreeMap<CoreUserId, CoreUserInfo>,
     ) -> Result<UserOutput, UserError> {
         self.apply_room_message(RoomEventMessage::UserInfoChanged(snapshot))
             .await
@@ -384,7 +412,7 @@ impl User {
 
     pub async fn update_recording_state(
         &mut self,
-        state: RecordingStateUpdate,
+        state: CoreRecordingStateUpdate,
     ) -> Result<UserOutput, UserError> {
         self.apply_room_message(RoomEventMessage::RecordingStateChanged(state))
             .await
@@ -415,7 +443,12 @@ impl User {
     }
 
     async fn reject_stale_connection(&self) -> Result<(), UserError> {
-        if self.room.has_connection(&self.id, self.connection_id).await {
+        let core_user_id = call_room::core_user_id(&self.id);
+        if self
+            .room
+            .has_connection(&core_user_id, self.connection_id)
+            .await
+        {
             return Ok(());
         }
         debug!(
@@ -449,9 +482,10 @@ impl User {
         )
     )]
     async fn create_initial_offer(&mut self) -> Result<UserOutput, UserError> {
+        let core_user_id = call_room::core_user_id(&self.id);
         let (offer, offered_capabilities) = self
             .media_core
-            .create_initial_offer(self.room.as_ref(), &self.id, self.connection_id)
+            .create_initial_offer(self.room.as_ref(), &core_user_id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(
@@ -584,10 +618,11 @@ impl User {
             PendingUserAction::EstablishSession {
                 offered_capabilities,
             } => {
+                let core_user_id = call_room::core_user_id(&self.id);
                 self.media_core
                     .apply_initial_answer(
                         self.room.as_ref(),
-                        &self.id,
+                        &core_user_id,
                         self.connection_id,
                         answer_sdp,
                         offered_capabilities,
@@ -595,10 +630,11 @@ impl User {
                     .await
             }
             PendingUserAction::RefreshSession => {
+                let core_user_id = call_room::core_user_id(&self.id);
                 self.media_core
                     .apply_renegotiation_answer(
                         self.room.as_ref(),
-                        &self.id,
+                        &core_user_id,
                         self.connection_id,
                         answer_sdp,
                     )
@@ -613,8 +649,9 @@ impl User {
     }
 
     async fn create_renegotiation_offer(&self) -> Result<Option<MediaNegotiationOffer>, UserError> {
+        let core_user_id = call_room::core_user_id(&self.id);
         self.media_core
-            .create_renegotiation_offer(self.room.as_ref(), &self.id, self.connection_id)
+            .create_renegotiation_offer(self.room.as_ref(), &core_user_id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(
@@ -678,13 +715,15 @@ impl User {
         let Some(stream_type) = slot.compatibility_stream_type() else {
             return false;
         };
+        let core_user_id = call_room::core_user_id(&self.id);
+        let core_stream_type = call_room::core_stream_type(stream_type);
         let staged = self
             .media_core
             .stage_publish(
                 self.room.as_ref(),
-                &self.id,
+                &core_user_id,
                 self.connection_id,
-                stream_type,
+                core_stream_type,
             )
             .await;
         if staged {
@@ -741,8 +780,9 @@ impl Drop for User {
         let connection_id = self.connection_id;
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
+                let core_user_id = call_room::core_user_id(&user_id);
                 media_core
-                    .rollback_connection_publishes(room.as_ref(), &user_id, connection_id)
+                    .rollback_connection_publishes(room.as_ref(), &core_user_id, connection_id)
                     .await;
             });
         }

@@ -1,12 +1,8 @@
-use o_sfu_protocol::{
-    shared::{RecordingState, RecordingStateUpdate, StopCode},
-    signaling::RecordingOptions,
-};
-
 use super::fixtures::*;
 use crate::{
     MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
+        RecordingOptions, RecordingState, RecordingStateUpdate, StopCode,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         recording::MediaTap,

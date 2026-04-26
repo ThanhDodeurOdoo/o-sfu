@@ -1,11 +1,13 @@
-use o_sfu_protocol::shared::StreamType;
 use serde_json::json;
 
-use crate::runtime::recording::{
-    OrtpFileHeader,
-    test_support::{
-        OrtpCodec, OrtpFrameHeader, RecordingFileMetadata, RecordingMetadata, RecordingSegment,
-        StreamWriter,
+use crate::runtime::{
+    StreamType,
+    recording::{
+        OrtpFileHeader,
+        test_support::{
+            OrtpCodec, OrtpFrameHeader, RecordingFileMetadata, RecordingMetadata, RecordingSegment,
+            StreamWriter,
+        },
     },
 };
 

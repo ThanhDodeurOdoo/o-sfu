@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     MediaFormat as RouterMediaFormat, MediaKind, MediaKind as RouterMediaKind,
     MediaStream as RouterRtpParameters, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
@@ -17,11 +16,14 @@ use tokio::time::sleep;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::RoomInstanceId;
 use crate::{
-    runtime::transport_adapter::{
-        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-        ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
-        ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
-        TransportMediaId, TransportSessionKey,
+    runtime::{
+        UserId,
+        transport_adapter::{
+            ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+            ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
+            ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
+            TransportMediaId, TransportSessionKey,
+        },
     },
     transport::SourcePolicySignal,
 };

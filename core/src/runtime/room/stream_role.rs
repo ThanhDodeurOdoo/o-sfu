@@ -1,5 +1,6 @@
-use o_sfu_protocol::shared::StreamType;
 use o_sfu_router::MediaKind;
+
+use crate::runtime::StreamType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum UserStreamRole {

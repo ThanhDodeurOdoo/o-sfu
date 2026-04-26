@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId, UserPermissions};
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
     derive_consumable_rtp_parameters,
@@ -29,7 +28,7 @@ use super::super::{
 use crate::{
     MediaCodecFlags,
     runtime::{
-        ConnectionId, RoomInstanceId,
+        ConnectionId, DownloadStates, RoomInstanceId, StreamType, UserId, UserPermissions,
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
         room::{

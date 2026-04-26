@@ -24,7 +24,7 @@ use super::{
     },
     transport_adapter::RuntimeTransportAdapter,
 };
-use crate::{config::Config, core::SfuCore};
+use crate::{application::room as call_room, config::Config, core::SfuCore};
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
@@ -119,9 +119,16 @@ impl TestServer {
     ) -> bool {
         wait_for_test_predicate(|| async {
             let room = self.room_manager.get_by_uuid(room_id).await?;
+            let core_consumer_user_id = call_room::core_user_id(consumer_user_id);
+            let core_producer_user_id = call_room::core_user_id(producer_user_id);
+            let core_stream_type = call_room::core_stream_type(stream_type);
             matches!(
-                room.consumer_route_state(consumer_user_id, producer_user_id, stream_type)
-                    .await,
+                room.consumer_route_state(
+                    &core_consumer_user_id,
+                    &core_producer_user_id,
+                    core_stream_type
+                )
+                .await,
                 Some(ConsumerRouteState::Absent)
             )
             .then_some(())
@@ -144,9 +151,16 @@ impl TestServer {
             } else {
                 ConsumerRouteState::Inactive
             };
+            let core_consumer_user_id = call_room::core_user_id(consumer_user_id);
+            let core_producer_user_id = call_room::core_user_id(producer_user_id);
+            let core_stream_type = call_room::core_stream_type(stream_type);
             matches!(
                 room
-                    .consumer_route_state(consumer_user_id, producer_user_id, stream_type)
+                    .consumer_route_state(
+                        &core_consumer_user_id,
+                        &core_producer_user_id,
+                        core_stream_type
+                    )
                     .await,
                 Some(state) if state == expected_state
             )

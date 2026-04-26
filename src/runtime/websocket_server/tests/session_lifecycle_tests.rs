@@ -1,7 +1,7 @@
 use std::slice;
 
 use super::fixtures::*;
-use crate::runtime::rtc_adapter::TransportSessionHealth;
+use crate::{application::room as call_room, runtime::rtc_adapter::TransportSessionHealth};
 
 #[tokio::test]
 async fn websocket_sends_ping_frames_and_accepts_pongs() {
@@ -113,7 +113,7 @@ async fn websocket_closes_when_pong_times_out() {
         !server
             .room_manager
             .test_api()
-            .has_session(room.uuid(), &user_id)
+            .has_session(room.uuid(), &call_room::core_user_id(&user_id))
             .await
     );
 }
@@ -163,13 +163,18 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         .is_some()
     );
 
-    let connection_id = room.test_api().inspect().user_connection_id(&user_id).await;
+    let core_user_id = call_room::core_user_id(&user_id);
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&core_user_id)
+        .await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;
     };
     server.transport_adapter.debug_set_session_transport_health(
-        &room.transport_user_key(&user_id, connection_id),
+        &room.transport_user_key(&core_user_id, connection_id),
         TransportSessionHealth::Disconnected,
     );
 
@@ -214,13 +219,18 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
         "user should receive the initial offer before the transport disconnect is injected"
     );
 
-    let connection_id = room.test_api().inspect().user_connection_id(&user_id).await;
+    let core_user_id = call_room::core_user_id(&user_id);
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&core_user_id)
+        .await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;
     };
     server.transport_adapter.debug_set_session_transport_health(
-        &room.transport_user_key(&user_id, connection_id),
+        &room.transport_user_key(&core_user_id, connection_id),
         TransportSessionHealth::Disconnected,
     );
 
@@ -254,7 +264,12 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
     let Some(mut websocket) = websocket else {
         return;
     };
-    let connection_id = room.test_api().inspect().user_connection_id(&user_id).await;
+    let core_user_id = call_room::core_user_id(&user_id);
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&core_user_id)
+        .await;
     assert!(connection_id.is_some());
     let Some(connection_id) = connection_id else {
         return;
@@ -286,8 +301,12 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
         "publish intent should stage media and request renegotiation"
     );
     assert!(
-        room.has_staged_publish(&user_id, connection_id, StreamType::Camera)
-            .await,
+        room.has_staged_publish(
+            &core_user_id,
+            connection_id,
+            call_room::core_stream_type(StreamType::Camera)
+        )
+        .await,
         "publish should be staged before the user finishes"
     );
 
@@ -295,7 +314,11 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
     let cleanup = timeout(Duration::from_secs(1), async {
         loop {
             if !room
-                .has_staged_publish(&user_id, connection_id, StreamType::Camera)
+                .has_staged_publish(
+                    &core_user_id,
+                    connection_id,
+                    call_room::core_stream_type(StreamType::Camera),
+                )
                 .await
             {
                 break;
@@ -337,7 +360,9 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed { user_id })
+        Some(&FakeWebRtcEvent::SessionClosed {
+            user_id: call_room::core_user_id(&user_id),
+        })
     );
 }
 
@@ -377,7 +402,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     assert_eq!(
         events.last(),
         Some(&FakeWebRtcEvent::SessionClosed {
-            user_id: user_id.clone(),
+            user_id: call_room::core_user_id(&user_id),
         })
     );
 
@@ -390,7 +415,9 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed { user_id })
+        Some(&FakeWebRtcEvent::SessionClosed {
+            user_id: call_room::core_user_id(&user_id),
+        })
     );
 }
 
@@ -421,7 +448,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
         .room_manager
         .disconnect_users(
             room.uuid(),
-            &[UserId::Integer(1)],
+            &[call_room::core_user_id(&UserId::Integer(1))],
             &server.transport_adapter,
         )
         .await;
@@ -443,7 +470,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
     assert_eq!(
         events.last(),
         Some(&FakeWebRtcEvent::SessionClosed {
-            user_id: UserId::Integer(1)
+            user_id: call_room::core_user_id(&UserId::Integer(1))
         })
     );
 }
@@ -467,11 +494,12 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
         return;
     };
 
+    let core_user_id = call_room::core_user_id(&user_id);
     server
         .room_manager
         .disconnect_users(
             room.uuid(),
-            slice::from_ref(&user_id),
+            slice::from_ref(&core_user_id),
             &server.transport_adapter,
         )
         .await;
@@ -489,6 +517,8 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed { user_id })
+        Some(&FakeWebRtcEvent::SessionClosed {
+            user_id: core_user_id
+        })
     );
 }

@@ -1,13 +1,12 @@
 use std::time::Duration;
 
-use o_sfu_protocol::signaling::WebSocketCloseCode;
-
 use super::{
     HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
     RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
     TransportIceState, WsSessionLoopExitReason,
 };
 use crate::runtime::{
+    WebSocketCloseCode,
     rtc_adapter::TransportSessionHealth,
     source_model::{SourceEncodingId, SourceSelector},
 };

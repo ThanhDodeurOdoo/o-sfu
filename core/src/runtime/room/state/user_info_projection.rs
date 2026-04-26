@@ -1,16 +1,11 @@
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::{
-    shared::{StreamType, UserId, UserInfo},
-    signaling::PeerSnapshot,
-};
-
 use super::{
     layout::UserLayout,
     presence::UserPresence,
     shared::{ActiveUser, RoomState, SourceKey},
 };
-use crate::runtime::ConnectionId;
+use crate::runtime::{ConnectionId, PeerSnapshot, StreamType, UserId, UserInfo};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::runtime::room) struct UserMediaView {

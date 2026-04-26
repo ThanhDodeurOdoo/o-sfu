@@ -1,4 +1,3 @@
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId};
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
     can_consume, negotiate_consumer_rtp_parameters,
@@ -11,7 +10,7 @@ use super::super::{
     shared::{ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey},
 };
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, DownloadStates, StreamType, UserId,
     source_model::{ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId},
     transport_adapter::TransportMediaId,
 };

@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use o_sfu_protocol::shared::UserId as SignalingSessionId;
 use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, TransportId};
 
 use crate::runtime::{
-    RoomInstanceId,
+    RoomInstanceId, UserId as SignalingSessionId,
     metrics::RuntimeMetrics,
     recording::{
         MediaSource, MediaTap, RecordingService,

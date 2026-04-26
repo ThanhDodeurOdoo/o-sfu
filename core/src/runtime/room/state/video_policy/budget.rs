@@ -7,13 +7,12 @@
 //! overload work should extend this module by selecting a whole receiver video
 //! set before emitting pause actions.
 
-use o_sfu_protocol::shared::StreamType;
-
 use super::{
     action::{ConsumerPacketSelectionUpdate, ReceiverVideoRouteAction, VideoRouteAction},
     input::ReceiverVideoPolicyInput,
 };
 use crate::runtime::{
+    StreamType,
     source_model::{ConsumerSourceSelection, SourceEncodingDescriptor, SourceSelector},
     transport_adapter::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
 };

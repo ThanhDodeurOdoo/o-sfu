@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_protocol::shared::{UserId, UserInfo};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -14,7 +13,7 @@ use super::{
     presence::UserPresence,
     shared::{ActiveUser, RoomState, TransportMediaRemoval},
 };
-use crate::runtime::ConnectionId;
+use crate::runtime::{ConnectionId, UserId, UserInfo};
 
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
@@ -428,7 +427,6 @@ mod tests {
 
     use std::sync::Arc;
 
-    use o_sfu_protocol::shared::{StreamType, UserPermissions};
     use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
     use tokio::sync::mpsc;
 
@@ -436,7 +434,7 @@ mod tests {
     use crate::{
         MediaCodecFlags,
         runtime::{
-            ConnectionId, RoomInstanceId,
+            ConnectionId, RoomInstanceId, StreamType, UserPermissions,
             metrics::RuntimeMetrics,
             recording::{MediaSource, MediaTap, RecordingService},
             room::{

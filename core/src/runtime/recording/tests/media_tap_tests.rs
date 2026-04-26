@@ -6,10 +6,8 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_protocol::shared::UserId;
-
 use crate::runtime::{
-    RoomInstanceId,
+    RoomInstanceId, UserId,
     recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
     rtc_adapter::test_support::{sample_forwarded_packet, test_transport_session_key},
     transport_adapter::{TransportMediaId, TransportSessionKey},

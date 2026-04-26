@@ -7,14 +7,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_protocol::shared::{StreamType, UserId};
-
 use super::{
     super::shared::{RoomState, SourceKey},
     layout::{ReceiverVideoLayoutIntent, featured_camera_user_ids_for_active_speakers},
 };
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, StreamType, UserId,
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
         SourceEncodingDescriptor,

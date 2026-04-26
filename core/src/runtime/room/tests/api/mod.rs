@@ -1,6 +1,5 @@
-use o_sfu_protocol::shared::UserId;
-
 use super::super::{Room, RoomManager};
+use crate::runtime::UserId;
 
 mod inspect;
 mod lifecycle;

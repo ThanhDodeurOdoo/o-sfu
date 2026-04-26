@@ -4,7 +4,6 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
@@ -21,6 +20,7 @@ use super::{
 use crate::{
     MediaCodecFlags,
     runtime::{
+        UserId,
         metrics::RuntimeMetrics,
         rtc_adapter::{
             bitrate::RtcBitrateState,

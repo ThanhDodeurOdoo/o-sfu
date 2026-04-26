@@ -1,4 +1,4 @@
-use o_sfu_protocol::shared::UserPermissions;
+use crate::runtime::UserPermissions;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoomUserPermissions {

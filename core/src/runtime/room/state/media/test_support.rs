@@ -1,8 +1,7 @@
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::MediaCapabilities;
 
 use super::super::shared::RoomState;
-use crate::runtime::ConnectionId;
+use crate::runtime::{ConnectionId, UserId};
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct PublishPrerequisites {

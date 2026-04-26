@@ -13,7 +13,6 @@ testing-transport = []
 [dependencies]
 bitflags.workspace = true
 futures-util.workspace = true
-o-sfu-protocol.workspace = true
 o-sfu-rfc.workspace = true
 o-sfu-router.workspace = true
 serde.workspace = true

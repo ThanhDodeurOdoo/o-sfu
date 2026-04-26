@@ -37,7 +37,7 @@ use tracing::{Instrument, Span, field, info};
 
 use super::WsWriter;
 use crate::{
-    application::user_session::User,
+    application::{room as call_room, user_session::User},
     core::runtime::room::{Room, UserOutbound},
     runtime::{ConnectionId, RuntimeState, request_origin::resolve_remote_address, telemetry},
 };
@@ -130,11 +130,12 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             "closing websocket user"
         );
         user_session.user.close().await;
+        let core_user_id = call_room::core_user_id(&user_session.user_id);
         let _ = state
             .rooms
             .close_session(
                 user_session.room.uuid(),
-                &user_session.user_id,
+                &core_user_id,
                 user_session.connection_id,
                 &state.transport_adapter,
             )

@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use o_sfu_protocol::shared::UserId;
-
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities},
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerJoinError,
@@ -9,8 +7,8 @@ use super::{
 use crate::{
     MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
-        ConnectionId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
-        transport_adapter::RuntimeTransportAdapter,
+        ConnectionId, UserId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+        recording::MediaTap, transport_adapter::RuntimeTransportAdapter,
     },
 };
 

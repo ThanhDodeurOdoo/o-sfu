@@ -1,11 +1,10 @@
-use o_sfu_protocol::{
-    shared::{UserId, UserInfo, UserPermissions},
-    signaling::RecordingOptions,
-};
 use tokio::sync::mpsc;
 
 use super::super::super::{Room, RoomJoinError, UserCleanup, UserOutbound};
-use crate::runtime::{ConnectionId, transport_adapter::RuntimeTransportAdapter};
+use crate::runtime::{
+    ConnectionId, RecordingOptions, UserId, UserInfo, UserPermissions,
+    transport_adapter::RuntimeTransportAdapter,
+};
 
 #[derive(Clone, Copy)]
 pub struct RoomTestLifecycle<'a> {

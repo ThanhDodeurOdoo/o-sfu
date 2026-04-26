@@ -12,8 +12,9 @@
 //! The important invariant is that each transition makes its ordering and failure
 //! handling explicit where room state meets transport state.
 
-use o_sfu_protocol::shared::{StreamType, UserId};
 use tracing::warn;
+
+use crate::runtime::{StreamType, UserId};
 
 mod source_policy;
 pub(super) use source_policy::SourcePolicyEffectPlan;

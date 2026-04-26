@@ -375,12 +375,13 @@ impl fmt::Debug for RelayRegistry {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::UserId;
-
     use super::*;
-    use crate::runtime::rtc_adapter::{
-        state::RtcBootstrapState,
-        test_support::{sample_forwarded_packet, test_transport_session_key},
+    use crate::runtime::{
+        UserId,
+        rtc_adapter::{
+            state::RtcBootstrapState,
+            test_support::{sample_forwarded_packet, test_transport_session_key},
+        },
     };
 
     #[test]

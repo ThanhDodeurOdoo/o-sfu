@@ -6,11 +6,9 @@
 //! future policy vocabulary for overload work, but it is not emitted until the
 //! budget solver starts withholding routes.
 
-use o_sfu_protocol::shared::UserId;
-
 use super::{input::ReceiverVideoRouteInput, projection::source_packet_gate_for_selector};
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, UserId,
     source_model::{PolicyPauseReason, PublishedSourceId, SourceSelector},
     transport_adapter::{SourcePacketGate, TransportMediaId},
 };

@@ -1,5 +1,3 @@
-use o_sfu_protocol::shared::UserId;
-
 use super::{
     super::{
         RoomEventMessage,
@@ -7,6 +5,7 @@ use super::{
     },
     shared::RoomState,
 };
+use crate::runtime::UserId;
 
 impl RoomState {
     pub(in crate::runtime::room) fn fanout_all(&self, message: &RoomEventMessage) -> MessageFanout {

@@ -4,11 +4,11 @@
 
 use std::time::Duration;
 
-use o_sfu_protocol::shared::{RecordingState, StreamType, UserId, UserInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::runtime::{
+    RecordingState, StreamType, UserId, UserInfo,
     rtc_adapter::TransportSessionHealth,
     source_model::{SourceRoomPolicySelector, SourceRoutePriority, SourceSelector},
     transport_adapter::{

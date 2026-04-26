@@ -453,11 +453,10 @@ impl RtcBootstrapState {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use o_sfu_protocol::shared::UserId;
     use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 
     use super::*;
-    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
+    use crate::runtime::{UserId, rtc_adapter::test_support::test_transport_session_key};
 
     #[test]
     fn consumer_media_lookup_uses_the_reverse_index() {

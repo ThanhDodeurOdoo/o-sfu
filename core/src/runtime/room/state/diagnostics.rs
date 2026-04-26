@@ -1,10 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_protocol::shared::{StreamType, UserId};
-
 use super::shared::{ConsumerKey, RoomState};
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, StreamType, UserId,
     diagnostics::{
         DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
         DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState,

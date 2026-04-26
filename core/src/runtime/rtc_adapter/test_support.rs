@@ -1,5 +1,3 @@
-use o_sfu_protocol::shared::UserId;
-
 #[cfg(any(test, feature = "testing-transport"))]
 pub use super::commands::debug::DebugRouteEntry;
 #[cfg(any(test, feature = "testing-transport"))]
@@ -7,7 +5,9 @@ pub use super::forwarded_packet::test_support::{
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
     sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
 };
-use crate::runtime::{ConnectionId, RoomInstanceId, transport_adapter::TransportSessionKey};
+use crate::runtime::{
+    ConnectionId, RoomInstanceId, UserId, transport_adapter::TransportSessionKey,
+};
 
 #[must_use]
 pub fn test_transport_session_key(

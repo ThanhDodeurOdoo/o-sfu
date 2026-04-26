@@ -1,9 +1,8 @@
-use o_sfu_protocol::shared::{StreamType, UserId};
 use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
 
 use super::shared::{RoomState, SourceKey};
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, StreamType, UserId,
     room::RoomUserPermissions,
     source_model::{PublishedSourceId, SourceEncodingId},
     transport_adapter::TransportMediaId,

@@ -8,8 +8,6 @@
 
 use std::time::Duration;
 
-use o_sfu_protocol::signaling::WebSocketCloseCode;
-
 use super::{
     counter::{
         Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
@@ -23,7 +21,9 @@ use super::{
         WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
-use crate::runtime::{rtc_adapter::TransportSessionHealth, source_model::SourceSelector};
+use crate::runtime::{
+    WebSocketCloseCode, rtc_adapter::TransportSessionHealth, source_model::SourceSelector,
+};
 
 #[derive(Debug, Default)]
 pub struct RuntimeMetrics {

@@ -8,7 +8,6 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_protocol::shared::UserId;
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid},
     rtp::Ssrc,
@@ -24,7 +23,7 @@ use super::{
 use crate::{
     MediaCodecFlags,
     runtime::{
-        RoomInstanceId,
+        RoomInstanceId, UserId,
         metrics::{RtpForwardDestinationKind, RuntimeMetrics},
         packet_sink_registry::{
             PacketSink as MediaPacketSink, RegisteredPacketSink,

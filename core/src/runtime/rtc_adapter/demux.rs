@@ -254,11 +254,9 @@ impl RemoteAddrDemux {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use o_sfu_protocol::shared::UserId;
-
     use super::RemoteAddrDemux;
     use crate::runtime::{
-        rtc_adapter::test_support::test_transport_session_key,
+        UserId, rtc_adapter::test_support::test_transport_session_key,
         transport_adapter::TransportSessionKey,
     };
 

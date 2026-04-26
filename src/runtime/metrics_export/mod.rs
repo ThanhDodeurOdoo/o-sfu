@@ -36,16 +36,18 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
 mod tests {
     use std::time::Duration;
 
-    use o_sfu_protocol::signaling::WebSocketCloseCode;
-
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
-    use crate::runtime::{
-        metrics::{
-            HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-            RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
+    use crate::{
+        core::runtime::WebSocketCloseCode,
+        runtime::{
+            metrics::{
+                HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+                RtpForwardDestinationKind, RuntimeMetrics, TransportIceState,
+                WsSessionLoopExitReason,
+            },
+            rtc_adapter::TransportSessionHealth,
+            source_model::{SourceEncodingId, SourceSelector},
         },
-        rtc_adapter::TransportSessionHealth,
-        source_model::{SourceEncodingId, SourceSelector},
     };
 
     fn assert_http_and_websocket_metrics(rendered: &str) {

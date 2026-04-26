@@ -1,4 +1,3 @@
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId};
 use o_sfu_router::{
     MediaKind, MediaStream as RouterRtpParameters, derive_consumable_rtp_parameters,
 };
@@ -6,7 +5,7 @@ use tracing::warn;
 
 use super::super::super::{Room, media_transaction::PendingPublishTransaction};
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, DownloadStates, StreamType, UserId,
     transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId},
 };
 

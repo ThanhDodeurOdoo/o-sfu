@@ -5,7 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_protocol::shared::UserId;
 use o_sfu_router::{
     MediaCapabilities as RouterRtpCapabilities, MediaCodecCapability, MediaKind,
     MediaKind as RouterMediaKind, MediaStream, StreamBinding,
@@ -17,7 +16,7 @@ use super::RuntimeTransportAdapter;
 use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
-        ConnectionId, RoomInstanceId,
+        ConnectionId, RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,

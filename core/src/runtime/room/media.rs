@@ -1,4 +1,3 @@
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserId};
 use tracing::warn;
 
 use super::{
@@ -7,7 +6,7 @@ use super::{
     state::ConsumerBootstrapOrigin,
 };
 use crate::runtime::{
-    ConnectionId,
+    ConnectionId, DownloadStates, StreamType, UserId,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
     transport_adapter::{MediaPort, ObservabilityPort},

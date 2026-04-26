@@ -12,7 +12,6 @@ pub(super) use std::{
     time::{Duration, Instant},
 };
 
-pub(super) use o_sfu_protocol::shared::UserId;
 pub(super) use o_sfu_router::{
     MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding,
 };
@@ -29,6 +28,7 @@ pub(super) use super::super::{
 pub(super) use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
+        UserId,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,

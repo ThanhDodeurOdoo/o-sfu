@@ -12,7 +12,7 @@ use o_sfu_protocol::{
 };
 
 use crate::{
-    application::call_policy::CallPublicationSlot,
+    application::{call_policy::CallPublicationSlot, room as call_room},
     core::{
         OfferedMediaCapabilities,
         runtime::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
@@ -251,17 +251,21 @@ impl RemoteTrackProjection {
     ) -> TranslatedRoomMessage {
         match message {
             RoomEventMessage::Broadcast { sender_id, message } => {
+                let sender_id = call_room::protocol_user_id(&sender_id);
                 TranslatedRoomMessage::messages(vec![ServerMessage::Broadcast(
                     ServerBroadcastPayload { sender_id, message },
                 )])
             }
             RoomEventMessage::UserJoined { user_id, info } => {
+                let user_id = call_room::protocol_user_id(&user_id);
+                let info = call_room::protocol_user_info(&info);
                 TranslatedRoomMessage::messages(vec![ServerMessage::PeerJoined(PeerInfoPayload {
                     user_id,
                     info,
                 })])
             }
             RoomEventMessage::UserDeparted { user_id } => {
+                let user_id = call_room::protocol_user_id(&user_id);
                 let removed_tracks = self
                     .bindings_by_mid
                     .values()
@@ -274,10 +278,12 @@ impl RemoteTrackProjection {
                 }
             }
             RoomEventMessage::UserInfoChanged(snapshot) => {
-                self.translate_user_info_snapshot(snapshot)
+                self.translate_user_info_snapshot(call_room::protocol_user_info_snapshot(snapshot))
             }
             RoomEventMessage::RecordingStateChanged(state) => {
-                TranslatedRoomMessage::messages(vec![ServerMessage::RecordingChange(state)])
+                TranslatedRoomMessage::messages(vec![ServerMessage::RecordingChange(
+                    call_room::protocol_recording_state_update(&state),
+                )])
             }
         }
     }
@@ -286,8 +292,8 @@ impl RemoteTrackProjection {
         let mid = payload.mid().to_owned();
         self.apply_track_binding(
             mid,
-            payload.user_id().clone(),
-            payload.stream_type(),
+            call_room::protocol_user_id(payload.user_id()),
+            call_room::protocol_stream_type(payload.stream_type()),
             payload.active(),
             payload.source_descriptor(),
         );
@@ -301,9 +307,11 @@ impl RemoteTrackProjection {
         &mut self,
         update: &TrackBindingUpdate,
     ) -> TranslatedRoomMessage {
+        let user_id = call_room::protocol_user_id(&update.user_id);
+        let stream_type = call_room::protocol_stream_type(update.stream_type);
         let changed = match update.active {
-            Some(active) => self.set_track_active(&update.user_id, update.stream_type, active),
-            None => self.remove_track_binding(&update.user_id, update.stream_type),
+            Some(active) => self.set_track_active(&user_id, stream_type, active),
+            None => self.remove_track_binding(&user_id, stream_type),
         };
         if !changed {
             return TranslatedRoomMessage::messages(Vec::new());
@@ -460,9 +468,12 @@ mod tests {
     use super::*;
     use crate::{
         application::call_policy::CallPublicationSlot,
-        core::runtime::source_model::{
-            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+        core::runtime::{
+            StreamType as CoreStreamType, UserId as CoreUserId,
+            source_model::{
+                PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+                SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+            },
         },
     };
 
@@ -572,8 +583,8 @@ mod tests {
         });
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
-            owner: PublishedSourceOwner::new(UserId::Integer(7)),
-            stream_type: StreamType::Camera,
+            owner: PublishedSourceOwner::new(CoreUserId::Integer(7)),
+            stream_type: CoreStreamType::Camera,
             media_kind: MediaKind::Video,
             mid: Some(Mid::new(mid)),
             encodings: vec![encoding],

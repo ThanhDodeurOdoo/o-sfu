@@ -12,12 +12,11 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
-use o_sfu_protocol::shared::UserId;
 use serde_json::{Map, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::types::DiagnosticsEvent;
-use crate::runtime::RoomInstanceId;
+use crate::runtime::{RoomInstanceId, UserId};
 
 const GLOBAL_RECENT_EVENT_LIMIT: usize = 64;
 const SCOPE_RECENT_EVENT_LIMIT: usize = 32;
@@ -238,11 +237,10 @@ fn reversed_events(events: &VecDeque<DiagnosticsEvent>) -> Vec<DiagnosticsEvent>
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::UserId;
     use serde_json::{Map, Value};
 
     use super::{DiagnosticsEventData, DiagnosticsStore, GLOBAL_RECENT_EVENT_LIMIT};
-    use crate::runtime::RoomInstanceId;
+    use crate::runtime::{RoomInstanceId, UserId};
 
     #[test]
     fn global_events_keep_the_newest_entries_in_reverse_chronological_order() {

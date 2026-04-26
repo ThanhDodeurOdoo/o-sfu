@@ -204,10 +204,8 @@ impl RtcBootstrapState {
 mod tests {
     use std::sync::Mutex;
 
-    use o_sfu_protocol::shared::UserId;
-
     use super::*;
-    use crate::runtime::rtc_adapter::test_support::test_transport_session_key;
+    use crate::runtime::{UserId, rtc_adapter::test_support::test_transport_session_key};
 
     #[test]
     fn incoming_media_bitrate_reports_recent_bits() {

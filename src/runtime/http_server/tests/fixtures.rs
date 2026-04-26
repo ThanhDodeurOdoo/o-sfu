@@ -9,7 +9,7 @@ pub(super) use axum::{
     http::{Request, StatusCode, header, request::Builder as HttpRequestBuilder},
     response::Response as AxumResponse,
 };
-pub(super) use o_sfu_protocol::shared::{UserId, UserPermissions};
+pub(super) use o_sfu_protocol::shared::UserId;
 pub(super) use serde::de::DeserializeOwned;
 pub(super) use tokio::sync::mpsc;
 pub(super) use tower::util::ServiceExt;

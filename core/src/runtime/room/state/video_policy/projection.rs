@@ -94,14 +94,16 @@ mod tests {
         reason = "test fixtures should fail loudly when they build invalid source graphs"
     )]
 
-    use o_sfu_protocol::shared::{StreamType, UserId};
     use o_sfu_router::{MediaKind, Rid};
 
     use super::*;
-    use crate::runtime::source_model::{
-        PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-        SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-        SourceOperatingPoint, SourceTemporalLayerId,
+    use crate::runtime::{
+        StreamType, UserId,
+        source_model::{
+            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+            SourceOperatingPoint, SourceTemporalLayerId,
+        },
     };
 
     fn source_with_encodings(

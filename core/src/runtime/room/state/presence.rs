@@ -1,4 +1,4 @@
-use o_sfu_protocol::shared::UserInfo;
+use crate::runtime::UserInfo;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::runtime::room) struct UserPresence {

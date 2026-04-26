@@ -1,10 +1,12 @@
-use o_sfu_protocol::shared::{AvailableFeatures, UserId};
 use uuid::Uuid;
 
 use super::{RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
 use crate::{
     RuntimeFeatureFlags,
-    runtime::{ConnectionId, RoomInstanceId, transport_adapter::TransportSessionKey},
+    runtime::{
+        AvailableFeatures, ConnectionId, RoomInstanceId, UserId,
+        transport_adapter::TransportSessionKey,
+    },
 };
 
 #[derive(Debug, Clone)]

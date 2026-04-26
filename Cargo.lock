@@ -1104,7 +1104,6 @@ version = "0.3.0"
 dependencies = [
  "bitflags",
  "futures-util",
- "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",
  "serde",
