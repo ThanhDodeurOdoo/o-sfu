@@ -3,49 +3,36 @@ use o_sfu_router::MediaKind;
 
 /// Application-owned publication slot.
 ///
-/// Core media routing only needs the technical [`MediaKind`]. Compatibility
-/// stream names are kept here so adding another application slot does not add
-/// another core media identity.
+/// Core media routing only needs the technical [`MediaKind`]. Stream labels are
+/// kept here as app policy so future call products can choose their publication
+/// slots without adding core media identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum CallPublicationSlot {
-    Odoo(StreamType),
-    #[allow(
-        dead_code,
-        reason = "custom app slots are the extension point that keeps new business media choices out of core stream enums"
-    )]
-    CustomAudio(&'static str),
+pub(crate) struct CallPublicationSlot {
+    stream_type: StreamType,
 }
 
 impl CallPublicationSlot {
     pub(crate) const fn from_stream_type(stream_type: StreamType) -> Self {
-        Self::Odoo(stream_type)
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn background_music() -> Self {
-        Self::CustomAudio("background_music")
+        Self { stream_type }
     }
 
     pub(crate) const fn media_kind(self) -> MediaKind {
-        match self {
-            Self::Odoo(StreamType::Audio) | Self::CustomAudio(_) => MediaKind::Audio,
-            Self::Odoo(StreamType::Camera | StreamType::Screen) => MediaKind::Video,
+        match self.stream_type {
+            StreamType::Audio => MediaKind::Audio,
+            StreamType::Camera | StreamType::Screen => MediaKind::Video,
         }
     }
 
-    pub(crate) const fn compatibility_stream_type(self) -> Option<StreamType> {
-        match self {
-            Self::Odoo(stream_type) => Some(stream_type),
-            Self::CustomAudio(_) => None,
-        }
+    pub(crate) const fn stream_type(self) -> StreamType {
+        self.stream_type
     }
 
     #[cfg(test)]
-    pub(crate) const fn default_odoo_slots() -> [Self; 3] {
+    pub(crate) const fn default_slots() -> [Self; 3] {
         [
-            Self::Odoo(StreamType::Audio),
-            Self::Odoo(StreamType::Camera),
-            Self::Odoo(StreamType::Screen),
+            Self::from_stream_type(StreamType::Audio),
+            Self::from_stream_type(StreamType::Camera),
+            Self::from_stream_type(StreamType::Screen),
         ]
     }
 }
@@ -86,37 +73,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn odoo_default_slots_remain_one_audio_camera_and_screen_slot() {
-        let slots = CallPublicationSlot::default_odoo_slots();
+    fn default_slots_remain_one_audio_camera_and_screen_slot() {
+        let slots = CallPublicationSlot::default_slots();
 
         assert_eq!(slots.len(), 3);
-        assert_eq!(
-            slots[0].compatibility_stream_type(),
-            Some(StreamType::Audio)
-        );
+        assert_eq!(slots[0].stream_type(), StreamType::Audio);
         assert_eq!(slots[0].media_kind(), MediaKind::Audio);
-        assert_eq!(
-            slots[1].compatibility_stream_type(),
-            Some(StreamType::Camera)
-        );
+        assert_eq!(slots[1].stream_type(), StreamType::Camera);
         assert_eq!(slots[1].media_kind(), MediaKind::Video);
-        assert_eq!(
-            slots[2].compatibility_stream_type(),
-            Some(StreamType::Screen)
-        );
+        assert_eq!(slots[2].stream_type(), StreamType::Screen);
         assert_eq!(slots[2].media_kind(), MediaKind::Video);
-    }
-
-    #[test]
-    fn extra_application_audio_slot_does_not_need_a_core_stream_type() {
-        let slot = CallPublicationSlot::background_music();
-
-        assert_eq!(slot.media_kind(), MediaKind::Audio);
-        assert_eq!(slot.compatibility_stream_type(), None);
-        assert_ne!(
-            slot,
-            CallPublicationSlot::from_stream_type(StreamType::Audio)
-        );
     }
 
     #[test]

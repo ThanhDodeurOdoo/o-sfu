@@ -37,7 +37,7 @@ use super::{
     io::send_user_output,
 };
 use crate::{
-    application::{room as call_room, user_session::User},
+    application::user_session::User,
     core::runtime::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
     runtime::{
         ConnectionId, RuntimeState,
@@ -400,17 +400,15 @@ async fn join_user(
 ) -> Option<JoinedUser> {
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
     let user_id = claims.user_id.clone();
-    let core_user_id = call_room::core_user_id(&user_id);
-    let core_permissions =
-        call_room::core_user_permissions(&claims.permissions.unwrap_or_default());
+    let permissions = claims.permissions.unwrap_or_default();
     let join_result = state
         .rooms
         .join_user(
             room.uuid(),
             JoinUserRequest {
-                user_id: core_user_id,
+                user_id: user_id.clone(),
                 label: claims.label,
-                permissions: core_permissions,
+                permissions,
                 sender: outbound_tx,
             },
             &state.transport_adapter,
@@ -546,12 +544,11 @@ async fn cleanup_failed_session(
     user_id: &UserId,
     connection_id: ConnectionId,
 ) {
-    let core_user_id = call_room::core_user_id(user_id);
     let _ = state
         .rooms
         .close_session(
             room.uuid(),
-            &core_user_id,
+            user_id,
             connection_id,
             &state.transport_adapter,
         )
@@ -565,9 +562,7 @@ async fn reject_handshake<T>(
     remote_address: &str,
     message: &str,
 ) -> Option<T> {
-    state
-        .metrics
-        .record_ws_handshake_rejection(close_code.map(call_room::core_websocket_close_code));
+    state.metrics.record_ws_handshake_rejection(close_code);
     if let Some(code) = close_code {
         info!(
             event = telemetry::schema::event::WS_HANDSHAKE_REJECTED,

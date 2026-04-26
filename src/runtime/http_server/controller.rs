@@ -13,25 +13,22 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
-use crate::{
-    application::room as call_room,
-    runtime::{
-        RuntimeState,
-        auth::{self, HttpDisconnectClaims, HttpRoomClaims},
-        diagnostics,
-        diagnostics::DiagnosticsUserLookup,
-        http_server::contract::{
-            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
-            RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
-        },
-        metrics::HttpRoute,
-        metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-        options::HttpOptions,
-        request_origin::{resolve_remote_address, trusted_forwarded_header},
-        room::{RoomConfig, RuntimeRoomStatsSnapshot},
-        telemetry, websocket_server,
+use crate::runtime::{
+    RuntimeState,
+    auth::{self, HttpDisconnectClaims, HttpRoomClaims},
+    diagnostics,
+    diagnostics::DiagnosticsUserLookup,
+    http_server::contract::{
+        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+        DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
+        RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
     },
+    metrics::HttpRoute,
+    metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+    options::HttpOptions,
+    request_origin::{resolve_remote_address, trusted_forwarded_header},
+    room::{RoomConfig, RuntimeRoomStatsSnapshot},
+    telemetry, websocket_server,
 };
 
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
@@ -219,13 +216,9 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
             return StatusCode::UNPROCESSABLE_ENTITY.into_response();
         };
         for (room_id, user_ids) in &claims.user_ids_by_room {
-            let core_user_ids = user_ids
-                .iter()
-                .map(call_room::core_user_id)
-                .collect::<Vec<_>>();
             state
                 .rooms
-                .disconnect_users(room_id, &core_user_ids, &state.transport_adapter)
+                .disconnect_users(room_id, user_ids, &state.transport_adapter)
                 .await;
         }
         state.metrics.record_http_disconnect_success();

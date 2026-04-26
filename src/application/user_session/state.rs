@@ -12,7 +12,7 @@ use o_sfu_protocol::{
 };
 
 use crate::{
-    application::{call_policy::CallPublicationSlot, room as call_room},
+    application::call_policy::CallPublicationSlot,
     core::{
         OfferedMediaCapabilities,
         runtime::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
@@ -24,7 +24,7 @@ use crate::{
 pub(super) struct UserState {
     request_ids: UserRequestIds,
     pub(super) negotiation: UserNegotiationState,
-    pub(super) tracks: RemoteTrackProjection,
+    pub(super) wire_state: UserWireState,
 }
 
 impl UserState {
@@ -225,12 +225,12 @@ impl UserNegotiationState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TranslatedRoomMessage {
+pub(super) struct UserWireMessages {
     pub(super) messages: Vec<ServerMessage>,
     pub(super) needs_renegotiation: bool,
 }
 
-impl TranslatedRoomMessage {
+impl UserWireMessages {
     fn messages(messages: Vec<ServerMessage>) -> Self {
         Self {
             messages,
@@ -239,63 +239,62 @@ impl TranslatedRoomMessage {
     }
 }
 
+/// Per-connection state used to build compatibility server messages.
+///
+/// This state owns the remote track snapshot because some room events, such as
+/// peer departure or user-info changes, must also update track bindings
+/// before the websocket edge serializes the resulting messages.
 #[derive(Debug, Default)]
-pub(super) struct RemoteTrackProjection {
+pub(super) struct UserWireState {
     bindings_by_mid: BTreeMap<String, TrackBinding>,
 }
 
-impl RemoteTrackProjection {
-    pub(super) fn translate_room_message(
+impl UserWireState {
+    pub(super) fn messages_for_room_event(
         &mut self,
         message: RoomEventMessage,
-    ) -> TranslatedRoomMessage {
+    ) -> UserWireMessages {
         match message {
             RoomEventMessage::Broadcast { sender_id, message } => {
-                let sender_id = call_room::protocol_user_id(&sender_id);
-                TranslatedRoomMessage::messages(vec![ServerMessage::Broadcast(
-                    ServerBroadcastPayload { sender_id, message },
-                )])
+                UserWireMessages::messages(vec![ServerMessage::Broadcast(ServerBroadcastPayload {
+                    sender_id,
+                    message,
+                })])
             }
             RoomEventMessage::UserJoined { user_id, info } => {
-                let user_id = call_room::protocol_user_id(&user_id);
-                let info = call_room::protocol_user_info(&info);
-                TranslatedRoomMessage::messages(vec![ServerMessage::PeerJoined(PeerInfoPayload {
+                UserWireMessages::messages(vec![ServerMessage::PeerJoined(PeerInfoPayload {
                     user_id,
                     info,
                 })])
             }
             RoomEventMessage::UserDeparted { user_id } => {
-                let user_id = call_room::protocol_user_id(&user_id);
                 let removed_tracks = self
                     .bindings_by_mid
                     .values()
                     .any(|binding| binding.user_id == user_id);
                 self.bindings_by_mid
                     .retain(|_mid, binding| binding.user_id != user_id);
-                TranslatedRoomMessage {
+                UserWireMessages {
                     messages: vec![ServerMessage::PeerLeft(PeerLeftPayload { user_id })],
                     needs_renegotiation: removed_tracks,
                 }
             }
             RoomEventMessage::UserInfoChanged(snapshot) => {
-                self.translate_user_info_snapshot(call_room::protocol_user_info_snapshot(snapshot))
+                self.messages_for_user_info_snapshot(snapshot)
             }
             RoomEventMessage::RecordingStateChanged(state) => {
-                TranslatedRoomMessage::messages(vec![ServerMessage::RecordingChange(
-                    call_room::protocol_recording_state_update(&state),
-                )])
+                UserWireMessages::messages(vec![ServerMessage::RecordingChange(state)])
             }
         }
     }
 
-    pub(super) fn apply_remote_track_bootstrap(&mut self, payload: &RemoteTrackBootstrap) {
-        let mid = payload.mid().to_owned();
+    pub(super) fn apply_remote_track_bootstrap(&mut self, track: &RemoteTrackBootstrap) {
         self.apply_track_binding(
-            mid,
-            call_room::protocol_user_id(payload.user_id()),
-            call_room::protocol_stream_type(payload.stream_type()),
-            payload.active(),
-            payload.source_descriptor(),
+            track.mid().to_owned(),
+            track.user_id().clone(),
+            track.stream_type(),
+            track.active(),
+            track.source_descriptor(),
         );
     }
 
@@ -303,20 +302,20 @@ impl RemoteTrackProjection {
         self.bindings_by_mid.values().cloned().collect()
     }
 
-    pub(super) fn translate_track_binding_update(
+    pub(super) fn messages_for_track_binding_update(
         &mut self,
         update: &TrackBindingUpdate,
-    ) -> TranslatedRoomMessage {
-        let user_id = call_room::protocol_user_id(&update.user_id);
-        let stream_type = call_room::protocol_stream_type(update.stream_type);
+    ) -> UserWireMessages {
+        let user_id = update.user_id.clone();
+        let stream_type = update.stream_type;
         let changed = match update.active {
             Some(active) => self.set_track_active(&user_id, stream_type, active),
             None => self.remove_track_binding(&user_id, stream_type),
         };
         if !changed {
-            return TranslatedRoomMessage::messages(Vec::new());
+            return UserWireMessages::messages(Vec::new());
         }
-        TranslatedRoomMessage {
+        UserWireMessages {
             messages: vec![ServerMessage::Tracks(self.snapshot())],
             needs_renegotiation: update.active.is_none(),
         }
@@ -347,10 +346,10 @@ impl RemoteTrackProjection {
         );
     }
 
-    fn translate_user_info_snapshot(
+    fn messages_for_user_info_snapshot(
         &mut self,
         snapshot: BTreeMap<UserId, UserInfo>,
-    ) -> TranslatedRoomMessage {
+    ) -> UserWireMessages {
         let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
         let mut track_snapshot_changed = false;
         for (user_id, info) in snapshot {
@@ -360,7 +359,7 @@ impl RemoteTrackProjection {
         if track_snapshot_changed {
             messages.push(ServerMessage::Tracks(self.snapshot()));
         }
-        TranslatedRoomMessage {
+        UserWireMessages {
             messages,
             needs_renegotiation: false,
         }
@@ -547,9 +546,9 @@ mod tests {
     #[test]
     fn source_descriptor_mid_uses_published_source_mid_not_consumer_binding_mid() {
         let source = published_source("published-cam-0");
-        let mut projection = RemoteTrackProjection::default();
+        let mut wire_state = UserWireState::default();
 
-        projection.apply_track_binding(
+        wire_state.apply_track_binding(
             "subscriber-down-0".to_owned(),
             UserId::Integer(7),
             StreamType::Camera,
@@ -557,10 +556,10 @@ mod tests {
             &source,
         );
 
-        let snapshot = projection.snapshot();
+        let snapshot = wire_state.snapshot();
         let binding = snapshot
             .first()
-            .expect("projection should contain the inserted track binding");
+            .expect("wire state should contain the inserted track binding");
         assert_eq!(binding.mid, "subscriber-down-0");
         let source = binding
             .source

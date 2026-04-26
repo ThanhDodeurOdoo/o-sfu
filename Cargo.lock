@@ -1104,6 +1104,7 @@ version = "0.3.0"
 dependencies = [
  "bitflags",
  "futures-util",
+ "o-sfu-model",
  "o-sfu-rfc",
  "o-sfu-router",
  "serde",
@@ -1115,6 +1116,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "o-sfu-model"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1131,6 +1140,7 @@ dependencies = [
 name = "o-sfu-protocol"
 version = "0.3.0"
 dependencies = [
+ "o-sfu-model",
  "o-sfu-rfc",
  "serde",
  "serde-wasm-bindgen",

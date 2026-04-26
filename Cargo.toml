@@ -1,6 +1,6 @@
 [workspace]
 exclude = ["tests/fuzz"]
-members = ["core", "protocol", "rfc", "router", "telemetry", "tests", "tests/proofs"]
+members = ["core", "model", "protocol", "rfc", "router", "telemetry", "tests", "tests/proofs"]
 resolver = "3"
 
 [workspace.package]
@@ -21,6 +21,7 @@ opentelemetry-otlp = { version = "0.31", default-features = false, features = ["
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
 o-sfu-protocol = { path = "protocol" }
 o-sfu-core = { path = "core" }
+o-sfu-model = { path = "model" }
 o-sfu-rfc = { path = "rfc" }
 o-sfu-router = { path = "router" }
 serde = { version = "1.0", features = ["derive"] }

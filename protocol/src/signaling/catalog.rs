@@ -2,7 +2,8 @@ use o_sfu_rfc::webrtc::MediaKind;
 use serde::{Deserialize, Serialize};
 
 use crate::shared::{
-    AvailableFeatures, DownloadStates, JsonPayload, RecordingState, StreamType, UserId, UserInfo,
+    AvailableFeatures, DownloadStates, JsonPayload, PeerSnapshot, RecordingState, StreamType,
+    UserId, UserInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10,15 +11,6 @@ pub struct AuthPayload {
     pub jwt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerSnapshot {
-    #[serde(rename = "sessionId")]
-    pub user_id: UserId,
-    #[serde(default)]
-    pub info: UserInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,16 +127,6 @@ pub struct ClientBroadcastPayload {
 pub struct ServerBroadcastPayload {
     pub sender_id: UserId,
     pub message: JsonPayload,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RecordingOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub video: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcription: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

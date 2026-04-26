@@ -45,8 +45,8 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         .test_api()
         .media()
         .publish_track(
-            &call_room::core_user_id(&UserId::Integer(51)),
-            call_room::core_stream_type(StreamType::Camera),
+            &UserId::Integer(51),
+            StreamType::Camera,
             MediaKind::Video,
             sample_video_rtp_parameters("cam-0"),
             &server.transport_adapter,
@@ -184,7 +184,7 @@ async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
             FakeWebRtcEvent::PublishMediaRequested {
                 user_id,
                 media_kind,
-            } if *user_id == call_room::core_user_id(&UserId::Integer(53))
+            } if *user_id == UserId::Integer(53)
                 && *media_kind == MediaKind::Video
         )),
         "protocol publish should declare producer media through the transport adapter"
@@ -333,7 +333,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
             if let Some(capabilities) = room
                 .test_api()
                 .inspect()
-                .parsed_client_rtp_capabilities(&call_room::core_user_id(&UserId::Integer(75)))
+                .parsed_client_rtp_capabilities(&UserId::Integer(75))
                 .await
             {
                 return capabilities;

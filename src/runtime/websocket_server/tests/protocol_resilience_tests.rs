@@ -1,8 +1,5 @@
 use super::fixtures::*;
-use crate::{
-    application::room as call_room,
-    runtime::websocket_server::io::{MAX_CLIENT_BATCH_ENVELOPES, MAX_CLIENT_FRAME_BYTES},
-};
+use crate::runtime::websocket_server::io::{MAX_CLIENT_BATCH_ENVELOPES, MAX_CLIENT_FRAME_BYTES};
 
 #[tokio::test]
 async fn websocket_rejects_unknown_protocol_envelope_tag() {
@@ -260,10 +257,7 @@ async fn invalid_protocol_initial_answer_closes_before_user_negotiates() {
     );
     assert!(
         !room
-            .is_stream_published(
-                &call_room::core_user_id(&UserId::Integer(91)),
-                call_room::core_stream_type(StreamType::Camera)
-            )
+            .is_stream_published(&UserId::Integer(91), StreamType::Camera)
             .await,
         "invalid initial answer must not let queued publish state commit through a fallback-ready user"
     );

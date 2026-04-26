@@ -1,0 +1,14 @@
+[package]
+name = "o-sfu-model"
+description = "Shared canonical o-sfu call model types"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -835,7 +835,7 @@ impl Room {
 }
 
 fn media_kind_for_stream_type(stream_type: StreamType) -> o_sfu_router::MediaKind {
-    UserStreamIntent::from_protocol_stream_type(stream_type).media_kind()
+    UserStreamIntent::from_stream_type(stream_type).media_kind()
 }
 
 /// Marker parameters for a protocol publish whose concrete SSRC/RID bindings

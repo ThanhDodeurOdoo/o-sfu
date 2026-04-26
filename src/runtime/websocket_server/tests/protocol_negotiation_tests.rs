@@ -2,7 +2,6 @@ use o_sfu_protocol::signaling::{ServerMessage, ServerRequest, TrackBinding};
 use o_sfu_router::{MediaKind, test_sample::sample_simulcast_video_rtp_parameters};
 
 use super::fixtures::*;
-use crate::application::room as call_room;
 
 #[tokio::test]
 async fn protocol_user_serializes_topology_renegotiations() {
@@ -119,8 +118,8 @@ async fn publish_until_ready(
                 .test_api()
                 .media()
                 .publish_track(
-                    &call_room::core_user_id(&UserId::Integer(81)),
-                    call_room::core_stream_type(stream_type),
+                    &UserId::Integer(81),
+                    stream_type,
                     MediaKind::Video,
                     sample_video_rtp_parameters(mid),
                     &server.transport_adapter,

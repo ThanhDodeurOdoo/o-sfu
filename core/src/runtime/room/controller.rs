@@ -61,15 +61,15 @@ use crate::{
     },
 };
 
-/// Delta sent from room state to one post-auth user's track projection.
+/// Delta sent from room state to one post-auth user's wire track state.
 ///
 /// This keeps the room boundary independent from wire `mid` assignment. The
-/// websocket user projects the update onto its own current track bindings.
+/// websocket user applies the update to its own current track bindings.
 /// The room only talks in terms of publisher user ids and logical stream
 /// kinds, which keeps room state independent from renegotiation details
 #[derive(Debug, Clone)]
 pub struct TrackBindingUpdate {
-    /// Publisher whose projected track set changed.
+    /// Publisher whose wire track set changed.
     ///
     /// The receiver uses this together with `stream_type` to find its current
     /// browser-side binding for that remote track.
@@ -77,7 +77,7 @@ pub struct TrackBindingUpdate {
     /// Which logical stream changd for that publisher.
     ///
     /// The room never exposes transport media ids here because bindings are
-    /// reprojected per user after negotiation.
+    /// assigned per user after negotiation.
     pub stream_type: StreamType,
     /// `Some(active)` updates an existing binding. `None` removes it
     ///
@@ -88,7 +88,7 @@ pub struct TrackBindingUpdate {
 
 /// Outbound work the room wants one websocket user to perform
 ///
-/// The room stays protocol-neutral here. Post-auth user code translates
+/// The room stays protocol-neutral here. Post-auth user code maps
 /// each variant into the wire messages or local actions the socket needs.
 ///
 /// This enum is the main handoff from room-owned state transitions to
@@ -100,12 +100,12 @@ pub struct TrackBindingUpdate {
 ///
 /// `UserOutbound` exists so the room can stay focused on membership and
 /// media semantics instead of websocket mechanics. The room never writes a
-/// close frame, never serializs a JSON envelope and never mutates browser
+/// close frame, never serializes a JSON envelope and never mutates browser
 /// track bindings directly. It emits one of these values and leaves the
-/// user-local projection to post-auth websocket code.
+/// user-local wire state to post-auth websocket code.
 #[derive(Debug, Clone)]
 pub enum UserOutbound {
-    /// Fan-out payload that can be translated directly into server messages.
+    /// Fan-out payload that maps directly to server messages.
     ///
     /// This is the common path for user joins, leaves, user-info updates,
     /// recording state fan-out and other room-level notifications.
@@ -116,9 +116,9 @@ pub enum UserOutbound {
     /// user must do extra local work such as bootstrapping a new remote
     /// track on its own transport user.
     Request(Box<RoomEventRequest>),
-    /// Minimal track-binding delta for the user's track projection.
+    /// Minimal track-binding delta for the user's wire track state.
     ///
-    /// This lets the webssocket user update its track projection without
+    /// This lets the websocket user update its track bindings without
     /// rebuilding the whole user snapshot for every small media change.
     TrackBindingUpdate(TrackBindingUpdate),
     /// Ask the user owner to close the websocket with the mapped reason.
@@ -128,12 +128,12 @@ pub enum UserOutbound {
     Close(UserCloseReason),
 }
 
-/// User-local work requested by the chanel after a room-state transition.
+/// User-local work requested by the channel after a room-state transition.
 ///
 /// These requests are more specific than `RoomEventMessage`. They represent
 /// work that must run in the context of one live websocket user because it
 /// depends on that user's transport state, negotiation state, or browser
-/// projection state
+/// track binding state.
 ///
 /// # Why this is a separate enum
 ///
@@ -382,7 +382,7 @@ pub struct RoomMediaCounts {
     pub subscriptions: usize,
 }
 
-/// Analogus to one Odoo Discuss room.
+/// Represents one logical call room.
 ///
 /// `Room` owns immutable room definition plus the guarded mutable state needed to run
 /// membership, routing and recording for that room. Callers are expected to express

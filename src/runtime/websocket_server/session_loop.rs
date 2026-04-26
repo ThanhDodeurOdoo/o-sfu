@@ -17,10 +17,7 @@ use tracing::{debug, info, warn};
 
 use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
 use crate::{
-    application::{
-        room as call_room,
-        user_session::{User, UserError, UserOutput, UserSignal},
-    },
+    application::user_session::{User, UserError, UserOutput, UserSignal},
     core::runtime::room::{
         Room, RoomEventMessage, RoomEventRequest, UserCloseReason, UserOutbound,
     },
@@ -409,10 +406,8 @@ async fn start_recording(
     request_id: RequestId,
     payload: RecordingOptions,
 ) -> UserOutput {
-    let core_user_id = call_room::core_user_id(user_id);
-    let core_options = call_room::core_recording_options(&payload);
     let ok = room
-        .start_recording_runtime(&core_user_id, connection_id, core_options)
+        .start_recording_runtime(user_id, connection_id, payload)
         .await;
     info!(
         event = telemetry_event::RECORDING_STARTED,
@@ -432,10 +427,7 @@ async fn stop_recording(
     connection_id: ConnectionId,
     request_id: RequestId,
 ) -> UserOutput {
-    let core_user_id = call_room::core_user_id(user_id);
-    let ok = room
-        .stop_recording_runtime(&core_user_id, connection_id)
-        .await;
+    let ok = room.stop_recording_runtime(user_id, connection_id).await;
     info!(
         event = telemetry_event::RECORDING_STOPPED,
         operation = "recording_stop",

@@ -14,6 +14,7 @@ testing-transport = []
 bitflags.workspace = true
 futures-util.workspace = true
 o-sfu-rfc.workspace = true
+o-sfu-model.workspace = true
 o-sfu-router.workspace = true
 serde.workspace = true
 serde_json.workspace = true
