@@ -1111,6 +1111,7 @@ dependencies = [
 name = "o-sfu-protocol"
 version = "0.3.0"
 dependencies = [
+ "o-sfu-rfc",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

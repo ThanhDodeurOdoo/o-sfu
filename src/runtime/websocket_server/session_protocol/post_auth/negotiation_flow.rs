@@ -1,6 +1,6 @@
 use o_sfu_protocol::signaling::{
-    NegotiationUploadEncoding, NegotiationUploadKind, NegotiationUploadSlot, RequestId,
-    ServerRequest, SessionDescriptionPayload, WebSocketCloseCode,
+    NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerRequest,
+    SessionDescriptionPayload, WebSocketCloseCode,
 };
 use tracing::{info, instrument, warn};
 
@@ -18,7 +18,7 @@ use crate::runtime::{
     telemetry::schema::event as telemetry_event,
     transport_adapter::{
         AppliedSessionAnswer, NegotiationPort, SessionOffer, SessionUploadEncoding,
-        SessionUploadKind, SessionUploadSlot, TransportAdapterError, TransportSessionKey,
+        SessionUploadSlot, TransportAdapterError, TransportSessionKey,
     },
     websocket_server::WsWriter,
 };
@@ -425,20 +425,13 @@ fn session_description_payload(offer: SessionOffer) -> SessionDescriptionPayload
 fn protocol_upload_slot(slot: SessionUploadSlot) -> NegotiationUploadSlot {
     NegotiationUploadSlot {
         mid: slot.mid,
-        kind: protocol_upload_kind(slot.kind),
+        kind: slot.kind,
         codecs: slot.codecs,
         simulcast_encodings: slot
             .simulcast_encodings
             .into_iter()
             .map(protocol_upload_encoding)
             .collect(),
-    }
-}
-
-fn protocol_upload_kind(kind: SessionUploadKind) -> NegotiationUploadKind {
-    match kind {
-        SessionUploadKind::Audio => NegotiationUploadKind::Audio,
-        SessionUploadKind::Video => NegotiationUploadKind::Video,
     }
 }
 

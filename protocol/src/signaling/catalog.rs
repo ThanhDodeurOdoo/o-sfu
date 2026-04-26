@@ -1,3 +1,4 @@
+use o_sfu_rfc::webrtc::MediaKind;
 use serde::{Deserialize, Serialize};
 
 use crate::shared::{
@@ -34,18 +35,11 @@ pub struct SessionDescriptionPayload {
     pub upload_slots: Vec<NegotiationUploadSlot>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum NegotiationUploadKind {
-    Audio,
-    Video,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NegotiationUploadSlot {
     pub mid: String,
-    pub kind: NegotiationUploadKind,
+    pub kind: MediaKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codecs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

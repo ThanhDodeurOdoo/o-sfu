@@ -25,9 +25,9 @@ pub use types::TransportSessionKey;
 pub(crate) use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
-    ReceiverBandwidthSnapshot, SessionOffer, SessionUploadEncoding, SessionUploadKind,
-    SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportResult,
+    ReceiverBandwidthSnapshot, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
+    SourcePacketGate, SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
+    TransportMediaId, TransportResult,
 };
 
 #[cfg(test)]

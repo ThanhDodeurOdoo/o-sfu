@@ -10,10 +10,10 @@ mod response;
 mod tests;
 
 pub use catalog::{
-    AuthPayload, ClientBroadcastPayload, NegotiationUploadEncoding, NegotiationUploadKind,
-    NegotiationUploadSlot, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
-    RecordingOptions, ServerBroadcastPayload, SessionDescriptionPayload, SourceDescriptor,
-    SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
+    AuthPayload, ClientBroadcastPayload, NegotiationUploadEncoding, NegotiationUploadSlot,
+    PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions,
+    ServerBroadcastPayload, SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor,
+    StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
 };
 pub use close_code::WebSocketCloseCode;
 pub use codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope};

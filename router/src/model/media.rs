@@ -1,5 +1,1 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaKind {
-    Audio,
-    Video,
-}
+pub use o_sfu_rfc::webrtc::MediaKind;

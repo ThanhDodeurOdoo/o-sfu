@@ -38,7 +38,7 @@ pub struct FakeRtcPeer {
     rtc: Rtc,
     socket: UdpSocket,
     local_addr: SocketAddr,
-    send_paths: BTreeMap<ProtocolMediaKey, ProtocolSendPath>,
+    send_paths: BTreeMap<MediaKind, ProtocolSendPath>,
     connected: bool,
     start_wallclock: Instant,
 }
@@ -47,12 +47,6 @@ pub struct FakeRtcPeer {
 struct ProtocolSendPath {
     mid: Mid,
     payload_type: Pt,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum ProtocolMediaKey {
-    Audio,
-    Video,
 }
 
 impl FakeRtcPeer {
@@ -156,7 +150,7 @@ impl FakeRtcPeer {
     }
 
     fn write_rtp_packet(&mut self, media_kind: MediaKind, frame: FakeMediaFrame) -> Option<()> {
-        let send_path = *self.send_paths.get(&ProtocolMediaKey::from(media_kind))?;
+        let send_path = *self.send_paths.get(&media_kind)?;
         self.rtc
             .direct_api()
             .stream_tx_by_mid(send_path.mid, None)?
@@ -338,14 +332,14 @@ async fn pump_until_rtp(
 fn collect_protocol_send_paths(
     offer_sdp: &str,
     rtc: &Rtc,
-) -> BTreeMap<ProtocolMediaKey, ProtocolSendPath> {
+) -> BTreeMap<MediaKind, ProtocolSendPath> {
     let mut send_paths = BTreeMap::new();
-    let mut current_kind: Option<ProtocolMediaKey> = None;
+    let mut current_kind: Option<MediaKind> = None;
     let mut current_mid: Option<Mid> = None;
     let mut current_direction = OfferDirection::Inactive;
 
     let mut flush_section =
-        |kind: Option<ProtocolMediaKey>, mid: Option<Mid>, direction: OfferDirection| {
+        |kind: Option<MediaKind>, mid: Option<Mid>, direction: OfferDirection| {
             let Some(kind) = kind else {
                 return;
             };
@@ -389,32 +383,23 @@ fn collect_protocol_send_paths(
     send_paths
 }
 
-fn payload_type_for_media_kind(rtc: &Rtc, media_kind: ProtocolMediaKey) -> Option<Pt> {
+fn payload_type_for_media_kind(rtc: &Rtc, media_kind: MediaKind) -> Option<Pt> {
     let codec = match media_kind {
-        ProtocolMediaKey::Audio => Codec::Opus,
-        ProtocolMediaKey::Video => Codec::Vp8,
+        MediaKind::Audio => Codec::Opus,
+        MediaKind::Video => Codec::Vp8,
     };
     rtc.codec_config()
         .find(|params| params.spec().codec == codec)
         .map(PayloadParams::pt)
 }
 
-fn parse_offer_media_kind(line: &str) -> Option<ProtocolMediaKey> {
+fn parse_offer_media_kind(line: &str) -> Option<MediaKind> {
     if line.starts_with("m=audio ") {
-        Some(ProtocolMediaKey::Audio)
+        Some(MediaKind::Audio)
     } else if line.starts_with("m=video ") {
-        Some(ProtocolMediaKey::Video)
+        Some(MediaKind::Video)
     } else {
         None
-    }
-}
-
-impl From<MediaKind> for ProtocolMediaKey {
-    fn from(value: MediaKind) -> Self {
-        match value {
-            MediaKind::Audio => Self::Audio,
-            MediaKind::Video => Self::Video,
-        }
     }
 }
 

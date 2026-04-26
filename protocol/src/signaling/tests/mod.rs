@@ -1,12 +1,13 @@
+use o_sfu_rfc::webrtc::MediaKind;
 use serde_json::json;
 
 use super::{
     AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse, Envelope,
-    EnvelopeDecodeError, NegotiationUploadEncoding, NegotiationUploadKind, NegotiationUploadSlot,
-    PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions,
-    RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest,
-    ServerResponse, SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor,
-    StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
+    EnvelopeDecodeError, NegotiationUploadEncoding, NegotiationUploadSlot, PeerInfoPayload,
+    PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions, RequestId,
+    ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
+    SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload,
+    SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
 };
 use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType,
@@ -426,7 +427,7 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
             sdp: String::from("v=0\r\n"),
             upload_slots: vec![NegotiationUploadSlot {
                 mid: String::from("video-1"),
-                kind: NegotiationUploadKind::Video,
+                kind: MediaKind::Video,
                 codecs: vec![String::from("VP8")],
                 simulcast_encodings: vec![
                     NegotiationUploadEncoding {

@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use str0m::{
     bwe::Bitrate,
     change::{SdpAnswer, SdpApi},
@@ -34,8 +35,8 @@ use crate::{
     runtime::{
         metrics::RuntimeMetrics,
         transport_adapter::{
-            AppliedSessionAnswer, SessionOffer, SessionUploadKind, SessionUploadSlot,
-            TransportAdapterError, TransportMediaId, TransportSessionKey,
+            AppliedSessionAnswer, SessionOffer, SessionUploadSlot, TransportAdapterError,
+            TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -381,11 +382,11 @@ fn initial_upload_slots(
         .collect()
 }
 
-pub(super) fn upload_kind(media_kind: MediaKind) -> SessionUploadKind {
+pub(super) fn upload_kind(media_kind: MediaKind) -> ProtocolMediaKind {
     if media_kind.is_video() {
-        SessionUploadKind::Video
+        ProtocolMediaKind::Video
     } else {
-        SessionUploadKind::Audio
+        ProtocolMediaKind::Audio
     }
 }
 

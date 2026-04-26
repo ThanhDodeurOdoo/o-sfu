@@ -5,6 +5,7 @@ use std::{
 };
 
 use o_sfu_protocol::shared::UserId;
+use o_sfu_rfc::webrtc::MediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
@@ -374,16 +375,10 @@ impl SessionOffer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionUploadKind {
-    Audio,
-    Video,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionUploadSlot {
     pub(crate) mid: String,
-    pub(crate) kind: SessionUploadKind,
+    pub(crate) kind: MediaKind,
     pub(crate) codecs: Vec<String>,
     pub(crate) simulcast_encodings: Vec<SessionUploadEncoding>,
 }

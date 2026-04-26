@@ -16,6 +16,7 @@ use std::{
     time::Instant,
 };
 
+use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::{
     bwe::Bitrate,
@@ -42,8 +43,8 @@ use super::{
 use crate::{
     config::MediaCodecFlags,
     runtime::transport_adapter::{
-        SessionUploadKind, SessionUploadSlot, TransportAdapterError, TransportMediaId,
-        TransportResult, TransportSessionKey,
+        SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportResult,
+        TransportSessionKey,
     },
 };
 
@@ -577,11 +578,11 @@ fn upload_slot(
     }
 }
 
-fn upload_kind(media_kind: MediaKind) -> SessionUploadKind {
+fn upload_kind(media_kind: MediaKind) -> ProtocolMediaKind {
     if media_kind.is_video() {
-        SessionUploadKind::Video
+        ProtocolMediaKind::Video
     } else {
-        SessionUploadKind::Audio
+        ProtocolMediaKind::Audio
     }
 }
 

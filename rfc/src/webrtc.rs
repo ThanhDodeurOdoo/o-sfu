@@ -156,12 +156,54 @@ impl fmt::Display for IceCandidateType {
     }
 }
 
-/// MIME top-level media kidns used by ORTC and SDP paylods
-/// same as on web stream/tracks APIs
+/// MIME top-level media kinds used by ORTC and SDP payloads
+/// same as on web stream/tracks APIs.
 pub mod media_kind {
     pub const AUDIO: &str = "audio";
     pub const VIDEO: &str = "video";
     pub const APPLICATION: &str = "application";
+}
+
+/// Technical media kind shared by RTP, SDP, and signaling metadata.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Audio,
+    Video,
+}
+
+impl MediaKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Audio => media_kind::AUDIO,
+            Self::Video => media_kind::VIDEO,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_audio(self) -> bool {
+        matches!(self, Self::Audio)
+    }
+
+    #[must_use]
+    pub const fn is_video(self) -> bool {
+        matches!(self, Self::Video)
+    }
+}
+
+impl AsRef<str> for MediaKind {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for MediaKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// RTCP feedback type and parameter tokens used by current WebRTC capability paylods.

@@ -12,8 +12,7 @@ use str0m::{
 use super::fixtures::*;
 use crate::runtime::{
     rtc_adapter::client_rtp_capabilities_from_answer,
-    test_rtp_samples::sample_simulcast_video_rtp_parameters,
-    transport_adapter::{SessionUploadKind, TransportMediaId},
+    test_rtp_samples::sample_simulcast_video_rtp_parameters, transport_adapter::TransportMediaId,
 };
 
 #[tokio::test]
@@ -107,7 +106,7 @@ async fn rtc_initial_session_offer_guards_simulcast_receive_surface() {
     );
     let video_slot = upload_slots
         .iter()
-        .find(|slot| slot.kind == SessionUploadKind::Video)
+        .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("initial offer should include a video upload slot");
     assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
     assert!(
@@ -150,7 +149,7 @@ async fn rtc_initial_session_offer_omits_simulcast_when_vp8_is_disabled() {
     );
     let video_slot = upload_slots
         .iter()
-        .find(|slot| slot.kind == SessionUploadKind::Video)
+        .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("initial offer should include a video upload slot");
     assert_eq!(
         video_slot.codecs,
@@ -434,7 +433,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         .into_parts();
     let Some(video_upload_slot) = upload_slots
         .iter()
-        .find(|slot| slot.kind == SessionUploadKind::Video)
+        .find(|slot| slot.kind == RouterMediaKind::Video)
     else {
         panic!("protocol publish should advertise a video upload slot");
     };
