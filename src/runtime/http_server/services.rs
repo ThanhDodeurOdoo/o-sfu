@@ -8,7 +8,7 @@ use axum::{
 use crate::{
     application::{
         program::HttpOptions,
-        rooms::{CreateRoomRequest, Room},
+        rooms::{CallRooms, CreateRoomRequest},
     },
     runtime::{
         RuntimeState,
@@ -79,7 +79,7 @@ pub(super) enum DisconnectError {
 }
 
 pub(super) async fn disconnect_users(
-    rooms: &Room,
+    rooms: &CallRooms,
     options: &HttpOptions,
     body: &Bytes,
 ) -> Result<(), DisconnectError> {

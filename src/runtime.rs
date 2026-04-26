@@ -7,13 +7,10 @@
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
 //! |  `- session_protocol  -> authenticated signaling flow for one connected user
-//! |- room              -> room allocation, membership, negotiation, and recording policy
-//! |- packet_sink_registry -> room-scoped side-effect sinks shared by transport and recording
+//! |- application          -> business-facing room/user orchestration
 //! |- telemetry            -> runtime-owned tracing config and event-name conventions
-//! |- transport_adapter    -> runtime-facing transport service boundary
-//! |  `- rtc_adapter       -> WebRTC worker and packet execution engine
-//! |- recording            -> recording lifecycle and router observer inventory
-//! `- metrics              -> process-global metrics state and Prometheus export snapshot
+//! |- core                 -> room engine, transport adapter, recording, metrics, and diagnostics
+//! `- metrics_export       -> Prometheus export snapshot
 //! ```
 
 use std::{collections::BTreeSet, process, sync::Arc, time::Instant as StdInstant};
@@ -29,7 +26,7 @@ use tracing::info;
 use crate::{
     application::{
         program::{CallApplication, HttpOptions, ProgramOptions, SocketOptions},
-        rooms::Room as ApplicationRoom,
+        rooms::CallRooms,
     },
     config::Config,
     core::{CoreOptions, SfuCore},
@@ -39,9 +36,7 @@ pub(crate) mod auth;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
 mod metrics_export;
-mod recording;
 mod request_origin;
-pub(crate) mod room;
 pub(crate) mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_rtp_samples;
@@ -52,14 +47,18 @@ pub(crate) mod websocket_server;
 pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
 pub(crate) use metrics::RuntimeMetrics;
+#[cfg(test)]
+pub(crate) use o_sfu_core::runtime::source_model;
 pub(crate) use o_sfu_core::{
     ConnectionId, RoomInstanceId,
-    runtime::{metrics, packet_sink_registry, rtc_adapter, source_model, transport_adapter},
+    runtime::{metrics, packet_sink_registry, recording, room, rtc_adapter, transport_adapter},
 };
 use packet_sink_registry::RoomPacketSinkRegistry;
 pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
-use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy};
+use room::{
+    RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy, rtp_capabilities,
+};
 pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
 pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
 use telemetry::init_tracing;
@@ -112,7 +111,7 @@ impl Runtime {
         let room_runtime_policy = RoomRuntimePolicy::new(
             RoomAdmissionPolicy::new(options.call.room.max_users),
             options.call.feature_flags(),
-            room::rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
+            rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
         );
         info!("{}", config.log_view(process::id()));
         info!(
@@ -205,7 +204,7 @@ fn build_call_application(
 ) -> CallApplication {
     CallApplication::new(
         options.call.clone(),
-        ApplicationRoom::new(room_manager, diagnostics, transport_adapter.clone()),
+        CallRooms::new(room_manager, diagnostics, transport_adapter.clone()),
         SfuCore::new(options.core, transport_adapter),
     )
 }

@@ -29,7 +29,7 @@ impl User {
     pub(super) async fn send_initial_offer(&mut self) -> Result<CallOutcome, UserError> {
         let (offer, offered_capabilities) = self
             .media_core
-            .create_initial_offer(self.room.as_ref(), &self.id, self.connection_id)
+            .create_initial_offer(self.room.as_core_room(), &self.id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(
@@ -183,7 +183,7 @@ impl User {
             } => {
                 self.media_core
                     .apply_initial_answer(
-                        self.room.as_ref(),
+                        self.room.as_core_room(),
                         &self.id,
                         self.connection_id,
                         answer_sdp,
@@ -194,7 +194,7 @@ impl User {
             PendingFlowAction::RefreshSession => {
                 self.media_core
                     .apply_renegotiation_answer(
-                        self.room.as_ref(),
+                        self.room.as_core_room(),
                         &self.id,
                         self.connection_id,
                         answer_sdp,
@@ -211,7 +211,7 @@ impl User {
 
     async fn create_renegotiation_offer(&self) -> Result<Option<MediaNegotiationOffer>, UserError> {
         self.media_core
-            .create_renegotiation_offer(self.room.as_ref(), &self.id, self.connection_id)
+            .create_renegotiation_offer(self.room.as_core_room(), &self.id, self.connection_id)
             .await
             .map_err(|error| {
                 warn!(

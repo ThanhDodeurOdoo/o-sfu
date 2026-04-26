@@ -1,13 +1,7 @@
 use anyhow::Result;
+pub use o_sfu_core::RuntimeFeatureFlags;
 
 use super::parsing::parse_optional_env;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct RuntimeFeatureFlags {
-    pub transcription: bool,
-    pub audio_recording: bool,
-    pub video_recording: bool,
-}
 
 pub(super) fn load_runtime_feature_flags(
     mut get_var: impl FnMut(&str) -> Option<String>,

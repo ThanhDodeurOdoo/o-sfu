@@ -1,6 +1,6 @@
 //! Room-level business use cases consumed by non-streaming server edges.
 //!
-//! `Room` is the application facade for HTTP control-plane flows. The
+//! `CallRooms` is the application facade for HTTP control-plane flows. The
 //! Axum layer remains responsible for request extraction, authentication, and
 //! response rendering; this facade owns the room behavior those routes ask for.
 
@@ -8,27 +8,29 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_protocol::{
     shared::{AvailableFeatures, RecordingState, UserId, UserPermissions},
-    signaling::PeerSnapshot,
+    signaling::{PeerSnapshot, RecordingOptions},
 };
+use room::{
+    JoinUserRequest, RemoteTrackBootstrap, Room as CoreRoom, RoomConfig, RoomEventMessage,
+    RoomEventRequest, RoomManager, RoomManagerJoinError, RuntimeRoomStatsSnapshot,
+    TrackBindingUpdate, UserCloseReason, UserOutbound,
+};
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::{
-    core::RuntimeTransportAdapter,
+    core::{RuntimeTransportAdapter, runtime::room},
     runtime::{
         ConnectionId, DiagnosticsStore,
         diagnostics::{
             self, DiagnosticsUserLookup,
             types::{DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse},
         },
-        room::{
-            JoinUserRequest, Room as RuntimeRoom, RoomConfig, RoomManager, RoomManagerJoinError,
-            RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
-        },
     },
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct Room {
+pub(crate) struct CallRooms {
     rooms: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     transport_adapter: RuntimeTransportAdapter,
@@ -73,13 +75,17 @@ pub(crate) struct IncomingBitrateStats {
     pub(crate) screen: u64,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct RoomHandle {
-    room: Arc<RuntimeRoom>,
+    room: Arc<CoreRoom>,
 }
 
 pub(crate) type UserOutboundEvent = UserOutbound;
 pub(crate) type UserCloseReasonEvent = UserCloseReason;
+pub(crate) type RoomMessageEvent = RoomEventMessage;
+pub(crate) type RoomRequestEvent = RoomEventRequest;
+pub(crate) type RoomTrackBindingUpdate = TrackBindingUpdate;
+pub(crate) type RemoteTrackBootstrapEvent = RemoteTrackBootstrap;
 
 pub(crate) struct JoinRoomUserRequest {
     pub(crate) user_id: UserId,
@@ -101,7 +107,7 @@ pub(crate) struct JoinedRoomUser {
     pub(crate) outbound_rx: mpsc::UnboundedReceiver<UserOutboundEvent>,
 }
 
-impl Room {
+impl CallRooms {
     #[must_use]
     pub(crate) fn new(
         rooms: Arc<RoomManager>,
@@ -250,8 +256,48 @@ impl RoomHandle {
         self.room.peer_snapshots_except(user_id).await
     }
 
-    pub(in crate::application) fn into_runtime_room(self) -> Arc<RuntimeRoom> {
+    pub(in crate::application) async fn has_connection(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> bool {
+        self.room.has_connection(user_id, connection_id).await
+    }
+
+    pub(in crate::application) async fn broadcast(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        message: Value,
+    ) {
         self.room
+            .broadcast_runtime(user_id, connection_id, message)
+            .await;
+    }
+
+    pub(in crate::application) async fn start_recording(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        options: RecordingOptions,
+    ) -> bool {
+        self.room
+            .start_recording_runtime(user_id, connection_id, options)
+            .await
+    }
+
+    pub(in crate::application) async fn stop_recording(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> bool {
+        self.room
+            .stop_recording_runtime(user_id, connection_id)
+            .await
+    }
+
+    pub(in crate::application) fn as_core_room(&self) -> &CoreRoom {
+        self.room.as_ref()
     }
 }
 

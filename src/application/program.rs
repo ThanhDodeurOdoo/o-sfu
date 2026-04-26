@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use crate::{
-    application::rooms::Room,
+    application::rooms::CallRooms,
     config::{Config, DiagnosticsConfig, RuntimeFeatureFlags},
     core::{
         CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions,
@@ -13,7 +13,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct CallApplication {
     _options: CallOptions,
-    rooms: Room,
+    rooms: CallRooms,
     media_core: RuntimeSfuCore,
 }
 
@@ -144,7 +144,7 @@ impl ProgramOptions {
 
 impl CallApplication {
     #[must_use]
-    pub(crate) fn new(options: CallOptions, rooms: Room, media_core: RuntimeSfuCore) -> Self {
+    pub(crate) fn new(options: CallOptions, rooms: CallRooms, media_core: RuntimeSfuCore) -> Self {
         Self {
             _options: options,
             rooms,
@@ -153,7 +153,7 @@ impl CallApplication {
     }
 
     #[must_use]
-    pub(crate) fn rooms(&self) -> &Room {
+    pub(crate) fn rooms(&self) -> &CallRooms {
         &self.rooms
     }
 

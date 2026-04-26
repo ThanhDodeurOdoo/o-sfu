@@ -47,6 +47,13 @@ pub struct ObservabilityOptions {
     pub transport_metrics_enabled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeFeatureFlags {
+    pub transcription: bool,
+    pub audio_recording: bool,
+    pub video_recording: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtcPortRange {
     min: u16,

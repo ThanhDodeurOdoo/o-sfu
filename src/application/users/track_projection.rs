@@ -8,9 +8,9 @@ use o_sfu_protocol::{
     },
 };
 
-use crate::runtime::{
-    room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
-    source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
+use crate::{
+    application::rooms::{RemoteTrackBootstrapEvent, RoomMessageEvent, RoomTrackBindingUpdate},
+    core::runtime::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,18 +36,18 @@ pub(super) struct RemoteTrackProjection {
 impl RemoteTrackProjection {
     pub(super) fn translate_server_message(
         &mut self,
-        message: RoomEventMessage,
+        message: RoomMessageEvent,
     ) -> TranslatedServerMessage {
         match message {
-            RoomEventMessage::Broadcast { sender_id, message } => {
+            RoomMessageEvent::Broadcast { sender_id, message } => {
                 TranslatedServerMessage::messages(vec![ServerMessage::Broadcast(
                     ServerBroadcastPayload { sender_id, message },
                 )])
             }
-            RoomEventMessage::UserJoined { user_id, info } => TranslatedServerMessage::messages(
+            RoomMessageEvent::UserJoined { user_id, info } => TranslatedServerMessage::messages(
                 vec![ServerMessage::PeerJoined(PeerInfoPayload { user_id, info })],
             ),
-            RoomEventMessage::UserDeparted { user_id } => {
+            RoomMessageEvent::UserDeparted { user_id } => {
                 let removed_tracks = self
                     .bindings_by_mid
                     .values()
@@ -59,16 +59,16 @@ impl RemoteTrackProjection {
                     needs_renegotiation: removed_tracks,
                 }
             }
-            RoomEventMessage::UserInfoChanged(snapshot) => {
+            RoomMessageEvent::UserInfoChanged(snapshot) => {
                 self.translate_user_info_snapshot(snapshot)
             }
-            RoomEventMessage::RecordingStateChanged(state) => {
+            RoomMessageEvent::RecordingStateChanged(state) => {
                 TranslatedServerMessage::messages(vec![ServerMessage::RecordingChange(state)])
             }
         }
     }
 
-    pub(super) fn apply_remote_track_bootstrap(&mut self, payload: &RemoteTrackBootstrap) {
+    pub(super) fn apply_remote_track_bootstrap(&mut self, payload: &RemoteTrackBootstrapEvent) {
         let mid = payload.mid().to_owned();
         self.apply_track_binding(
             mid,
@@ -110,7 +110,7 @@ impl RemoteTrackProjection {
 
     pub(super) fn translate_track_binding_update(
         &mut self,
-        update: &TrackBindingUpdate,
+        update: &RoomTrackBindingUpdate,
     ) -> TranslatedServerMessage {
         let changed = match update.active {
             Some(active) => self.set_track_active(&update.user_id, update.stream_type, active),

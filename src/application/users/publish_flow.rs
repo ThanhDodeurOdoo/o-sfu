@@ -35,7 +35,7 @@ impl User {
             || self
                 .media_core
                 .has_staged_publish(
-                    self.room.as_ref(),
+                    self.room.as_core_room(),
                     &self.id,
                     self.connection_id,
                     stream_type,
@@ -46,7 +46,7 @@ impl User {
         }
         if self
             .media_core
-            .is_stream_published(self.room.as_ref(), &self.id, stream_type)
+            .is_stream_published(self.room.as_core_room(), &self.id, stream_type)
             .await
         {
             // Once a stream is already live publish intent is just a resume of
@@ -54,7 +54,7 @@ impl User {
             // needed here
             self.media_core
                 .set_publication_active(
-                    self.room.as_ref(),
+                    self.room.as_core_room(),
                     &self.id,
                     self.connection_id,
                     stream_type,
@@ -91,7 +91,7 @@ impl User {
         if self
             .media_core
             .rollback_staged_publish(
-                self.room.as_ref(),
+                self.room.as_core_room(),
                 &self.id,
                 self.connection_id,
                 stream_type,
@@ -104,7 +104,7 @@ impl User {
         if !self
             .media_core
             .unpublish(
-                self.room.as_ref(),
+                self.room.as_core_room(),
                 &self.id,
                 self.connection_id,
                 stream_type,
@@ -120,7 +120,7 @@ impl User {
         let staged = self
             .media_core
             .stage_publish(
-                self.room.as_ref(),
+                self.room.as_core_room(),
                 &self.id,
                 self.connection_id,
                 stream_type,

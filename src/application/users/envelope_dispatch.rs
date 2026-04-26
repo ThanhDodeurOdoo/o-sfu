@@ -29,7 +29,7 @@ impl User {
     async fn handle_info_message(&self, info: UserInfo) {
         self.media_core
             .update_user_info(
-                self.room.as_ref(),
+                self.room.as_core_room(),
                 &self.id,
                 self.connection_id,
                 info,
@@ -57,7 +57,7 @@ impl User {
         );
         self.media_core
             .update_subscription(
-                self.room.as_ref(),
+                self.room.as_core_room(),
                 &self.id,
                 self.connection_id,
                 target_session_id,
@@ -89,7 +89,7 @@ impl User {
     ) -> CallOutcome {
         let ok = self
             .room
-            .start_recording_runtime(&self.id, self.connection_id, payload)
+            .start_recording(&self.id, self.connection_id, payload)
             .await;
         info!(
             event = telemetry_event::RECORDING_STARTED,
@@ -114,10 +114,7 @@ impl User {
         )
     )]
     async fn handle_stop_recording_request(&self, request_id: RequestId) -> CallOutcome {
-        let ok = self
-            .room
-            .stop_recording_runtime(&self.id, self.connection_id)
-            .await;
+        let ok = self.room.stop_recording(&self.id, self.connection_id).await;
         info!(
             event = telemetry_event::RECORDING_STOPPED,
             operation = "recording_stop",
@@ -161,7 +158,7 @@ impl User {
                 message,
             })) => {
                 self.room
-                    .broadcast_runtime(&self.id, self.connection_id, message)
+                    .broadcast(&self.id, self.connection_id, message)
                     .await;
                 Ok(CallOutcome::new())
             }

@@ -20,7 +20,7 @@ pub mod transport;
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
     CodecOptions, CoreOptions, MediaCodecFlags, MediaOptions, ObservabilityOptions, RoutingOptions,
-    RtcPortRange, SessionBitrateLimits,
+    RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits,
 };
 pub use room::MediaRoom;
 pub use runtime::transport_adapter::RuntimeTransportAdapter;

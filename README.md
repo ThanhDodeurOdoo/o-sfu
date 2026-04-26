@@ -18,7 +18,30 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 
 ## Architecture
 
-TODO
+```mermaid
+flowchart TD
+    Odoo["Odoo Backend"] --> Http["HTTP API"]
+    Browser["Browser Client"] --> Ws["WebSocket Edge"]
+    Http --> App["Application Layer"]
+    Ws --> App
+    App --> Core["o-sfu-core"]
+    Core --> Room["Core Room Engine"]
+    Core --> Sfu["SfuCore Facade"]
+    Core --> Transport["Transport Adapter"]
+    Transport --> Rtc["str0m RTC Adapter"]
+    Room --> Router["o-sfu-router"]
+    Room --> Recording["Core Recording Pipeline"]
+    Rtc --> Router
+    Rtc --> Recording
+    App --> MetricsExport["Prometheus Export"]
+    Core --> Diagnostics["Core Diagnostics And Metrics"]
+    MetricsExport --> Diagnostics
+```
+
+The server crate is the orchestration shell: it loads config, exposes HTTP and
+WebSocket edges, maps edge errors, and coordinates the application room/user
+facades. Media-heavy room state, routing topology, recording capture, transport
+adapters, diagnostics storage, and metrics live in `o-sfu-core`.
 
 Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.
 

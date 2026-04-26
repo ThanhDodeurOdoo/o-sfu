@@ -18,13 +18,10 @@ use track_projection::RemoteTrackProjection;
 use crate::{
     application::{
         outcomes::{CallOutcome, UserEndReason, UserError, UserSignal},
-        rooms::RoomHandle,
+        rooms::{RoomHandle, RoomMessageEvent, RoomRequestEvent, RoomTrackBindingUpdate},
     },
     core::{MediaEndpointHealth, RuntimeSfuCore},
-    runtime::{
-        ConnectionId,
-        room::{Room, RoomEventMessage, RoomEventRequest, TrackBindingUpdate},
-    },
+    runtime::ConnectionId,
 };
 
 #[derive(Debug, Default)]
@@ -47,9 +44,9 @@ pub(crate) enum UserIntent {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RoomEvent {
-    Message(RoomEventMessage),
-    Request(RoomEventRequest),
-    TrackBindingUpdate(TrackBindingUpdate),
+    Message(RoomMessageEvent),
+    Request(RoomRequestEvent),
+    TrackBindingUpdate(RoomTrackBindingUpdate),
 }
 
 /// The main orchestrator for an authenticated room user.
@@ -62,7 +59,7 @@ pub(crate) struct User {
     id: UserId,
     connection_id: ConnectionId,
     remote_address: Arc<str>,
-    room: Arc<Room>,
+    room: RoomHandle,
     media_core: RuntimeSfuCore,
     request_ids: ServerRequestIdState,
     flow_state: SessionFlowState,
@@ -83,7 +80,7 @@ impl User {
             connection_id,
             remote_address,
             media_core,
-            room: room.into_runtime_room(),
+            room,
             request_ids: ServerRequestIdState::default(),
             flow_state: SessionFlowState::default(),
             track_projection: RemoteTrackProjection::default(),
@@ -93,7 +90,7 @@ impl User {
 
     pub(crate) fn end_reason(&self) -> Option<UserEndReason> {
         self.media_core
-            .endpoint_health(self.room.as_ref(), &self.id, self.connection_id)
+            .endpoint_health(self.room.as_core_room(), &self.id, self.connection_id)
             .and_then(|health| match health {
                 MediaEndpointHealth::Disconnected => Some(UserEndReason::TransportDisconnected),
                 MediaEndpointHealth::Connected => None,
@@ -126,14 +123,14 @@ impl User {
 
     pub(crate) async fn finish(&mut self) {
         self.media_core
-            .rollback_connection_publishes(self.room.as_ref(), &self.id, self.connection_id)
+            .rollback_connection_publishes(self.room.as_core_room(), &self.id, self.connection_id)
             .await;
         self.cleanup_finished = true;
     }
 
     async fn handle_room_message(
         &mut self,
-        message: RoomEventMessage,
+        message: RoomMessageEvent,
     ) -> Result<CallOutcome, UserError> {
         let translated = self.track_projection.translate_server_message(message);
         let mut call_outcome =
@@ -146,10 +143,10 @@ impl User {
 
     async fn handle_room_request(
         &mut self,
-        request: RoomEventRequest,
+        request: RoomRequestEvent,
     ) -> Result<CallOutcome, UserError> {
         match request {
-            RoomEventRequest::BootstrapRemoteTrack(payload) => {
+            RoomRequestEvent::BootstrapRemoteTrack(payload) => {
                 self.track_projection.apply_remote_track_bootstrap(&payload);
                 let mut call_outcome = CallOutcome::new()
                     .with_signal(ServerMessage::Tracks(self.track_projection.snapshot()).into());
@@ -161,7 +158,7 @@ impl User {
 
     async fn handle_track_binding_update(
         &mut self,
-        update: TrackBindingUpdate,
+        update: RoomTrackBindingUpdate,
     ) -> Result<CallOutcome, UserError> {
         let translated = self
             .track_projection
@@ -181,13 +178,13 @@ impl Drop for User {
             return;
         }
         let media_core = self.media_core.clone();
-        let room = Arc::clone(&self.room);
+        let room = self.room.clone();
         let user_id = self.id.clone();
         let connection_id = self.connection_id;
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
                 media_core
-                    .rollback_connection_publishes(room.as_ref(), &user_id, connection_id)
+                    .rollback_connection_publishes(room.as_core_room(), &user_id, connection_id)
                     .await;
             });
         }
