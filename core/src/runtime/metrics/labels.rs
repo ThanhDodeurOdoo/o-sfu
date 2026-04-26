@@ -24,7 +24,7 @@ macro_rules! impl_metric_label {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsSessionLoopExitReason {
-    PeerClosed,
+    UserClosed,
     ReaderError,
     BusBreak,
     PingTimeout,
@@ -272,7 +272,7 @@ impl_metric_label!(WsStartupFailureKind {
 });
 
 impl_metric_label!(WsSessionLoopExitReason {
-    PeerClosed => 0,
+    UserClosed => 0,
     ReaderError => 1,
     BusBreak => 2,
     PingTimeout => 3,

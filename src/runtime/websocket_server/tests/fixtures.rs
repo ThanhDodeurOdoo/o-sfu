@@ -31,7 +31,6 @@ pub(super) use crate::{
     runtime::{
         RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
-        build_runtime_state,
         diagnostics::DiagnosticsStore,
         http_server::app,
         metrics::RuntimeMetrics,
@@ -40,7 +39,7 @@ pub(super) use crate::{
             Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
             RoomRuntimePolicy, rtp_capabilities,
         },
-        testing::decode_protocol_welcome_batch,
+        testing::{build_test_runtime_state, decode_protocol_welcome_batch},
         transport_adapter::{
             RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
@@ -58,6 +57,7 @@ pub(super) struct TestServer {
     pub(super) addr: SocketAddr,
     pub(super) handle: JoinHandle<()>,
     pub(super) room_manager: Arc<RoomManager>,
+    pub(super) transport_adapter: RuntimeTransportAdapter,
     pub(super) state: RuntimeState,
 }
 
@@ -162,12 +162,12 @@ async fn spawn_test_server_impl(
         Arc::clone(&metrics),
     ));
     let bind_address = config.bind_address;
-    let state = build_runtime_state(
+    let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),
         Arc::clone(&diagnostics),
         metrics,
-        transport_adapter,
+        transport_adapter.clone(),
     );
     let state_for_server = state.clone();
     let listener = TcpListener::bind(bind_address).await.ok()?;
@@ -183,6 +183,7 @@ async fn spawn_test_server_impl(
         addr,
         handle,
         room_manager,
+        transport_adapter,
         state,
     })
 }

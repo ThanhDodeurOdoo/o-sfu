@@ -6,8 +6,7 @@
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! |  `- session_protocol  -> authenticated signaling flow for one connected user
-//! |- application          -> business-facing room/user orchestration
+//! |- application          -> business-facing room orchestration
 //! |- telemetry            -> runtime-owned tracing config and event-name conventions
 //! |- core                 -> room engine, transport adapter, recording, metrics, and diagnostics
 //! `- metrics_export       -> Prometheus export snapshot
@@ -87,12 +86,8 @@ pub struct Runtime {
 pub(super) struct RuntimeState {
     http_options: HttpOptions,
     websocket_options: SocketOptions,
-    #[cfg(test)]
-    room_manager: Arc<RoomManager>,
     application: CallApplication,
     metrics: Arc<RuntimeMetrics>,
-    #[cfg(test)]
-    transport_adapter: RuntimeTransportAdapter,
 }
 
 impl Runtime {
@@ -150,49 +145,12 @@ impl Runtime {
                 Arc::clone(&self.diagnostics),
                 self.transport_adapter.clone(),
             ),
-            #[cfg(test)]
-            room_manager: self.room_manager,
             metrics: self.metrics,
-            #[cfg(test)]
-            transport_adapter: self.transport_adapter,
         })
         .await;
         source_packet_policy_sync.abort();
         let _ = source_packet_policy_sync.await;
         result
-    }
-}
-
-fn build_runtime_state(
-    config: &Config,
-    room_manager: Arc<RoomManager>,
-    diagnostics: Arc<DiagnosticsStore>,
-    metrics: Arc<RuntimeMetrics>,
-    transport_adapter: RuntimeTransportAdapter,
-) -> RuntimeState {
-    let options = ProgramOptions::from_config(config);
-    #[cfg(test)]
-    let application_room_manager = Arc::clone(&room_manager);
-    #[cfg(not(test))]
-    let application_room_manager = room_manager;
-    #[cfg(test)]
-    let application_transport_adapter = transport_adapter.clone();
-    #[cfg(not(test))]
-    let application_transport_adapter = transport_adapter;
-    RuntimeState {
-        http_options: options.http.clone(),
-        websocket_options: options.websocket.clone(),
-        application: build_call_application(
-            &options,
-            application_room_manager,
-            diagnostics,
-            application_transport_adapter,
-        ),
-        #[cfg(test)]
-        room_manager,
-        metrics,
-        #[cfg(test)]
-        transport_adapter,
     }
 }
 
@@ -202,10 +160,10 @@ fn build_call_application(
     diagnostics: Arc<DiagnosticsStore>,
     transport_adapter: RuntimeTransportAdapter,
 ) -> CallApplication {
+    let media_core = SfuCore::new(options.core, transport_adapter.clone());
     CallApplication::new(
         options.call.clone(),
-        CallRooms::new(room_manager, diagnostics, transport_adapter.clone()),
-        SfuCore::new(options.core, transport_adapter),
+        CallRooms::new(room_manager, diagnostics, transport_adapter, media_core),
     )
 }
 

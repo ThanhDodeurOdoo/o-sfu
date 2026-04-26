@@ -7,19 +7,17 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_protocol::{
-    shared::{AvailableFeatures, RecordingState, UserId, UserPermissions},
-    signaling::{PeerSnapshot, RecordingOptions},
+    shared::{UserId, UserPermissions},
+    signaling::RecordingOptions,
 };
 use room::{
-    JoinUserRequest, RemoteTrackBootstrap, Room as CoreRoom, RoomConfig, RoomEventMessage,
-    RoomEventRequest, RoomManager, RoomManagerJoinError, RuntimeRoomStatsSnapshot,
-    TrackBindingUpdate, UserCloseReason, UserOutbound,
+    JoinUserRequest, Room as CoreRoom, RoomConfig, RoomEventMessage, RoomEventRequest, RoomManager,
+    RoomManagerJoinError, RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
 };
-use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::{
-    core::{RuntimeTransportAdapter, runtime::room},
+    core::{RuntimeSfuCore, RuntimeTransportAdapter, User, runtime::room},
     runtime::{
         ConnectionId, DiagnosticsStore,
         diagnostics::{
@@ -34,6 +32,7 @@ pub(crate) struct CallRooms {
     manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     transport_adapter: RuntimeTransportAdapter,
+    media_core: RuntimeSfuCore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,8 +83,6 @@ pub(crate) type UserOutboundEvent = UserOutbound;
 pub(crate) type UserCloseReasonEvent = UserCloseReason;
 pub(crate) type RoomMessageEvent = RoomEventMessage;
 pub(crate) type RoomRequestEvent = RoomEventRequest;
-pub(crate) type RoomTrackBindingUpdate = TrackBindingUpdate;
-pub(crate) type RemoteTrackBootstrapEvent = RemoteTrackBootstrap;
 
 pub(crate) struct JoinRoomUserRequest {
     pub(crate) user_id: UserId,
@@ -105,6 +102,7 @@ pub(crate) struct JoinedRoomUser {
     pub(crate) user_id: UserId,
     pub(crate) connection_id: ConnectionId,
     pub(crate) outbound_rx: mpsc::UnboundedReceiver<UserOutboundEvent>,
+    pub(crate) user: User,
 }
 
 impl CallRooms {
@@ -113,11 +111,13 @@ impl CallRooms {
         manager: Arc<RoomManager>,
         diagnostics: Arc<DiagnosticsStore>,
         transport_adapter: RuntimeTransportAdapter,
+        media_core: RuntimeSfuCore,
     ) -> Self {
         Self {
             manager,
             diagnostics,
             transport_adapter,
+            media_core,
         }
     }
 
@@ -158,6 +158,7 @@ impl CallRooms {
         &self,
         room: &RoomHandle,
         request: JoinRoomUserRequest,
+        remote_address: Arc<str>,
     ) -> Result<JoinedRoomUser, JoinRoomUserError> {
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
         let user_id = request.user_id.clone();
@@ -175,11 +176,19 @@ impl CallRooms {
             )
             .await
             .map_err(JoinRoomUserError::from)?;
+        let user = User::new(
+            user_id.clone(),
+            connection_id,
+            remote_address,
+            Arc::clone(&room),
+            self.media_core.clone(),
+        );
         Ok(JoinedRoomUser {
             room: RoomHandle { room },
             user_id,
             connection_id,
             outbound_rx,
+            user,
         })
     }
 
@@ -245,38 +254,7 @@ impl RoomHandle {
         self.room.key()
     }
 
-    pub(crate) fn available_features(&self) -> AvailableFeatures {
-        self.room.available_features()
-    }
-
-    pub(crate) async fn recording_state(&self) -> RecordingState {
-        self.room.recording_state().await
-    }
-
-    pub(crate) async fn peer_snapshots_except(&self, user_id: &UserId) -> Vec<PeerSnapshot> {
-        self.room.peer_snapshots_except(user_id).await
-    }
-
-    pub(in crate::application) async fn has_connection(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> bool {
-        self.room.has_connection(user_id, connection_id).await
-    }
-
-    pub(in crate::application) async fn broadcast(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        message: Value,
-    ) {
-        self.room
-            .broadcast_runtime(user_id, connection_id, message)
-            .await;
-    }
-
-    pub(in crate::application) async fn start_recording(
+    pub(crate) async fn start_recording(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -287,7 +265,7 @@ impl RoomHandle {
             .await
     }
 
-    pub(in crate::application) async fn stop_recording(
+    pub(crate) async fn stop_recording(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -295,10 +273,6 @@ impl RoomHandle {
         self.room
             .stop_recording_runtime(user_id, connection_id)
             .await
-    }
-
-    pub(in crate::application) fn as_core_room(&self) -> &CoreRoom {
-        self.room.as_ref()
     }
 }
 

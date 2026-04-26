@@ -3,10 +3,7 @@ use std::net::SocketAddr;
 use crate::{
     application::rooms::CallRooms,
     config::{Config, DiagnosticsConfig, RuntimeFeatureFlags},
-    core::{
-        CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions,
-        RuntimeSfuCore,
-    },
+    core::{CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions},
     runtime::SessionBitrateLimits,
 };
 
@@ -14,7 +11,6 @@ use crate::{
 pub(crate) struct CallApplication {
     _options: CallOptions,
     rooms: CallRooms,
-    media_core: RuntimeSfuCore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +27,6 @@ pub(crate) struct CallOptions {
     pub(crate) room: RoomOptions,
     pub(crate) user: UserOptions,
     pub(crate) recording_policy: RecordingPolicyOptions,
-    pub(crate) features: FeatureOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,10 +50,6 @@ pub(crate) struct UserOptions {
 pub(crate) struct RecordingPolicyOptions {
     pub(crate) audio_enabled: bool,
     pub(crate) video_enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FeatureOptions {
     pub(crate) transcription_enabled: bool,
 }
 
@@ -80,26 +71,24 @@ pub(crate) struct SocketOptions {
 impl ProgramOptions {
     #[must_use]
     pub(crate) fn from_config(config: &Config) -> Self {
-        let auth = AuthOptions {
-            key: config.auth_key.clone(),
-            authentication_timeout_ms: config.authentication_timeout_ms,
-        };
-        let user = UserOptions {
-            timeout_ms: config.user_timeout_ms,
-            ping_interval_ms: config.ping_interval_ms,
-        };
         let call = CallOptions {
-            auth,
+            auth: AuthOptions {
+                key: config.auth_key.clone(),
+                authentication_timeout_ms: config.authentication_timeout_ms,
+            },
             room: RoomOptions {
                 max_users: config.room_size,
             },
-            user,
+            user: UserOptions {
+                timeout_ms: config.user_timeout_ms,
+                ping_interval_ms: config.ping_interval_ms,
+            },
             recording_policy: RecordingPolicyOptions {
                 audio_enabled: config.feature_flags.audio_recording,
                 video_enabled: config.feature_flags.video_recording,
-            },
-            features: FeatureOptions {
-                transcription_enabled: config.feature_flags.transcription,
+                transcription_enabled: config.feature_flags.transcription
+                    && (config.feature_flags.audio_recording
+                        || config.feature_flags.video_recording),
             },
         };
         let core = CoreOptions::new(
@@ -144,11 +133,10 @@ impl ProgramOptions {
 
 impl CallApplication {
     #[must_use]
-    pub(crate) fn new(options: CallOptions, rooms: CallRooms, media_core: RuntimeSfuCore) -> Self {
+    pub(crate) fn new(options: CallOptions, rooms: CallRooms) -> Self {
         Self {
             _options: options,
             rooms,
-            media_core,
         }
     }
 
@@ -156,18 +144,13 @@ impl CallApplication {
     pub(crate) fn rooms(&self) -> &CallRooms {
         &self.rooms
     }
-
-    #[must_use]
-    pub(crate) fn media_core(&self) -> RuntimeSfuCore {
-        self.media_core.clone()
-    }
 }
 
 impl CallOptions {
     #[must_use]
     pub(crate) const fn feature_flags(&self) -> RuntimeFeatureFlags {
         RuntimeFeatureFlags {
-            transcription: self.features.transcription_enabled,
+            transcription: self.recording_policy.transcription_enabled,
             audio_recording: self.recording_policy.audio_enabled,
             video_recording: self.recording_policy.video_enabled,
         }
@@ -216,7 +199,7 @@ mod tests {
         assert_eq!(options.call.auth.key, config.auth_key.as_str());
         assert_eq!(options.call.room.max_users, 42);
         assert_eq!(options.call.user.timeout_ms, 7_000);
-        assert!(options.call.features.transcription_enabled);
+        assert!(options.call.recording_policy.transcription_enabled);
         assert!(options.call.recording_policy.audio_enabled);
         assert!(!options.call.recording_policy.video_enabled);
         assert_eq!(options.call.feature_flags(), config.feature_flags);
@@ -238,5 +221,56 @@ mod tests {
         );
         assert_eq!(options.websocket.user.ping_interval_ms, 11_000);
         assert!(options.websocket.trust_proxy_headers);
+    }
+
+    #[test]
+    fn transcription_feature_is_part_of_recording_policy() {
+        let mut config = Config {
+            auth_key: "dGVzdC1rZXk=".to_owned(),
+            bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
+            authentication_timeout_ms: 1_500,
+            room_size: 42,
+            diagnostics: DiagnosticsConfig::default(),
+            user_timeout_ms: 7_000,
+            ping_interval_ms: 11_000,
+            trust_proxy_headers: true,
+            feature_flags: RuntimeFeatureFlags {
+                transcription: true,
+                audio_recording: false,
+                video_recording: false,
+            },
+            codec_flags: MediaCodecFlags::default(),
+            telemetry: TelemetryConfig::default(),
+            public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+            max_bitrate_in_bps: 1_234_000,
+            max_bitrate_out_bps: 5_678_000,
+            rtc_port_range: RtcPortRange::new(50_000, 50_099),
+            rtc_media_worker_count: 4,
+        };
+
+        let options = ProgramOptions::from_config(&config);
+
+        assert!(!options.call.recording_policy.transcription_enabled);
+        assert_eq!(
+            options.call.feature_flags(),
+            RuntimeFeatureFlags {
+                transcription: false,
+                audio_recording: false,
+                video_recording: false,
+            }
+        );
+
+        config.feature_flags.audio_recording = true;
+        let options = ProgramOptions::from_config(&config);
+
+        assert!(options.call.recording_policy.transcription_enabled);
+        assert_eq!(
+            options.call.feature_flags(),
+            RuntimeFeatureFlags {
+                transcription: true,
+                audio_recording: true,
+                video_recording: false,
+            }
+        );
     }
 }

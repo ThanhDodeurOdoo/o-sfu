@@ -23,7 +23,6 @@ pub(super) use crate::{
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
-        build_runtime_state,
         diagnostics::{
             DiagnosticsStore,
             types::{
@@ -42,11 +41,18 @@ pub(super) use crate::{
             RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
             rtp_capabilities,
         },
+        testing::build_test_runtime_state,
         transport_adapter::RuntimeTransportAdapter,
     },
 };
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
+
+pub(super) struct TestRuntimeState {
+    pub(super) state: RuntimeState,
+    pub(super) room_manager: Arc<RoomManager>,
+    pub(super) transport_adapter: RuntimeTransportAdapter,
+}
 
 pub(super) fn test_config() -> Config {
     Config {
@@ -70,6 +76,10 @@ pub(super) fn test_config() -> Config {
 }
 
 pub(super) fn test_state() -> RuntimeState {
+    test_state_with_handles().state
+}
+
+pub(super) fn test_state_with_handles() -> TestRuntimeState {
     let config = test_config();
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
@@ -87,13 +97,18 @@ pub(super) fn test_state() -> RuntimeState {
         Arc::clone(&metrics),
     ));
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
-    build_runtime_state(
+    let state = build_test_runtime_state(
         &config,
-        room_manager,
+        Arc::clone(&room_manager),
         diagnostics,
         metrics,
+        transport_adapter.clone(),
+    );
+    TestRuntimeState {
+        state,
+        room_manager,
         transport_adapter,
-    )
+    }
 }
 
 pub(super) fn signed_room_claims(issuer: Option<&str>, key: Option<&str>) -> Option<String> {

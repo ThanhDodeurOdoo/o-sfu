@@ -140,7 +140,7 @@ fn metrics_snapshot_tracks_http_and_websocket_counters() {
     metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::AuthTimeout));
     metrics.record_ws_user_joined();
     metrics.record_ws_user_loop_started();
-    metrics.record_ws_user_loop_exit(WsSessionLoopExitReason::PeerClosed);
+    metrics.record_ws_user_loop_exit(WsSessionLoopExitReason::UserClosed);
     metrics.record_ws_bus_batch_received(3);
     metrics.record_ws_bus_invalid_input_failure();
     metrics.record_ws_bus_unsupported_feature_failure();
@@ -165,7 +165,7 @@ fn metrics_snapshot_tracks_http_and_websocket_counters() {
     assert_eq!(snapshot.ws_handshake_rejected_protocol_error, 0);
     assert_eq!(snapshot.ws_users_joined, 1);
     assert_eq!(snapshot.ws_user_loops_started, 1);
-    assert_eq!(snapshot.ws_user_loop_exits_peer_closed, 1);
+    assert_eq!(snapshot.ws_user_loop_exits_user_closed, 1);
     assert_eq!(snapshot.ws_user_loop_exits_ping_timeout, 0);
     assert_eq!(snapshot.ws_user_loop_exits_transport_disconnected, 0);
     assert_eq!(snapshot.ws_bus_parse_failures, 2);

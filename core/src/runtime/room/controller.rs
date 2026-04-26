@@ -110,7 +110,7 @@ pub struct TrackBindingUpdate {
 pub enum UserOutbound {
     /// Fan-out payload that can be translated directly into server messages.
     ///
-    /// This is the common path for peer joins, leaves, user-info updates,
+    /// This is the common path for user joins, leaves, user-info updates,
     /// recording state fan-out and other room-level notifications.
     Message(RoomEventMessage),
     /// Imperative request that needs user-local bootstrap or renegotiation work.
@@ -140,7 +140,7 @@ pub enum UserOutbound {
 ///
 /// # Why this is a separate enum
 ///
-/// A plain fan-out message is enough for room notifications such as "peer
+/// A plain fan-out message is enough for room notifications such as "user
 /// joined" or "recording state changed". It is not enough for flows where the
 /// targeted user must execute a local protocol step. Those flows go through
 /// `RoomEventRequest` so the room can ask for a concrete action without
@@ -604,17 +604,17 @@ impl Room {
         self.state.read().await.recording_state()
     }
 
-    /// Snapshot of every peer except the requested user.
+    /// Snapshot of every user except the requested user.
     ///
     /// This is the room-facing view used when a user needs to learn about
-    /// the rest of the room without receiving itself back as a peer entry
+    /// the rest of the room without receiving itself back as a user entry.
     /// The shape is already projected into protocol-facing `PeerSnapshot`
     /// values, so callers do not need to rebuild that view from raw room state.
-    pub async fn peer_snapshots_except(&self, excluded_user_id: &UserId) -> Vec<PeerSnapshot> {
+    pub async fn user_snapshots_except(&self, excluded_user_id: &UserId) -> Vec<PeerSnapshot> {
         self.state
             .read()
             .await
-            .peer_snapshots_except(excluded_user_id)
+            .user_snapshots_except(excluded_user_id)
     }
 
     /// Router-native RTP capability surface exposed by this room.

@@ -69,9 +69,9 @@ async fn noop_returns_ok_response() {
 
 #[tokio::test]
 async fn stats_returns_live_room_data() {
-    let state = test_state();
+    let test_state = test_state_with_handles();
     let query = CreateRoomQuery::default();
-    let room = state
+    let room = test_state
         .room_manager
         .serve_room(
             "issuer-a",
@@ -114,7 +114,7 @@ async fn stats_returns_live_room_data() {
         alice_connection_id,
         StreamType::Camera,
         22_222,
-        &state.transport_adapter,
+        &test_state.transport_adapter,
     )
     .await;
     publish_video_stream(
@@ -123,7 +123,7 @@ async fn stats_returns_live_room_data() {
         bob_connection_id,
         StreamType::Screen,
         33_333,
-        &state.transport_adapter,
+        &test_state.transport_adapter,
     )
     .await;
 
@@ -132,7 +132,7 @@ async fn stats_returns_live_room_data() {
     let Some(request) = request else {
         return;
     };
-    let response = app(state).oneshot(request).await;
+    let response = app(test_state.state).oneshot(request).await;
     assert!(
         response.is_ok(),
         "stats request should succeed: {response:?}"

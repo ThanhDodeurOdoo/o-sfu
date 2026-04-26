@@ -16,21 +16,16 @@
 //!    into the room. This allocates a unique connection ID and sets up the
 //!    outbound message routing queues.
 //!
-//! 4. **User Initialization**: the server send a complete state snapshot
-//!    (the `Welcome` message) back to the client, including the current peers and
-//!    room features. It also initializes the `SessionProtocol`, which coordinates
-//!    with the media core to prepare the backend WebRTC transport.
+//! 4. **User Initialization**: the core user returns the initial welcome snapshot
+//!    and transport offer, and this edge serializes that output to the socket.
 
 use std::{sync::Arc, time::Duration};
 
 use axum::extract::ws::Message;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use o_sfu_protocol::{
     shared::{UserId, UserPermissions},
-    signaling::{
-        AuthPayload, ClientEnvelope, ClientMessage, ServerMessage, WebSocketCloseCode,
-        WelcomePayload,
-    },
+    signaling::{AuthPayload, ClientEnvelope, ClientMessage, WebSocketCloseCode},
 };
 use serde::Deserialize;
 use tokio::time::timeout;
@@ -38,11 +33,12 @@ use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
     WsWriter, close_writer,
-    controller::{ConnectedSession, WsReader},
-    session_protocol::SessionProtocol,
+    controller::{ConnectedUser, WsReader},
+    io::send_user_output,
 };
 use crate::{
     application::rooms::{JoinRoomUserError, JoinRoomUserRequest, JoinedRoomUser, RoomHandle},
+    core::User,
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
@@ -90,10 +86,11 @@ pub(super) async fn establish_user(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: Arc<str>,
-) -> Option<ConnectedSession> {
+) -> Option<ConnectedUser> {
     let (room, claims) =
         authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
-    let joined_user = join_user(state, writer, room, claims, remote_address.as_ref()).await?;
+    let mut joined_user =
+        join_user(state, writer, room, claims, Arc::clone(&remote_address)).await?;
     state.metrics.record_ws_user_joined();
     record_session_span(
         &joined_user.room,
@@ -101,21 +98,13 @@ pub(super) async fn establish_user(
         joined_user.connection_id,
         remote_address.as_ref(),
     );
-    let mut session_protocol = SessionProtocol::new(
-        joined_user.user_id.clone(),
-        joined_user.connection_id,
-        Arc::clone(&remote_address),
-        joined_user.room.clone(),
-        state.application.media_core(),
-        Arc::clone(&state.metrics),
-    );
-    initialize_session(
+    initialize_user(
         state,
         writer,
         &joined_user.room,
         &joined_user.user_id,
         joined_user.connection_id,
-        &mut session_protocol,
+        &mut joined_user.user,
         remote_address.as_ref(),
     )
     .instrument(telemetry::activated_span(tracing::info_span!(
@@ -126,13 +115,13 @@ pub(super) async fn establish_user(
         remote_address = %remote_address
     )))
     .await?;
-    Some(ConnectedSession {
+    Some(ConnectedUser {
         room: joined_user.room,
         user_id: joined_user.user_id,
         connection_id: joined_user.connection_id,
         remote_address,
         outbound_rx: joined_user.outbound_rx,
-        session_protocol,
+        user: joined_user.user,
     })
 }
 
@@ -404,7 +393,7 @@ async fn join_user(
     writer: &mut WsWriter,
     room: RoomHandle,
     claims: WebSocketConnectClaims,
-    remote_address: &str,
+    remote_address: Arc<str>,
 ) -> Option<JoinedRoomUser> {
     let user_id = claims.user_id.clone();
     let join_result = state
@@ -417,6 +406,7 @@ async fn join_user(
                 label: claims.label,
                 permissions: claims.permissions.unwrap_or_default(),
             },
+            Arc::clone(&remote_address),
         )
         .await;
     match join_result {
@@ -438,7 +428,7 @@ async fn join_user(
             warn!(
                 event = telemetry::schema::event::WS_JOIN_FAILED,
                 ?user_id,
-                remote_address,
+                remote_address = remote_address.as_ref(),
                 ?error,
                 close_code = u16::from(close_code),
                 "rejecting websocket because the authenticated user could not join the room"
@@ -447,7 +437,7 @@ async fn join_user(
                 state,
                 Some(writer),
                 Some(close_code),
-                remote_address,
+                remote_address.as_ref(),
                 "rejecting websocket during user join",
             )
             .await
@@ -481,20 +471,37 @@ fn record_session_span(
     metrics = "state.metrics",
     record = "record_ws_user_initialize_duration"
 )]
-async fn initialize_session(
+async fn initialize_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
     room: &RoomHandle,
     user_id: &UserId,
     connection_id: ConnectionId,
-    session_protocol: &mut SessionProtocol,
+    user: &mut User,
     remote_address: &str,
 ) -> Option<()> {
-    if send_welcome(room, user_id, writer).await.is_err() {
+    let output = match user.start().await {
+        Ok(output) => output,
+        Err(_error) => {
+            warn!(
+                event = telemetry::schema::event::WS_JOIN_FAILED,
+                ?user_id,
+                connection_id = ?connection_id,
+                remote_address,
+                outcome = "user_initialize_failed",
+                "failed to initialize websocket user"
+            );
+            state.metrics.record_ws_user_initialize_failure();
+            user.close().await;
+            cleanup_failed_session(state, room, user_id, connection_id).await;
+            return None;
+        }
+    };
+    if send_user_output(writer, output).await.is_err() {
         debug!(
             ?user_id,
             connection_id = ?connection_id,
-            "failed to send welcome payload"
+            "failed to send user startup payload"
         );
         state.metrics.record_ws_startup_send_failure();
         warn!(
@@ -502,24 +509,10 @@ async fn initialize_session(
             user_id = ?user_id,
             connection_id = ?connection_id,
             remote_address,
-            outcome = "welcome_send_failed",
-            "failed to send websocket welcome payload"
+            outcome = "startup_send_failed",
+            "failed to send websocket user startup payload"
         );
-        session_protocol.finish().await;
-        cleanup_failed_session(state, room, user_id, connection_id).await;
-        return None;
-    }
-    if session_protocol.initialize(writer).await.is_err() {
-        warn!(
-            event = telemetry::schema::event::WS_JOIN_FAILED,
-            ?user_id,
-            connection_id = ?connection_id,
-            remote_address,
-            outcome = "user_initialize_failed",
-            "failed to initialize websocket user protocol"
-        );
-        state.metrics.record_ws_user_initialize_failure();
-        session_protocol.finish().await;
+        user.close().await;
         cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }
@@ -559,24 +552,6 @@ async fn reject_handshake<T>(
         }
     }
     None
-}
-
-async fn send_welcome(
-    room: &RoomHandle,
-    user_id: &UserId,
-    writer: &mut WsWriter,
-) -> Result<(), ()> {
-    let welcome_payload = ServerMessage::Welcome(WelcomePayload {
-        features: room.available_features(),
-        recording: room.recording_state().await,
-        peers: room.peer_snapshots_except(user_id).await,
-    });
-    let welcome_envelope = welcome_payload.into_envelope().map_err(|_error| ())?;
-    let welcome_json = serde_json::to_string(&vec![welcome_envelope]).map_err(|_error| ())?;
-    writer
-        .send(Message::Text(welcome_json.into()))
-        .await
-        .map_err(|_error| ())
 }
 
 #[cfg(test)]

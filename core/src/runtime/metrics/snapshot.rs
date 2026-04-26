@@ -74,7 +74,7 @@ pub struct RuntimeMetricsSnapshot {
     pub ws_startup_send_failures: u64,
     pub ws_user_initialize_failures: u64,
     pub ws_user_loops_started: u64,
-    pub ws_user_loop_exits_peer_closed: u64,
+    pub ws_user_loop_exits_user_closed: u64,
     pub ws_user_loop_exits_reader_error: u64,
     pub ws_user_loop_exits_bus_break: u64,
     pub ws_user_loop_exits_ping_timeout: u64,
@@ -188,7 +188,7 @@ struct WebSocketSnapshot {
     startup_send_failures: u64,
     user_initialize_failures: u64,
     user_loops_started: u64,
-    user_loop_exits_peer_closed: u64,
+    user_loop_exits_user_closed: u64,
     user_loop_exits_reader_error: u64,
     user_loop_exits_bus_break: u64,
     user_loop_exits_ping_timeout: u64,
@@ -345,7 +345,7 @@ impl RuntimeMetrics {
             ws_startup_send_failures: websocket.startup_send_failures,
             ws_user_initialize_failures: websocket.user_initialize_failures,
             ws_user_loops_started: websocket.user_loops_started,
-            ws_user_loop_exits_peer_closed: websocket.user_loop_exits_peer_closed,
+            ws_user_loop_exits_user_closed: websocket.user_loop_exits_user_closed,
             ws_user_loop_exits_reader_error: websocket.user_loop_exits_reader_error,
             ws_user_loop_exits_bus_break: websocket.user_loop_exits_bus_break,
             ws_user_loop_exits_ping_timeout: websocket.user_loop_exits_ping_timeout,
@@ -539,9 +539,9 @@ impl RuntimeMetrics {
                 .ws_startup_failures
                 .load(WsStartupFailureKind::SessionInitialize),
             user_loops_started: self.ws_user_loops_started.load(),
-            user_loop_exits_peer_closed: self
+            user_loop_exits_user_closed: self
                 .ws_user_loop_exits
-                .load(WsSessionLoopExitReason::PeerClosed),
+                .load(WsSessionLoopExitReason::UserClosed),
             user_loop_exits_reader_error: self
                 .ws_user_loop_exits
                 .load(WsSessionLoopExitReason::ReaderError),

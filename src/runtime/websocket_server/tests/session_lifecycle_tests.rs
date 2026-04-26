@@ -168,13 +168,10 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     let Some(connection_id) = connection_id else {
         return;
     };
-    server
-        .state
-        .transport_adapter
-        .debug_set_session_transport_health(
-            &room.transport_user_key(&user_id, connection_id),
-            TransportSessionHealth::Disconnected,
-        );
+    server.transport_adapter.debug_set_session_transport_health(
+        &room.transport_user_key(&user_id, connection_id),
+        TransportSessionHealth::Disconnected,
+    );
 
     let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
     assert!(
@@ -222,13 +219,10 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     let Some(connection_id) = connection_id else {
         return;
     };
-    server
-        .state
-        .transport_adapter
-        .debug_set_session_transport_health(
-            &room.transport_user_key(&user_id, connection_id),
-            TransportSessionHealth::Disconnected,
-        );
+    server.transport_adapter.debug_set_session_transport_health(
+        &room.transport_user_key(&user_id, connection_id),
+        TransportSessionHealth::Disconnected,
+    );
 
     let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
     assert!(
@@ -428,7 +422,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
         .disconnect_users(
             room.uuid(),
             &[UserId::Integer(1)],
-            &server.state.transport_adapter,
+            &server.transport_adapter,
         )
         .await;
 
@@ -478,7 +472,7 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
         .disconnect_users(
             room.uuid(),
             slice::from_ref(&user_id),
-            &server.state.transport_adapter,
+            &server.transport_adapter,
         )
         .await;
 

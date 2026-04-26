@@ -16,6 +16,8 @@ pub mod runtime;
 mod sfu;
 pub mod signals;
 pub mod transport;
+mod user;
+mod user_state;
 
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
@@ -28,5 +30,6 @@ pub use sfu::{
     MediaEndpointHealth, MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot,
     OfferedMediaCapabilities, SfuCore, SfuCoreError,
 };
+pub use user::{User, UserDisconnectReason, UserError, UserOutput, UserSignal};
 
 pub type RuntimeSfuCore = SfuCore<RuntimeTransportAdapter>;

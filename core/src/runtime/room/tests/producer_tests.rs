@@ -1372,7 +1372,7 @@ async fn publish_track_releases_room_lock_while_waiting_on_transport_adapter() {
             msg,
             UserOutbound::Message(RoomEventMessage::UserInfoChanged(_))
         )),
-        "peer should still receive the concurrent info broadcast"
+        "user should still receive the concurrent info broadcast"
     );
 }
 

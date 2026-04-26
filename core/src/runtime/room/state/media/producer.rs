@@ -366,7 +366,7 @@ impl RoomState {
         })
     }
 
-    /// Plans bootstrap work for peers that should consume a newly published track
+    /// Plans bootstrap work for users that should consume a newly published track.
     ///
     /// This only computes the next transport-facing work. It does not mutate
     /// consumer state yet, so callers can still stop out cleanly if the later
@@ -377,20 +377,21 @@ impl RoomState {
     ) -> Vec<PendingConsumerBootstrapTarget> {
         self.users
             .iter()
-            .filter_map(|(peer_user_id, peer_user)| {
-                if peer_user_id == producer.owner_user_id() || !peer_user.negotiation.can_consume()
+            .filter_map(|(remote_user_id, remote_user)| {
+                if remote_user_id == producer.owner_user_id()
+                    || !remote_user.negotiation.can_consume()
                 {
                     return None;
                 }
                 if self.consumer_bootstrap_exists(&ConsumerKey::new(
-                    peer_user_id,
+                    remote_user_id,
                     producer.source_id(),
                 )) {
                     return None;
                 }
                 Some(PendingConsumerBootstrapTarget::new(
-                    peer_user_id.clone(),
-                    peer_user.connection_id,
+                    remote_user_id.clone(),
+                    remote_user.connection_id,
                     (*producer).clone(),
                 ))
             })

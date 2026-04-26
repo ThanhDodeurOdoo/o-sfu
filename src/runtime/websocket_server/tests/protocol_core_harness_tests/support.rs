@@ -402,7 +402,6 @@ pub(super) async fn real_rtc_route_activity(
         .await?;
     let consumer_session_key = room.transport_user_key(&consumer_user_id, consumer_connection_id);
     let route_entry = server
-        .state
         .transport_adapter
         .debug_route_entry_by_consumer_mid(&consumer_session_key, Mid::from(mid))
         .await?;

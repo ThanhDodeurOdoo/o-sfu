@@ -5,7 +5,7 @@
 //! `layout` owns server-driven user layout state.
 //! `presence` owns client-driven user presence state.
 //! `recording` owns room recording-control state updates and fan-out.
-//! `user_info_projection` owns outward-facing user and peer projection.
+//! `user_info_projection` owns outward-facing user projection.
 //! `video_policy` owns room-level source selection input, planning, projection, and commit.
 //! `shared` owns the in-memory state and bookkeeping types.
 //! `membership` owns user lifecycle, presence fan-out, and negotiation readiness.

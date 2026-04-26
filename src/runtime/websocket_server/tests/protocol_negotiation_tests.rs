@@ -123,7 +123,7 @@ async fn publish_until_ready(
                     stream_type,
                     MediaKind::Video,
                     sample_video_rtp_parameters(mid),
-                    &server.state.transport_adapter,
+                    &server.transport_adapter,
                 )
                 .await
             {

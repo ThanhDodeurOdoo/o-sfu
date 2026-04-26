@@ -57,7 +57,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
             StreamType::Camera,
             MediaKind::Video,
             sample_video_rtp_parameters("cam-1"),
-            &server.state.transport_adapter,
+            &server.transport_adapter,
         )
         .await;
     assert!(producer_id.is_some(), "protocol publisher should be ready");

@@ -95,7 +95,7 @@ pub(super) fn append_ws_loop_metrics(output: &mut String, snapshot: &RuntimeMetr
         "Total websocket user loop exits by reason.",
         "reason",
         &[
-            LabeledValue::new("peer_closed", snapshot.ws_user_loop_exits_peer_closed),
+            LabeledValue::new("user_closed", snapshot.ws_user_loop_exits_user_closed),
             LabeledValue::new("reader_error", snapshot.ws_user_loop_exits_reader_error),
             LabeledValue::new("bus_break", snapshot.ws_user_loop_exits_bus_break),
             LabeledValue::new("ping_timeout", snapshot.ws_user_loop_exits_ping_timeout),

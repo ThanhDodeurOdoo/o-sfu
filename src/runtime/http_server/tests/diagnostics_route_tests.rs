@@ -119,8 +119,8 @@ async fn diagnostics_routes_require_the_configured_bearer_token() {
 
 #[tokio::test]
 async fn diagnostics_routes_return_live_room_and_user_details() {
-    let state = test_state();
-    let room = state
+    let test_state = test_state_with_handles();
+    let room = test_state
         .room_manager
         .serve_room(
             "issuer-a",
@@ -168,14 +168,14 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
     assert!(carol_join.is_ok());
-    make_session_ready(&room, &bob_session_id, &state.transport_adapter).await;
-    make_session_ready(&room, &carol_session_id, &state.transport_adapter).await;
+    make_session_ready(&room, &bob_session_id, &test_state.transport_adapter).await;
+    make_session_ready(&room, &carol_session_id, &test_state.transport_adapter).await;
     publish_media_stream(
         &room,
         &alice_session_id,
         StreamType::Camera,
         test_simulcast_video_rtp_parameters(),
-        &state.transport_adapter,
+        &test_state.transport_adapter,
     )
     .await;
     let rooms_request = build_request(Request::get(DIAGNOSTICS_ROOMS_PATH), Body::empty());
@@ -183,7 +183,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     let Some(rooms_request) = rooms_request else {
         return;
     };
-    let rooms_response = app(state.clone()).oneshot(rooms_request).await;
+    let rooms_response = app(test_state.state.clone()).oneshot(rooms_request).await;
     assert!(rooms_response.is_ok());
     let Some(rooms_response) = rooms_response.ok() else {
         return;
@@ -207,7 +207,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     let Some(detail_request) = detail_request else {
         return;
     };
-    let detail_response = app(state.clone()).oneshot(detail_request).await;
+    let detail_response = app(test_state.state.clone()).oneshot(detail_request).await;
     assert!(detail_response.is_ok());
     let Some(detail_response) = detail_response.ok() else {
         return;
@@ -252,7 +252,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     let Some(session_request) = session_request else {
         return;
     };
-    let session_response = app(state.clone()).oneshot(session_request).await;
+    let session_response = app(test_state.state.clone()).oneshot(session_request).await;
     assert!(session_response.is_ok());
     let Some(session_response) = session_response.ok() else {
         return;
@@ -286,7 +286,9 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     let Some(bob_session_request) = bob_session_request else {
         return;
     };
-    let bob_session_response = app(state.clone()).oneshot(bob_session_request).await;
+    let bob_session_response = app(test_state.state.clone())
+        .oneshot(bob_session_request)
+        .await;
     assert!(bob_session_response.is_ok());
     let Some(bob_session_response) = bob_session_response.ok() else {
         return;
@@ -317,7 +319,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     let Some(summary_request) = summary_request else {
         return;
     };
-    let summary_response = app(state).oneshot(summary_request).await;
+    let summary_response = app(test_state.state).oneshot(summary_request).await;
     assert!(summary_response.is_ok());
     let Some(summary_response) = summary_response.ok() else {
         return;
@@ -336,8 +338,8 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
 
 #[tokio::test]
 async fn diagnostics_user_lookup_reports_ambiguous_matches() {
-    let state = test_state();
-    let first_room = state
+    let test_state = test_state_with_handles();
+    let first_room = test_state
         .room_manager
         .serve_room(
             "issuer-a",
@@ -346,7 +348,7 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() {
             Some("203.0.113.10"),
         )
         .await;
-    let second_room = state
+    let second_room = test_state
         .room_manager
         .serve_room(
             "issuer-b",
@@ -389,7 +391,7 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() {
     let Some(request) = request else {
         return;
     };
-    let response = app(state).oneshot(request).await;
+    let response = app(test_state.state).oneshot(request).await;
     assert!(response.is_ok());
     let Some(response) = response.ok() else {
         return;

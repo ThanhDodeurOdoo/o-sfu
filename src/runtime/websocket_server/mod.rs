@@ -1,23 +1,21 @@
-//! This node turns an upgraded socket into an authenticated (rtc) user. It owns the
-//! transport-specific mechanics of the WebSocket connection and then delegate the
-//! business meaning of authenticated messages to `session_protocol`
+//! This node turns an upgraded socket into an authenticated RTC user. It owns the
+//! transport-specific mechanics of the WebSocket connection and then delegates the
+//! business meaning of authenticated messages to `o-sfu-core::User`.
 //!
 //! ```text
 //! websocket_server
 //! |- controller       -> upgrade boundary and outer user lifecycle
 //! |- handshake        -> first-frame authentication and room admission
 //! |- session_loop     -> steady-state reader/writer loop after admission
-//! |- session_protocol -> authenticated signaling flow
 //! `- io               -> socket writer boundary and close helpers
 //! ```
 //!
-//! The rest of the runtime should traet this module as the sole owner of WebSocket
+//! The rest of the runtime should treat this module as the sole owner of WebSocket
 //! mechanics such as close codes, ping/pong liveness, and reader/writer management.
 mod controller;
 mod handshake;
 pub(crate) mod io;
 mod session_loop;
-mod session_protocol;
 #[cfg(test)]
 mod tests;
 

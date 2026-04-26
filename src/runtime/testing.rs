@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use super::{
-    build_runtime_state, build_transport_adapter,
+    RuntimeState, build_call_application, build_transport_adapter,
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
@@ -21,6 +21,7 @@ use super::{
         ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
         rtp_capabilities::router_rtp_capabilities,
     },
+    transport_adapter::RuntimeTransportAdapter,
 };
 use crate::{application::program::ProgramOptions, config::Config};
 
@@ -190,7 +191,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         Arc::clone(&metrics),
     );
     let bind_address = config.bind_address;
-    let state = build_runtime_state(
+    let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),
         Arc::clone(&diagnostics),
@@ -213,6 +214,27 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         room_manager,
         handle,
     })
+}
+
+/// Builds runtime state for in-crate tests and the exported `o_sfu::testing` harness.
+///
+/// This cannot be `#[cfg(test)]`: integration tests and fuzz targets use
+/// `o_sfu::testing` as a normal dependency, so Rust compiles this module without
+/// unit-test cfgs in those callers.
+pub(in crate::runtime) fn build_test_runtime_state(
+    config: &Config,
+    room_manager: Arc<RoomManager>,
+    diagnostics: Arc<DiagnosticsStore>,
+    metrics: Arc<RuntimeMetrics>,
+    transport_adapter: RuntimeTransportAdapter,
+) -> RuntimeState {
+    let options = ProgramOptions::from_config(config);
+    RuntimeState {
+        http_options: options.http.clone(),
+        websocket_options: options.websocket.clone(),
+        application: build_call_application(&options, room_manager, diagnostics, transport_adapter),
+        metrics,
+    }
 }
 
 #[must_use]

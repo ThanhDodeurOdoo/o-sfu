@@ -37,7 +37,7 @@ pub(in crate::runtime::room) fn project_user_info(
 }
 
 impl RoomState {
-    pub(in crate::runtime::room) fn peer_snapshots_except(
+    pub(in crate::runtime::room) fn user_snapshots_except(
         &self,
         excluded_user_id: &UserId,
     ) -> Vec<PeerSnapshot> {
