@@ -18,7 +18,7 @@ pub mod http {
     use axum::http::{HeaderMap, HeaderValue, header};
 
     pub use crate::runtime::http_server::contract::{
-        CHANNEL_PATH, CreateRoomQuery, DISCONNECT_PATH, IncomingBitRateStats, METRICS_PATH,
+        CHANNEL_PATH, CreateRoomQuery, DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH,
         RoomResponse, STATS_PATH, StatsResponse,
     };
     use crate::{

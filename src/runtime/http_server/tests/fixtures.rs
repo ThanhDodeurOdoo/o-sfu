@@ -16,6 +16,7 @@ pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
 pub(super) use crate::{
+    application::rooms::Room as ApplicationRoom,
     config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TelemetryConfig,
@@ -72,24 +73,30 @@ pub(super) fn test_state() -> RuntimeState {
     let config = test_config();
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
-    RuntimeState {
-        room_manager: Arc::new(RoomManager::new(
-            RoomManagerConfig::new(
-                1,
-                RoomRuntimePolicy::new(
-                    RoomAdmissionPolicy::new(config.room_size),
-                    config.feature_flags,
-                    rtp_capabilities::router_rtp_capabilities(config.codec_flags),
-                ),
+    let room_manager = Arc::new(RoomManager::new(
+        RoomManagerConfig::new(
+            1,
+            RoomRuntimePolicy::new(
+                RoomAdmissionPolicy::new(config.room_size),
+                config.feature_flags,
+                rtp_capabilities::router_rtp_capabilities(config.codec_flags),
             ),
-            Arc::new(MediaTap::default()),
+        ),
+        Arc::new(MediaTap::default()),
+        Arc::clone(&diagnostics),
+        Arc::clone(&metrics),
+    ));
+    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    RuntimeState {
+        rooms: ApplicationRoom::new(
+            Arc::clone(&room_manager),
             Arc::clone(&diagnostics),
-            Arc::clone(&metrics),
-        )),
+            transport_adapter.clone(),
+        ),
+        room_manager,
         config,
-        diagnostics,
         metrics,
-        transport_adapter: RuntimeTransportAdapter::fake_for_testing(),
+        transport_adapter,
     }
 }
 

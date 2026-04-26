@@ -22,7 +22,7 @@ use super::{
         rtp_capabilities::router_rtp_capabilities,
     },
 };
-use crate::config::Config;
+use crate::{application::rooms::Room as ApplicationRoom, config::Config};
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
@@ -190,8 +190,12 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     );
     let state = RuntimeState {
         config,
+        rooms: ApplicationRoom::new(
+            Arc::clone(&room_manager),
+            Arc::clone(&diagnostics),
+            transport_adapter.clone(),
+        ),
         room_manager: Arc::clone(&room_manager),
-        diagnostics,
         metrics,
         transport_adapter,
     };

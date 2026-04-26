@@ -24,6 +24,7 @@ pub(super) use tokio_tungstenite::{
 };
 
 pub(super) use crate::{
+    application::rooms::Room as ApplicationRoom,
     config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TelemetryConfig,
@@ -162,8 +163,12 @@ async fn spawn_test_server_impl(
     ));
     let state = RuntimeState {
         config,
+        rooms: ApplicationRoom::new(
+            Arc::clone(&room_manager),
+            Arc::clone(&diagnostics),
+            transport_adapter.clone(),
+        ),
         room_manager: Arc::clone(&room_manager),
-        diagnostics,
         metrics,
         transport_adapter,
     };

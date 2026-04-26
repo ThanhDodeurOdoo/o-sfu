@@ -6,13 +6,13 @@ use axum::{
 };
 
 use crate::{
+    application::rooms::{CreateRoomRequest, Room},
     config::Config,
     runtime::{
         RuntimeState,
         auth::{self, HttpDisconnectClaims, HttpRoomClaims},
         http_server::contract::CreateRoomQuery,
         request_origin::{resolve_remote_address, trusted_forwarded_header},
-        room::RoomConfig,
     },
 };
 
@@ -52,19 +52,17 @@ pub(super) async fn verify_and_get_room(
     let remote_address =
         resolve_remote_address(context.headers, &state.config, context.connect_address);
     let room = state
-        .room_manager
-        .serve_room(
+        .rooms
+        .create_or_get(CreateRoomRequest {
             issuer,
-            claims.key.as_deref(),
-            &RoomConfig {
-                web_rtc_enabled: context.query.web_rtc_enabled(),
-                recording_address: context.query.recording_address.clone(),
-            },
-            Some(&remote_address),
-        )
+            key: claims.key.as_deref(),
+            web_rtc_enabled: context.query.web_rtc_enabled(),
+            recording_address: context.query.recording_address.clone(),
+            remote_address: Some(remote_address),
+        })
         .await;
     Ok(CreatedRoom {
-        uuid: room.uuid().to_owned(),
+        uuid: room.uuid,
         base_url: request_base_url(context.headers, &state.config),
     })
 }
@@ -75,21 +73,17 @@ pub(super) enum DisconnectError {
 }
 
 pub(super) async fn disconnect_users(
-    state: &RuntimeState,
+    rooms: &Room,
+    config: &Config,
     body: &Bytes,
 ) -> Result<(), DisconnectError> {
     let Ok(token) = str::from_utf8(body) else {
         return Err(DisconnectError::BadRequest);
     };
-    let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth_key) else {
+    let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &config.auth_key) else {
         return Err(DisconnectError::UnprocessableEntity);
     };
-    for (room_id, user_ids) in &claims.user_ids_by_room {
-        state
-            .room_manager
-            .disconnect_users(room_id, user_ids, &state.transport_adapter)
-            .await;
-    }
+    rooms.disconnect_users(&claims.user_ids_by_room).await;
     Ok(())
 }
 

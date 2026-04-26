@@ -1,12 +1,11 @@
 //! This module is the synchronous sibling of `websocket_server`: it exposes the server's
-//! endpoints, translates authenticated HTTP requsts into runtime
-//! operations, and then delegates room-level work to `room` ownership instead of
-//! keeping business logic inside route handlers.
+//! endpoints, translates authenticated HTTP requests into application
+//! room intents, and then renders the resulting public HTTP contract.
 //!
 //! ```text
 //! http_server
 //! |- controller -> Axum app construction plus route-level parsing/response shaping
-//! `- services   -> auth-aware room/disconnect helpers behind the route handlers
+//! `- services   -> auth-aware edge parsing helpers behind the route handlers
 //! ```
 //!
 //! Read this node before the WebSocket path when you need the server's non-streaming

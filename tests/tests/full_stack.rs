@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use o_sfu::testing::http::IncomingBitRateStats;
+use o_sfu::testing::http::IncomingBitRateStatsResponse;
 use o_sfu_protocol::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{ServerMessage, ServerRequest, TrackBinding},
@@ -1558,7 +1558,7 @@ async fn stream_until_audio_bitrate_is_observable(
     publisher: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
-) -> Option<IncomingBitRateStats> {
+) -> Option<IncomingBitRateStatsResponse> {
     for _ in 0..20 {
         publisher.send_rtp_packets(source, clock, 2).await?;
         let stats = network.stats().await?;

@@ -60,7 +60,7 @@ pub struct RoomResponse {
 /// Incoming bitrate statistics broken down by media type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IncomingBitRateStats {
+pub struct IncomingBitRateStatsResponse {
     /// Total incoming bitrate across all streams (in bps).
     pub total: u64,
     /// Incoming bitrate from screen sharing streams (in bps).
@@ -74,9 +74,9 @@ pub struct IncomingBitRateStats {
 /// Aggregated statistics for all active users within a room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UsersStats {
+pub struct UsersStatsResponse {
     /// Breakdown of incoming bitrates for the room.
-    pub incoming_bit_rate: IncomingBitRateStats,
+    pub incoming_bit_rate: IncomingBitRateStatsResponse,
     /// Total number of connected users in this room.
     pub count: u64,
     /// Number of users currently publishing a camera stream.
@@ -88,7 +88,7 @@ pub struct UsersStats {
 /// Statistics payload for an individual active room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RoomStats {
+pub struct RoomStatsResponse {
     /// ISO 8601 formatted timestamp of when the room was created.
     pub create_date: String,
     /// The room's unique identifier.
@@ -97,21 +97,21 @@ pub struct RoomStats {
     pub remote_address: String,
     /// Aggregated user statistics for the room.
     #[serde(rename = "sessionsStats")]
-    pub users_stats: UsersStats,
+    pub users_stats: UsersStatsResponse,
     /// Whether WebRTC is enabled for this room.
     pub web_rtc_enabled: bool,
 }
 
 /// Response payload for the `/v1/stats` endpoint, containing statistics for all active rooms.
-pub type StatsResponse = Vec<RoomStats>;
+pub type StatsResponse = Vec<RoomStatsResponse>;
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
-        CreateRoomQuery, IncomingBitRateStats, NoopResponse, RoomResponse, RoomStats,
-        StatsResponse, UsersStats,
+        CreateRoomQuery, IncomingBitRateStatsResponse, NoopResponse, RoomResponse,
+        RoomStatsResponse, StatsResponse, UsersStatsResponse,
     };
 
     #[test]
@@ -147,12 +147,12 @@ mod tests {
         assert_eq!(serde_json::to_value(&room)?, expected_room);
         assert_eq!(serde_json::from_value::<RoomResponse>(expected_room)?, room);
 
-        let stats: StatsResponse = vec![RoomStats {
+        let stats: StatsResponse = vec![RoomStatsResponse {
             create_date: "2026-04-02T01:02:03.000Z".to_owned(),
             uuid: "31dcc5dc-4d26-453e-9bca-ab1f5d268303".to_owned(),
             remote_address: "203.0.113.10".to_owned(),
-            users_stats: UsersStats {
-                incoming_bit_rate: IncomingBitRateStats {
+            users_stats: UsersStatsResponse {
+                incoming_bit_rate: IncomingBitRateStatsResponse {
                     total: 1200,
                     screen: 400,
                     audio: 300,

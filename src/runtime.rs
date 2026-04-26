@@ -26,7 +26,7 @@ use tokio::{
 };
 use tracing::info;
 
-use crate::config::Config;
+use crate::{application::rooms::Room as ApplicationRoom, config::Config};
 
 pub(crate) mod auth;
 pub(crate) mod diagnostics;
@@ -85,7 +85,7 @@ pub struct Runtime {
 pub(super) struct RuntimeState {
     config: Config,
     room_manager: Arc<RoomManager>,
-    diagnostics: Arc<DiagnosticsStore>,
+    rooms: ApplicationRoom,
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
 }
@@ -136,8 +136,12 @@ impl Runtime {
         );
         let result = serve_http(RuntimeState {
             config: self.config,
+            rooms: ApplicationRoom::new(
+                Arc::clone(&self.room_manager),
+                Arc::clone(&self.diagnostics),
+                self.transport_adapter.clone(),
+            ),
             room_manager: self.room_manager,
-            diagnostics: self.diagnostics,
             metrics: self.metrics,
             transport_adapter: self.transport_adapter,
         })
