@@ -31,7 +31,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct CallRooms {
-    rooms: Arc<RoomManager>,
+    manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     transport_adapter: RuntimeTransportAdapter,
 }
@@ -110,12 +110,12 @@ pub(crate) struct JoinedRoomUser {
 impl CallRooms {
     #[must_use]
     pub(crate) fn new(
-        rooms: Arc<RoomManager>,
+        manager: Arc<RoomManager>,
         diagnostics: Arc<DiagnosticsStore>,
         transport_adapter: RuntimeTransportAdapter,
     ) -> Self {
         Self {
-            rooms,
+            manager,
             diagnostics,
             transport_adapter,
         }
@@ -127,7 +127,7 @@ impl CallRooms {
             recording_address: request.recording_address,
         };
         let room = self
-            .rooms
+            .manager
             .serve_room(
                 request.issuer,
                 request.key,
@@ -142,7 +142,7 @@ impl CallRooms {
 
     pub(crate) async fn disconnect_users(&self, user_ids_by_room: &BTreeMap<String, Vec<UserId>>) {
         for (room_id, user_ids) in user_ids_by_room {
-            self.rooms
+            self.manager
                 .disconnect_users(room_id, user_ids, &self.transport_adapter)
                 .await;
         }
@@ -150,7 +150,7 @@ impl CallRooms {
 
     pub(crate) async fn by_uuid(&self, room_id: &str) -> Option<RoomHandle> {
         Some(RoomHandle {
-            room: self.rooms.get_by_uuid(room_id).await?,
+            room: self.manager.get_by_uuid(room_id).await?,
         })
     }
 
@@ -162,7 +162,7 @@ impl CallRooms {
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
         let user_id = request.user_id.clone();
         let (room, connection_id) = self
-            .rooms
+            .manager
             .join_user(
                 room.uuid(),
                 JoinUserRequest {
@@ -189,13 +189,13 @@ impl CallRooms {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> bool {
-        self.rooms
+        self.manager
             .close_session(room_id, user_id, connection_id, &self.transport_adapter)
             .await
     }
 
     pub(crate) async fn stats(&self) -> Vec<RoomStats> {
-        self.rooms
+        self.manager
             .stats_snapshots(&self.transport_adapter)
             .await
             .into_iter()
@@ -204,11 +204,12 @@ impl CallRooms {
     }
 
     pub(crate) async fn diagnostics_summary(&self) -> DiagnosticsSummaryResponse {
-        diagnostics::summary_response(&self.rooms, &self.transport_adapter, &self.diagnostics).await
+        diagnostics::summary_response(&self.manager, &self.transport_adapter, &self.diagnostics)
+            .await
     }
 
     pub(crate) async fn diagnostics_rooms(&self) -> Vec<DiagnosticsRoomSummary> {
-        diagnostics::rooms_response(&self.rooms, &self.transport_adapter, &self.diagnostics).await
+        diagnostics::rooms_response(&self.manager, &self.transport_adapter, &self.diagnostics).await
     }
 
     pub(crate) async fn diagnostics_room_detail(
@@ -216,7 +217,7 @@ impl CallRooms {
         room_id: &str,
     ) -> Option<DiagnosticsRoomDetail> {
         diagnostics::room_detail_response(
-            &self.rooms,
+            &self.manager,
             &self.transport_adapter,
             &self.diagnostics,
             room_id,
@@ -226,7 +227,7 @@ impl CallRooms {
 
     pub(crate) async fn diagnostics_user_detail(&self, user_id: &str) -> DiagnosticsUserLookup {
         diagnostics::user_detail_response(
-            &self.rooms,
+            &self.manager,
             &self.transport_adapter,
             &self.diagnostics,
             user_id,
