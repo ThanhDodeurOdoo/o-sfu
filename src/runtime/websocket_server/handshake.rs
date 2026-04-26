@@ -12,7 +12,7 @@
 //!    to validate the  client's identity and permissions for the target room.
 //!    (the JWT is signed by the Odoo server that owns the room)
 //!
-//! 3. **Room Admission**: Requests the application room facade to admit the client
+//! 3. **Room Admission**: Requests the core room manager to admit the client
 //!    into the room. This allocates a unique connection ID and sets up the
 //!    outbound message routing queues.
 //!
@@ -28,7 +28,7 @@ use o_sfu_protocol::{
     signaling::{AuthPayload, ClientEnvelope, ClientMessage, WebSocketCloseCode},
 };
 use serde::Deserialize;
-use tokio::time::timeout;
+use tokio::{sync::mpsc, time::timeout};
 use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
@@ -37,8 +37,10 @@ use super::{
     io::send_user_output,
 };
 use crate::{
-    application::rooms::{JoinRoomUserError, JoinRoomUserRequest, JoinedRoomUser, RoomHandle},
-    core::User,
+    core::{
+        User,
+        runtime::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
+    },
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
@@ -60,11 +62,19 @@ struct RoomScopedConnectClaims {
 }
 
 enum HandshakeRoomResolution {
-    ExplicitRoom(RoomHandle),
+    ExplicitRoom(Arc<Room>),
     GlobalClaims {
-        room: RoomHandle,
+        room: Arc<Room>,
         claims: Box<WebSocketConnectClaims>,
     },
+}
+
+struct JoinedUser {
+    room: Arc<Room>,
+    user_id: UserId,
+    connection_id: ConnectionId,
+    outbound_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    user: User,
 }
 
 /// Admit one upgraded socket into an authenticated room user.
@@ -179,7 +189,7 @@ async fn authenticate_handshake_session(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
-) -> Option<(RoomHandle, WebSocketConnectClaims)> {
+) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
     authenticate_session(state, writer, &auth_payload, remote_address).await
 }
@@ -239,7 +249,7 @@ async fn authenticate(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Result<(RoomHandle, WebSocketConnectClaims), WebSocketCloseCode> {
+) -> Result<(Arc<Room>, WebSocketConnectClaims), WebSocketCloseCode> {
     match resolve_handshake_room(state, auth_payload, remote_address).await? {
         HandshakeRoomResolution::ExplicitRoom(room) => {
             let room_id = room.uuid();
@@ -285,27 +295,22 @@ async fn resolve_handshake_room(
 async fn resolve_explicit_room(
     state: &RuntimeState,
     room_id: &str,
-) -> Result<RoomHandle, WebSocketCloseCode> {
-    state
-        .application
-        .rooms()
-        .by_uuid(room_id)
-        .await
-        .ok_or_else(|| {
-            debug!(
-                room_id,
-                "authentication referenced an unknown explicit room"
-            );
-            WebSocketCloseCode::AuthFailed
-        })
+) -> Result<Arc<Room>, WebSocketCloseCode> {
+    state.rooms.get_by_uuid(room_id).await.ok_or_else(|| {
+        debug!(
+            room_id,
+            "authentication referenced an unknown explicit room"
+        );
+        WebSocketCloseCode::AuthFailed
+    })
 }
 
 async fn resolve_global_claims_room(
     state: &RuntimeState,
     claims: &WebSocketConnectClaims,
     _remote_address: &str,
-) -> Result<RoomHandle, WebSocketCloseCode> {
-    let Some(room) = state.application.rooms().by_uuid(&claims.room_id).await else {
+) -> Result<Arc<Room>, WebSocketCloseCode> {
+    let Some(room) = state.rooms.get_by_uuid(&claims.room_id).await else {
         debug!(
             room_id = claims.room_id,
             "verified websocket token referenced a missing room"
@@ -361,7 +366,7 @@ async fn authenticate_session(
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Option<(RoomHandle, WebSocketConnectClaims)> {
+) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
     match authenticate(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
@@ -391,26 +396,41 @@ async fn authenticate_session(
 async fn join_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    room: RoomHandle,
+    room: Arc<Room>,
     claims: WebSocketConnectClaims,
     remote_address: Arc<str>,
-) -> Option<JoinedRoomUser> {
+) -> Option<JoinedUser> {
+    let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
     let user_id = claims.user_id.clone();
     let join_result = state
-        .application
-        .rooms()
+        .rooms
         .join_user(
-            &room,
-            JoinRoomUserRequest {
+            room.uuid(),
+            JoinUserRequest {
                 user_id: user_id.clone(),
                 label: claims.label,
                 permissions: claims.permissions.unwrap_or_default(),
+                sender: outbound_tx,
             },
-            Arc::clone(&remote_address),
+            &state.transport_adapter,
         )
         .await;
     match join_result {
-        Ok(joined_user) => {
+        Ok((room, connection_id)) => {
+            let user = User::new(
+                user_id.clone(),
+                connection_id,
+                Arc::clone(&remote_address),
+                Arc::clone(&room),
+                state.media_core.clone(),
+            );
+            let joined_user = JoinedUser {
+                room,
+                user_id,
+                connection_id,
+                outbound_rx,
+                user,
+            };
             info!(
                 event = telemetry::schema::event::WS_JOIN_SUCCEEDED,
                 connection_id = ?joined_user.connection_id,
@@ -420,8 +440,8 @@ async fn join_user(
         }
         Err(error) => {
             let close_code = match error {
-                JoinRoomUserError::RoomFull => WebSocketCloseCode::RoomFull,
-                JoinRoomUserError::MissingRoom | JoinRoomUserError::RouterState => {
+                RoomManagerJoinError::RoomFull => WebSocketCloseCode::RoomFull,
+                RoomManagerJoinError::MissingRoom | RoomManagerJoinError::RouterState => {
                     WebSocketCloseCode::AuthFailed
                 }
             };
@@ -446,7 +466,7 @@ async fn join_user(
 }
 
 fn record_session_span(
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     remote_address: &str,
@@ -474,7 +494,7 @@ fn record_session_span(
 async fn initialize_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
@@ -521,14 +541,18 @@ async fn initialize_user(
 
 async fn cleanup_failed_session(
     state: &RuntimeState,
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
 ) {
     let _ = state
-        .application
-        .rooms()
-        .remove_user(room.uuid(), user_id, connection_id)
+        .rooms
+        .close_session(
+            room.uuid(),
+            user_id,
+            connection_id,
+            &state.transport_adapter,
+        )
         .await;
 }
 

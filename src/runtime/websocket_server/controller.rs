@@ -17,7 +17,7 @@
 //!    room events to send back to the client.
 //!
 //! 4. **Removal**: When the user loop terminates (due to client disconnect, timeout, or
-//!    protocol error), the connection is cleaned up through the application room facade,
+//!    protocol error), the connection is cleaned up through the core room manager,
 //!    which removes the user from the room and tears down associated media resources.
 
 use std::{net::SocketAddr, sync::Arc};
@@ -37,19 +37,21 @@ use tracing::{Instrument, Span, field, info};
 
 use super::WsWriter;
 use crate::{
-    application::rooms::{RoomHandle, UserOutboundEvent},
-    core::User,
+    core::{
+        User,
+        runtime::room::{Room, UserOutbound},
+    },
     runtime::{ConnectionId, RuntimeState, request_origin::resolve_remote_address, telemetry},
 };
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 
 pub(super) struct ConnectedUser {
-    pub(super) room: RoomHandle,
+    pub(super) room: Arc<Room>,
     pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
     pub(super) remote_address: Arc<str>,
-    pub(super) outbound_rx: mpsc::UnboundedReceiver<UserOutboundEvent>,
+    pub(super) outbound_rx: mpsc::UnboundedReceiver<UserOutbound>,
     pub(super) user: User,
 }
 
@@ -111,7 +113,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         let exit_reason = super::session_loop::run(super::session_loop::UserLoop {
             writer: &mut ws_writer,
             reader: &mut ws_reader,
-            room: &user_session.room,
+            room: user_session.room.as_ref(),
             user_id: &user_session.user_id,
             connection_id: user_session.connection_id,
             outbound_rx: &mut user_session.outbound_rx,
@@ -131,12 +133,12 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         );
         user_session.user.close().await;
         let _ = state
-            .application
-            .rooms()
-            .remove_user(
+            .rooms
+            .close_session(
                 user_session.room.uuid(),
                 &user_session.user_id,
                 user_session.connection_id,
+                &state.transport_adapter,
             )
             .await;
     }

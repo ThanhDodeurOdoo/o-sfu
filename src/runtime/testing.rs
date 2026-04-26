@@ -12,10 +12,11 @@ use tokio::{
 };
 
 use super::{
-    RuntimeState, build_call_application, build_transport_adapter,
+    RuntimeState, build_transport_adapter,
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
+    options::RuntimeOptions,
     packet_sink_registry::RoomPacketSinkRegistry,
     room::{
         ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
@@ -23,7 +24,7 @@ use super::{
     },
     transport_adapter::RuntimeTransportAdapter,
 };
-use crate::{application::program::ProgramOptions, config::Config};
+use crate::{config::Config, core::SfuCore};
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
@@ -167,7 +168,7 @@ impl Drop for TestServer {
 ///
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
-    let options = ProgramOptions::from_config(&config);
+    let options = RuntimeOptions::from_config(&config);
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
@@ -175,8 +176,8 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         RoomManagerConfig::new(
             options.core.routing.media_worker_count,
             RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(options.call.room.max_users),
-                options.call.feature_flags(),
+                RoomAdmissionPolicy::new(options.room.max_users),
+                options.feature_flags(),
                 router_rtp_capabilities(options.core.codecs.flags),
             ),
         ),
@@ -228,11 +229,15 @@ pub(in crate::runtime) fn build_test_runtime_state(
     metrics: Arc<RuntimeMetrics>,
     transport_adapter: RuntimeTransportAdapter,
 ) -> RuntimeState {
-    let options = ProgramOptions::from_config(config);
+    let options = RuntimeOptions::from_config(config);
+    let media_core = SfuCore::new(options.core, transport_adapter.clone());
     RuntimeState {
-        http_options: options.http.clone(),
-        websocket_options: options.websocket.clone(),
-        application: build_call_application(&options, room_manager, diagnostics, transport_adapter),
+        http_options: options.http,
+        websocket_options: options.websocket,
+        rooms: room_manager,
+        diagnostics,
+        transport_adapter,
+        media_core,
         metrics,
     }
 }

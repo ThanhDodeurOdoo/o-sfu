@@ -6,7 +6,6 @@
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! |- application          -> business-facing room orchestration
 //! |- telemetry            -> runtime-owned tracing config and event-name conventions
 //! |- core                 -> room engine, transport adapter, recording, metrics, and diagnostics
 //! `- metrics_export       -> Prometheus export snapshot
@@ -23,18 +22,15 @@ use tokio::{
 use tracing::info;
 
 use crate::{
-    application::{
-        program::{CallApplication, HttpOptions, ProgramOptions, SocketOptions},
-        rooms::CallRooms,
-    },
     config::Config,
-    core::{CoreOptions, SfuCore},
+    core::{CoreOptions, RuntimeSfuCore, SfuCore},
 };
 
 pub(crate) mod auth;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
 mod metrics_export;
+pub(crate) mod options;
 mod request_origin;
 pub(crate) mod telemetry;
 #[cfg(test)]
@@ -52,6 +48,7 @@ pub(crate) use o_sfu_core::{
     ConnectionId, RoomInstanceId,
     runtime::{metrics, packet_sink_registry, recording, room, rtc_adapter, transport_adapter},
 };
+use options::{HttpOptions, RuntimeOptions, SocketOptions};
 use packet_sink_registry::RoomPacketSinkRegistry;
 pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
@@ -68,14 +65,14 @@ pub(crate) use transport_adapter::{
     SessionBitrateLimits,
 };
 
-/// Process-global application shell for the server process.
+/// Process-global shell for the server process.
 ///
 /// `Runtime` owns the long-lived subsystems that every request shares: configuration,
 /// room allocation, metrics,and the transport backend. Per-requets entrypoints take
 /// cheap clones of these dependencies through [`RuntimeState`].
 #[derive(Debug)]
 pub struct Runtime {
-    options: ProgramOptions,
+    options: RuntimeOptions,
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
@@ -86,14 +83,17 @@ pub struct Runtime {
 pub(super) struct RuntimeState {
     http_options: HttpOptions,
     websocket_options: SocketOptions,
-    application: CallApplication,
+    rooms: Arc<RoomManager>,
+    diagnostics: Arc<DiagnosticsStore>,
+    transport_adapter: RuntimeTransportAdapter,
+    media_core: RuntimeSfuCore,
     metrics: Arc<RuntimeMetrics>,
 }
 
 impl Runtime {
     #[must_use]
     pub fn new(config: &Config) -> Self {
-        let options = ProgramOptions::from_config(config);
+        let options = RuntimeOptions::from_config(config);
         let diagnostics = Arc::new(DiagnosticsStore::default());
         let metrics = Arc::new(RuntimeMetrics::default());
         let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
@@ -104,8 +104,8 @@ impl Runtime {
             Arc::clone(&metrics),
         );
         let room_runtime_policy = RoomRuntimePolicy::new(
-            RoomAdmissionPolicy::new(options.call.room.max_users),
-            options.call.feature_flags(),
+            RoomAdmissionPolicy::new(options.room.max_users),
+            options.feature_flags(),
             rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
         );
         info!("{}", config.log_view(process::id()));
@@ -136,15 +136,14 @@ impl Runtime {
             self.transport_adapter.clone(),
         );
         let options = self.options.clone();
+        let media_core = SfuCore::new(options.core, self.transport_adapter.clone());
         let result = serve_http(RuntimeState {
             http_options: options.http.clone(),
             websocket_options: options.websocket.clone(),
-            application: build_call_application(
-                &options,
-                Arc::clone(&self.room_manager),
-                Arc::clone(&self.diagnostics),
-                self.transport_adapter.clone(),
-            ),
+            rooms: Arc::clone(&self.room_manager),
+            diagnostics: Arc::clone(&self.diagnostics),
+            transport_adapter: self.transport_adapter.clone(),
+            media_core,
             metrics: self.metrics,
         })
         .await;
@@ -152,19 +151,6 @@ impl Runtime {
         let _ = source_packet_policy_sync.await;
         result
     }
-}
-
-fn build_call_application(
-    options: &ProgramOptions,
-    room_manager: Arc<RoomManager>,
-    diagnostics: Arc<DiagnosticsStore>,
-    transport_adapter: RuntimeTransportAdapter,
-) -> CallApplication {
-    let media_core = SfuCore::new(options.core, transport_adapter.clone());
-    CallApplication::new(
-        options.call.clone(),
-        CallRooms::new(room_manager, diagnostics, transport_adapter, media_core),
-    )
 }
 
 /// Room state decides which producer layers should remain routable from room-level

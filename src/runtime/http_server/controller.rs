@@ -13,25 +13,22 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
-use crate::{
-    application::{
-        program::HttpOptions,
-        rooms::{RoomStats as ApplicationRoomStats, ServeRoomRequest},
+use crate::runtime::{
+    RuntimeState,
+    auth::{self, HttpDisconnectClaims, HttpRoomClaims},
+    diagnostics,
+    diagnostics::DiagnosticsUserLookup,
+    http_server::contract::{
+        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+        DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
+        RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
     },
-    runtime::{
-        RuntimeState,
-        auth::{self, HttpDisconnectClaims, HttpRoomClaims},
-        diagnostics::DiagnosticsUserLookup,
-        http_server::contract::{
-            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
-            RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
-        },
-        metrics::HttpRoute,
-        metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-        request_origin::{resolve_remote_address, trusted_forwarded_header},
-        telemetry, websocket_server,
-    },
+    metrics::HttpRoute,
+    metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+    options::HttpOptions,
+    request_origin::{resolve_remote_address, trusted_forwarded_header},
+    room::{RoomConfig, RuntimeRoomStatsSnapshot},
+    telemetry, websocket_server,
 };
 
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
@@ -99,9 +96,8 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     async {
         axum::Json(
             state
-                .application
-                .rooms()
-                .stats()
+                .rooms
+                .stats_snapshots(&state.transport_adapter)
                 .await
                 .into_iter()
                 .map(http_room_stats)
@@ -169,22 +165,24 @@ async fn room(
             state.http_options.trust_proxy_headers,
             connect_info.map(|Extension(ConnectInfo(addr))| addr),
         );
+        let room_config = RoomConfig {
+            web_rtc_enabled: query.web_rtc_enabled(),
+            recording_address: query.recording_address,
+        };
         let room = state
-            .application
-            .rooms()
-            .serve(ServeRoomRequest {
+            .rooms
+            .serve_room(
                 issuer,
-                key: claims.key.as_deref(),
-                web_rtc_enabled: query.web_rtc_enabled(),
-                recording_address: query.recording_address,
-                remote_address: Some(remote_address),
-            })
+                claims.key.as_deref(),
+                &room_config,
+                Some(remote_address.as_str()),
+            )
             .await;
         state.metrics.record_http_room_success();
         (
             StatusCode::OK,
             axum::Json(RoomResponse {
-                uuid: room.uuid,
+                uuid: room.uuid().to_owned(),
                 url: request_base_url(&headers, &state.http_options),
             }),
         )
@@ -217,11 +215,12 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
             state.metrics.record_http_disconnect_unprocessable_entity();
             return StatusCode::UNPROCESSABLE_ENTITY.into_response();
         };
-        state
-            .application
-            .rooms()
-            .disconnect_users(&claims.user_ids_by_room)
-            .await;
+        for (room_id, user_ids) in &claims.user_ids_by_room {
+            state
+                .rooms
+                .disconnect_users(room_id, user_ids, &state.transport_adapter)
+                .await;
+        }
         state.metrics.record_http_disconnect_success();
         StatusCode::OK.into_response()
     }
@@ -259,7 +258,15 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        axum::Json(state.application.rooms().diagnostics_summary().await).into_response()
+        axum::Json(
+            diagnostics::summary_response(
+                &state.rooms,
+                &state.transport_adapter,
+                &state.diagnostics,
+            )
+            .await,
+        )
+        .into_response()
     }
     .await
 }
@@ -271,7 +278,11 @@ async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        axum::Json(state.application.rooms().diagnostics_rooms().await).into_response()
+        axum::Json(
+            diagnostics::rooms_response(&state.rooms, &state.transport_adapter, &state.diagnostics)
+                .await,
+        )
+        .into_response()
     }
     .await
 }
@@ -287,11 +298,13 @@ async fn diagnostics_room_detail(
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        let Some(payload) = state
-            .application
-            .rooms()
-            .diagnostics_room_detail(&room_id)
-            .await
+        let Some(payload) = diagnostics::room_detail_response(
+            &state.rooms,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &room_id,
+        )
+        .await
         else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -311,11 +324,13 @@ async fn diagnostics_user_detail(
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
-        match state
-            .application
-            .rooms()
-            .diagnostics_user_detail(&user_id)
-            .await
+        match diagnostics::user_detail_response(
+            &state.rooms,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &user_id,
+        )
+        .await
         {
             DiagnosticsUserLookup::Missing => StatusCode::NOT_FOUND.into_response(),
             DiagnosticsUserLookup::Found(payload) => axum::Json(payload).into_response(),
@@ -357,7 +372,7 @@ fn ensure_diagnostics_access(headers: &HeaderMap, options: &HttpOptions) -> Diag
     }
 }
 
-fn http_room_stats(snapshot: ApplicationRoomStats) -> RoomStatsResponse {
+fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {
     RoomStatsResponse {
         create_date: snapshot.create_date,
         uuid: snapshot.uuid,

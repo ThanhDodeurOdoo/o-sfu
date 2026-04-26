@@ -17,10 +17,10 @@ use tracing::{debug, info, warn};
 
 use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
 use crate::{
-    application::rooms::{
-        RoomHandle, RoomMessageEvent, RoomRequestEvent, UserCloseReasonEvent, UserOutboundEvent,
+    core::{
+        User, UserError, UserOutput, UserSignal,
+        runtime::room::{Room, RoomEventMessage, RoomEventRequest, UserCloseReason, UserOutbound},
     },
-    core::{User, UserError, UserOutput, UserSignal},
     runtime::{
         ConnectionId,
         metrics::{RuntimeMetrics, WsSessionLoopExitReason},
@@ -49,10 +49,10 @@ impl LivenessState {
 pub(super) struct UserLoop<'a> {
     pub(super) writer: &'a mut WsWriter,
     pub(super) reader: &'a mut WsReader,
-    pub(super) room: &'a RoomHandle,
+    pub(super) room: &'a Room,
     pub(super) user_id: &'a UserId,
     pub(super) connection_id: ConnectionId,
-    pub(super) outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutboundEvent>,
+    pub(super) outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
     pub(super) user: &'a mut User,
     pub(super) user_timeout_ms: u64,
     pub(super) ping_interval_ms: u64,
@@ -171,7 +171,7 @@ async fn handle_transport_state_tick(
 )]
 async fn handle_incoming_socket_event(
     writer: &mut WsWriter,
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
@@ -210,7 +210,7 @@ async fn handle_incoming_socket_event(
 )]
 async fn handle_incoming_frame(
     writer: &mut WsWriter,
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
@@ -263,7 +263,7 @@ async fn handle_incoming_frame(
 
 async fn handle_binary_payload(
     writer: &mut WsWriter,
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
@@ -304,7 +304,7 @@ async fn handle_binary_payload(
 
 async fn handle_text_payload(
     writer: &mut WsWriter,
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
@@ -363,7 +363,7 @@ fn record_client_envelope_metrics(metrics: &RuntimeMetrics, envelope: &ClientEnv
 }
 
 async fn dispatch_client_envelope(
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
@@ -400,13 +400,15 @@ async fn dispatch_client_envelope(
 }
 
 async fn start_recording(
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     request_id: RequestId,
     payload: RecordingOptions,
 ) -> UserOutput {
-    let ok = room.start_recording(user_id, connection_id, payload).await;
+    let ok = room
+        .start_recording_runtime(user_id, connection_id, payload)
+        .await;
     info!(
         event = telemetry_event::RECORDING_STARTED,
         operation = "recording_start",
@@ -420,12 +422,12 @@ async fn start_recording(
 }
 
 async fn stop_recording(
-    room: &RoomHandle,
+    room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
     request_id: RequestId,
 ) -> UserOutput {
-    let ok = room.stop_recording(user_id, connection_id).await;
+    let ok = room.stop_recording_runtime(user_id, connection_id).await;
     info!(
         event = telemetry_event::RECORDING_STOPPED,
         operation = "recording_stop",
@@ -440,7 +442,7 @@ async fn stop_recording(
 
 async fn handle_outbound_event(
     writer: &mut WsWriter,
-    outbound: Option<UserOutboundEvent>,
+    outbound: Option<UserOutbound>,
     user: &mut User,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
@@ -458,7 +460,7 @@ async fn handle_outbound_event(
 )]
 async fn handle_outbound_payload(
     writer: &mut WsWriter,
-    outbound: UserOutboundEvent,
+    outbound: UserOutbound,
     user: &mut User,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
@@ -499,19 +501,19 @@ async fn handle_outbound_payload(
 
 async fn dispatch_room_outbound(
     user: &mut User,
-    outbound: UserOutboundEvent,
+    outbound: UserOutbound,
 ) -> Result<UserOutput, WebSocketCloseCode> {
     match outbound {
-        UserOutboundEvent::Close(reason) => Err(map_room_close_reason(reason)),
-        UserOutboundEvent::Message(message) => dispatch_room_message(user, message)
+        UserOutbound::Close(reason) => Err(map_room_close_reason(reason)),
+        UserOutbound::Message(message) => dispatch_room_message(user, message)
             .await
             .map_err(map_user_error),
-        UserOutboundEvent::Request(request) => match *request {
-            RoomRequestEvent::BootstrapRemoteTrack(payload) => {
+        UserOutbound::Request(request) => match *request {
+            RoomEventRequest::BootstrapRemoteTrack(payload) => {
                 user.add_remote_track(payload).await.map_err(map_user_error)
             }
         },
-        UserOutboundEvent::TrackBindingUpdate(update) => user
+        UserOutbound::TrackBindingUpdate(update) => user
             .update_remote_track(update)
             .await
             .map_err(map_user_error),
@@ -520,16 +522,16 @@ async fn dispatch_room_outbound(
 
 async fn dispatch_room_message(
     user: &mut User,
-    message: RoomMessageEvent,
+    message: RoomEventMessage,
 ) -> Result<UserOutput, UserError> {
     match message {
-        RoomMessageEvent::Broadcast { sender_id, message } => {
+        RoomEventMessage::Broadcast { sender_id, message } => {
             user.notify_broadcast(sender_id, message).await
         }
-        RoomMessageEvent::UserJoined { user_id, info } => user.add_remote_user(user_id, info).await,
-        RoomMessageEvent::UserDeparted { user_id } => user.remove_remote_user(user_id).await,
-        RoomMessageEvent::UserInfoChanged(snapshot) => user.update_remote_users(snapshot).await,
-        RoomMessageEvent::RecordingStateChanged(state) => user.update_recording_state(state).await,
+        RoomEventMessage::UserJoined { user_id, info } => user.add_remote_user(user_id, info).await,
+        RoomEventMessage::UserDeparted { user_id } => user.remove_remote_user(user_id).await,
+        RoomEventMessage::UserInfoChanged(snapshot) => user.update_remote_users(snapshot).await,
+        RoomEventMessage::RecordingStateChanged(state) => user.update_recording_state(state).await,
     }
 }
 
@@ -547,11 +549,9 @@ async fn close_writer_if_terminal(writer: &mut WsWriter, code: WebSocketCloseCod
     }
 }
 
-fn map_room_close_reason(reason: UserCloseReasonEvent) -> WebSocketCloseCode {
+fn map_room_close_reason(reason: UserCloseReason) -> WebSocketCloseCode {
     match reason {
-        UserCloseReasonEvent::Replaced | UserCloseReasonEvent::RemovedByRuntime => {
-            WebSocketCloseCode::Kicked
-        }
+        UserCloseReason::Replaced | UserCloseReason::RemovedByRuntime => WebSocketCloseCode::Kicked,
     }
 }
 

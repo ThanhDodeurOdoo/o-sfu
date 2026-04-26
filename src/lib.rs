@@ -1,4 +1,3 @@
-pub mod application;
 pub mod config;
 pub use o_sfu_core as core;
 mod runtime;

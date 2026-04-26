@@ -1,32 +1,18 @@
 use std::net::SocketAddr;
 
 use crate::{
-    application::rooms::CallRooms,
     config::{Config, DiagnosticsConfig, RuntimeFeatureFlags},
     core::{CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions},
     runtime::SessionBitrateLimits,
 };
 
-#[derive(Debug, Clone)]
-pub(crate) struct CallApplication {
-    _options: CallOptions,
-    rooms: CallRooms,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProgramOptions {
-    pub(crate) call: CallOptions,
+pub(crate) struct RuntimeOptions {
+    pub(crate) room: RoomOptions,
+    pub(crate) recording_policy: RecordingPolicyOptions,
     pub(crate) core: CoreOptions,
     pub(crate) http: HttpOptions,
     pub(crate) websocket: SocketOptions,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CallOptions {
-    pub(crate) auth: AuthOptions,
-    pub(crate) room: RoomOptions,
-    pub(crate) user: UserOptions,
-    pub(crate) recording_policy: RecordingPolicyOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,28 +54,25 @@ pub(crate) struct SocketOptions {
     pub(crate) trust_proxy_headers: bool,
 }
 
-impl ProgramOptions {
+impl RuntimeOptions {
     #[must_use]
     pub(crate) fn from_config(config: &Config) -> Self {
-        let call = CallOptions {
-            auth: AuthOptions {
-                key: config.auth_key.clone(),
-                authentication_timeout_ms: config.authentication_timeout_ms,
-            },
-            room: RoomOptions {
-                max_users: config.room_size,
-            },
-            user: UserOptions {
-                timeout_ms: config.user_timeout_ms,
-                ping_interval_ms: config.ping_interval_ms,
-            },
-            recording_policy: RecordingPolicyOptions {
-                audio_enabled: config.feature_flags.audio_recording,
-                video_enabled: config.feature_flags.video_recording,
-                transcription_enabled: config.feature_flags.transcription
-                    && (config.feature_flags.audio_recording
-                        || config.feature_flags.video_recording),
-            },
+        let auth = AuthOptions {
+            key: config.auth_key.clone(),
+            authentication_timeout_ms: config.authentication_timeout_ms,
+        };
+        let room = RoomOptions {
+            max_users: config.room_size,
+        };
+        let user = UserOptions {
+            timeout_ms: config.user_timeout_ms,
+            ping_interval_ms: config.ping_interval_ms,
+        };
+        let recording_policy = RecordingPolicyOptions {
+            audio_enabled: config.feature_flags.audio_recording,
+            video_enabled: config.feature_flags.video_recording,
+            transcription_enabled: config.feature_flags.transcription
+                && (config.feature_flags.audio_recording || config.feature_flags.video_recording),
         };
         let core = CoreOptions::new(
             MediaOptions {
@@ -113,40 +96,24 @@ impl ProgramOptions {
         );
         let http = HttpOptions {
             bind_address: config.bind_address,
-            auth: call.auth.clone(),
+            auth: auth.clone(),
             diagnostics: config.diagnostics.clone(),
             trust_proxy_headers: config.trust_proxy_headers,
         };
         let websocket = SocketOptions {
-            auth: call.auth.clone(),
-            user: call.user,
+            auth,
+            user,
             trust_proxy_headers: config.trust_proxy_headers,
         };
         Self {
-            call,
+            room,
+            recording_policy,
             core,
             http,
             websocket,
         }
     }
-}
 
-impl CallApplication {
-    #[must_use]
-    pub(crate) fn new(options: CallOptions, rooms: CallRooms) -> Self {
-        Self {
-            _options: options,
-            rooms,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn rooms(&self) -> &CallRooms {
-        &self.rooms
-    }
-}
-
-impl CallOptions {
     #[must_use]
     pub(crate) const fn feature_flags(&self) -> RuntimeFeatureFlags {
         RuntimeFeatureFlags {
@@ -161,14 +128,14 @@ impl CallOptions {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use super::ProgramOptions;
+    use super::RuntimeOptions;
     use crate::config::{
         Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
         TelemetryConfig,
     };
 
     #[test]
-    fn program_options_group_config_by_runtime_boundary() {
+    fn runtime_options_group_config_by_runtime_boundary() {
         let config = Config {
             auth_key: "dGVzdC1rZXk=".to_owned(),
             bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
@@ -194,15 +161,15 @@ mod tests {
             rtc_media_worker_count: 4,
         };
 
-        let options = ProgramOptions::from_config(&config);
+        let options = RuntimeOptions::from_config(&config);
 
-        assert_eq!(options.call.auth.key, config.auth_key.as_str());
-        assert_eq!(options.call.room.max_users, 42);
-        assert_eq!(options.call.user.timeout_ms, 7_000);
-        assert!(options.call.recording_policy.transcription_enabled);
-        assert!(options.call.recording_policy.audio_enabled);
-        assert!(!options.call.recording_policy.video_enabled);
-        assert_eq!(options.call.feature_flags(), config.feature_flags);
+        assert_eq!(options.http.auth.key, config.auth_key.as_str());
+        assert_eq!(options.room.max_users, 42);
+        assert_eq!(options.websocket.user.timeout_ms, 7_000);
+        assert!(options.recording_policy.transcription_enabled);
+        assert!(options.recording_policy.audio_enabled);
+        assert!(!options.recording_policy.video_enabled);
+        assert_eq!(options.feature_flags(), config.feature_flags);
         assert_eq!(options.core.media.public_ip, config.public_ip);
         assert_eq!(options.core.media.rtc_port_range, config.rtc_port_range);
         assert_eq!(
@@ -248,11 +215,11 @@ mod tests {
             rtc_media_worker_count: 4,
         };
 
-        let options = ProgramOptions::from_config(&config);
+        let options = RuntimeOptions::from_config(&config);
 
-        assert!(!options.call.recording_policy.transcription_enabled);
+        assert!(!options.recording_policy.transcription_enabled);
         assert_eq!(
-            options.call.feature_flags(),
+            options.feature_flags(),
             RuntimeFeatureFlags {
                 transcription: false,
                 audio_recording: false,
@@ -261,11 +228,11 @@ mod tests {
         );
 
         config.feature_flags.audio_recording = true;
-        let options = ProgramOptions::from_config(&config);
+        let options = RuntimeOptions::from_config(&config);
 
-        assert!(options.call.recording_policy.transcription_enabled);
+        assert!(options.recording_policy.transcription_enabled);
         assert_eq!(
-            options.call.feature_flags(),
+            options.feature_flags(),
             RuntimeFeatureFlags {
                 transcription: true,
                 audio_recording: true,
