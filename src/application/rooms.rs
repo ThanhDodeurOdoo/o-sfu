@@ -37,7 +37,7 @@ pub(crate) struct CallRooms {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CreateRoomRequest<'a> {
+pub(crate) struct ServeRoomRequest<'a> {
     pub(crate) issuer: &'a str,
     pub(crate) key: Option<&'a str>,
     pub(crate) web_rtc_enabled: bool,
@@ -46,7 +46,7 @@ pub(crate) struct CreateRoomRequest<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CreatedRoom {
+pub(crate) struct ServedRoom {
     pub(crate) uuid: String,
 }
 
@@ -121,7 +121,7 @@ impl CallRooms {
         }
     }
 
-    pub(crate) async fn create_or_get(&self, request: CreateRoomRequest<'_>) -> CreatedRoom {
+    pub(crate) async fn serve(&self, request: ServeRoomRequest<'_>) -> ServedRoom {
         let config = RoomConfig {
             web_rtc_enabled: request.web_rtc_enabled,
             recording_address: request.recording_address,
@@ -135,7 +135,7 @@ impl CallRooms {
                 request.remote_address.as_deref(),
             )
             .await;
-        CreatedRoom {
+        ServedRoom {
             uuid: room.uuid().to_owned(),
         }
     }
@@ -183,7 +183,7 @@ impl CallRooms {
         })
     }
 
-    pub(crate) async fn close_user(
+    pub(crate) async fn remove_user(
         &self,
         room_id: &str,
         user_id: &UserId,

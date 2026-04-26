@@ -5,7 +5,6 @@
 //! ```text
 //! http_server
 //! |- controller -> Axum app construction plus route-level parsing/response shaping
-//! `- services   -> auth-aware edge parsing helpers behind the route handlers
 //! ```
 //!
 //! Read this node before the WebSocket path when you need the server's non-streaming
@@ -13,9 +12,7 @@
 
 pub(crate) mod contract;
 mod controller;
-mod services;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use controller::{app, serve_http};
-pub(crate) use services::request_base_url;
+pub(crate) use controller::{app, request_base_url, serve_http};

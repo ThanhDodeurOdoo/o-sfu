@@ -130,7 +130,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         let _ = state
             .application
             .rooms()
-            .close_user(user.room.uuid(), &user.user_id, user.connection_id)
+            .remove_user(user.room.uuid(), &user.user_id, user.connection_id)
             .await;
     }
     .instrument(telemetry::ws_upgrade_span())

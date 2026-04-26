@@ -535,7 +535,7 @@ async fn cleanup_failed_session(
     let _ = state
         .application
         .rooms()
-        .close_user(room.uuid(), user_id, connection_id)
+        .remove_user(room.uuid(), user_id, connection_id)
         .await;
 }
 

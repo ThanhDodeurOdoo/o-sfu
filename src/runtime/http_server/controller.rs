@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, str};
 
 use anyhow::Result;
 use axum::{
@@ -14,23 +14,22 @@ use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
 use crate::{
-    application::{program::HttpOptions, rooms::RoomStats as ApplicationRoomStats},
+    application::{
+        program::HttpOptions,
+        rooms::{RoomStats as ApplicationRoomStats, ServeRoomRequest},
+    },
     runtime::{
         RuntimeState,
+        auth::{self, HttpDisconnectClaims, HttpRoomClaims},
         diagnostics::DiagnosticsUserLookup,
-        http_server::{
-            contract::{
-                CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-                DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH,
-                NoopResponse, RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
-            },
-            services::{
-                CreateRoomContext, CreateRoomError, DisconnectError, authorization_token,
-                disconnect_users, verify_and_get_room,
-            },
+        http_server::contract::{
+            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+            DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
+            RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
         },
         metrics::HttpRoute,
         metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+        request_origin::{resolve_remote_address, trusted_forwarded_header},
         telemetry, websocket_server,
     },
 };
@@ -148,40 +147,48 @@ async fn room(
     Query(query): Query<CreateRoomQuery>,
 ) -> Response {
     async {
-        match verify_and_get_room(
-            &state,
-            CreateRoomContext {
-                headers: &headers,
-                connect_address: connect_info.map(|Extension(ConnectInfo(addr))| addr),
-                query: &query,
-            },
-        )
-        .await
-        {
-            Ok(room) => {
-                state.metrics.record_http_room_success();
-                (
-                    StatusCode::OK,
-                    axum::Json(RoomResponse {
-                        uuid: room.uuid,
-                        url: room.base_url,
-                    }),
-                )
-                    .into_response()
-            }
-            Err(CreateRoomError::Unauthorized) => {
-                state.metrics.record_http_room_unauthorized();
-                StatusCode::UNAUTHORIZED.into_response()
-            }
-            Err(CreateRoomError::Forbidden) => {
-                state.metrics.record_http_room_forbidden();
-                StatusCode::FORBIDDEN.into_response()
-            }
-            Err(CreateRoomError::BadRequest) => {
-                state.metrics.record_http_room_bad_request();
-                StatusCode::BAD_REQUEST.into_response()
-            }
+        let Some(token) = authorization_token(&headers) else {
+            state.metrics.record_http_room_unauthorized();
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.http_options.auth.key) else {
+            state.metrics.record_http_room_unauthorized();
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let Some(issuer) = claims.registered.iss.as_deref() else {
+            state.metrics.record_http_room_forbidden();
+            return StatusCode::FORBIDDEN.into_response();
+        };
+        if query.recording_address.is_some() && claims.key.is_none() {
+            state.metrics.record_http_room_bad_request();
+            return StatusCode::BAD_REQUEST.into_response();
         }
+
+        let remote_address = resolve_remote_address(
+            &headers,
+            state.http_options.trust_proxy_headers,
+            connect_info.map(|Extension(ConnectInfo(addr))| addr),
+        );
+        let room = state
+            .application
+            .rooms()
+            .serve(ServeRoomRequest {
+                issuer,
+                key: claims.key.as_deref(),
+                web_rtc_enabled: query.web_rtc_enabled(),
+                recording_address: query.recording_address,
+                remote_address: Some(remote_address),
+            })
+            .await;
+        state.metrics.record_http_room_success();
+        (
+            StatusCode::OK,
+            axum::Json(RoomResponse {
+                uuid: room.uuid,
+                url: request_base_url(&headers, &state.http_options),
+            }),
+        )
+            .into_response()
     }
     .instrument(telemetry::http_request_span("room"))
     .await
@@ -201,23 +208,48 @@ async fn room(
 )]
 async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
     async {
-        match disconnect_users(state.application.rooms(), &state.http_options, &body).await {
-            Ok(()) => {
-                state.metrics.record_http_disconnect_success();
-                StatusCode::OK.into_response()
-            }
-            Err(DisconnectError::BadRequest) => {
-                state.metrics.record_http_disconnect_bad_request();
-                StatusCode::BAD_REQUEST.into_response()
-            }
-            Err(DisconnectError::UnprocessableEntity) => {
-                state.metrics.record_http_disconnect_unprocessable_entity();
-                StatusCode::UNPROCESSABLE_ENTITY.into_response()
-            }
-        }
+        let Ok(token) = str::from_utf8(&body) else {
+            state.metrics.record_http_disconnect_bad_request();
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.http_options.auth.key)
+        else {
+            state.metrics.record_http_disconnect_unprocessable_entity();
+            return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+        };
+        state
+            .application
+            .rooms()
+            .disconnect_users(&claims.user_ids_by_room)
+            .await;
+        state.metrics.record_http_disconnect_success();
+        StatusCode::OK.into_response()
     }
     .instrument(telemetry::http_request_span("disconnect"))
     .await
+}
+
+fn authorization_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split_once(' ').map(|(_, token)| token))
+}
+
+pub(crate) fn request_base_url(headers: &HeaderMap, options: &HttpOptions) -> String {
+    let scheme =
+        trusted_forwarded_header(headers, options.trust_proxy_headers, "x-forwarded-proto")
+            .unwrap_or("http");
+    let host = trusted_forwarded_header(headers, options.trust_proxy_headers, "x-forwarded-host")
+        .map(str::to_owned)
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| options.bind_address.to_string());
+    format!("{scheme}://{host}")
 }
 
 async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
