@@ -28,7 +28,7 @@ use tracing::info;
 
 use crate::{
     application::{
-        program::{CallApplication, HttpOptions, ProgramOptions, WebSocketOptions},
+        program::{CallApplication, HttpOptions, ProgramOptions, SocketOptions},
         rooms::Room as ApplicationRoom,
     },
     config::Config,
@@ -91,10 +91,12 @@ pub struct Runtime {
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     http_options: HttpOptions,
-    websocket_options: WebSocketOptions,
+    websocket_options: SocketOptions,
+    #[cfg(test)]
     room_manager: Arc<RoomManager>,
     application: CallApplication,
     metrics: Arc<RuntimeMetrics>,
+    #[cfg(test)]
     transport_adapter: RuntimeTransportAdapter,
 }
 
@@ -153,8 +155,10 @@ impl Runtime {
                 Arc::clone(&self.diagnostics),
                 self.transport_adapter.clone(),
             ),
+            #[cfg(test)]
             room_manager: self.room_manager,
             metrics: self.metrics,
+            #[cfg(test)]
             transport_adapter: self.transport_adapter,
         })
         .await;
@@ -172,17 +176,27 @@ fn build_runtime_state(
     transport_adapter: RuntimeTransportAdapter,
 ) -> RuntimeState {
     let options = ProgramOptions::from_config(config);
+    #[cfg(test)]
+    let application_room_manager = Arc::clone(&room_manager);
+    #[cfg(not(test))]
+    let application_room_manager = room_manager;
+    #[cfg(test)]
+    let application_transport_adapter = transport_adapter.clone();
+    #[cfg(not(test))]
+    let application_transport_adapter = transport_adapter;
     RuntimeState {
         http_options: options.http.clone(),
         websocket_options: options.websocket.clone(),
         application: build_call_application(
             &options,
-            Arc::clone(&room_manager),
+            application_room_manager,
             diagnostics,
-            transport_adapter.clone(),
+            application_transport_adapter,
         ),
+        #[cfg(test)]
         room_manager,
         metrics,
+        #[cfg(test)]
         transport_adapter,
     }
 }

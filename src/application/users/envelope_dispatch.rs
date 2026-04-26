@@ -2,14 +2,14 @@ use o_sfu_protocol::{
     shared::{DownloadStates, UserId, UserInfo},
     signaling::{
         ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
-        RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
+        RecordingActionResult, RecordingOptions, RequestId, ServerResponse,
     },
 };
 use tracing::{debug, info, instrument};
 
 use super::{User, flow_state::FlowChange};
 use crate::{
-    application::outcomes::{CallOutcome, UserSignal},
+    application::outcomes::{CallOutcome, UserError, UserSignal},
     runtime::telemetry::schema::event as telemetry_event,
 };
 
@@ -124,10 +124,7 @@ impl User {
         ))
     }
 
-    async fn dispatch_flow_change(
-        &mut self,
-        change: FlowChange,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    async fn dispatch_flow_change(&mut self, change: FlowChange) -> Result<CallOutcome, UserError> {
         match change {
             FlowChange::Publish(stream_type) => self.handle_publish_intent(stream_type).await,
             FlowChange::Unpublish(stream_type) => self.handle_unpublish_intent(stream_type).await,
@@ -145,9 +142,9 @@ impl User {
     pub(super) async fn handle_client_envelope(
         &mut self,
         envelope: ClientEnvelope,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         if self.reject_stale_connection().await {
-            return Err(WebSocketCloseCode::Kicked);
+            return Err(UserError::Kicked);
         }
         match envelope {
             ClientEnvelope::Message(ClientMessage::Info(info)) => {
@@ -191,9 +188,7 @@ impl User {
                 request_id,
                 request: ClientRequest::StopRecording,
             } => Ok(self.handle_stop_recording_request(request_id).await),
-            ClientEnvelope::Message(ClientMessage::Auth(_)) => {
-                Err(WebSocketCloseCode::ProtocolError)
-            }
+            ClientEnvelope::Message(ClientMessage::Auth(_)) => Err(UserError::ProtocolViolation),
         }
     }
 }

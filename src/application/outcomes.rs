@@ -108,6 +108,13 @@ pub enum UserEndReason {
     InternalError,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserError {
+    ProtocolViolation,
+    Kicked,
+    InternalError,
+}
+
 #[cfg(test)]
 mod tests {
     use o_sfu_protocol::{

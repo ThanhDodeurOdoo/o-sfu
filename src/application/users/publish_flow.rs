@@ -4,12 +4,13 @@
 //! staged publish transactions and when renegotiation must happen. The
 //! staged publish lifecycle is in `room/media_transaction.rs`.
 
-use o_sfu_protocol::{shared::StreamType, signaling::WebSocketCloseCode};
+use o_sfu_protocol::shared::StreamType;
 use tracing::{info, instrument};
 
 use super::User;
 use crate::{
-    application::outcomes::CallOutcome, runtime::telemetry::schema::event as telemetry_event,
+    application::outcomes::{CallOutcome, UserError},
+    runtime::telemetry::schema::event as telemetry_event,
 };
 
 impl User {
@@ -26,7 +27,7 @@ impl User {
     pub(super) async fn handle_publish_intent(
         &mut self,
         stream_type: StreamType,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         // If the same stream is already queued or staged, treat the new intent
         // as idempotent. The room transaction layer is strict about one
         // staged publish per `(user, connection, stream_type)`
@@ -68,7 +69,7 @@ impl User {
     pub(super) async fn handle_unpublish_intent(
         &mut self,
         stream_type: StreamType,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         // Queued publish means the stream never staged transport media, so
         // clearing the queued intent is enough.
         if self.flow_state.clear_queued_publish(stream_type) {

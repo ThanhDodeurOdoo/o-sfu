@@ -10,14 +10,14 @@ use tracing::warn;
 use super::{super::WsWriter, frame_codec::send_call_outcome};
 use crate::{
     application::{
-        outcomes::{CallOutcome, UserEndReason},
+        outcomes::{CallOutcome, UserEndReason, UserError},
+        rooms::{RoomHandle, UserCloseReasonEvent, UserOutboundEvent},
         users::{RoomEvent, User, UserIntent},
     },
     core::SfuCore,
     runtime::{
         ConnectionId,
         metrics::RuntimeMetrics,
-        room::{Room, UserCloseReason, UserOutbound},
         websocket_server::{
             ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
         },
@@ -46,7 +46,7 @@ impl SessionProtocol {
         user_id: UserId,
         connection_id: ConnectionId,
         remote_address: Arc<str>,
-        room: Arc<Room>,
+        room: RoomHandle,
         media_core: SfuCore,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
@@ -100,29 +100,32 @@ impl SessionProtocol {
     pub(in crate::runtime::websocket_server) async fn send_outbound(
         &mut self,
         writer: &mut WsWriter,
-        outbound: UserOutbound,
+        outbound: UserOutboundEvent,
     ) -> Result<usize, WebSocketCloseCode> {
         match outbound {
-            UserOutbound::Close(reason) => Err(map_session_close_reason(reason)),
-            UserOutbound::Message(message) => {
+            UserOutboundEvent::Close(reason) => Err(map_session_close_reason(reason)),
+            UserOutboundEvent::Message(message) => {
                 let outcome = self
                     .user
                     .handle_room_event(RoomEvent::Message(message))
-                    .await?;
+                    .await
+                    .map_err(map_user_error)?;
                 send_call_outcome(writer, outcome).await
             }
-            UserOutbound::Request(request) => {
+            UserOutboundEvent::Request(request) => {
                 let outcome = self
                     .user
                     .handle_room_event(RoomEvent::Request(*request))
-                    .await?;
+                    .await
+                    .map_err(map_user_error)?;
                 send_call_outcome(writer, outcome).await
             }
-            UserOutbound::TrackBindingUpdate(update) => {
+            UserOutboundEvent::TrackBindingUpdate(update) => {
                 let outcome = self
                     .user
                     .handle_room_event(RoomEvent::TrackBindingUpdate(update))
-                    .await?;
+                    .await
+                    .map_err(map_user_error)?;
                 send_call_outcome(writer, outcome).await
             }
         }
@@ -197,7 +200,7 @@ impl SessionProtocol {
                 .await
             {
                 Ok(outcome) => call_outcome.extend(outcome),
-                Err(code) => return SocketMessageOutcome::Close(code),
+                Err(error) => return SocketMessageOutcome::Close(map_user_error(error)),
             }
         }
         SocketMessageOutcome::Continue(call_outcome)
@@ -229,8 +232,18 @@ enum SocketMessageOutcome {
     Close(WebSocketCloseCode),
 }
 
-fn map_session_close_reason(reason: UserCloseReason) -> WebSocketCloseCode {
+fn map_session_close_reason(reason: UserCloseReasonEvent) -> WebSocketCloseCode {
     match reason {
-        UserCloseReason::Replaced | UserCloseReason::RemovedByRuntime => WebSocketCloseCode::Kicked,
+        UserCloseReasonEvent::Replaced | UserCloseReasonEvent::RemovedByRuntime => {
+            WebSocketCloseCode::Kicked
+        }
+    }
+}
+
+fn map_user_error(error: UserError) -> WebSocketCloseCode {
+    match error {
+        UserError::ProtocolViolation => WebSocketCloseCode::ProtocolError,
+        UserError::Kicked => WebSocketCloseCode::Kicked,
+        UserError::InternalError => WebSocketCloseCode::Error,
     }
 }

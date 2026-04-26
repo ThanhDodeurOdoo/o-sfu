@@ -7,20 +7,19 @@
 //!    request in the `upgrade` handler. It is then split into a read and write stream
 //!    as a raw, unauthenticated socket.
 //!
-//! 2. **Upgrade to RTC User**: The raw socket is passed to `handshake::establish_session`,
+//! 2. **Upgrade to RTC User**: The raw socket is passed to `handshake::establish_user`,
 //!    where it waits for an `auth` envelope from the client. After JWT validation,
-//!    the connection is admitted into a `Room`. At this point, the connection is upgraded
+//!    the connection is admitted into a room. At this point, the connection is upgraded
 //!    into a full RTC user: a `SessionProtocol` is created to handle WebRTC state, and
-//!    the `TransportAdapter` initializes the backend WebRTC transport resources.
+//!    the application/media core initializes the backend WebRTC transport resources.
 //!
 //! 3. **Steady State**: The connection enters the steady-state `session_loop::run`, continuously
 //!    polling for incoming WebSocket frames to feed the `SessionProtocol` and outbound
 //!    room events to send back to the client.
 //!
 //! 4. **Removal**: When the user loop terminates (due to client disconnect, timeout, or
-//!    protocol error), the connection is cleaned up. The `close_session` method is invoked
-//!    on the `RoomManager`, which removes the user from the room and signasl
-//!    the `TransportAdapter` to tear down the associated WebRTC media resources.
+//!    protocol error), the connection is cleaned up through the application room facade,
+//!    which removes the user from the room and tears down associated media resources.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -38,21 +37,19 @@ use tokio::sync::mpsc;
 use tracing::{Instrument, Span, field, info};
 
 use super::{WsWriter, session_protocol::SessionProtocol};
-use crate::runtime::{
-    ConnectionId, RuntimeState,
-    request_origin::resolve_remote_address,
-    room::{Room, UserOutbound},
-    telemetry,
+use crate::{
+    application::rooms::{RoomHandle, UserOutboundEvent},
+    runtime::{ConnectionId, RuntimeState, request_origin::resolve_remote_address, telemetry},
 };
 
 pub(super) type WsReader = SplitStream<WebSocket>;
 
 pub(super) struct ConnectedSession {
-    pub(super) room: Arc<Room>,
+    pub(super) room: RoomHandle,
     pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
     pub(super) remote_address: Arc<str>,
-    pub(super) outbound_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    pub(super) outbound_rx: mpsc::UnboundedReceiver<UserOutboundEvent>,
     pub(super) session_protocol: SessionProtocol,
 }
 
@@ -96,7 +93,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             telemetry::schema::field::REMOTE_ADDRESS,
             field::display(remote_address.as_ref()),
         );
-        let Some(mut user) = super::handshake::establish_session(
+        let Some(mut user) = super::handshake::establish_user(
             &state,
             &mut ws_writer,
             &mut ws_reader,
@@ -131,13 +128,9 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         );
         user.session_protocol.finish().await;
         let _ = state
-            .room_manager
-            .close_session(
-                user.room.uuid(),
-                &user.user_id,
-                user.connection_id,
-                &state.transport_adapter,
-            )
+            .application
+            .rooms()
+            .close_user(user.room.uuid(), &user.user_id, user.connection_id)
             .await;
     }
     .instrument(telemetry::ws_upgrade_span())

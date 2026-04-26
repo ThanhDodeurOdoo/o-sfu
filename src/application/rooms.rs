@@ -6,15 +6,22 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use o_sfu_protocol::shared::UserId;
+use o_sfu_protocol::{
+    shared::{AvailableFeatures, RecordingState, UserId, UserPermissions},
+    signaling::PeerSnapshot,
+};
+use tokio::sync::mpsc;
 
 use crate::runtime::{
-    DiagnosticsStore, RuntimeTransportAdapter,
+    ConnectionId, DiagnosticsStore, RuntimeTransportAdapter,
     diagnostics::{
         self, DiagnosticsUserLookup,
         types::{DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse},
     },
-    room::{RoomConfig, RoomManager, RuntimeRoomStatsSnapshot},
+    room::{
+        JoinUserRequest, Room as RuntimeRoom, RoomConfig, RoomManager, RoomManagerJoinError,
+        RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -63,6 +70,34 @@ pub(crate) struct IncomingBitrateStats {
     pub(crate) screen: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct RoomHandle {
+    room: Arc<RuntimeRoom>,
+}
+
+pub(crate) type UserOutboundEvent = UserOutbound;
+pub(crate) type UserCloseReasonEvent = UserCloseReason;
+
+pub(crate) struct JoinRoomUserRequest {
+    pub(crate) user_id: UserId,
+    pub(crate) label: Option<String>,
+    pub(crate) permissions: UserPermissions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JoinRoomUserError {
+    MissingRoom,
+    RoomFull,
+    RouterState,
+}
+
+pub(crate) struct JoinedRoomUser {
+    pub(crate) room: RoomHandle,
+    pub(crate) user_id: UserId,
+    pub(crate) connection_id: ConnectionId,
+    pub(crate) outbound_rx: mpsc::UnboundedReceiver<UserOutboundEvent>,
+}
+
 impl Room {
     #[must_use]
     pub(crate) fn new(
@@ -104,6 +139,52 @@ impl Room {
         }
     }
 
+    pub(crate) async fn by_uuid(&self, room_id: &str) -> Option<RoomHandle> {
+        Some(RoomHandle {
+            room: self.rooms.get_by_uuid(room_id).await?,
+        })
+    }
+
+    pub(crate) async fn join_user(
+        &self,
+        room: &RoomHandle,
+        request: JoinRoomUserRequest,
+    ) -> Result<JoinedRoomUser, JoinRoomUserError> {
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let user_id = request.user_id.clone();
+        let (room, connection_id) = self
+            .rooms
+            .join_user(
+                room.uuid(),
+                JoinUserRequest {
+                    user_id: request.user_id,
+                    label: request.label,
+                    permissions: request.permissions,
+                    sender: outbound_tx,
+                },
+                &self.transport_adapter,
+            )
+            .await
+            .map_err(JoinRoomUserError::from)?;
+        Ok(JoinedRoomUser {
+            room: RoomHandle { room },
+            user_id,
+            connection_id,
+            outbound_rx,
+        })
+    }
+
+    pub(crate) async fn close_user(
+        &self,
+        room_id: &str,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> bool {
+        self.rooms
+            .close_session(room_id, user_id, connection_id, &self.transport_adapter)
+            .await
+    }
+
     pub(crate) async fn stats(&self) -> Vec<RoomStats> {
         self.rooms
             .stats_snapshots(&self.transport_adapter)
@@ -142,6 +223,42 @@ impl Room {
             user_id,
         )
         .await
+    }
+}
+
+impl RoomHandle {
+    pub(crate) fn uuid(&self) -> &str {
+        self.room.uuid()
+    }
+
+    pub(crate) fn key(&self) -> Option<&str> {
+        self.room.key()
+    }
+
+    pub(crate) fn available_features(&self) -> AvailableFeatures {
+        self.room.available_features()
+    }
+
+    pub(crate) async fn recording_state(&self) -> RecordingState {
+        self.room.recording_state().await
+    }
+
+    pub(crate) async fn peer_snapshots_except(&self, user_id: &UserId) -> Vec<PeerSnapshot> {
+        self.room.peer_snapshots_except(user_id).await
+    }
+
+    pub(in crate::application) fn into_runtime_room(self) -> Arc<RuntimeRoom> {
+        self.room
+    }
+}
+
+impl From<RoomManagerJoinError> for JoinRoomUserError {
+    fn from(error: RoomManagerJoinError) -> Self {
+        match error {
+            RoomManagerJoinError::MissingRoom => Self::MissingRoom,
+            RoomManagerJoinError::RoomFull => Self::RoomFull,
+            RoomManagerJoinError::RouterState => Self::RouterState,
+        }
     }
 }
 

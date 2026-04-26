@@ -1,6 +1,6 @@
 use o_sfu_protocol::signaling::{
     NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerRequest,
-    SessionDescriptionPayload, WebSocketCloseCode,
+    SessionDescriptionPayload,
 };
 use tracing::{info, instrument, warn};
 
@@ -11,7 +11,7 @@ use super::{
     },
 };
 use crate::{
-    application::outcomes::{CallOutcome, UserSignal},
+    application::outcomes::{CallOutcome, UserError, UserSignal},
     core::{MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot, SfuCoreError},
     runtime::telemetry::schema::event as telemetry_event,
 };
@@ -26,7 +26,7 @@ impl User {
             connection_id = ?self.connection_id
         )
     )]
-    pub(super) async fn send_initial_offer(&mut self) -> Result<CallOutcome, WebSocketCloseCode> {
+    pub(super) async fn send_initial_offer(&mut self) -> Result<CallOutcome, UserError> {
         let (offer, offered_capabilities) = self
             .media_core
             .create_initial_offer(&self.room, &self.id, self.connection_id)
@@ -42,7 +42,7 @@ impl User {
                     ?error,
                     "failed to create initial transport offer"
                 );
-                WebSocketCloseCode::Error
+                UserError::InternalError
             })?;
         info!(
             event = telemetry_event::NEGOTIATION_STARTED,
@@ -88,9 +88,7 @@ impl User {
             connection_id = ?self.connection_id
         )
     )]
-    pub(super) async fn request_renegotiation(
-        &mut self,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    pub(super) async fn request_renegotiation(&mut self) -> Result<CallOutcome, UserError> {
         match self.flow_state.request_renegotiation() {
             RenegotiationDisposition::Skip | RenegotiationDisposition::QueueOnly => {
                 Ok(CallOutcome::new())
@@ -111,10 +109,10 @@ impl User {
         &mut self,
         response_to: RequestId,
         answer: SessionDescriptionPayload,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         self.validate_negotiation_answer(&response_to, &answer)?;
         let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
-            return Err(WebSocketCloseCode::ProtocolError);
+            return Err(UserError::ProtocolViolation);
         };
         self.apply_negotiation_action(&resolved.pending, &answer.sdp, &response_to)
             .await?;
@@ -133,7 +131,7 @@ impl User {
         &self,
         response_to: &RequestId,
         answer: &SessionDescriptionPayload,
-    ) -> Result<(), WebSocketCloseCode> {
+    ) -> Result<(), UserError> {
         if answer.sdp.is_empty() {
             warn!(
                 user_id = ?self.id,
@@ -142,7 +140,7 @@ impl User {
                 ?response_to,
                 "received empty SDP answer for negotiation request"
             );
-            return Err(WebSocketCloseCode::ProtocolError);
+            return Err(UserError::ProtocolViolation);
         }
         Ok(())
     }
@@ -164,7 +162,7 @@ impl User {
     async fn send_follow_up_renegotiation_if_needed(
         &mut self,
         resolved: &ResolvedFlowState,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         let needs_follow_up =
             self.stage_queued_publish_streams().await || resolved.queued_renegotiation;
         if !needs_follow_up {
@@ -178,7 +176,7 @@ impl User {
         pending: &PendingFlowRequest,
         answer_sdp: &str,
         response_to: &RequestId,
-    ) -> Result<(), WebSocketCloseCode> {
+    ) -> Result<(), UserError> {
         let result = match &pending.action {
             PendingFlowAction::EstablishSession {
                 offered_capabilities,
@@ -211,9 +209,7 @@ impl User {
         Ok(())
     }
 
-    async fn create_renegotiation_offer(
-        &self,
-    ) -> Result<Option<MediaNegotiationOffer>, WebSocketCloseCode> {
+    async fn create_renegotiation_offer(&self) -> Result<Option<MediaNegotiationOffer>, UserError> {
         self.media_core
             .create_renegotiation_offer(&self.room, &self.id, self.connection_id)
             .await
@@ -228,7 +224,7 @@ impl User {
                     ?error,
                     "failed to build a staged renegotiation offer"
                 );
-                WebSocketCloseCode::Error
+                UserError::InternalError
             })
     }
 
@@ -313,11 +309,11 @@ fn negotiation_operation_name(action: &PendingFlowAction) -> &'static str {
     }
 }
 
-fn map_core_negotiation_error(error: SfuCoreError) -> WebSocketCloseCode {
+fn map_core_negotiation_error(error: SfuCoreError) -> UserError {
     match error {
-        SfuCoreError::Transport(_) => WebSocketCloseCode::Error,
+        SfuCoreError::Transport(_) => UserError::InternalError,
         SfuCoreError::CapabilityProjection(_)
         | SfuCoreError::UserStateCommitRejected
-        | SfuCoreError::UserStateRefreshRejected => WebSocketCloseCode::ProtocolError,
+        | SfuCoreError::UserStateRefreshRejected => UserError::ProtocolViolation,
     }
 }

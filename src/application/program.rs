@@ -21,7 +21,7 @@ pub(crate) struct ProgramOptions {
     pub(crate) call: CallOptions,
     pub(crate) core: CoreOptions,
     pub(crate) http: HttpOptions,
-    pub(crate) websocket: WebSocketOptions,
+    pub(crate) websocket: SocketOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub(crate) struct HttpOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WebSocketOptions {
+pub(crate) struct SocketOptions {
     pub(crate) auth: AuthOptions,
     pub(crate) user: UserOptions,
     pub(crate) trust_proxy_headers: bool,
@@ -127,7 +127,7 @@ impl ProgramOptions {
             diagnostics: config.diagnostics.clone(),
             trust_proxy_headers: config.trust_proxy_headers,
         };
-        let websocket = WebSocketOptions {
+        let websocket = SocketOptions {
             auth: call.auth.clone(),
             user: call.user,
             trust_proxy_headers: config.trust_proxy_headers,

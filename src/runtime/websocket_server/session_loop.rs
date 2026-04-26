@@ -14,9 +14,9 @@ use super::{
     controller::WsReader,
     session_protocol::{SessionProtocol, SessionProtocolOutcome},
 };
-use crate::runtime::{
-    metrics::{RuntimeMetrics, WsSessionLoopExitReason},
-    room::UserOutbound,
+use crate::{
+    application::rooms::UserOutboundEvent,
+    runtime::metrics::{RuntimeMetrics, WsSessionLoopExitReason},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +43,7 @@ impl LivenessState {
 pub(super) async fn run(
     writer: &mut WsWriter,
     reader: &mut WsReader,
-    outbound_rx: &mut mpsc::UnboundedReceiver<UserOutbound>,
+    outbound_rx: &mut mpsc::UnboundedReceiver<UserOutboundEvent>,
     session_protocol: &mut SessionProtocol,
     user_timeout_ms: u64,
     ping_interval_ms: u64,
@@ -193,7 +193,7 @@ async fn handle_incoming_frame(
 
 async fn handle_outbound_event(
     writer: &mut WsWriter,
-    outbound: Option<UserOutbound>,
+    outbound: Option<UserOutboundEvent>,
     session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
@@ -211,7 +211,7 @@ async fn handle_outbound_event(
 )]
 async fn handle_outbound_payload(
     writer: &mut WsWriter,
-    outbound: UserOutbound,
+    outbound: UserOutboundEvent,
     session_protocol: &mut SessionProtocol,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {

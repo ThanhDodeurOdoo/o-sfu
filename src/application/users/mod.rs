@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use o_sfu_protocol::{
     shared::UserId,
-    signaling::{ClientEnvelope, RequestId, ServerMessage, WebSocketCloseCode},
+    signaling::{ClientEnvelope, RequestId, ServerMessage},
 };
 use tokio::runtime::Handle;
 
@@ -16,7 +16,10 @@ use flow_state::SessionFlowState;
 use track_projection::RemoteTrackProjection;
 
 use crate::{
-    application::outcomes::{CallOutcome, UserEndReason, UserSignal},
+    application::{
+        outcomes::{CallOutcome, UserEndReason, UserError, UserSignal},
+        rooms::RoomHandle,
+    },
     core::{MediaEndpointHealth, SfuCore},
     runtime::{
         ConnectionId,
@@ -72,7 +75,7 @@ impl User {
         user_id: UserId,
         connection_id: ConnectionId,
         remote_address: Arc<str>,
-        room: Arc<Room>,
+        room: RoomHandle,
         media_core: SfuCore,
     ) -> Self {
         Self {
@@ -80,7 +83,7 @@ impl User {
             connection_id,
             remote_address,
             media_core,
-            room,
+            room: room.into_runtime_room(),
             request_ids: ServerRequestIdState::default(),
             flow_state: SessionFlowState::default(),
             track_projection: RemoteTrackProjection::default(),
@@ -97,14 +100,14 @@ impl User {
             })
     }
 
-    pub(crate) async fn bootstrap(&mut self) -> Result<CallOutcome, WebSocketCloseCode> {
+    pub(crate) async fn bootstrap(&mut self) -> Result<CallOutcome, UserError> {
         self.send_initial_offer().await
     }
 
     pub(crate) async fn handle_intent(
         &mut self,
         intent: UserIntent,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         match intent {
             UserIntent::ClientEnvelope(envelope) => self.handle_client_envelope(envelope).await,
         }
@@ -113,7 +116,7 @@ impl User {
     pub(crate) async fn handle_room_event(
         &mut self,
         event: RoomEvent,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         match event {
             RoomEvent::Message(message) => self.handle_room_message(message).await,
             RoomEvent::Request(request) => self.handle_room_request(request).await,
@@ -131,7 +134,7 @@ impl User {
     async fn handle_room_message(
         &mut self,
         message: RoomEventMessage,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         let translated = self.track_projection.translate_server_message(message);
         let mut call_outcome =
             CallOutcome::new().with_signals(translated.messages.into_iter().map(UserSignal::from));
@@ -144,7 +147,7 @@ impl User {
     async fn handle_room_request(
         &mut self,
         request: RoomEventRequest,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         match request {
             RoomEventRequest::BootstrapRemoteTrack(payload) => {
                 self.track_projection.apply_remote_track_bootstrap(&payload);
@@ -159,7 +162,7 @@ impl User {
     async fn handle_track_binding_update(
         &mut self,
         update: TrackBindingUpdate,
-    ) -> Result<CallOutcome, WebSocketCloseCode> {
+    ) -> Result<CallOutcome, UserError> {
         let translated = self
             .track_projection
             .translate_track_binding_update(&update);

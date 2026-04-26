@@ -12,14 +12,14 @@
 //!    to validate the  client's identity and permissions for the target room.
 //!    (the JWT is signed by the Odoo server that owns the room)
 //!
-//! 3. **Room Admission**: Requests the `RoomManager` to admit the client into
-//!    the `Room`. This allocates a unique connection ID and sets up the
+//! 3. **Room Admission**: Requests the application room facade to admit the client
+//!    into the room. This allocates a unique connection ID and sets up the
 //!    outbound message routing queues.
 //!
 //! 4. **User Initialization**: the server send a complete state snapshot
 //!    (the `Welcome` message) back to the client, including the current peers and
-//!    room features. It also initializes the `SessionProtocol`, wich coordinates
-//!    with the `TransportAdapter` to prepare the backend WebRTC transport.
+//!    room features. It also initializes the `SessionProtocol`, which coordinates
+//!    with the media core to prepare the backend WebRTC transport.
 
 use std::{sync::Arc, time::Duration};
 
@@ -33,7 +33,7 @@ use o_sfu_protocol::{
     },
 };
 use serde::Deserialize;
-use tokio::{sync::mpsc, time::timeout};
+use tokio::time::timeout;
 use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
@@ -41,12 +41,14 @@ use super::{
     controller::{ConnectedSession, WsReader},
     session_protocol::SessionProtocol,
 };
-use crate::runtime::{
-    ConnectionId, RuntimeState,
-    auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
-    room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
-    telemetry,
-    websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
+use crate::{
+    application::rooms::{JoinRoomUserError, JoinRoomUserRequest, JoinedRoomUser, RoomHandle},
+    runtime::{
+        ConnectionId, RuntimeState,
+        auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
+        telemetry,
+        websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
+    },
 };
 
 #[derive(Deserialize)]
@@ -62,9 +64,9 @@ struct RoomScopedConnectClaims {
 }
 
 enum HandshakeRoomResolution {
-    ExplicitRoom(Arc<Room>),
+    ExplicitRoom(RoomHandle),
     GlobalClaims {
-        room: Arc<Room>,
+        room: RoomHandle,
         claims: Box<WebSocketConnectClaims>,
     },
 }
@@ -83,7 +85,7 @@ enum HandshakeRoomResolution {
     metrics = "state.metrics",
     record = "record_ws_handshake_duration"
 )]
-pub(super) async fn establish_session(
+pub(super) async fn establish_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
     reader: &mut WsReader,
@@ -91,41 +93,45 @@ pub(super) async fn establish_session(
 ) -> Option<ConnectedSession> {
     let (room, claims) =
         authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
-    let (user_id, outbound_rx, room, connection_id) =
-        join_user(state, writer, room, claims, remote_address.as_ref()).await?;
+    let joined_user = join_user(state, writer, room, claims, remote_address.as_ref()).await?;
     state.metrics.record_ws_user_joined();
-    record_session_span(&room, &user_id, connection_id, remote_address.as_ref());
+    record_session_span(
+        &joined_user.room,
+        &joined_user.user_id,
+        joined_user.connection_id,
+        remote_address.as_ref(),
+    );
     let mut session_protocol = SessionProtocol::new(
-        user_id.clone(),
-        connection_id,
+        joined_user.user_id.clone(),
+        joined_user.connection_id,
         Arc::clone(&remote_address),
-        Arc::clone(&room),
+        joined_user.room.clone(),
         state.application.media_core(),
         Arc::clone(&state.metrics),
     );
     initialize_session(
         state,
         writer,
-        &room,
-        &user_id,
-        connection_id,
+        &joined_user.room,
+        &joined_user.user_id,
+        joined_user.connection_id,
         &mut session_protocol,
         remote_address.as_ref(),
     )
     .instrument(telemetry::activated_span(tracing::info_span!(
         "user.initialize",
-        room_id = %room.uuid(),
-        user_id = ?user_id,
-        connection_id = ?connection_id,
+        room_id = %joined_user.room.uuid(),
+        user_id = ?joined_user.user_id,
+        connection_id = ?joined_user.connection_id,
         remote_address = %remote_address
     )))
     .await?;
     Some(ConnectedSession {
-        room,
-        user_id,
-        connection_id,
+        room: joined_user.room,
+        user_id: joined_user.user_id,
+        connection_id: joined_user.connection_id,
         remote_address,
-        outbound_rx,
+        outbound_rx: joined_user.outbound_rx,
         session_protocol,
     })
 }
@@ -184,7 +190,7 @@ async fn authenticate_handshake_session(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
-) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
+) -> Option<(RoomHandle, WebSocketConnectClaims)> {
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
     authenticate_session(state, writer, &auth_payload, remote_address).await
 }
@@ -244,7 +250,7 @@ async fn authenticate(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Result<(Arc<Room>, WebSocketConnectClaims), WebSocketCloseCode> {
+) -> Result<(RoomHandle, WebSocketConnectClaims), WebSocketCloseCode> {
     match resolve_handshake_room(state, auth_payload, remote_address).await? {
         HandshakeRoomResolution::ExplicitRoom(room) => {
             let room_id = room.uuid();
@@ -290,10 +296,11 @@ async fn resolve_handshake_room(
 async fn resolve_explicit_room(
     state: &RuntimeState,
     room_id: &str,
-) -> Result<Arc<Room>, WebSocketCloseCode> {
+) -> Result<RoomHandle, WebSocketCloseCode> {
     state
-        .room_manager
-        .get_by_uuid(room_id)
+        .application
+        .rooms()
+        .by_uuid(room_id)
         .await
         .ok_or_else(|| {
             debug!(
@@ -308,8 +315,8 @@ async fn resolve_global_claims_room(
     state: &RuntimeState,
     claims: &WebSocketConnectClaims,
     _remote_address: &str,
-) -> Result<Arc<Room>, WebSocketCloseCode> {
-    let Some(room) = state.room_manager.get_by_uuid(&claims.room_id).await else {
+) -> Result<RoomHandle, WebSocketCloseCode> {
+    let Some(room) = state.application.rooms().by_uuid(&claims.room_id).await else {
         debug!(
             room_id = claims.room_id,
             "verified websocket token referenced a missing room"
@@ -365,7 +372,7 @@ async fn authenticate_session(
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
+) -> Option<(RoomHandle, WebSocketConnectClaims)> {
     match authenticate(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
@@ -395,43 +402,36 @@ async fn authenticate_session(
 async fn join_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    room: Arc<Room>,
+    room: RoomHandle,
     claims: WebSocketConnectClaims,
     remote_address: &str,
-) -> Option<(
-    UserId,
-    mpsc::UnboundedReceiver<UserOutbound>,
-    Arc<Room>,
-    ConnectionId,
-)> {
-    let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+) -> Option<JoinedRoomUser> {
     let user_id = claims.user_id.clone();
     let join_result = state
-        .room_manager
+        .application
+        .rooms()
         .join_user(
-            room.uuid(),
-            JoinUserRequest {
+            &room,
+            JoinRoomUserRequest {
                 user_id: user_id.clone(),
                 label: claims.label,
                 permissions: claims.permissions.unwrap_or_default(),
-                sender: outbound_tx,
             },
-            &state.transport_adapter,
         )
         .await;
     match join_result {
-        Ok((room, connection_id)) => {
+        Ok(joined_user) => {
             info!(
                 event = telemetry::schema::event::WS_JOIN_SUCCEEDED,
-                connection_id = ?connection_id,
+                connection_id = ?joined_user.connection_id,
                 "joined websocket user"
             );
-            Some((user_id, outbound_rx, room, connection_id))
+            Some(joined_user)
         }
         Err(error) => {
             let close_code = match error {
-                RoomManagerJoinError::RoomFull => WebSocketCloseCode::RoomFull,
-                RoomManagerJoinError::MissingRoom | RoomManagerJoinError::RouterState => {
+                JoinRoomUserError::RoomFull => WebSocketCloseCode::RoomFull,
+                JoinRoomUserError::MissingRoom | JoinRoomUserError::RouterState => {
                     WebSocketCloseCode::AuthFailed
                 }
             };
@@ -456,7 +456,7 @@ async fn join_user(
 }
 
 fn record_session_span(
-    room: &Room,
+    room: &RoomHandle,
     user_id: &UserId,
     connection_id: ConnectionId,
     remote_address: &str,
@@ -484,7 +484,7 @@ fn record_session_span(
 async fn initialize_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
-    room: &Arc<Room>,
+    room: &RoomHandle,
     user_id: &UserId,
     connection_id: ConnectionId,
     session_protocol: &mut SessionProtocol,
@@ -528,18 +528,14 @@ async fn initialize_session(
 
 async fn cleanup_failed_session(
     state: &RuntimeState,
-    room: &Room,
+    room: &RoomHandle,
     user_id: &UserId,
     connection_id: ConnectionId,
 ) {
     let _ = state
-        .room_manager
-        .close_session(
-            room.uuid(),
-            user_id,
-            connection_id,
-            &state.transport_adapter,
-        )
+        .application
+        .rooms()
+        .close_user(room.uuid(), user_id, connection_id)
         .await;
 }
 
@@ -565,7 +561,11 @@ async fn reject_handshake<T>(
     None
 }
 
-async fn send_welcome(room: &Room, user_id: &UserId, writer: &mut WsWriter) -> Result<(), ()> {
+async fn send_welcome(
+    room: &RoomHandle,
+    user_id: &UserId,
+    writer: &mut WsWriter,
+) -> Result<(), ()> {
     let welcome_payload = ServerMessage::Welcome(WelcomePayload {
         features: room.available_features(),
         recording: room.recording_state().await,
