@@ -24,6 +24,24 @@ updates:
       - "AI"
 
   - package-ecosystem: "cargo"
+    directory: "/core"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "cargo"
+      - "AI"
+
+  - package-ecosystem: "cargo"
+    directory: "/telemetry"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "cargo"
+      - "AI"
+
+  - package-ecosystem: "cargo"
     directory: "/protocol"
     schedule:
       interval: "weekly"
