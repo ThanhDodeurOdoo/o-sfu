@@ -731,9 +731,9 @@ impl Room {
         self.definition.feature_flags()
     }
 
-    /// Merge room state and transport observabillity into diagnostics user views.
+    /// Merge room state and transport observability into diagnostics user views.
     ///
-    /// This is richer than [`Self::session_stats_snapshot`] because it builds a
+    /// This is richer than `session_stats_snapshot` because it builds a
     /// per-user view with transport health and current incoming bitrate.
     pub async fn diagnostics_user_views(
         &self,

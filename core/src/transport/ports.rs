@@ -40,6 +40,21 @@ use crate::{
     },
 };
 
+/// Full transport backend contract required by the media-core facade.
+///
+/// `SfuCore` needs negotiation, media mutation, and read-only transport
+/// observability against the same backend. Code that only needs one concern
+/// should keep depending on the narrower port trait instead.
+pub trait TransportFacade:
+    Clone + MediaPort + NegotiationPort + ObservabilityPort + Send + Sync
+{
+}
+
+impl<T> TransportFacade for T where
+    T: Clone + MediaPort + NegotiationPort + ObservabilityPort + Send + Sync
+{
+}
+
 /// Handles the SDP negotiation lifecycle for a transport user
 #[allow(
     async_fn_in_trait,

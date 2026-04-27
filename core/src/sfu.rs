@@ -4,8 +4,8 @@ use crate::{
     ConnectionId, CoreOptions, MediaRoom,
     runtime::{DownloadStates, StreamType, UserId, UserInfo},
     transport::{
-        AppliedSessionAnswer, MediaPort, NegotiationPort, ObservabilityPort, SessionOffer,
-        SessionUploadEncoding, SessionUploadSlot, TransportAdapterError, TransportSessionHealth,
+        AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
+        TransportAdapterError, TransportFacade, TransportSessionHealth,
     },
 };
 
@@ -54,7 +54,7 @@ pub struct SfuCore<T> {
 
 impl<T> SfuCore<T>
 where
-    T: Clone + MediaPort + NegotiationPort + ObservabilityPort + Send + Sync,
+    T: TransportFacade,
 {
     #[must_use]
     pub fn new(options: CoreOptions, transport_adapter: T) -> Self {

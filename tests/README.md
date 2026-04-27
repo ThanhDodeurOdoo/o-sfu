@@ -54,6 +54,24 @@ Run the enforced policy checks:
 cargo deny check advisories bans sources
 ```
 
+## Public API audit
+
+Install once:
+
+```bash
+cargo install cargo-public-api --locked
+```
+
+Print the current supported and transitional public surface for review:
+
+```bash
+cargo public-api -p o-sfu-core --all-features --simplified
+```
+
+When a change intentionally adds or removes `o-sfu-core` public items, include
+this output or an equivalent diff in the review context and update the
+crate-level API docs when the item is part of the supported front door.
+
 ## UB tests
 
 Install once:

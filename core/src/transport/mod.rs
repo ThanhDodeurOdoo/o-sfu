@@ -2,7 +2,9 @@ mod ports;
 mod source_policy;
 mod types;
 
-pub use ports::{MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort};
+pub use ports::{
+    MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort, TransportFacade,
+};
 pub use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
