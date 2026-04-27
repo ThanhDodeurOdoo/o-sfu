@@ -1,9 +1,12 @@
 use tokio::sync::mpsc;
 
 use super::super::super::{Room, RoomJoinError, UserCleanup, UserOutbound};
-use crate::runtime::{
-    ConnectionId, RecordingOptions, UserId, UserInfo, UserPermissions,
-    transport_adapter::RuntimeTransportAdapter,
+use crate::{
+    UserInfoRefresh,
+    runtime::{
+        ConnectionId, RecordingOptions, UserId, UserInfo, UserPermissions,
+        transport_adapter::RuntimeTransportAdapter,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -149,7 +152,7 @@ impl RoomTestLifecycle<'_> {
                 user_id,
                 connection_id,
                 info,
-                need_refresh,
+                UserInfoRefresh::from_needed(need_refresh),
                 transport_adapter,
             )
             .await;

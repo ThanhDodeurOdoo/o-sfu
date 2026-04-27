@@ -9,8 +9,8 @@ use super::{config::RtcTransportAdapterShardSetConfig, shard_set::RtcTransportAd
 use crate::{
     runtime::RoomInstanceId,
     transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-        ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
+        ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
         ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
         TransportMediaId, TransportSessionHealth, TransportSessionKey,
@@ -244,18 +244,18 @@ impl MediaPort for RuntimeTransportAdapter {
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-        active: bool,
+        activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
         let result = dispatch_transport_backend!(self, |backend| {
             backend
-                .set_producer_active(session_key, transport_media_id, active)
+                .set_producer_active(session_key, transport_media_id, activity.is_active())
                 .await
         });
         if let Err(error) = &result {
             warn!(
                 ?session_key,
                 ?transport_media_id,
-                active,
+                active = activity.is_active(),
                 ?error,
                 "transport adapter failed to update producer activity"
             );
@@ -269,7 +269,7 @@ impl MediaPort for RuntimeTransportAdapter {
         consumer_transport_media_id: TransportMediaId,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        active: bool,
+        activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
         let result = dispatch_transport_backend!(self, |backend| {
             backend
@@ -278,7 +278,7 @@ impl MediaPort for RuntimeTransportAdapter {
                     consumer_transport_media_id,
                     source_session_key,
                     source_transport_media_id,
-                    active,
+                    activity.is_active(),
                 )
                 .await
         });
@@ -288,7 +288,7 @@ impl MediaPort for RuntimeTransportAdapter {
                 ?consumer_transport_media_id,
                 ?source_session_key,
                 ?source_transport_media_id,
-                active,
+                active = activity.is_active(),
                 ?error,
                 "transport adapter failed to update consumer activity"
             );

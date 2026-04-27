@@ -42,7 +42,9 @@ use crate::runtime::{
     ConnectionId, StreamType, UserId,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{AppliedSessionAnswer, MediaPort, ObservabilityPort, TransportMediaId},
+    transport_adapter::{
+        AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort, TransportMediaId,
+    },
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -819,7 +821,7 @@ impl Room {
                 &self
                     .transport_user_key(target.producer_user_id(), target.producer_connection_id()),
                 target.transport_media_id(),
-                false,
+                ConsumerActivity::Inactive,
             )
             .await
             .is_err()

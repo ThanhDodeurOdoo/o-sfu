@@ -4,9 +4,12 @@ use o_sfu_router::{
 use tracing::warn;
 
 use super::super::super::{Room, media_transaction::PendingPublishTransaction};
-use crate::runtime::{
-    ConnectionId, DownloadStates, StreamType, UserId,
-    transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId},
+use crate::{
+    PublicationActivity,
+    runtime::{
+        ConnectionId, DownloadStates, StreamType, UserId,
+        transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -134,7 +137,7 @@ impl RoomTestMedia<'_> {
                 user_id,
                 connection_id,
                 stream_type,
-                active,
+                PublicationActivity::from_active(active),
                 transport_adapter,
             )
             .await;

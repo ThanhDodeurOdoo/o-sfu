@@ -14,12 +14,13 @@ pub use crate::{
     SessionBitrateLimits,
     transport::{
         ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-        ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaPort,
-        NegotiationPort, ObservabilityPort, ReceiverBandwidthSnapshot, SessionOffer, SessionPort,
-        SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
-        SourcePolicyDirtyState, SourcePolicyPort, SourcePolicySignal,
-        SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportResult, TransportSessionKey,
+        ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
+        ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
+        ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SessionUploadEncoding,
+        SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint, SourcePolicyDirtyState,
+        SourcePolicyPort, SourcePolicySignal, SourcePolicyUpdateSubscription,
+        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportResult,
+        TransportSessionKey,
     },
 };
 

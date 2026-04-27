@@ -3,7 +3,8 @@ mod source_policy;
 mod types;
 
 pub use ports::{
-    MediaPort, NegotiationPort, ObservabilityPort, SessionPort, SourcePolicyPort, TransportFacade,
+    ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity, SessionPort,
+    SourcePolicyPort, TransportFacade,
 };
 pub use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,

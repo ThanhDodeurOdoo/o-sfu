@@ -5,11 +5,14 @@ use super::{
     effects::{SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan},
     state::ConsumerBootstrapOrigin,
 };
-use crate::runtime::{
-    ConnectionId, DownloadStates, StreamType, UserId,
-    diagnostics::DiagnosticsEventData,
-    telemetry::schema::event as telemetry_event,
-    transport_adapter::{MediaPort, ObservabilityPort},
+use crate::{
+    PublicationActivity,
+    runtime::{
+        ConnectionId, DownloadStates, StreamType, UserId,
+        diagnostics::DiagnosticsEventData,
+        telemetry::schema::event as telemetry_event,
+        transport_adapter::{MediaPort, ObservabilityPort, ProducerActivity},
+    },
 };
 
 impl Room {
@@ -81,9 +84,10 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: StreamType,
-        active: bool,
+        activity: PublicationActivity,
         media_port: &impl MediaPort,
     ) {
+        let active = activity.is_active();
         let Some(producer_target) = ({
             let state = self.state.read().await;
             state.producer_route_target(user_id, connection_id, stream_type)
@@ -102,7 +106,7 @@ impl Room {
             .set_producer_active(
                 &transport_user_key,
                 outcome.transport_media_id,
-                outcome.active,
+                ProducerActivity::from_active(outcome.active),
             )
             .await
             .is_err()

@@ -55,6 +55,42 @@ impl<T> TransportFacade for T where
 {
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProducerActivity {
+    Active,
+    Inactive,
+}
+
+impl ProducerActivity {
+    #[must_use]
+    pub const fn from_active(active: bool) -> Self {
+        if active { Self::Active } else { Self::Inactive }
+    }
+
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumerActivity {
+    Active,
+    Inactive,
+}
+
+impl ConsumerActivity {
+    #[must_use]
+    pub const fn from_active(active: bool) -> Self {
+        if active { Self::Active } else { Self::Inactive }
+    }
+
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
 /// Handles the SDP negotiation lifecycle for a transport user
 #[allow(
     async_fn_in_trait,
@@ -127,7 +163,7 @@ pub trait MediaPort {
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-        active: bool,
+        activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError>;
 
     async fn set_consumer_active(
@@ -136,7 +172,7 @@ pub trait MediaPort {
         consumer_transport_media_id: TransportMediaId,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        active: bool,
+        activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError>;
 
     async fn set_consumer_packet_gate(

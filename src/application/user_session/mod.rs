@@ -13,8 +13,9 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     core::{
-        MediaEndpointHealth, MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot,
-        RuntimeSfuCore, SfuCoreError,
+        MediaEndpointHealth, MediaNegotiationOffer, MediaSession, MediaUploadEncoding,
+        MediaUploadSlot, PublicationActivity, RuntimeSfuCore, RuntimeTransportAdapter,
+        SfuCoreError, UserInfoRefresh,
     },
     runtime::{
         ConnectionId,
@@ -145,10 +146,15 @@ impl User {
         }
     }
 
+    fn media(&self) -> MediaSession<'_, Room, RuntimeTransportAdapter> {
+        self.media_core
+            .session(self.room.as_ref(), &self.id, self.connection_id)
+    }
+
     #[must_use]
     pub fn disconnect_reason(&self) -> Option<UserDisconnectReason> {
-        self.media_core
-            .endpoint_health(self.room.as_ref(), &self.id, self.connection_id)
+        self.media()
+            .endpoint_health()
             .and_then(|health| match health {
                 MediaEndpointHealth::Disconnected => {
                     Some(UserDisconnectReason::TransportDisconnected)
@@ -169,22 +175,14 @@ impl User {
     }
 
     pub async fn close(&mut self) {
-        self.media_core
-            .rollback_connection_publishes(self.room.as_ref(), &self.id, self.connection_id)
-            .await;
+        self.media().rollback_connection_publishes().await;
         self.cleanup_finished = true;
     }
 
     pub async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        self.media_core
-            .update_user_info(
-                self.room.as_ref(),
-                &self.id,
-                self.connection_id,
-                info,
-                false,
-            )
+        self.media()
+            .update_user_info(info, UserInfoRefresh::NotNeeded)
             .await;
         Ok(UserOutput::new())
     }
@@ -210,31 +208,13 @@ impl User {
     pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         if self.state.negotiation.has_queued_publish(stream_type)
-            || self
-                .media_core
-                .has_staged_publish(
-                    self.room.as_ref(),
-                    &self.id,
-                    self.connection_id,
-                    stream_type,
-                )
-                .await
+            || self.media().has_staged_publish(stream_type).await
         {
             return Ok(UserOutput::new());
         }
-        if self
-            .media_core
-            .is_stream_published(self.room.as_ref(), &self.id, stream_type)
-            .await
-        {
-            self.media_core
-                .set_publication_active(
-                    self.room.as_ref(),
-                    &self.id,
-                    self.connection_id,
-                    stream_type,
-                    true,
-                )
+        if self.media().is_stream_published(stream_type).await {
+            self.media()
+                .set_publication_activity(stream_type, PublicationActivity::Active)
                 .await;
             return Ok(UserOutput::new());
         }
@@ -254,29 +234,11 @@ impl User {
         if self.state.negotiation.clear_queued_publish(stream_type) {
             return Ok(UserOutput::new());
         }
-        if self
-            .media_core
-            .rollback_staged_publish(
-                self.room.as_ref(),
-                &self.id,
-                self.connection_id,
-                stream_type,
-            )
-            .await
-        {
+        if self.media().rollback_staged_publish(stream_type).await {
             let _disposition = self.state.negotiation.request_renegotiation();
             return Ok(UserOutput::new());
         }
-        if !self
-            .media_core
-            .unpublish(
-                self.room.as_ref(),
-                &self.id,
-                self.connection_id,
-                stream_type,
-            )
-            .await
-        {
+        if !self.media().unpublish(stream_type).await {
             return Ok(UserOutput::new());
         }
         self.request_renegotiation().await
@@ -304,14 +266,8 @@ impl User {
             outcome = "request_received",
             "received subscribe intent"
         );
-        self.media_core
-            .update_subscription(
-                self.room.as_ref(),
-                &self.id,
-                self.connection_id,
-                target_user_id,
-                states,
-            )
+        self.media()
+            .update_subscription(target_user_id, states)
             .await;
         info!(
             event = telemetry_event::SUBSCRIBE_SUCCEEDED,
@@ -446,11 +402,8 @@ impl User {
         )
     )]
     async fn create_initial_offer(&mut self) -> Result<UserOutput, UserError> {
-        let (offer, offered_capabilities) = self
-            .media_core
-            .create_initial_offer(self.room.as_ref(), &self.id, self.connection_id)
-            .await
-            .map_err(|error| {
+        let (offer, offered_capabilities) =
+            self.media().create_initial_offer().await.map_err(|error| {
                 warn!(
                     event = telemetry_event::NEGOTIATION_FAILED,
                     operation = "initial_offer_create",
@@ -581,25 +534,12 @@ impl User {
             PendingUserAction::EstablishSession {
                 offered_capabilities,
             } => {
-                self.media_core
-                    .apply_initial_answer(
-                        self.room.as_ref(),
-                        &self.id,
-                        self.connection_id,
-                        answer_sdp,
-                        offered_capabilities,
-                    )
+                self.media()
+                    .apply_initial_answer(answer_sdp, offered_capabilities)
                     .await
             }
             PendingUserAction::RefreshSession => {
-                self.media_core
-                    .apply_renegotiation_answer(
-                        self.room.as_ref(),
-                        &self.id,
-                        self.connection_id,
-                        answer_sdp,
-                    )
-                    .await
+                self.media().apply_renegotiation_answer(answer_sdp).await
             }
         };
         if let Err(error) = result {
@@ -610,8 +550,8 @@ impl User {
     }
 
     async fn create_renegotiation_offer(&self) -> Result<Option<MediaNegotiationOffer>, UserError> {
-        self.media_core
-            .create_renegotiation_offer(self.room.as_ref(), &self.id, self.connection_id)
+        self.media()
+            .create_renegotiation_offer()
             .await
             .map_err(|error| {
                 warn!(
@@ -672,15 +612,7 @@ impl User {
 
     async fn stage_publish_slot(&self, stream_type: StreamType) -> bool {
         let media_kind = media_kind_for_stream_type(stream_type);
-        let staged = self
-            .media_core
-            .stage_publish(
-                self.room.as_ref(),
-                &self.id,
-                self.connection_id,
-                stream_type,
-            )
-            .await;
+        let staged = self.media().stage_publish(stream_type).await;
         if staged {
             info!(
                 event = telemetry_event::PUBLISH_PREPARED,
@@ -736,7 +668,8 @@ impl Drop for User {
         if let Ok(runtime_handle) = Handle::try_current() {
             runtime_handle.spawn(async move {
                 media_core
-                    .rollback_connection_publishes(room.as_ref(), &user_id, connection_id)
+                    .session(room.as_ref(), &user_id, connection_id)
+                    .rollback_connection_publishes()
                     .await;
             });
         }

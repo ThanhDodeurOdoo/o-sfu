@@ -6,10 +6,13 @@
 //!   [`RoutingOptions`], [`CodecOptions`], [`ObservabilityOptions`],
 //!   [`RtcPortRange`], [`SessionBitrateLimits`], [`MediaCodecFlags`], and
 //!   [`RuntimeFeatureFlags`];
-//! - [`SfuCore`], the media facade used by the server application to express
-//!   endpoint health checks, offer/answer negotiation, publication, subscription,
-//!   and cleanup intent;
-//! - [`MediaRoom`], the room bridge implemented by the runtime room engine;
+//! - [`SfuCore`] and its borrow-based [`MediaSession`] handle, used by the
+//!   server application to express endpoint health checks, offer/answer
+//!   negotiation, publication, subscription, and cleanup intent;
+//! - [`MediaRoom`] and [`MediaSessionContext`], the room bridge implemented by
+//!   the runtime room engine;
+//! - semantic media intent types such as [`PublicationActivity`] and
+//!   [`UserInfoRefresh`] for caller-facing control decisions;
 //! - [`RuntimeTransportAdapter`], the production transport backend facade over
 //!   the concrete RTC adapter;
 //! - the transport concern traits in [`transport`], especially
@@ -56,10 +59,10 @@ pub use options::{
     CodecOptions, CoreOptions, MediaCodecFlags, MediaOptions, ObservabilityOptions, RoutingOptions,
     RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits,
 };
-pub use room::MediaRoom;
+pub use room::{MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh};
 pub use runtime::transport_adapter::RuntimeTransportAdapter;
 pub use sfu::{
-    MediaEndpointHealth, MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot,
+    MediaEndpointHealth, MediaNegotiationOffer, MediaSession, MediaUploadEncoding, MediaUploadSlot,
     OfferedMediaCapabilities, SfuCore, SfuCoreError,
 };
 pub use transport::TransportFacade;

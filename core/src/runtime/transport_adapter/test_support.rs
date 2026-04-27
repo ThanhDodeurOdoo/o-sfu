@@ -26,8 +26,8 @@ use crate::transport::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::transport::{
-    MediaPort, NegotiationPort, ObservabilityPort, SessionOffer, SessionPort, SourcePacketGate,
-    SourcePolicyPort, TransportAdapterError,
+    ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
+    SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort, TransportAdapterError,
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -115,9 +115,9 @@ impl MediaPort for FakeWebRtcAdapter {
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-        active: bool,
+        activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        Self::set_producer_active(self, session_key, transport_media_id, active).await
+        Self::set_producer_active(self, session_key, transport_media_id, activity.is_active()).await
     }
 
     async fn set_consumer_active(
@@ -126,7 +126,7 @@ impl MediaPort for FakeWebRtcAdapter {
         consumer_transport_media_id: TransportMediaId,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        active: bool,
+        activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
         Self::set_consumer_active(
             self,
@@ -134,7 +134,7 @@ impl MediaPort for FakeWebRtcAdapter {
             consumer_transport_media_id,
             source_session_key,
             source_transport_media_id,
-            active,
+            activity.is_active(),
         )
         .await
     }

@@ -31,7 +31,7 @@ use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{MediaPort, TransportMediaId},
+    transport_adapter::{ConsumerActivity, MediaPort, TransportMediaId},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -210,7 +210,7 @@ impl SubscriptionEffectPlan {
                         transport_op.producer_connection_id,
                     ),
                     transport_op.source_media,
-                    transport_op.active,
+                    ConsumerActivity::from_active(transport_op.active),
                 )
                 .await
                 .is_err()

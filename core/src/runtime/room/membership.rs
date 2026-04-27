@@ -10,11 +10,14 @@ use super::{
     },
     user_negotiation::UserNegotiationUpdate,
 };
-use crate::runtime::{
-    ConnectionId, UserId, UserInfo, UserPermissions,
-    diagnostics::DiagnosticsEventData,
-    telemetry::schema::event as telemetry_event,
-    transport_adapter::{MediaPort, RuntimeTransportAdapter, SessionPort},
+use crate::{
+    UserInfoRefresh,
+    runtime::{
+        ConnectionId, UserId, UserInfo, UserPermissions,
+        diagnostics::DiagnosticsEventData,
+        telemetry::schema::event as telemetry_event,
+        transport_adapter::{MediaPort, RuntimeTransportAdapter, SessionPort},
+    },
 };
 #[derive(Clone, Copy)]
 pub(in crate::runtime::room) struct UserCleanup<'a> {
@@ -176,14 +179,14 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         info: UserInfo,
-        need_refresh: bool,
+        refresh: UserInfoRefresh,
         transport_adapter: &RuntimeTransportAdapter,
     ) {
         self.update_user_info_with_transport(
             user_id,
             connection_id,
             info,
-            need_refresh,
+            refresh,
             Some(transport_adapter),
         )
         .await;
@@ -194,9 +197,10 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         info: UserInfo,
-        need_refresh: bool,
+        refresh: UserInfoRefresh,
         transport_adapter: Option<&RuntimeTransportAdapter>,
     ) {
+        let need_refresh = refresh.is_needed();
         let outcome = {
             let mut state = self.state.write().await;
             state.apply_presence_update(user_id, connection_id, &info, need_refresh)

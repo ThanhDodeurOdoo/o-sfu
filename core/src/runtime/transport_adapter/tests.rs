@@ -22,7 +22,7 @@ use crate::{
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::{
-            ActiveSpeakerSource, MediaPort, NegotiationPort, ObservabilityPort,
+            ActiveSpeakerSource, ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort,
             RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SessionPort,
             SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
             TransportMediaId, TransportSessionKey, test_support::FakeWebRtcAdapter,
@@ -732,7 +732,7 @@ async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes(
                 remote_consumer_media_id,
                 &source_session,
                 source_media_id,
-                false,
+                ConsumerActivity::Inactive,
             )
             .await
             .is_ok()
@@ -762,7 +762,7 @@ async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes(
                 remote_consumer_media_id,
                 &source_session,
                 source_media_id,
-                true,
+                ConsumerActivity::Active,
             )
             .await
             .is_ok()

@@ -2,7 +2,7 @@ use o_sfu_router::MediaCapabilities;
 
 use super::Room;
 use crate::{
-    MediaRoom,
+    MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh,
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId, UserInfo,
         transport_adapter::RuntimeTransportAdapter,
@@ -25,52 +25,58 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
 
     async fn apply_session_negotiated(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         capabilities: MediaCapabilities,
         media_port: &RuntimeTransportAdapter,
     ) -> bool {
-        self.apply_session_negotiated(user_id, connection_id, capabilities, media_port)
-            .await
+        self.apply_session_negotiated(
+            session.user_id(),
+            session.connection_id(),
+            capabilities,
+            media_port,
+        )
+        .await
     }
 
     async fn apply_session_refreshed(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         media_port: &RuntimeTransportAdapter,
     ) -> bool {
-        self.apply_session_refreshed(user_id, connection_id, media_port)
+        self.apply_session_refreshed(session.user_id(), session.connection_id(), media_port)
             .await
     }
 
     async fn has_staged_publish(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         stream_type: StreamType,
     ) -> bool {
-        self.has_staged_publish(user_id, connection_id, stream_type)
+        self.has_staged_publish(session.user_id(), session.connection_id(), stream_type)
             .await
     }
 
-    async fn is_stream_published(&self, user_id: &UserId, stream_type: StreamType) -> bool {
-        self.is_stream_published(user_id, stream_type).await
+    async fn is_stream_published(
+        &self,
+        session: &MediaSessionContext<'_>,
+        stream_type: StreamType,
+    ) -> bool {
+        self.is_stream_published(session.user_id(), stream_type)
+            .await
     }
 
     async fn set_publication_active(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         stream_type: StreamType,
-        active: bool,
+        activity: PublicationActivity,
         media_port: &RuntimeTransportAdapter,
     ) {
         self.set_publication_active_runtime(
-            user_id,
-            connection_id,
+            session.user_id(),
+            session.connection_id(),
             stream_type,
-            active,
+            activity,
             media_port,
         )
         .await;
@@ -78,15 +84,14 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
 
     async fn update_subscription(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         target_user_id: &UserId,
         states: &DownloadStates,
         media_port: &RuntimeTransportAdapter,
     ) {
         self.update_subscription_runtime(
-            user_id,
-            connection_id,
+            session.user_id(),
+            session.connection_id(),
             target_user_id,
             states,
             media_port,
@@ -96,17 +101,16 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
 
     async fn update_user_info(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         info: UserInfo,
-        need_refresh: bool,
+        refresh: UserInfoRefresh,
         media_port: &RuntimeTransportAdapter,
     ) {
         self.update_user_info_runtime_for_connection(
-            user_id,
-            connection_id,
+            session.user_id(),
+            session.connection_id(),
             info,
-            need_refresh,
+            refresh,
             media_port,
         )
         .await;
@@ -114,46 +118,56 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
 
     async fn stage_publish(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &RuntimeTransportAdapter,
     ) -> bool {
-        self.stage_negotiated_publish(user_id, connection_id, stream_type, media_port)
-            .await
+        self.stage_negotiated_publish(
+            session.user_id(),
+            session.connection_id(),
+            stream_type,
+            media_port,
+        )
+        .await
     }
 
     async fn rollback_staged_publish(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &RuntimeTransportAdapter,
     ) -> bool {
-        self.rollback_staged_publish(user_id, connection_id, stream_type, media_port)
-            .await
+        self.rollback_staged_publish(
+            session.user_id(),
+            session.connection_id(),
+            stream_type,
+            media_port,
+        )
+        .await
     }
 
     async fn rollback_connection_publishes(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         media_port: &RuntimeTransportAdapter,
     ) {
-        self.rollback_staged_publishes_for_connection(user_id, connection_id, media_port)
-            .await;
+        self.rollback_staged_publishes_for_connection(
+            session.user_id(),
+            session.connection_id(),
+            media_port,
+        )
+        .await;
     }
 
     async fn commit_staged_publishes(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         applied_answer: &AppliedSessionAnswer,
         media_port: &RuntimeTransportAdapter,
     ) {
         self.commit_staged_publishes(
-            user_id,
-            connection_id,
+            session.user_id(),
+            session.connection_id(),
             applied_answer,
             media_port,
             media_port,
@@ -163,12 +177,16 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
 
     async fn unpublish(
         &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &RuntimeTransportAdapter,
     ) -> bool {
-        self.unpublish_track(user_id, connection_id, stream_type, media_port)
-            .await
+        self.unpublish_track(
+            session.user_id(),
+            session.connection_id(),
+            stream_type,
+            media_port,
+        )
+        .await
     }
 }
