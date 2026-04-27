@@ -46,6 +46,7 @@ impl RtcTransportAdapterShardSet {
             return Self {
                 primary_shard: Arc::new(RtcTransportAdapter::new(
                     config.adapter_config(),
+                    config.adapter_deps(),
                     Arc::clone(&source_policy_signal),
                 )),
                 extra_shards: Vec::new(),
@@ -57,6 +58,7 @@ impl RtcTransportAdapterShardSet {
             return Self {
                 primary_shard: Arc::new(RtcTransportAdapter::new(
                     config.adapter_config(),
+                    config.adapter_deps(),
                     Arc::clone(&source_policy_signal),
                 )),
                 extra_shards: Vec::new(),
@@ -66,12 +68,14 @@ impl RtcTransportAdapterShardSet {
         Self {
             primary_shard: Arc::new(RtcTransportAdapter::new(
                 &config.shard_config_with_port_range(primary_range),
+                config.adapter_deps(),
                 Arc::clone(&source_policy_signal),
             )),
             extra_shards: shard_ranges
                 .map(|range| {
                     Arc::new(RtcTransportAdapter::new(
                         &config.shard_config_with_port_range(range),
+                        config.adapter_deps(),
                         Arc::clone(&source_policy_signal),
                     ))
                 })

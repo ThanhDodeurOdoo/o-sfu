@@ -10,37 +10,13 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct RtcTransportAdapterConfig {
-    public_ip: IpAddr,
-    bitrate_limits: SessionBitrateLimits,
-    rtc_port_range: RtcPortRange,
-    codec_flags: MediaCodecFlags,
-    diagnostics: Arc<DiagnosticsStore>,
-    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    metrics: Arc<RuntimeMetrics>,
+    pub public_ip: IpAddr,
+    pub bitrate_limits: SessionBitrateLimits,
+    pub rtc_port_range: RtcPortRange,
+    pub codec_flags: MediaCodecFlags,
 }
 
 impl RtcTransportAdapterConfig {
-    #[must_use]
-    pub fn new(
-        public_ip: IpAddr,
-        bitrate_limits: SessionBitrateLimits,
-        rtc_port_range: RtcPortRange,
-        codec_flags: MediaCodecFlags,
-        diagnostics: Arc<DiagnosticsStore>,
-        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-        metrics: Arc<RuntimeMetrics>,
-    ) -> Self {
-        Self {
-            public_ip,
-            bitrate_limits,
-            rtc_port_range,
-            codec_flags,
-            diagnostics,
-            packet_sink_registry,
-            metrics,
-        }
-    }
-
     #[must_use]
     pub(super) fn with_rtc_port_range(&self, rtc_port_range: RtcPortRange) -> Self {
         Self {
@@ -48,9 +24,6 @@ impl RtcTransportAdapterConfig {
             bitrate_limits: self.bitrate_limits,
             rtc_port_range,
             codec_flags: self.codec_flags,
-            diagnostics: Arc::clone(&self.diagnostics),
-            packet_sink_registry: Arc::clone(&self.packet_sink_registry),
-            metrics: Arc::clone(&self.metrics),
         }
     }
 
@@ -77,7 +50,16 @@ impl RtcTransportAdapterConfig {
     pub const fn codec_flags(&self) -> MediaCodecFlags {
         self.codec_flags
     }
+}
 
+#[derive(Debug, Clone)]
+pub struct RtcTransportAdapterDeps {
+    pub diagnostics: Arc<DiagnosticsStore>,
+    pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
+    pub metrics: Arc<RuntimeMetrics>,
+}
+
+impl RtcTransportAdapterDeps {
     #[must_use]
     pub fn packet_sink_registry(&self) -> Arc<RoomPacketSinkRegistry> {
         Arc::clone(&self.packet_sink_registry)
@@ -96,37 +78,22 @@ impl RtcTransportAdapterConfig {
 
 #[derive(Debug, Clone)]
 pub struct RtcTransportAdapterShardSetConfig {
-    worker_count: usize,
-    adapter: RtcTransportAdapterConfig,
+    pub worker_count: usize,
+    pub transport: RtcTransportAdapterConfig,
+    pub deps: RtcTransportAdapterDeps,
 }
 
 impl RtcTransportAdapterShardSetConfig {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "transport shard-set construction keeps network, codec, and shared runtime services explicit"
-    )]
     #[must_use]
     pub fn new(
-        public_ip: IpAddr,
-        bitrate_limits: SessionBitrateLimits,
-        rtc_port_range: RtcPortRange,
+        transport: RtcTransportAdapterConfig,
+        deps: RtcTransportAdapterDeps,
         worker_count: usize,
-        codec_flags: MediaCodecFlags,
-        diagnostics: Arc<DiagnosticsStore>,
-        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-        metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
             worker_count,
-            adapter: RtcTransportAdapterConfig::new(
-                public_ip,
-                bitrate_limits,
-                rtc_port_range,
-                codec_flags,
-                diagnostics,
-                packet_sink_registry,
-                metrics,
-            ),
+            transport,
+            deps,
         }
     }
 
@@ -137,7 +104,12 @@ impl RtcTransportAdapterShardSetConfig {
 
     #[must_use]
     pub(super) fn adapter_config(&self) -> &RtcTransportAdapterConfig {
-        &self.adapter
+        &self.transport
+    }
+
+    #[must_use]
+    pub(super) fn adapter_deps(&self) -> &RtcTransportAdapterDeps {
+        &self.deps
     }
 
     #[must_use]
@@ -145,6 +117,6 @@ impl RtcTransportAdapterShardSetConfig {
         &self,
         rtc_port_range: RtcPortRange,
     ) -> RtcTransportAdapterConfig {
-        self.adapter.with_rtc_port_range(rtc_port_range)
+        self.transport.with_rtc_port_range(rtc_port_range)
     }
 }

@@ -44,8 +44,8 @@ use crate::{
         packet_sink_registry::RoomPacketSinkRegistry,
         transport_adapter::{
             AppliedSessionAnswer, ConsumerPacketGateUpdate, RtcTransportAdapterConfig,
-            SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
-            TransportMediaId, TransportResult, TransportSessionKey,
+            RtcTransportAdapterDeps, SessionOffer, SourcePacketGate, SourcePolicySignal,
+            TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
         },
     },
 };
@@ -112,6 +112,7 @@ pub struct RtcTransportObservabilityFacade<'a> {
 impl RtcTransportAdapter {
     pub fn new(
         config: &RtcTransportAdapterConfig,
+        deps: &RtcTransportAdapterDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
     ) -> Self {
         Self {
@@ -123,11 +124,11 @@ impl RtcTransportAdapter {
             max_bitrate_out_bps: config.max_bitrate_out_bps(),
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
-            diagnostics: config.diagnostics(),
-            packet_sink_registry: config.packet_sink_registry(),
+            diagnostics: deps.diagnostics(),
+            packet_sink_registry: deps.packet_sink_registry(),
             relay_registry: Arc::new(RelayRegistry::default()),
             source_policy_signal,
-            metrics: config.metrics(),
+            metrics: deps.metrics(),
             worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
         }
     }

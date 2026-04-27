@@ -33,8 +33,9 @@ pub(super) use crate::{
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
         transport_adapter::{
-            ActiveSpeakerSource, RtcTransportAdapterConfig, SessionBitrateLimits, SessionOffer,
-            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
+            SessionBitrateLimits, SessionOffer, SourcePolicySignal, TransportAdapterError,
+            TransportMediaId, TransportSessionKey,
         },
     },
 };
@@ -99,15 +100,17 @@ fn rtc_adapter_for_test(
     codec_flags: MediaCodecFlags,
 ) -> RtcTransportAdapter {
     RtcTransportAdapter::new(
-        &RtcTransportAdapterConfig::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
-            RtcPortRange::new(40_000, 49_999),
+        &RtcTransportAdapterConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
+            rtc_port_range: RtcPortRange::new(40_000, 49_999),
             codec_flags,
-            Arc::new(DiagnosticsStore::default()),
-            Arc::new(MediaTap::default()),
-            Arc::new(RuntimeMetrics::default()),
-        ),
+        },
+        &RtcTransportAdapterDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(MediaTap::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        },
         Arc::new(SourcePolicySignal::default()),
     )
 }

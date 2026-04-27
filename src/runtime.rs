@@ -59,8 +59,8 @@ use telemetry::init_tracing;
 use transport_adapter::SourcePolicyPort;
 pub use transport_adapter::TransportSessionKey;
 pub(crate) use transport_adapter::{
-    MediaPort, ObservabilityPort, RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
-    SessionBitrateLimits,
+    MediaPort, ObservabilityPort, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
+    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
 };
 
 /// Process-global shell for the server process.
@@ -88,40 +88,41 @@ pub(super) struct RuntimeState {
     metrics: Arc<RuntimeMetrics>,
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeDeps {
+    diagnostics: Arc<DiagnosticsStore>,
+    metrics: Arc<RuntimeMetrics>,
+    recording_media_tap: Arc<MediaTap>,
+}
+
+impl Default for RuntimeDeps {
+    fn default() -> Self {
+        Self {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+            recording_media_tap: Arc::new(RoomPacketSinkRegistry::default()),
+        }
+    }
+}
+
 impl Runtime {
     #[must_use]
     pub fn new(config: &Config) -> Self {
         let options = RuntimeOptions::from_config(config);
-        let diagnostics = Arc::new(DiagnosticsStore::default());
-        let metrics = Arc::new(RuntimeMetrics::default());
-        let recording_media_tap = Arc::new(RoomPacketSinkRegistry::default());
-        let transport_adapter = build_transport_adapter(
-            &options.core,
-            Arc::clone(&diagnostics),
-            Arc::clone(&recording_media_tap),
-            Arc::clone(&metrics),
-        );
-        let room_runtime_policy = RoomRuntimePolicy::new(
-            RoomAdmissionPolicy::new(options.room.max_users),
-            options.feature_flags(),
-            rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
-        );
+        let deps = RuntimeDeps::default();
+        let transport_adapter = build_transport_adapter(&options.core, &deps);
+        let room_runtime_policy = build_room_runtime_policy(&options);
         info!("{}", config.log_view(process::id()));
         info!(
             event = telemetry::schema::event::RUNTIME_BOOT,
             "runtime configuration loaded"
         );
-        let room_manager = Arc::new(RoomManager::new(
-            RoomManagerConfig::new(options.core.routing.media_worker_count, room_runtime_policy),
-            recording_media_tap,
-            Arc::clone(&diagnostics),
-            Arc::clone(&metrics),
-        ));
+        let room_manager = build_room_manager(&options, room_runtime_policy, &deps);
         Self {
             options,
             room_manager,
-            diagnostics,
-            metrics,
+            diagnostics: deps.diagnostics,
+            metrics: deps.metrics,
             transport_adapter,
         }
     }
@@ -232,21 +233,41 @@ async fn sync_source_packet_selection_policies(
         .await;
 }
 
-fn build_transport_adapter(
-    options: &CoreOptions,
-    diagnostics: Arc<DiagnosticsStore>,
-    recording_media_tap: Arc<MediaTap>,
-    metrics: Arc<RuntimeMetrics>,
-) -> RuntimeTransportAdapter {
+fn build_transport_adapter(options: &CoreOptions, deps: &RuntimeDeps) -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        options.media.public_ip,
-        options.media.bitrate_limits,
-        options.media.rtc_port_range,
+        RtcTransportAdapterConfig {
+            public_ip: options.media.public_ip,
+            bitrate_limits: options.media.bitrate_limits,
+            rtc_port_range: options.media.rtc_port_range,
+            codec_flags: options.codecs.flags,
+        },
+        RtcTransportAdapterDeps {
+            diagnostics: Arc::clone(&deps.diagnostics),
+            packet_sink_registry: Arc::clone(&deps.recording_media_tap),
+            metrics: Arc::clone(&deps.metrics),
+        },
         options.routing.media_worker_count,
-        options.codecs.flags,
-        diagnostics,
-        recording_media_tap,
-        metrics,
+    ))
+}
+
+fn build_room_runtime_policy(options: &RuntimeOptions) -> RoomRuntimePolicy {
+    RoomRuntimePolicy::new(
+        RoomAdmissionPolicy::new(options.room.max_users),
+        options.feature_flags(),
+        rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
+    )
+}
+
+fn build_room_manager(
+    options: &RuntimeOptions,
+    runtime_policy: RoomRuntimePolicy,
+    deps: &RuntimeDeps,
+) -> Arc<RoomManager> {
+    Arc::new(RoomManager::new(
+        RoomManagerConfig::new(options.core.routing.media_worker_count, runtime_policy),
+        Arc::clone(&deps.recording_media_tap),
+        Arc::clone(&deps.diagnostics),
+        Arc::clone(&deps.metrics),
     ))
 }
 

@@ -41,7 +41,8 @@ pub(super) use crate::{
         },
         testing::{build_test_runtime_state, decode_protocol_welcome_batch},
         transport_adapter::{
-            RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+            RtcTransportAdapterConfig, RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig,
+            RuntimeTransportAdapter, SessionBitrateLimits,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         },
     },
@@ -236,14 +237,18 @@ pub(super) async fn spawn_test_server_with_feature_flags(
 
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        SessionBitrateLimits::new(8_000_000, 10_000_000),
-        RtcPortRange::new(47_200, 47_299),
+        RtcTransportAdapterConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            rtc_port_range: RtcPortRange::new(47_200, 47_299),
+            codec_flags: MediaCodecFlags::default(),
+        },
+        RtcTransportAdapterDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(MediaTap::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        },
         1,
-        MediaCodecFlags::default(),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::new(MediaTap::default()),
-        Arc::new(RuntimeMetrics::default()),
     ))
 }
 

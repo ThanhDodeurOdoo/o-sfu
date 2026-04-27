@@ -23,9 +23,10 @@ use crate::{
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::{
             ActiveSpeakerSource, ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort,
-            RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SessionPort,
-            SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
-            TransportMediaId, TransportSessionKey, test_support::FakeWebRtcAdapter,
+            RtcTransportAdapterConfig, RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig,
+            SessionBitrateLimits, SessionOffer, SessionPort, SourcePolicyPort,
+            SourcePolicyUpdateSubscription, TransportAdapterError, TransportMediaId,
+            TransportSessionKey, test_support::FakeWebRtcAdapter,
         },
     },
 };
@@ -181,16 +182,27 @@ async fn assert_remote_route_activity(
 }
 
 fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        SessionBitrateLimits::new(8_000_000, 10_000_000),
-        rtc_port_range,
+    RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(worker_count, rtc_port_range))
+}
+
+fn test_rtc_shard_set_config(
+    worker_count: usize,
+    rtc_port_range: RtcPortRange,
+) -> RtcTransportAdapterShardSetConfig {
+    RtcTransportAdapterShardSetConfig::new(
+        RtcTransportAdapterConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            rtc_port_range,
+            codec_flags: MediaCodecFlags::default(),
+        },
+        RtcTransportAdapterDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(MediaTap::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        },
         worker_count,
-        MediaCodecFlags::default(),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::new(MediaTap::default()),
-        Arc::new(RuntimeMetrics::default()),
-    ))
+    )
 }
 
 fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
@@ -305,15 +317,9 @@ async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
 
 #[test]
 fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
-    let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        SessionBitrateLimits::new(8_000_000, 10_000_000),
-        RtcPortRange::new(46_100, 46_199),
+    let adapter = RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(
         1,
-        MediaCodecFlags::default(),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::new(MediaTap::default()),
-        Arc::new(RuntimeMetrics::default()),
+        RtcPortRange::new(46_100, 46_199),
     ));
 
     let projected = adapter.negotiated_client_rtp_capabilities(
@@ -326,15 +332,9 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
 
 #[tokio::test]
 async fn rtc_adapter_shards_room_bootstrap_by_explicit_media_worker() {
-    let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        SessionBitrateLimits::new(8_000_000, 10_000_000),
-        RtcPortRange::new(46_000, 46_003),
+    let adapter = RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(
         2,
-        MediaCodecFlags::default(),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::new(MediaTap::default()),
-        Arc::new(RuntimeMetrics::default()),
+        RtcPortRange::new(46_000, 46_003),
     ));
     let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
@@ -513,15 +513,9 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
 
 #[tokio::test]
 async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
-    let adapter = RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        SessionBitrateLimits::new(8_000_000, 10_000_000),
-        RtcPortRange::new(46_300, 46_599),
+    let adapter = RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(
         3,
-        MediaCodecFlags::default(),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::new(MediaTap::default()),
-        Arc::new(RuntimeMetrics::default()),
+        RtcPortRange::new(46_300, 46_599),
     ));
     let source_session = test_session_key(30, 0, 1, UserId::Integer(1));
     let first_consumer_session = test_session_key(30, 1, 2, UserId::Integer(2));

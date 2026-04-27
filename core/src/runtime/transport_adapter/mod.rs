@@ -7,7 +7,9 @@ mod shard_set;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
 
-pub use config::{RtcTransportAdapterConfig, RtcTransportAdapterShardSetConfig};
+pub use config::{
+    RtcTransportAdapterConfig, RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig,
+};
 pub use runtime_adapter::RuntimeTransportAdapter;
 
 pub use crate::{
