@@ -66,6 +66,10 @@ pub(crate) fn app(state: RuntimeState) -> Router {
             get(diagnostics_room_detail),
         )
         .route(
+            "/internal/diagnostics/node-graph/channels/{uuid}",
+            get(diagnostics_room_graph),
+        )
+        .route(
             "/internal/diagnostics/users/{id}",
             get(diagnostics_user_detail),
         )
@@ -309,6 +313,33 @@ async fn diagnostics_room_detail(
             return StatusCode::NOT_FOUND.into_response();
         };
         axum::Json(payload).into_response()
+    }
+    .await
+}
+
+async fn diagnostics_room_graph(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(room_id): Path<String>,
+) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        let Some(payload) = diagnostics::room_detail_response(
+            &state.rooms,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &room_id,
+        )
+        .await
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let graph = diagnostics::build_graph(&payload);
+        axum::Json(graph).into_response()
     }
     .await
 }
