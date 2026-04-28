@@ -9,6 +9,8 @@
 //! - [`SfuCore`] and its borrow-based [`MediaSession`] handle, used by the
 //!   server application to express endpoint health checks, offer/answer
 //!   negotiation, publication, subscription, and cleanup intent;
+//! - [`NegotiationOffer`], [`UploadSlot`], and [`UploadEncoding`], the
+//!   transport-neutral negotiation vocabulary exposed by the core front door;
 //! - [`MediaRoom`] and [`MediaSessionContext`], the room bridge implemented by
 //!   the runtime room engine;
 //! - semantic media intent types such as [`PublicationActivity`] and
@@ -23,13 +25,39 @@
 //!   [`runtime::metrics`], which remain part of the current server integration
 //!   contract.
 //!
-//! The broad [`runtime`] module and the standalone [`signals`] vocabulary are
-//! still public because the server crate and integration tests consume them
-//! directly. Treat those modules as transitional internals unless a type is
-//! re-exported at the crate root or explicitly documented by its module as a
-//! supported extension point. New public items should first fit the front door
-//! above; otherwise they need an architecture note explaining why they are
+//! The broad [`runtime`] module is still public because the server crate and
+//! integration tests consume it directly. Treat it as transitional internals
+//! unless a type is re-exported at the crate root or explicitly documented by
+//! its module as a supported extension point. The older media-signal vocabulary
+//! has moved under [`unstable::signals`] because it is not the current server
+//! orchestration path. New public items should first fit the front door above;
+//! otherwise they need an architecture note explaining why they are
 //! intentionally exposed.
+//!
+//! # Server-facing example
+//!
+//! ```rust,no_run
+//! use o_sfu_core::{CoreOptions, RuntimeSfuCore, RuntimeTransportAdapter};
+//! use o_sfu_core::runtime::room::Room;
+//! use o_sfu_core::runtime::UserId;
+//! use o_sfu_core::ConnectionId;
+//!
+//! async fn create_offer(
+//!     core: &RuntimeSfuCore,
+//!     room: &Room,
+//!     user_id: &UserId,
+//!     connection_id: ConnectionId,
+//! ) -> Result<(), o_sfu_core::SfuCoreError> {
+//!     let session = core.session(room, user_id, connection_id);
+//!     let (offer, capabilities) = session.create_initial_offer().await?;
+//!     session.apply_initial_answer(&offer.sdp, &capabilities).await?;
+//!     Ok(())
+//! }
+//!
+//! fn build_core(options: CoreOptions, transport: RuntimeTransportAdapter) -> RuntimeSfuCore {
+//!     RuntimeSfuCore::new(options, transport)
+//! }
+//! ```
 //!
 //! `o-sfu-core` keeps the core transport backend generic for tests and future
 //! adapters, but normal server application code should use [`RuntimeSfuCore`]
@@ -51,8 +79,20 @@ mod options;
 mod room;
 pub mod runtime;
 mod sfu;
-pub mod signals;
 pub mod transport;
+
+mod signals;
+
+pub mod unstable {
+    //! Unstable media-core surfaces with no compatibility guarantee yet.
+    //!
+    //! These names remain available for experiments and migration work, but
+    //! they are not part of the supported `o-sfu-core` front door.
+
+    pub mod signals {
+        pub use crate::signals::*;
+    }
+}
 
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
@@ -62,9 +102,14 @@ pub use options::{
 pub use room::{MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh};
 pub use runtime::transport_adapter::RuntimeTransportAdapter;
 pub use sfu::{
-    MediaEndpointHealth, MediaNegotiationOffer, MediaSession, MediaUploadEncoding, MediaUploadSlot,
-    OfferedMediaCapabilities, SfuCore, SfuCoreError,
+    MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,
+    SfuCoreError, UploadEncoding, UploadSlot,
 };
+#[allow(
+    deprecated,
+    reason = "The aliases are intentionally re-exported for one migration cycle."
+)]
+pub use sfu::{MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot};
 pub use transport::TransportFacade;
 
 pub type RuntimeSfuCore = SfuCore<RuntimeTransportAdapter>;

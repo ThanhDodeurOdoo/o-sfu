@@ -121,6 +121,84 @@ test("wrapped protocol core rejects malformed host commands", () => {
     );
 });
 
+test("wrapped protocol core requires initial negotiation after peer connection creation", () => {
+    const core = wrapProtocolCoreBindings(
+        validCore({
+            onWsMessage() {
+                return [
+                    {
+                        kind: "applyNegotiation",
+                        requestId: "offer-1",
+                        negotiationKind: NEGOTIATION_KIND.OFFER,
+                        sdp: "v=0\r\n",
+                        uploadSlots: []
+                    }
+                ];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => core.onWsMessage("offer"),
+        "protocol core onWsMessage() command #0 initial negotiation must immediately follow createPeerConnection"
+    );
+});
+
+test("wrapped protocol core rejects peer connection recreation during renegotiation", () => {
+    const core = wrapProtocolCoreBindings(
+        validCore({
+            onWsMessage() {
+                return [
+                    { kind: "createPeerConnection" },
+                    {
+                        kind: "applyNegotiation",
+                        requestId: "renegotiate-1",
+                        negotiationKind: NEGOTIATION_KIND.RENEGOTIATE,
+                        sdp: "v=0\r\n",
+                        uploadSlots: []
+                    }
+                ];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => core.onWsMessage("renegotiate"),
+        "protocol core onWsMessage() command #1 renegotiation must not recreate the peer connection"
+    );
+});
+
+test("wrapped protocol core validates close and recovery ordering", () => {
+    const closeOrderCore = wrapProtocolCoreBindings(
+        validCore({
+            disconnect() {
+                return [{ kind: "closePeerConnection" }, { kind: "closeWebSocket", code: 1000 }];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => closeOrderCore.disconnect(),
+        "protocol core disconnect() must close the websocket before the peer connection when both are in one batch"
+    );
+
+    const recoveryOrderCore = wrapProtocolCoreBindings(
+        validCore({
+            onWsClose() {
+                return [
+                    { kind: "scheduleTimer", id: 1, ms: 1000 },
+                    { kind: "closePeerConnection" }
+                ];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => recoveryOrderCore.onWsClose(1011),
+        "protocol core onWsClose() must close the peer connection before scheduling recovery"
+    );
+});
+
 test("wrapped protocol core rejects malformed track bindings", () => {
     const core = wrapProtocolCoreBindings(
         validCore({

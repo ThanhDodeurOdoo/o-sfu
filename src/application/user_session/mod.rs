@@ -13,9 +13,8 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     core::{
-        MediaEndpointHealth, MediaNegotiationOffer, MediaSession, MediaUploadEncoding,
-        MediaUploadSlot, PublicationActivity, RuntimeSfuCore, RuntimeTransportAdapter,
-        SfuCoreError, UserInfoRefresh,
+        MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity, RuntimeSfuCore,
+        RuntimeTransportAdapter, SfuCoreError, UploadEncoding, UploadSlot, UserInfoRefresh,
     },
     runtime::{
         ConnectionId,
@@ -549,7 +548,7 @@ impl User {
         Ok(())
     }
 
-    async fn create_renegotiation_offer(&self) -> Result<Option<MediaNegotiationOffer>, UserError> {
+    async fn create_renegotiation_offer(&self) -> Result<Option<NegotiationOffer>, UserError> {
         self.media()
             .create_renegotiation_offer()
             .await
@@ -683,7 +682,7 @@ const fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
     }
 }
 
-fn session_description_payload(offer: MediaNegotiationOffer) -> SessionDescriptionPayload {
+fn session_description_payload(offer: NegotiationOffer) -> SessionDescriptionPayload {
     SessionDescriptionPayload {
         sdp: offer.sdp,
         upload_slots: offer
@@ -694,7 +693,7 @@ fn session_description_payload(offer: MediaNegotiationOffer) -> SessionDescripti
     }
 }
 
-fn protocol_upload_slot(slot: MediaUploadSlot) -> NegotiationUploadSlot {
+fn protocol_upload_slot(slot: UploadSlot) -> NegotiationUploadSlot {
     NegotiationUploadSlot {
         mid: slot.mid,
         kind: slot.kind,
@@ -707,7 +706,7 @@ fn protocol_upload_slot(slot: MediaUploadSlot) -> NegotiationUploadSlot {
     }
 }
 
-fn protocol_upload_encoding(encoding: MediaUploadEncoding) -> NegotiationUploadEncoding {
+fn protocol_upload_encoding(encoding: UploadEncoding) -> NegotiationUploadEncoding {
     NegotiationUploadEncoding {
         rid: encoding.rid,
         max_bitrate: encoding.max_bitrate,

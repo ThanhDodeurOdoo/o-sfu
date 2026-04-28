@@ -19,7 +19,18 @@
 //!    and makes it obvious when the host still owes a timer cancel or close.
 //!
 //! The command system is more cumbersome than inlining I/O calls, but that
-//! cost is what keeps the protocol verifiable and portable.
+//! cost is what keeps the protocol verifiable and portable. Browser hosts
+//! should consume the commands through the TypeScript runtime contract wrapper,
+//! which validates the highest-risk batch ordering before the runtime executes
+//! them:
+//!
+//! - an initial offer must create the peer connection immediately before
+//!   applying the remote description;
+//! - a renegotiation offer must not recreate the peer connection;
+//! - explicit disconnect cleanup closes the websocket before the peer
+//!   connection when both effects are emitted together;
+//! - recovery scheduling happens only after the peer connection has been
+//!   closed for that socket loss.
 
 use std::collections::BTreeMap;
 

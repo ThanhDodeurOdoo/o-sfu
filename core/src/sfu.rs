@@ -13,25 +13,51 @@ use crate::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OfferedMediaCapabilities(MediaCapabilities);
 
+/// Transport-neutral SDP offer returned by the media-core public API.
+///
+/// The transport adapter still owns the backend-specific `SessionOffer` shape.
+/// `NegotiationOffer` is the stable core-facing vocabulary consumed by server
+/// signaling code and mapped to the compatibility websocket payload at the
+/// protocol edge.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MediaNegotiationOffer {
+pub struct NegotiationOffer {
     pub sdp: String,
-    pub upload_slots: Vec<MediaUploadSlot>,
+    pub upload_slots: Vec<UploadSlot>,
 }
 
+/// Upload media slot advertised by a core negotiation offer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MediaUploadSlot {
+pub struct UploadSlot {
     pub mid: String,
     pub kind: o_sfu_router::MediaKind,
     pub codecs: Vec<String>,
-    pub simulcast_encodings: Vec<MediaUploadEncoding>,
+    pub simulcast_encodings: Vec<UploadEncoding>,
 }
 
+/// Upload encoding constraint advertised for one simulcast/SVC sender layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MediaUploadEncoding {
+pub struct UploadEncoding {
     pub rid: String,
     pub max_bitrate: Option<u64>,
 }
+
+#[deprecated(
+    since = "0.3.0",
+    note = "use NegotiationOffer; MediaNegotiationOffer was the transitional Workstream 2 name"
+)]
+pub type MediaNegotiationOffer = NegotiationOffer;
+
+#[deprecated(
+    since = "0.3.0",
+    note = "use UploadSlot; MediaUploadSlot was the transitional Workstream 2 name"
+)]
+pub type MediaUploadSlot = UploadSlot;
+
+#[deprecated(
+    since = "0.3.0",
+    note = "use UploadEncoding; MediaUploadEncoding was the transitional Workstream 2 name"
+)]
+pub type MediaUploadEncoding = UploadEncoding;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaEndpointHealth {
@@ -111,7 +137,7 @@ where
         room: &R,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Result<(MediaNegotiationOffer, OfferedMediaCapabilities), SfuCoreError>
+    ) -> Result<(NegotiationOffer, OfferedMediaCapabilities), SfuCoreError>
     where
         R: MediaRoom<T>,
     {
@@ -125,7 +151,7 @@ where
         room: &R,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Result<Option<MediaNegotiationOffer>, SfuCoreError>
+    ) -> Result<Option<NegotiationOffer>, SfuCoreError>
     where
         R: MediaRoom<T>,
     {
@@ -317,7 +343,7 @@ where
 
     pub async fn create_initial_offer(
         &self,
-    ) -> Result<(MediaNegotiationOffer, OfferedMediaCapabilities), SfuCoreError> {
+    ) -> Result<(NegotiationOffer, OfferedMediaCapabilities), SfuCoreError> {
         let offered_capabilities =
             OfferedMediaCapabilities(self.room.router_rtp_capabilities().await);
         let offer = self
@@ -326,19 +352,19 @@ where
             .create_initial_session_offer(self.context.transport_user_key())
             .await
             .map_err(SfuCoreError::Transport)?;
-        Ok((MediaNegotiationOffer::from(offer), offered_capabilities))
+        Ok((NegotiationOffer::from(offer), offered_capabilities))
     }
 
     pub async fn create_renegotiation_offer(
         &self,
-    ) -> Result<Option<MediaNegotiationOffer>, SfuCoreError> {
+    ) -> Result<Option<NegotiationOffer>, SfuCoreError> {
         match self
             .core
             .transport_adapter
             .create_session_renegotiation_offer(self.context.transport_user_key())
             .await
         {
-            Ok(offer) => Ok(Some(MediaNegotiationOffer::from(offer))),
+            Ok(offer) => Ok(Some(NegotiationOffer::from(offer))),
             Err(TransportAdapterError::UnsupportedFeature) => Ok(None),
             Err(error) => Err(SfuCoreError::Transport(error)),
         }
@@ -469,20 +495,17 @@ where
     }
 }
 
-impl From<SessionOffer> for MediaNegotiationOffer {
+impl From<SessionOffer> for NegotiationOffer {
     fn from(offer: SessionOffer) -> Self {
         let (sdp, upload_slots) = offer.into_parts();
         Self {
             sdp,
-            upload_slots: upload_slots
-                .into_iter()
-                .map(MediaUploadSlot::from)
-                .collect(),
+            upload_slots: upload_slots.into_iter().map(UploadSlot::from).collect(),
         }
     }
 }
 
-impl From<SessionUploadSlot> for MediaUploadSlot {
+impl From<SessionUploadSlot> for UploadSlot {
     fn from(slot: SessionUploadSlot) -> Self {
         Self {
             mid: slot.mid,
@@ -491,13 +514,13 @@ impl From<SessionUploadSlot> for MediaUploadSlot {
             simulcast_encodings: slot
                 .simulcast_encodings
                 .into_iter()
-                .map(MediaUploadEncoding::from)
+                .map(UploadEncoding::from)
                 .collect(),
         }
     }
 }
 
-impl From<SessionUploadEncoding> for MediaUploadEncoding {
+impl From<SessionUploadEncoding> for UploadEncoding {
     fn from(encoding: SessionUploadEncoding) -> Self {
         Self {
             rid: encoding.rid,

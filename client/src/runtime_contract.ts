@@ -226,9 +226,59 @@ function validateHostCommands(value: unknown, context: string): HostCommand[] {
     if (!Array.isArray(value)) {
         throw new Error(`${context} must return an array of host commands`);
     }
-    return value.map((command, index) =>
+    const commands = value.map((command, index) =>
         validateHostCommand(command, `${context} command #${index}`)
     );
+    validateHostCommandOrder(commands, context);
+    return commands;
+}
+
+function validateHostCommandOrder(commands: HostCommand[], context: string): void {
+    for (let index = 0; index < commands.length; index += 1) {
+        const command = commands[index];
+        if (command.kind !== CommandKind.APPLY_NEGOTIATION) {
+            continue;
+        }
+        const previous = commands[index - 1];
+        if (command.negotiationKind === NEGOTIATION_KIND.OFFER) {
+            if (!previous || previous.kind !== CommandKind.CREATE_PEER_CONNECTION) {
+                throw new Error(
+                    `${context} command #${index} initial negotiation must immediately follow createPeerConnection`
+                );
+            }
+        } else if (previous?.kind === CommandKind.CREATE_PEER_CONNECTION) {
+            throw new Error(
+                `${context} command #${index} renegotiation must not recreate the peer connection`
+            );
+        }
+    }
+
+    const closeWebSocketIndex = commands.findIndex(
+        (command) => command.kind === CommandKind.CLOSE_WEB_SOCKET
+    );
+    const closePeerConnectionIndex = commands.findIndex(
+        (command) => command.kind === CommandKind.CLOSE_PEER_CONNECTION
+    );
+    if (
+        closeWebSocketIndex >= 0 &&
+        closePeerConnectionIndex >= 0 &&
+        closeWebSocketIndex > closePeerConnectionIndex
+    ) {
+        throw new Error(
+            `${context} must close the websocket before the peer connection when both are in one batch`
+        );
+    }
+
+    const recoveryTimerIndex = commands.findIndex(
+        (command) => command.kind === CommandKind.SCHEDULE_TIMER && command.id === 1
+    );
+    if (
+        recoveryTimerIndex >= 0 &&
+        closePeerConnectionIndex >= 0 &&
+        closePeerConnectionIndex > recoveryTimerIndex
+    ) {
+        throw new Error(`${context} must close the peer connection before scheduling recovery`);
+    }
 }
 
 function validateHostCommand(value: unknown, context: string): HostCommand {
