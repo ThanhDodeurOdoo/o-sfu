@@ -37,7 +37,7 @@ use super::super::{
     state::RtcSnapshotState,
 };
 use crate::{
-    MediaCodecFlags, RtcPortRange,
+    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
@@ -79,8 +79,10 @@ pub struct RtcTransportAdapter {
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_in_bps: u64,
     pub(super) max_bitrate_out_bps: u64,
+    pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
+    pub(super) codec_preferences: CodecPreferences,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(super) relay_registry: Arc<RelayRegistry>,
@@ -122,8 +124,10 @@ impl RtcTransportAdapter {
             public_ip: config.public_ip(),
             max_bitrate_in_bps: config.max_bitrate_in_bps(),
             max_bitrate_out_bps: config.max_bitrate_out_bps(),
+            video_bitrate_limits: config.video_bitrate_limits(),
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
+            codec_preferences: config.codec_preferences(),
             diagnostics: deps.diagnostics(),
             packet_sink_registry: deps.packet_sink_registry(),
             relay_registry: Arc::new(RelayRegistry::default()),

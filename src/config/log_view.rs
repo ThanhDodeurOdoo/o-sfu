@@ -120,6 +120,11 @@ impl ConfigLogView<'_> {
         )?;
         writeln!(
             formatter,
+            "    - max_video_bitrate_bps={}",
+            config.video_bitrate_limits.max_video_bitrate_bps()
+        )?;
+        writeln!(
+            formatter,
             "    - rtc_port_range_min={}",
             config.rtc_port_range.min()
         )?;
@@ -185,7 +190,25 @@ impl ConfigLogView<'_> {
             config.codec_flags.h265_enabled()
         )?;
         writeln!(formatter, "    - vp9={}", config.codec_flags.vp9_enabled())?;
-        write!(formatter, "    - av1={}", config.codec_flags.av1_enabled())
+        writeln!(formatter, "    - av1={}", config.codec_flags.av1_enabled())?;
+        writeln!(
+            formatter,
+            "    - audio_preference={}",
+            config
+                .codec_preferences
+                .audio_order()
+                .map(o_sfu_core::AudioCodecPreference::wire_name)
+                .join(",")
+        )?;
+        write!(
+            formatter,
+            "    - video_preference={}",
+            config
+                .codec_preferences
+                .video_order()
+                .map(o_sfu_core::VideoCodecPreference::wire_name)
+                .join(",")
+        )
     }
 }
 
@@ -195,8 +218,8 @@ mod tests {
 
     use super::ConfigLogView;
     use crate::config::{
-        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-        TelemetryConfig,
+        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
     };
 
     fn test_config(bind_address: SocketAddr) -> Config {
@@ -211,10 +234,12 @@ mod tests {
             trust_proxy_headers: false,
             feature_flags: RuntimeFeatureFlags::default(),
             codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
             telemetry: TelemetryConfig::default(),
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             max_bitrate_in_bps: 8_000_000,
             max_bitrate_out_bps: 10_000_000,
+            video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
             rtc_media_worker_count: 1,
         }

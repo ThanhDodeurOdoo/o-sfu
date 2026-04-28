@@ -13,7 +13,9 @@ use str0m::media::{
     SimulcastLayer as Str0mSimulcastLayer,
 };
 
-use crate::{MediaCodecFlags, runtime::transport_adapter::SessionUploadEncoding};
+use crate::{
+    MediaCodecFlags, VideoBitrateLimits, runtime::transport_adapter::SessionUploadEncoding,
+};
 
 const SDP_ATTRIBUTE_PREFIX: &str = "a=";
 const SDP_MEDIA_PREFIX: &str = "m=";
@@ -21,7 +23,6 @@ const SDP_MID_ATTRIBUTE: &str = "mid";
 const DEFAULT_LOW_RID: &str = "lo";
 const DEFAULT_HIGH_RID: &str = "hi";
 const DEFAULT_LOW_MAX_BITRATE_BPS: u64 = 150_000;
-const DEFAULT_HIGH_MAX_BITRATE_BPS: u64 = 900_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NegotiatedRid {
@@ -38,39 +39,25 @@ struct SimulcastLayerSpec<'a> {
 pub(super) fn bootstrap_recv_simulcast(
     media_kind: MediaKind,
     codec_flags: MediaCodecFlags,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> Option<Str0mSimulcast> {
     if !bootstrap_simulcast_enabled(media_kind, codec_flags) {
         return None;
     }
-    Some(recv_simulcast_from_specs(&[
-        SimulcastLayerSpec {
-            rid: DEFAULT_LOW_RID,
-            max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE_BPS),
-        },
-        SimulcastLayerSpec {
-            rid: DEFAULT_HIGH_RID,
-            max_bitrate: Some(DEFAULT_HIGH_MAX_BITRATE_BPS),
-        },
-    ]))
+    Some(recv_simulcast_from_specs(&default_layer_specs(
+        video_bitrate_limits,
+    )))
 }
 
 pub(super) fn bootstrap_upload_encodings(
     media_kind: MediaKind,
     codec_flags: MediaCodecFlags,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> Vec<SessionUploadEncoding> {
     if !bootstrap_simulcast_enabled(media_kind, codec_flags) {
         return Vec::new();
     }
-    upload_encodings_from_specs(&[
-        SimulcastLayerSpec {
-            rid: DEFAULT_LOW_RID,
-            max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE_BPS),
-        },
-        SimulcastLayerSpec {
-            rid: DEFAULT_HIGH_RID,
-            max_bitrate: Some(DEFAULT_HIGH_MAX_BITRATE_BPS),
-        },
-    ])
+    upload_encodings_from_specs(&default_layer_specs(video_bitrate_limits))
 }
 
 pub(super) fn publish_recv_simulcast(
@@ -104,10 +91,11 @@ pub(super) fn publish_recv_simulcast_or_default(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     codec_flags: MediaCodecFlags,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> Option<Str0mSimulcast> {
     publish_recv_simulcast(media_kind, rtp_parameters).or_else(|| {
         publish_uses_default_profile(rtp_parameters)
-            .then(|| bootstrap_recv_simulcast(media_kind, codec_flags))
+            .then(|| bootstrap_recv_simulcast(media_kind, codec_flags, video_bitrate_limits))
             .flatten()
     })
 }
@@ -146,12 +134,29 @@ pub(super) fn publish_upload_encodings_or_default(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     codec_flags: MediaCodecFlags,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> Vec<SessionUploadEncoding> {
     let encodings = publish_upload_encodings(media_kind, rtp_parameters);
     if !encodings.is_empty() || !publish_uses_default_profile(rtp_parameters) {
         return encodings;
     }
-    bootstrap_upload_encodings(media_kind, codec_flags)
+    bootstrap_upload_encodings(media_kind, codec_flags, video_bitrate_limits)
+}
+
+fn default_layer_specs(
+    video_bitrate_limits: VideoBitrateLimits,
+) -> [SimulcastLayerSpec<'static>; 2] {
+    let high_max_bitrate = video_bitrate_limits.max_video_bitrate_bps();
+    [
+        SimulcastLayerSpec {
+            rid: DEFAULT_LOW_RID,
+            max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE_BPS.min(high_max_bitrate)),
+        },
+        SimulcastLayerSpec {
+            rid: DEFAULT_HIGH_RID,
+            max_bitrate: Some(high_max_bitrate),
+        },
+    ]
 }
 
 fn bootstrap_simulcast_enabled(media_kind: MediaKind, codec_flags: MediaCodecFlags) -> bool {
@@ -264,6 +269,8 @@ mod tests {
 
     use super::*;
 
+    const ANSWER_HIGH_MAX_BITRATE_BPS: u64 = 900_000;
+
     #[test]
     fn answer_send_rid_projection_preserves_declared_bitrate() {
         let answer = format!(
@@ -293,7 +300,7 @@ mod tests {
                 },
                 NegotiatedRid {
                     rid: Str0mRid::from(DEFAULT_HIGH_RID),
-                    max_bitrate: Some(DEFAULT_HIGH_MAX_BITRATE_BPS),
+                    max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE_BPS),
                 },
             ]
         );

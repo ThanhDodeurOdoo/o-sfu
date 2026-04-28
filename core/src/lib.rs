@@ -4,8 +4,8 @@
 //!
 //! - configuration values such as [`CoreOptions`], [`MediaOptions`],
 //!   [`RoutingOptions`], [`CodecOptions`], [`ObservabilityOptions`],
-//!   [`RtcPortRange`], [`SessionBitrateLimits`], [`MediaCodecFlags`], and
-//!   [`RuntimeFeatureFlags`];
+//!   [`RtcPortRange`], [`SessionBitrateLimits`], [`VideoBitrateLimits`],
+//!   [`MediaCodecFlags`], [`CodecPreferences`], and [`RuntimeFeatureFlags`];
 //! - [`SfuCore`] and its borrow-based [`MediaSession`] handle, used by the
 //!   server application to express endpoint health checks, offer/answer
 //!   negotiation, publication, subscription, and cleanup intent;
@@ -96,8 +96,9 @@ pub mod unstable {
 
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
-    CodecOptions, CoreOptions, MediaCodecFlags, MediaOptions, ObservabilityOptions, RoutingOptions,
-    RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits,
+    AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, MediaCodecFlags,
+    MediaOptions, ObservabilityOptions, RoutingOptions, RtcPortRange, RuntimeFeatureFlags,
+    SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 pub use room::{MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh};
 pub use runtime::transport_adapter::RuntimeTransportAdapter;

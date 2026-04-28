@@ -4,7 +4,7 @@ use o_sfu_router::{
     RtcpFeedback, RtcpFeedbackKind,
 };
 
-use crate::MediaCodecFlags;
+use crate::{AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoCodecPreference};
 
 const AUDIO_PAYLOAD_TYPE_PCMU: u8 = 0;
 const AUDIO_PAYLOAD_TYPE_PCMA: u8 = 8;
@@ -40,56 +40,69 @@ const HEADER_EXTENSION_ID_TRANSPORT_WIDE_CC: u8 = 5;
 const HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL: u8 = 10;
 
 pub fn router_rtp_capabilities(codec_flags: MediaCodecFlags) -> MediaCapabilities {
+    router_rtp_capabilities_with_preferences(codec_flags, CodecPreferences::default())
+}
+
+pub fn router_rtp_capabilities_with_preferences(
+    codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+) -> MediaCapabilities {
     let mut codecs = Vec::new();
-    if codec_flags.opus_enabled() {
-        codecs.push(opus_codec_capability());
+    for codec in codec_preferences.audio_order() {
+        if codec.enabled_by(codec_flags) {
+            push_audio_codec(&mut codecs, codec);
+        }
     }
-    if codec_flags.pcmu_enabled() {
-        codecs.push(audio_codec_capability(
+    for codec in codec_preferences.video_order() {
+        if codec.enabled_by(codec_flags) {
+            push_video_codec(&mut codecs, codec);
+        }
+    }
+
+    MediaCapabilities::new(codecs, default_header_extensions())
+}
+
+fn push_audio_codec(codecs: &mut Vec<MediaCodecCapability>, codec: AudioCodecPreference) {
+    match codec {
+        AudioCodecPreference::Opus => codecs.push(opus_codec_capability()),
+        AudioCodecPreference::Pcmu => codecs.push(audio_codec_capability(
             rtp::CodecName::from("PCMU"),
             AUDIO_PAYLOAD_TYPE_PCMU,
             8_000,
             None,
-        ));
-    }
-    if codec_flags.pcma_enabled() {
-        codecs.push(audio_codec_capability(
+        )),
+        AudioCodecPreference::Pcma => codecs.push(audio_codec_capability(
             rtp::CodecName::from("PCMA"),
             AUDIO_PAYLOAD_TYPE_PCMA,
             8_000,
             None,
-        ));
+        )),
     }
-    if codec_flags.vp8_enabled() {
-        codecs.push(video_codec_capability(
-            rtp::CodecName::Vp8,
-            VIDEO_PAYLOAD_TYPE_VP8,
-        ));
-        codecs.push(video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_VP8_RTX,
-            VIDEO_PAYLOAD_TYPE_VP8,
-        ));
-    }
-    if codec_flags.h264_enabled() {
-        codecs.extend(h264_codec_capabilities());
-    }
-    if codec_flags.h265_enabled() {
-        codecs.push(video_codec_capability(
+}
+
+fn push_video_codec(codecs: &mut Vec<MediaCodecCapability>, codec: VideoCodecPreference) {
+    match codec {
+        VideoCodecPreference::Vp8 => {
+            codecs.push(video_codec_capability(
+                rtp::CodecName::Vp8,
+                VIDEO_PAYLOAD_TYPE_VP8,
+            ));
+            codecs.push(video_rtx_codec_capability(
+                VIDEO_PAYLOAD_TYPE_VP8_RTX,
+                VIDEO_PAYLOAD_TYPE_VP8,
+            ));
+        }
+        VideoCodecPreference::H264 => codecs.extend(h264_codec_capabilities()),
+        VideoCodecPreference::H265 => codecs.push(video_codec_capability(
             rtp::CodecName::from("H265"),
             VIDEO_PAYLOAD_TYPE_H265,
-        ));
-    }
-    if codec_flags.vp9_enabled() {
-        codecs.extend(vp9_codec_capabilities());
-    }
-    if codec_flags.av1_enabled() {
-        codecs.push(video_codec_capability(
+        )),
+        VideoCodecPreference::Vp9 => codecs.extend(vp9_codec_capabilities()),
+        VideoCodecPreference::Av1 => codecs.push(video_codec_capability(
             rtp::CodecName::from("AV1"),
             VIDEO_PAYLOAD_TYPE_AV1,
-        ));
+        )),
     }
-
-    MediaCapabilities::new(codecs, default_header_extensions())
 }
 
 fn default_header_extensions() -> Vec<HeaderExtension> {
@@ -251,8 +264,8 @@ mod tests {
 
     use o_sfu_router::CodecSetting;
 
-    use super::router_rtp_capabilities;
-    use crate::MediaCodecFlags;
+    use super::{router_rtp_capabilities, router_rtp_capabilities_with_preferences};
+    use crate::{CodecPreferences, MediaCodecFlags, VideoCodecPreference};
 
     #[test]
     fn default_router_capabilities_match_the_browser_codec_baseline() {
@@ -351,5 +364,29 @@ mod tests {
         assert!(rtx_associations.contains(&113));
         assert!(rtx_associations.contains(&116));
         assert!(rtx_associations.contains(&118));
+    }
+
+    #[test]
+    fn router_capabilities_follow_configured_codec_preferences() {
+        let capabilities = router_rtp_capabilities_with_preferences(
+            MediaCodecFlags::default().with_h264(true).with_vp9(true),
+            CodecPreferences::default()
+                .with_video_order(&[VideoCodecPreference::H264, VideoCodecPreference::Vp9]),
+        );
+        let codec_names = capabilities
+            .codecs()
+            .map(|codec| codec.codec_name().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codec_names.get(..4),
+            Some(
+                &[
+                    String::from("opus"),
+                    String::from("H264"),
+                    String::from("rtx"),
+                    String::from("H264"),
+                ][..]
+            )
+        );
     }
 }

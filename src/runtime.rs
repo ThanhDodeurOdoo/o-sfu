@@ -238,8 +238,10 @@ fn build_transport_adapter(options: &CoreOptions, deps: &RuntimeDeps) -> Runtime
         RtcTransportAdapterConfig {
             public_ip: options.media.public_ip,
             bitrate_limits: options.media.bitrate_limits,
+            video_bitrate_limits: options.media.video_bitrate_limits,
             rtc_port_range: options.media.rtc_port_range,
             codec_flags: options.codecs.flags,
+            codec_preferences: options.codecs.preferences,
         },
         RtcTransportAdapterDeps {
             diagnostics: Arc::clone(&deps.diagnostics),
@@ -254,7 +256,10 @@ fn build_room_runtime_policy(options: &RuntimeOptions) -> RoomRuntimePolicy {
     RoomRuntimePolicy::new(
         RoomAdmissionPolicy::new(options.room.max_users),
         options.feature_flags(),
-        rtp_capabilities::router_rtp_capabilities(options.core.codecs.flags),
+        rtp_capabilities::router_rtp_capabilities_with_preferences(
+            options.core.codecs.flags,
+            options.core.codecs.preferences,
+        ),
     )
 }
 

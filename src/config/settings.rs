@@ -1,8 +1,8 @@
 use std::net::{IpAddr, SocketAddr};
 
 use super::{
-    MediaCodecFlags, RtcPortRange, diagnostics::DiagnosticsConfig,
-    feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
+    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,10 +17,12 @@ pub struct Config {
     pub trust_proxy_headers: bool,
     pub feature_flags: RuntimeFeatureFlags,
     pub codec_flags: MediaCodecFlags,
+    pub codec_preferences: CodecPreferences,
     pub telemetry: TelemetryConfig,
     pub public_ip: IpAddr,
     pub max_bitrate_in_bps: u64,
     pub max_bitrate_out_bps: u64,
+    pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
 }

@@ -29,6 +29,7 @@ pub struct MediaOptions {
     pub public_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
     pub bitrate_limits: SessionBitrateLimits,
+    pub video_bitrate_limits: VideoBitrateLimits,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub struct RoutingOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodecOptions {
     pub flags: MediaCodecFlags,
+    pub preferences: CodecPreferences,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +138,33 @@ impl SessionBitrateLimits {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoBitrateLimits {
+    max_video_bitrate_bps: u64,
+}
+
+impl VideoBitrateLimits {
+    pub const DEFAULT_MAX_VIDEO_BITRATE_BPS: u64 = 4_000_000;
+
+    #[must_use]
+    pub const fn new(max_video_bitrate_bps: u64) -> Self {
+        Self {
+            max_video_bitrate_bps,
+        }
+    }
+
+    #[must_use]
+    pub const fn max_video_bitrate_bps(self) -> u64 {
+        self.max_video_bitrate_bps
+    }
+}
+
+impl Default for VideoBitrateLimits {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_MAX_VIDEO_BITRATE_BPS)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaCodecFlags {
     enabled: MediaCodecSet,
 }
@@ -185,6 +214,178 @@ impl Default for MediaCodecFlags {
             enabled: MediaCodecSet::OPUS | MediaCodecSet::VP8,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioCodecPreference {
+    Opus,
+    Pcmu,
+    Pcma,
+}
+
+impl AudioCodecPreference {
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Opus => "opus",
+            Self::Pcmu => "PCMU",
+            Self::Pcma => "PCMA",
+        }
+    }
+
+    #[must_use]
+    pub fn enabled_by(self, flags: MediaCodecFlags) -> bool {
+        match self {
+            Self::Opus => flags.opus_enabled(),
+            Self::Pcmu => flags.pcmu_enabled(),
+            Self::Pcma => flags.pcma_enabled(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodecPreference {
+    Vp8,
+    H264,
+    H265,
+    Vp9,
+    Av1,
+}
+
+impl VideoCodecPreference {
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Vp8 => "VP8",
+            Self::H264 => "H264",
+            Self::H265 => "H265",
+            Self::Vp9 => "VP9",
+            Self::Av1 => "AV1",
+        }
+    }
+
+    #[must_use]
+    pub fn enabled_by(self, flags: MediaCodecFlags) -> bool {
+        match self {
+            Self::Vp8 => flags.vp8_enabled(),
+            Self::H264 => flags.h264_enabled(),
+            Self::H265 => flags.h265_enabled(),
+            Self::Vp9 => flags.vp9_enabled(),
+            Self::Av1 => flags.av1_enabled(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodecPreferences {
+    audio: [AudioCodecPreference; 3],
+    video: [VideoCodecPreference; 5],
+}
+
+impl CodecPreferences {
+    pub const DEFAULT_AUDIO: [AudioCodecPreference; 3] = [
+        AudioCodecPreference::Opus,
+        AudioCodecPreference::Pcmu,
+        AudioCodecPreference::Pcma,
+    ];
+    pub const DEFAULT_VIDEO: [VideoCodecPreference; 5] = [
+        VideoCodecPreference::Vp8,
+        VideoCodecPreference::H264,
+        VideoCodecPreference::H265,
+        VideoCodecPreference::Vp9,
+        VideoCodecPreference::Av1,
+    ];
+
+    #[must_use]
+    pub const fn new(audio: [AudioCodecPreference; 3], video: [VideoCodecPreference; 5]) -> Self {
+        Self { audio, video }
+    }
+
+    #[must_use]
+    pub fn with_audio_order(self, preferred: &[AudioCodecPreference]) -> Self {
+        Self {
+            audio: complete_audio_order(preferred),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_video_order(self, preferred: &[VideoCodecPreference]) -> Self {
+        Self {
+            video: complete_video_order(preferred),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub const fn audio_order(self) -> [AudioCodecPreference; 3] {
+        self.audio
+    }
+
+    #[must_use]
+    pub const fn video_order(self) -> [VideoCodecPreference; 5] {
+        self.video
+    }
+}
+
+impl Default for CodecPreferences {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_AUDIO, Self::DEFAULT_VIDEO)
+    }
+}
+
+fn complete_audio_order(preferred: &[AudioCodecPreference]) -> [AudioCodecPreference; 3] {
+    let mut output = CodecPreferences::DEFAULT_AUDIO;
+    let mut len = 0;
+    for codec in preferred
+        .iter()
+        .copied()
+        .chain(CodecPreferences::DEFAULT_AUDIO)
+    {
+        if contains_audio_codec(output, len, codec) {
+            continue;
+        }
+        if let Some(slot) = output.get_mut(len) {
+            *slot = codec;
+            len += 1;
+        }
+    }
+    output
+}
+
+fn complete_video_order(preferred: &[VideoCodecPreference]) -> [VideoCodecPreference; 5] {
+    let mut output = CodecPreferences::DEFAULT_VIDEO;
+    let mut len = 0;
+    for codec in preferred
+        .iter()
+        .copied()
+        .chain(CodecPreferences::DEFAULT_VIDEO)
+    {
+        if contains_video_codec(output, len, codec) {
+            continue;
+        }
+        if let Some(slot) = output.get_mut(len) {
+            *slot = codec;
+            len += 1;
+        }
+    }
+    output
+}
+
+fn contains_audio_codec(
+    codecs: [AudioCodecPreference; 3],
+    len: usize,
+    needle: AudioCodecPreference,
+) -> bool {
+    codecs.into_iter().take(len).any(|codec| codec == needle)
+}
+
+fn contains_video_codec(
+    codecs: [VideoCodecPreference; 5],
+    len: usize,
+    needle: VideoCodecPreference,
+) -> bool {
+    codecs.into_iter().take(len).any(|codec| codec == needle)
 }
 
 impl CoreOptions {

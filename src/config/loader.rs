@@ -3,9 +3,10 @@ use std::{env, net::SocketAddr};
 use anyhow::{Context, Result, ensure};
 
 use super::{
-    ConfigLogView, codec_flags::load_media_codec_flags, diagnostics::load_diagnostics_config,
-    feature_flags::load_runtime_feature_flags, parsing::parse_optional_env, settings::Config,
-    telemetry::load_telemetry_config, transport::load_transport_config,
+    ConfigLogView, codec_flags::load_media_codec_flags, codec_preferences::load_codec_preferences,
+    diagnostics::load_diagnostics_config, feature_flags::load_runtime_feature_flags,
+    parsing::parse_optional_env, settings::Config, telemetry::load_telemetry_config,
+    transport::load_transport_config,
 };
 
 impl Config {
@@ -60,6 +61,7 @@ impl Config {
         .unwrap_or(false);
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
+        let codec_preferences = load_codec_preferences(&mut get_var)?;
         let diagnostics = load_diagnostics_config(&mut get_var)?;
         let telemetry = load_telemetry_config(&mut get_var)?;
         let transport = load_transport_config(&mut get_var)?;
@@ -83,10 +85,12 @@ impl Config {
             trust_proxy_headers,
             feature_flags,
             codec_flags,
+            codec_preferences,
             telemetry,
             public_ip: transport.public_ip,
             max_bitrate_in_bps: transport.max_bitrate_in_bps,
             max_bitrate_out_bps: transport.max_bitrate_out_bps,
+            video_bitrate_limits: transport.video_bitrate_limits,
             rtc_port_range: transport.rtc_port_range,
             rtc_media_worker_count: transport.rtc_media_worker_count,
         })
@@ -96,8 +100,8 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use crate::config::{
-        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-        TelemetryConfig,
+        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
     };
 
     #[test]
@@ -130,11 +134,13 @@ mod tests {
         assert!(!config.trust_proxy_headers);
         assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
         assert_eq!(config.codec_flags, MediaCodecFlags::default());
+        assert_eq!(config.codec_preferences, CodecPreferences::default());
         assert_eq!(config.diagnostics, DiagnosticsConfig::default());
         assert_eq!(config.telemetry, TelemetryConfig::default());
         assert_eq!(config.public_ip.to_string(), "127.0.0.1");
         assert_eq!(config.max_bitrate_in_bps, 8_000_000);
         assert_eq!(config.max_bitrate_out_bps, 10_000_000);
+        assert_eq!(config.video_bitrate_limits, VideoBitrateLimits::default());
         assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
         assert_eq!(config.rtc_media_worker_count, 1);
     }

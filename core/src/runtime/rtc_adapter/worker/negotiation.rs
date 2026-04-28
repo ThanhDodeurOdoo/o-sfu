@@ -31,7 +31,7 @@ use super::{
     publication::refresh_negotiated_producer_parameters,
 };
 use crate::{
-    MediaCodecFlags, RtcPortRange,
+    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         metrics::RuntimeMetrics,
         transport_adapter::{
@@ -48,8 +48,10 @@ const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, Media
 pub(super) struct OfferBootstrapConfig<'a> {
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_out_bps: u64,
+    pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
+    pub(super) codec_preferences: CodecPreferences,
     pub(super) metrics: &'a RuntimeMetrics,
 }
 
@@ -123,7 +125,12 @@ fn worker_create_initial_session_offer(
     let bootstrap_mids = &mut session_state.sdp_negotiation.bootstrap_mids;
     let (offer, pending_offer) = {
         let mut sdp_api = session_state.rtc.sdp_api();
-        ensure_initial_negotiation_media(bootstrap_mids, &mut sdp_api, config.codec_flags);
+        ensure_initial_negotiation_media(
+            bootstrap_mids,
+            &mut sdp_api,
+            config.codec_flags,
+            config.video_bitrate_limits,
+        );
         sdp_api
             .apply()
             .ok_or(TransportAdapterError::TransportUnavailable)?
@@ -135,8 +142,14 @@ fn worker_create_initial_session_offer(
         .sdp_negotiation
         .staged_offer_upload_slots
         .clear();
-    Ok(SessionOffer::new(offer.to_sdp_string())
-        .with_upload_slots(initial_upload_slots(bootstrap_mids, config.codec_flags)))
+    Ok(
+        SessionOffer::new(offer.to_sdp_string()).with_upload_slots(initial_upload_slots(
+            bootstrap_mids,
+            config.codec_flags,
+            config.codec_preferences,
+            config.video_bitrate_limits,
+        )),
+    )
 }
 
 fn worker_create_session_renegotiation_offer(
@@ -345,6 +358,7 @@ fn ensure_initial_negotiation_media(
     bootstrap_mids: &mut Vec<Mid>,
     sdp_api: &mut SdpApi<'_>,
     codec_flags: MediaCodecFlags,
+    video_bitrate_limits: VideoBitrateLimits,
 ) {
     if !bootstrap_mids.is_empty() {
         return;
@@ -357,7 +371,11 @@ fn ensure_initial_negotiation_media(
                 INITIAL_NEGOTIATION_DIRECTION,
                 None,
                 None,
-                sdp_simulcast::bootstrap_recv_simulcast(media_kind, codec_flags),
+                sdp_simulcast::bootstrap_recv_simulcast(
+                    media_kind,
+                    codec_flags,
+                    video_bitrate_limits,
+                ),
             )
         })
         .collect();
@@ -366,6 +384,8 @@ fn ensure_initial_negotiation_media(
 fn initial_upload_slots(
     bootstrap_mids: &[Mid],
     codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> Vec<SessionUploadSlot> {
     INITIAL_NEGOTIATION_MEDIA_KINDS
         .iter()
@@ -373,10 +393,11 @@ fn initial_upload_slots(
         .map(|(media_kind, mid)| SessionUploadSlot {
             mid: mid.to_string(),
             kind: upload_kind(*media_kind),
-            codecs: offered_codecs(*media_kind, codec_flags),
+            codecs: offered_codecs(*media_kind, codec_flags, codec_preferences),
             simulcast_encodings: sdp_simulcast::bootstrap_upload_encodings(
                 *media_kind,
                 codec_flags,
+                video_bitrate_limits,
             ),
         })
         .collect()
@@ -390,37 +411,25 @@ pub(super) fn upload_kind(media_kind: MediaKind) -> ProtocolMediaKind {
     }
 }
 
-pub(super) fn offered_codecs(media_kind: MediaKind, codec_flags: MediaCodecFlags) -> Vec<String> {
+pub(super) fn offered_codecs(
+    media_kind: MediaKind,
+    codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+) -> Vec<String> {
     if media_kind.is_video() {
-        let mut codecs = Vec::new();
-        if codec_flags.vp8_enabled() {
-            codecs.push("VP8".to_owned());
-        }
-        if codec_flags.h264_enabled() {
-            codecs.push("H264".to_owned());
-        }
-        if codec_flags.h265_enabled() {
-            codecs.push("H265".to_owned());
-        }
-        if codec_flags.vp9_enabled() {
-            codecs.push("VP9".to_owned());
-        }
-        if codec_flags.av1_enabled() {
-            codecs.push("AV1".to_owned());
-        }
-        return codecs;
+        return codec_preferences
+            .video_order()
+            .into_iter()
+            .filter(|codec| codec.enabled_by(codec_flags))
+            .map(|codec| codec.wire_name().to_owned())
+            .collect();
     }
-    let mut codecs = Vec::new();
-    if codec_flags.opus_enabled() {
-        codecs.push("opus".to_owned());
-    }
-    if codec_flags.pcmu_enabled() {
-        codecs.push("PCMU".to_owned());
-    }
-    if codec_flags.pcma_enabled() {
-        codecs.push("PCMA".to_owned());
-    }
-    codecs
+    codec_preferences
+        .audio_order()
+        .into_iter()
+        .filter(|codec| codec.enabled_by(codec_flags))
+        .map(|codec| codec.wire_name().to_owned())
+        .collect()
 }
 
 fn ensure_session_ready_for_offer(

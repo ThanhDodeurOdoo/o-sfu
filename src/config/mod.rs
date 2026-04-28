@@ -1,4 +1,5 @@
 mod codec_flags;
+mod codec_preferences;
 mod diagnostics;
 mod feature_flags;
 mod loader;
@@ -8,7 +9,7 @@ mod settings;
 mod telemetry;
 mod transport;
 
-pub use o_sfu_core::{MediaCodecFlags, RtcPortRange};
+pub use o_sfu_core::{CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits};
 
 pub(crate) use self::log_view::ConfigLogView;
 pub use self::{

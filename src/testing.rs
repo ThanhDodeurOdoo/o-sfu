@@ -23,8 +23,8 @@ pub mod http {
     };
     use crate::{
         config::{
-            Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-            TelemetryConfig,
+            CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+            RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
         },
         runtime::{http_server::request_base_url, options::RuntimeOptions, resolve_remote_address},
     };
@@ -40,11 +40,13 @@ pub mod http {
             trust_proxy_headers,
             feature_flags: RuntimeFeatureFlags::default(),
             codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
             diagnostics: DiagnosticsConfig::default(),
             telemetry: TelemetryConfig::default(),
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             max_bitrate_in_bps: 8_000_000,
             max_bitrate_out_bps: 10_000_000,
+            video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
             rtc_media_worker_count: 1,
         }

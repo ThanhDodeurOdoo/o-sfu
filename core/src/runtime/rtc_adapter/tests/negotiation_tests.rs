@@ -12,8 +12,11 @@ use str0m::{
 };
 
 use super::fixtures::*;
-use crate::runtime::{
-    rtc_adapter::client_rtp_capabilities_from_answer, transport_adapter::TransportMediaId,
+use crate::{
+    VideoCodecPreference,
+    runtime::{
+        rtc_adapter::client_rtp_capabilities_from_answer, transport_adapter::TransportMediaId,
+    },
 };
 
 #[tokio::test]
@@ -163,6 +166,39 @@ async fn rtc_initial_session_offer_omits_simulcast_when_vp8_is_disabled() {
     assert!(
         video_slot.simulcast_encodings.is_empty(),
         "upload-slot metadata must not ask the browser to configure unsupported simulcast codecs"
+    );
+}
+
+#[tokio::test]
+async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
+    let adapter = rtc_adapter_with_codec_policy(
+        MediaCodecFlags::default()
+            .with_h264(true)
+            .with_vp9(true)
+            .with_av1(true),
+        CodecPreferences::default()
+            .with_video_order(&[VideoCodecPreference::H264, VideoCodecPreference::Vp9]),
+    );
+    let session_key = transport_key(1, 137, UserId::Integer(137));
+
+    let (_offer_sdp, upload_slots) = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed")
+        .into_parts();
+
+    let video_slot = upload_slots
+        .iter()
+        .find(|slot| slot.kind == RouterMediaKind::Video)
+        .expect("initial offer should include a video upload slot");
+    assert_eq!(
+        video_slot.codecs,
+        vec![
+            String::from("H264"),
+            String::from("VP9"),
+            String::from("VP8"),
+            String::from("AV1"),
+        ]
     );
 }
 

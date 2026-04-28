@@ -17,8 +17,8 @@ pub(super) use tower::util::ServiceExt;
 pub(super) use super::super::app;
 pub(super) use crate::{
     config::{
-        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-        TelemetryConfig,
+        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
     },
     runtime::{
         ConnectionId, RuntimeState,
@@ -66,11 +66,13 @@ pub(super) fn test_config() -> Config {
         trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
+        codec_preferences: CodecPreferences::default(),
         telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         max_bitrate_in_bps: 8_000_000,
         max_bitrate_out_bps: 10_000_000,
+        video_bitrate_limits: VideoBitrateLimits::default(),
         rtc_media_worker_count: 1,
     }
 }
@@ -89,7 +91,10 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
             RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(config.room_size),
                 config.feature_flags,
-                rtp_capabilities::router_rtp_capabilities(config.codec_flags),
+                rtp_capabilities::router_rtp_capabilities_with_preferences(
+                    config.codec_flags,
+                    config.codec_preferences,
+                ),
             ),
         ),
         Arc::new(MediaTap::default()),

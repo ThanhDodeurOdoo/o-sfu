@@ -25,8 +25,8 @@ pub(super) use tokio_tungstenite::{
 
 pub(super) use crate::{
     config::{
-        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-        TelemetryConfig,
+        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
     },
     runtime::{
         RuntimeState,
@@ -90,12 +90,14 @@ pub(super) fn test_config(
         trust_proxy_headers: false,
         feature_flags: RuntimeFeatureFlags::default(),
         codec_flags: MediaCodecFlags::default(),
+        codec_preferences: CodecPreferences::default(),
         diagnostics: DiagnosticsConfig::default(),
         telemetry: TelemetryConfig::default(),
         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         rtc_port_range: RtcPortRange::new(40_000, 49_999),
         max_bitrate_in_bps: 8_000_000,
         max_bitrate_out_bps: 10_000_000,
+        video_bitrate_limits: VideoBitrateLimits::default(),
         rtc_media_worker_count: 1,
     }
 }
@@ -240,8 +242,10 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
         RtcTransportAdapterConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(47_200, 47_299),
             codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
         },
         RtcTransportAdapterDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),

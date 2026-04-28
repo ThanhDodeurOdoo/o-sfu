@@ -41,7 +41,7 @@ use super::{
     types::AddSendMediaRequest,
 };
 use crate::{
-    MediaCodecFlags,
+    CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
     runtime::transport_adapter::{
         SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportResult,
         TransportSessionKey,
@@ -51,7 +51,9 @@ use crate::{
 #[derive(Clone, Copy)]
 pub struct RecvMediaPolicy {
     pub max_bitrate_in_bps: u64,
+    pub video_bitrate_limits: VideoBitrateLimits,
     pub codec_flags: MediaCodecFlags,
+    pub codec_preferences: CodecPreferences,
 }
 
 pub fn respond_remove_media(
@@ -294,6 +296,8 @@ fn worker_add_recv_media(
             media_kind,
             rtp_parameters,
             policy.codec_flags,
+            policy.codec_preferences,
+            policy.video_bitrate_limits,
         )?
     } else {
         let mid = transport_mid(rtp_parameters).unwrap_or_default();
@@ -345,6 +349,8 @@ fn worker_stage_native_recv_media(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> TransportResult<Mid> {
     if offer_is_awaiting_answer(session_state) {
         return Err(TransportAdapterError::InvalidInput);
@@ -360,15 +366,26 @@ fn worker_stage_native_recv_media(
         Direction::RecvOnly,
         None,
         None,
-        sdp_simulcast::publish_recv_simulcast_or_default(media_kind, rtp_parameters, codec_flags),
+        sdp_simulcast::publish_recv_simulcast_or_default(
+            media_kind,
+            rtp_parameters,
+            codec_flags,
+            video_bitrate_limits,
+        ),
     );
     let Some((offer, pending_offer)) = sdp_api.apply() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
-    session_state.sdp_negotiation.staged_offer_upload_slots =
-        vec![upload_slot(mid, media_kind, rtp_parameters, codec_flags)];
+    session_state.sdp_negotiation.staged_offer_upload_slots = vec![upload_slot(
+        mid,
+        media_kind,
+        rtp_parameters,
+        codec_flags,
+        codec_preferences,
+        video_bitrate_limits,
+    )];
     let pending_streams = recv_encoding_identities(rtp_parameters)
         .into_iter()
         .map(|(ssrc, rid)| PendingRecvStream { ssrc, rid })
@@ -565,15 +582,18 @@ fn upload_slot(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+    video_bitrate_limits: VideoBitrateLimits,
 ) -> SessionUploadSlot {
     SessionUploadSlot {
         mid: mid.to_string(),
         kind: upload_kind(media_kind),
-        codecs: upload_codecs(media_kind, rtp_parameters, codec_flags),
+        codecs: upload_codecs(media_kind, rtp_parameters, codec_flags, codec_preferences),
         simulcast_encodings: sdp_simulcast::publish_upload_encodings_or_default(
             media_kind,
             rtp_parameters,
             codec_flags,
+            video_bitrate_limits,
         ),
     }
 }
@@ -590,6 +610,7 @@ fn upload_codecs(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
 ) -> Vec<String> {
     let mut codecs = Vec::new();
     for format in rtp_parameters.formats() {
@@ -602,7 +623,7 @@ fn upload_codecs(
         }
     }
     if codecs.is_empty() {
-        negotiation::offered_codecs(media_kind, codec_flags)
+        negotiation::offered_codecs(media_kind, codec_flags, codec_preferences)
     } else {
         codecs
     }

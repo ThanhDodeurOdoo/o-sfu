@@ -1,7 +1,7 @@
 use std::{net::IpAddr, num::NonZeroUsize};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use o_sfu_core::RtcPortRange;
+use o_sfu_core::{RtcPortRange, VideoBitrateLimits};
 
 use super::parsing::parse_optional_env;
 
@@ -10,6 +10,7 @@ pub(super) struct LoadedTransportConfig {
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_in_bps: u64,
     pub(super) max_bitrate_out_bps: u64,
+    pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) rtc_media_worker_count: usize,
 }
@@ -44,6 +45,12 @@ pub(super) fn load_transport_config(
         "MAX_BITRATE_OUT must be a valid u64",
     )?
     .unwrap_or(10_000_000);
+    let max_video_bitrate_bps = parse_optional_env(
+        &mut get_var,
+        "MAX_VIDEO_BITRATE",
+        "MAX_VIDEO_BITRATE must be a valid u64",
+    )?
+    .unwrap_or(VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE_BPS);
     let rtc_max_port = parse_optional_env(
         &mut get_var,
         "RTC_MAX_PORT",
@@ -72,6 +79,10 @@ pub(super) fn load_transport_config(
         max_bitrate_out_bps > 0,
         "MAX_BITRATE_OUT must be greater than zero"
     );
+    ensure!(
+        max_video_bitrate_bps > 0,
+        "MAX_VIDEO_BITRATE must be greater than zero"
+    );
     let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
     ensure!(
         rtc_media_worker_count <= usize::from(rtc_port_range.port_count()),
@@ -89,6 +100,7 @@ pub(super) fn load_transport_config(
         public_ip,
         max_bitrate_in_bps,
         max_bitrate_out_bps,
+        video_bitrate_limits: VideoBitrateLimits::new(max_video_bitrate_bps),
         rtc_port_range,
         rtc_media_worker_count,
     })
@@ -98,7 +110,7 @@ pub(super) fn load_transport_config(
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
-    use super::{LoadedTransportConfig, RtcPortRange, load_transport_config};
+    use super::{LoadedTransportConfig, RtcPortRange, VideoBitrateLimits, load_transport_config};
 
     #[test]
     fn load_transport_config_accepts_public_ip_and_defaults() {
@@ -112,6 +124,7 @@ mod tests {
                 public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
                 max_bitrate_in_bps: 8_000_000,
                 max_bitrate_out_bps: 10_000_000,
+                video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
             })
@@ -124,6 +137,7 @@ mod tests {
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "MAX_BITRATE_IN" => Some("1234567".to_owned()),
             "MAX_BITRATE_OUT" => Some("7654321".to_owned()),
+            "MAX_VIDEO_BITRATE" => Some("2345678".to_owned()),
             _ => None,
         });
         assert!(config.is_ok());
@@ -132,6 +146,10 @@ mod tests {
         };
         assert_eq!(config.max_bitrate_in_bps, 1_234_567);
         assert_eq!(config.max_bitrate_out_bps, 7_654_321);
+        assert_eq!(
+            config.video_bitrate_limits,
+            VideoBitrateLimits::new(2_345_678)
+        );
     }
 
     #[test]
@@ -204,6 +222,16 @@ mod tests {
         let config = load_transport_config(|key| match key {
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "MAX_BITRATE_OUT" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn load_transport_config_rejects_zero_max_video_bitrate() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "MAX_VIDEO_BITRATE" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

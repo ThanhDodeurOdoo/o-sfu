@@ -95,10 +95,16 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `CODEC_H265`                       | `false`         |      ✅      | Enable H.265 video codec.                                                                                                                                         |
 | `CODEC_VP9`                        | `false`         |      ✅      | Enable VP9 video codec.                                                                                                                                           |
 | `CODEC_AV1`                        | `false`         |      ✅      | Enable AV1 video codec.                                                                                                                                           |
+| `CODEC_AUDIO_PREFERENCE`           | `opus,PCMU,PCMA` |      ✅      | Optional comma-separated audio codec preference order. Missing codecs keep their default relative order.                                                           |
+| `CODEC_VIDEO_PREFERENCE`           | `VP8,H264,H265,VP9,AV1` |      ✅      | Optional comma-separated video codec preference order. Missing codecs keep their default relative order.                                                           |
 | `MAX_BITRATE_IN`                   | `8000000`       |      ✅      | Maximum incoming bitrate in bps per user (upload).                                                                                                                |
 | `MAX_BITRATE_OUT`                  | `10000000`      |      ✅      | Maximum outgoing bitrate in bps per user (download).                                                                                                              |
-| `MAX_VIDEO_BITRATE`                | `4000000`       |      ❌      | Maximum bitrate in bps for the highest simulcast video layer.                                                                                                     |
+| `MAX_VIDEO_BITRATE`                | `4000000`       |      ✅      | Maximum bitrate in bps for the highest default simulcast video layer metadata.                                                                                    |
 | `DATA_PATH`/`MEDIA_DIR`            | `/tmp/odoo_sfu` |      ❌      | Base path for SFU local storage (`recordings`, `resources`, `debug` subfolders).                                                                                  |
+
+Codec preference variables accept comma-separated partial orders. Disabled
+codecs are ignored, and codecs omitted from the preference list keep their
+default relative order after the explicitly preferred entries.
 
 
 ## Running the server and contributing

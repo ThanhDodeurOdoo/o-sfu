@@ -32,7 +32,7 @@ use super::{
     session,
 };
 use crate::{
-    MediaCodecFlags, RtcPortRange,
+    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         RoomInstanceId,
         metrics::RuntimeMetrics,
@@ -49,8 +49,10 @@ pub struct WorkerCommandContext<'a> {
     pub public_ip: IpAddr,
     pub max_bitrate_in_bps: u64,
     pub max_bitrate_out_bps: u64,
+    pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub codec_flags: MediaCodecFlags,
+    pub codec_preferences: CodecPreferences,
     pub metrics: &'a RuntimeMetrics,
 }
 
@@ -115,7 +117,9 @@ pub fn handle_worker_command(
                 context.bitrate_state,
                 media::RecvMediaPolicy {
                     max_bitrate_in_bps: context.max_bitrate_in_bps,
+                    video_bitrate_limits: context.video_bitrate_limits,
                     codec_flags: context.codec_flags,
+                    codec_preferences: context.codec_preferences,
                 },
                 context.metrics,
                 context.relay_registry,
@@ -156,8 +160,10 @@ fn handle_negotiation_command(
             OfferBootstrapConfig {
                 public_ip: context.public_ip,
                 max_bitrate_out_bps: context.max_bitrate_out_bps,
+                video_bitrate_limits: context.video_bitrate_limits,
                 rtc_port_range: context.rtc_port_range,
                 codec_flags: context.codec_flags,
+                codec_preferences: context.codec_preferences,
                 metrics: context.metrics,
             },
             &session_key,

@@ -26,7 +26,7 @@ pub(super) use super::super::{
     test_support::test_transport_session_key,
 };
 pub(super) use crate::{
-    MediaCodecFlags, RtcPortRange,
+    CodecPreferences, MediaCodecFlags, RtcPortRange,
     runtime::{
         UserId,
         diagnostics::DiagnosticsStore,
@@ -87,24 +87,40 @@ pub(super) fn rtc_adapter_with_bitrate_limits(
         max_bitrate_in_bps,
         max_bitrate_out_bps,
         MediaCodecFlags::default(),
+        CodecPreferences::default(),
     )
 }
 
 pub(super) fn rtc_adapter_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportAdapter {
-    rtc_adapter_for_test(8_000_000, 10_000_000, codec_flags)
+    rtc_adapter_for_test(
+        8_000_000,
+        10_000_000,
+        codec_flags,
+        CodecPreferences::default(),
+    )
+}
+
+pub(super) fn rtc_adapter_with_codec_policy(
+    codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+) -> RtcTransportAdapter {
+    rtc_adapter_for_test(8_000_000, 10_000_000, codec_flags, codec_preferences)
 }
 
 fn rtc_adapter_for_test(
     max_bitrate_in_bps: u64,
     max_bitrate_out_bps: u64,
     codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
 ) -> RtcTransportAdapter {
     RtcTransportAdapter::new(
         &RtcTransportAdapterConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
             codec_flags,
+            codec_preferences,
         },
         &RtcTransportAdapterDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),

@@ -82,12 +82,14 @@ impl RuntimeOptions {
                     config.max_bitrate_in_bps,
                     config.max_bitrate_out_bps,
                 ),
+                video_bitrate_limits: config.video_bitrate_limits,
             },
             RoutingOptions {
                 media_worker_count: config.rtc_media_worker_count,
             },
             CodecOptions {
                 flags: config.codec_flags,
+                preferences: config.codec_preferences,
             },
             ObservabilityOptions {
                 transport_diagnostics_enabled: true,
@@ -130,8 +132,8 @@ mod tests {
 
     use super::RuntimeOptions;
     use crate::config::{
-        Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-        TelemetryConfig,
+        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
     };
 
     #[test]
@@ -153,10 +155,12 @@ mod tests {
                 video_recording: false,
             },
             codec_flags: MediaCodecFlags::default().with_h264(true),
+            codec_preferences: CodecPreferences::default(),
             telemetry: TelemetryConfig::default(),
             public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
             max_bitrate_in_bps: 1_234_000,
             max_bitrate_out_bps: 5_678_000,
+            video_bitrate_limits: VideoBitrateLimits::new(4_321_000),
             rtc_port_range: RtcPortRange::new(50_000, 50_099),
             rtc_media_worker_count: 4,
         };
@@ -176,8 +180,13 @@ mod tests {
             options.core.media.bitrate_limits.max_bitrate_in_bps(),
             config.max_bitrate_in_bps
         );
+        assert_eq!(
+            options.core.media.video_bitrate_limits,
+            config.video_bitrate_limits
+        );
         assert_eq!(options.core.routing.media_worker_count, 4);
         assert_eq!(options.core.codecs.flags, config.codec_flags);
+        assert_eq!(options.core.codecs.preferences, config.codec_preferences);
         assert_eq!(options.http.bind_address, config.bind_address);
         assert_eq!(options.http.auth.key, config.auth_key.as_str());
         assert_eq!(options.http.diagnostics, config.diagnostics);
@@ -207,10 +216,12 @@ mod tests {
                 video_recording: false,
             },
             codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
             telemetry: TelemetryConfig::default(),
             public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
             max_bitrate_in_bps: 1_234_000,
             max_bitrate_out_bps: 5_678_000,
+            video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(50_000, 50_099),
             rtc_media_worker_count: 4,
         };

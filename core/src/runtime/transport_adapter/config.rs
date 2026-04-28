@@ -1,7 +1,7 @@
 use std::{net::IpAddr, sync::Arc};
 
 use crate::{
-    MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits, VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -12,8 +12,10 @@ use crate::{
 pub struct RtcTransportAdapterConfig {
     pub public_ip: IpAddr,
     pub bitrate_limits: SessionBitrateLimits,
+    pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub codec_flags: MediaCodecFlags,
+    pub codec_preferences: CodecPreferences,
 }
 
 impl RtcTransportAdapterConfig {
@@ -22,8 +24,10 @@ impl RtcTransportAdapterConfig {
         Self {
             public_ip: self.public_ip,
             bitrate_limits: self.bitrate_limits,
+            video_bitrate_limits: self.video_bitrate_limits,
             rtc_port_range,
             codec_flags: self.codec_flags,
+            codec_preferences: self.codec_preferences,
         }
     }
 
@@ -42,6 +46,11 @@ impl RtcTransportAdapterConfig {
     }
 
     #[must_use]
+    pub const fn video_bitrate_limits(&self) -> VideoBitrateLimits {
+        self.video_bitrate_limits
+    }
+
+    #[must_use]
     pub const fn rtc_port_range(&self) -> RtcPortRange {
         self.rtc_port_range
     }
@@ -49,6 +58,11 @@ impl RtcTransportAdapterConfig {
     #[must_use]
     pub const fn codec_flags(&self) -> MediaCodecFlags {
         self.codec_flags
+    }
+
+    #[must_use]
+    pub const fn codec_preferences(&self) -> CodecPreferences {
+        self.codec_preferences
     }
 }
 

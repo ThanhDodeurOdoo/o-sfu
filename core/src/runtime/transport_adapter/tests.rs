@@ -193,8 +193,10 @@ fn test_rtc_shard_set_config(
         RtcTransportAdapterConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range,
             codec_flags: MediaCodecFlags::default(),
+            codec_preferences: crate::CodecPreferences::default(),
         },
         RtcTransportAdapterDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
