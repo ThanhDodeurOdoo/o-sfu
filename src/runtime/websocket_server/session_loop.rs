@@ -18,9 +18,7 @@ use tracing::{debug, info, warn};
 use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
 use crate::{
     application::user_session::{User, UserError, UserOutput, UserSignal},
-    core::runtime::room::{
-        Room, RoomEventMessage, RoomEventRequest, UserCloseReason, UserOutbound,
-    },
+    core::server::room::{Room, RoomEventMessage, RoomEventRequest, UserCloseReason, UserOutbound},
     runtime::{
         ConnectionId,
         metrics::{RuntimeMetrics, WsSessionLoopExitReason},

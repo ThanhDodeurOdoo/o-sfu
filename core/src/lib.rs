@@ -21,25 +21,25 @@
 //!   [`TransportFacade`] when a caller needs one backend with negotiation,
 //!   media, and observability capabilities, and the narrower port traits when a
 //!   caller only needs one concern;
-//! - diagnostics and metrics DTOs under [`runtime::diagnostics`] and
-//!   [`runtime::metrics`], which remain part of the current server integration
-//!   contract.
+//! - server-integration DTOs and facades under [`server`], including
+//!   diagnostics, metrics, room orchestration, recording taps, source
+//!   descriptors, and current transport construction seams.
 //!
-//! The broad [`runtime`] module is still public because the server crate and
-//! integration tests consume it directly. Treat it as transitional internals
-//! unless a type is re-exported at the crate root or explicitly documented by
-//! its module as a supported extension point. The older media-signal vocabulary
-//! has moved under [`unstable::signals`] because it is not the current server
-//! orchestration path. New public items should first fit the front door above;
-//! otherwise they need an architecture note explaining why they are
-//! intentionally exposed.
+//! The broad [`runtime`] module is still public because integration tests and
+//! unfinished migration work consume it directly. Production server code should
+//! use [`server`] for in-repository integration and crate-root re-exports for
+//! the stable media-core front door. The older media-signal vocabulary has moved
+//! under [`unstable::signals`] because it is not the current server
+//! orchestration path. New public items should first fit the front door above or
+//! the explicit server-integration namespace; otherwise they need an
+//! architecture note explaining why they are intentionally exposed.
 //!
 //! # Server-facing example
 //!
 //! ```rust,no_run
 //! use o_sfu_core::{CoreOptions, RuntimeSfuCore, RuntimeTransportAdapter};
-//! use o_sfu_core::runtime::room::Room;
-//! use o_sfu_core::runtime::UserId;
+//! use o_sfu_core::server::room::Room;
+//! use o_sfu_core::server::session::UserId;
 //! use o_sfu_core::ConnectionId;
 //!
 //! async fn create_offer(
@@ -78,6 +78,7 @@ mod ids;
 mod options;
 mod room;
 pub mod runtime;
+pub mod server;
 mod sfu;
 pub mod transport;
 

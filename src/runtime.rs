@@ -40,28 +40,26 @@ pub(crate) mod websocket_server;
 pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
 pub(crate) use metrics::RuntimeMetrics;
-#[cfg(test)]
-pub(crate) use o_sfu_core::runtime::source_model;
 pub(crate) use o_sfu_core::{
-    ConnectionId, RoomInstanceId,
-    runtime::{metrics, packet_sink_registry, recording, room, rtc_adapter, transport_adapter},
+    ConnectionId, RoomInstanceId, SessionBitrateLimits,
+    server::{metrics, recording, room, transport as transport_adapter},
 };
 use options::{HttpOptions, RuntimeOptions, SocketOptions};
-use packet_sink_registry::RoomPacketSinkRegistry;
 pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy, rtp_capabilities,
 };
-pub(crate) use rtc_adapter::client_rtp_capabilities_from_answer;
-pub use rtc_adapter::{RemoteAddrDemux, test_support::test_transport_session_key};
 use telemetry::init_tracing;
 use transport_adapter::SourcePolicyPort;
-pub use transport_adapter::TransportSessionKey;
+#[cfg(any(test, feature = "testing-transport"))]
+pub use transport_adapter::test_support::test_transport_session_key;
 pub(crate) use transport_adapter::{
     MediaPort, ObservabilityPort, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter, SessionBitrateLimits,
+    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+    client_rtp_capabilities_from_answer,
 };
+pub use transport_adapter::{RemoteAddrDemux, TransportSessionKey};
 
 /// Process-global shell for the server process.
 ///
@@ -100,7 +98,7 @@ impl Default for RuntimeDeps {
         Self {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-            recording_media_tap: Arc::new(RoomPacketSinkRegistry::default()),
+            recording_media_tap: Arc::new(MediaTap::default()),
         }
     }
 }

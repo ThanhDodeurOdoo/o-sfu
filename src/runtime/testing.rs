@@ -43,8 +43,8 @@ impl SourcePolicyDirtyState {
 }
 
 pub use super::{
-    packet_sink_registry::ActiveRoomRegistry,
-    rtc_adapter::{RelayTargetRegistry, WorkerHandleSlot},
+    recording::ActiveRoomRegistry,
+    transport_adapter::{RelayTargetRegistry, WorkerHandleSlot},
 };
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.

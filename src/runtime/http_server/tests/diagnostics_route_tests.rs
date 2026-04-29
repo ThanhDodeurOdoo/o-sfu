@@ -15,7 +15,7 @@ use o_sfu_router::{
 
 use super::fixtures::*;
 use crate::{
-    core::runtime::{StreamType, UserId, UserPermissions},
+    core::server::session::{StreamType, UserId, UserPermissions},
     runtime::{
         diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
         room::Room,

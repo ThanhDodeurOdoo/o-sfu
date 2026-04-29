@@ -38,7 +38,7 @@ use super::{
 };
 use crate::{
     application::user_session::User,
-    core::runtime::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
+    core::server::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},

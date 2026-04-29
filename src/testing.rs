@@ -119,5 +119,7 @@ pub mod concurrency {
 pub mod transport {
     pub use o_sfu_protocol::shared::UserId;
 
-    pub use crate::runtime::{RemoteAddrDemux, TransportSessionKey, test_transport_session_key};
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub use crate::runtime::test_transport_session_key;
+    pub use crate::runtime::{RemoteAddrDemux, TransportSessionKey};
 }

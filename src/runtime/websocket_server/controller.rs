@@ -38,7 +38,7 @@ use tracing::{Instrument, Span, field, info};
 use super::WsWriter;
 use crate::{
     application::user_session::User,
-    core::runtime::room::{Room, UserOutbound},
+    core::server::room::{Room, UserOutbound},
     runtime::{ConnectionId, RuntimeState, request_origin::resolve_remote_address, telemetry},
 };
 

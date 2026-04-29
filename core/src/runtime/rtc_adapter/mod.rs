@@ -42,6 +42,7 @@ mod routing_miss;
 mod sdp_simulcast;
 mod shared_payload;
 mod state;
+#[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
 #[cfg(test)]
 mod tests;

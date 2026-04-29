@@ -38,15 +38,14 @@ mod tests {
 
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::{
-        core::runtime::WebSocketCloseCode,
-        runtime::{
-            metrics::{
-                HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-                RtpForwardDestinationKind, RuntimeMetrics, TransportIceState,
-                WsSessionLoopExitReason,
-            },
-            rtc_adapter::TransportSessionHealth,
+        core::server::{
+            session::WebSocketCloseCode,
             source_model::{SourceEncodingId, SourceSelector},
+            transport::TransportSessionHealth,
+        },
+        runtime::metrics::{
+            HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
+            RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
         },
     };
 

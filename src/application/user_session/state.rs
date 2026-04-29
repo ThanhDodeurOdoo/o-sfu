@@ -14,7 +14,7 @@ use o_sfu_protocol::{
 use crate::{
     core::{
         OfferedMediaCapabilities,
-        runtime::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
+        server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
     },
     runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
 };
@@ -457,7 +457,7 @@ mod tests {
     use o_sfu_router::{MediaKind, Mid, Rid};
 
     use super::*;
-    use crate::core::runtime::source_model::{
+    use crate::core::server::source_model::{
         PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
         SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
     };

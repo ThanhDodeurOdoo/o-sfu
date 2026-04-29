@@ -38,7 +38,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use o_sfu_core::runtime::{StreamType, UserId};
+use o_sfu_core::server::session::{StreamType, UserId};
 use serde_json::{Value, json};
 
 use super::types::{

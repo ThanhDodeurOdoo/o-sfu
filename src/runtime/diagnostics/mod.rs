@@ -21,11 +21,11 @@
 mod graph;
 mod queries;
 pub(crate) mod types {
-    pub(crate) use o_sfu_core::runtime::diagnostics::types::*;
+    pub(crate) use o_sfu_core::server::diagnostics::*;
 }
 
 pub(crate) use graph::build_graph;
-pub(crate) use o_sfu_core::runtime::diagnostics::DiagnosticsStore;
+pub(crate) use o_sfu_core::server::diagnostics::DiagnosticsStore;
 pub(crate) use queries::{
     room_detail_response, rooms_response, summary_response, user_detail_response,
 };

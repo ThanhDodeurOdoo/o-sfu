@@ -1,7 +1,7 @@
 use std::slice;
 
 use super::fixtures::*;
-use crate::runtime::rtc_adapter::TransportSessionHealth;
+use crate::runtime::transport_adapter::TransportSessionHealth;
 
 #[tokio::test]
 async fn websocket_sends_ping_frames_and_accepts_pongs() {
