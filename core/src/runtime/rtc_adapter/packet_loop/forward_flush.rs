@@ -1,3 +1,23 @@
+//! Packet observation and forwarding flush for the packet loop.
+//!
+//! # Boundary role
+//!
+//! This module handles packet-derived updates, bounded relay intake and
+//! destination sends during the pump phase. Local session output and relay
+//! packets are batched before planning, packet observations update worker state
+//! before planning, and planned destinations are flushed before the worker
+//! returns to async waiting:
+//!
+//! - learn producer MID, SSRC and RID bindings from RTP headers
+//! - update active-speaker and incoming bitrate observations
+//! - request first video keyframes when ingress starts
+//! - drain a bounded number of relay packets into the local batch
+//! - send each planned packet to local RTC, packet sink or relay destinations
+//!
+//! Room policy decisions must already be projected into route-control state.
+//! This module observes packets and executes planned sends. It does not decide
+//! subscriptions or room membership.
+
 use std::time::Instant;
 
 use str0m::media::{KeyframeRequestKind, MediaKind};
@@ -19,6 +39,12 @@ use crate::runtime::{
     transport_adapter::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
 };
 
+/// Observe packet-path metadata before packets are forwarded.
+///
+/// This is where producer SSRC bindings, audio activity, RID readiness and
+/// incoming bitrate become worker state or metrics. The function also coalesces
+/// source-policy wakeups so the room layer is notified once per changed room
+/// after the batch has been inspected.
 pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,
     source_policy_signal: &SourcePolicySignal,
@@ -93,6 +119,12 @@ pub(super) fn record_incoming_stats(
     buffers.flush_source_policy_dirty(source_policy_signal);
 }
 
+/// Request a keyframe when the first packet for a video producer appears.
+///
+/// First ingress proves the producer is alive, but the first observed packet may
+/// not be decodable by new consumers. Asking for a PLI here helps strict
+/// selected-RID gates and late subscribers converge without making room policy
+/// inspect packet payloads.
 fn request_first_video_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
@@ -134,6 +166,11 @@ fn source_is_video(
         .is_some_and(|media| matches!(media.kind(), MediaKind::Video))
 }
 
+/// Drain relay packets without letting relay bursts monopolize one loop turn.
+///
+/// Relay messages are already decoded as `ForwardedPacket` values by their
+/// source worker. The cap keeps command handling and UDP receive responsive
+/// under cross-worker fanout spikes.
 pub(super) fn drain_relay_packets(
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
@@ -154,6 +191,22 @@ pub(super) fn drain_relay_packets(
     drained_packets
 }
 
+/// Execute planned forwarding destinations for all staged packets.
+///
+/// # Payload lifetime
+///
+/// The planner orders forwards by packet index. For relay destinations, this
+/// function promotes the source packet to a shared relay packet once and reuses
+/// it for every relay destination for that packet. For local RTC destinations,
+/// the destination can move the payload when it is the last destination and
+/// clone only when an earlier destination still needs the bytes.
+///
+/// # Error handling guidance
+///
+/// A missing local destination is treated as an empty local send because routes
+/// can change while packets are already batched. Relay overload is counted and
+/// dropped. Other destination errors are logged and the loop continues flushing
+/// the remaining planned destinations.
 pub(super) fn flush_forward_routes(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,

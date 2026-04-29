@@ -1,3 +1,18 @@
+//! Route-level keyframe feedback handling.
+//!
+//! # Boundary role
+//!
+//! Consumer `str0m::Rtc` instances emit keyframe requests in consumer-local
+//! terms, usually by MID and optional RID. The packet loop must translate that
+//! feedback back to the producer source that can satisfy it. This module owns
+//! that translation, duplicate coalescing and final dispatch to either a local
+//! producer session or a remote source-control handle.
+//!
+//! Keyframe requests are route-control feedback, not room policy. The room
+//! decides which sources and layers a user should receive. This module only
+//! makes sure the currently routed producer gets a bounded, source-keyed request
+//! stream.
+
 use std::time::Instant;
 
 use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
@@ -18,6 +33,11 @@ use crate::runtime::{
     transport_adapter::{TransportMediaId, TransportSessionKey},
 };
 
+/// Keyframe feedback emitted by one consumer session before producer lookup.
+///
+/// The MID is the consumer-local media identity. It must be resolved through
+/// worker route state before the packet loop knows which producer source owns
+/// the requested media.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingKeyframeRequest {
     pub(super) consumer_mid: Mid,
@@ -35,6 +55,11 @@ impl PendingKeyframeRequest {
     }
 }
 
+/// Producer-side destination for a resolved keyframe request.
+///
+/// Local sources are driven by the same worker state. Remote sources are owned
+/// by another worker or node and must be reached through source-control
+/// messaging.
 #[derive(Clone)]
 pub(super) enum ResolvedKeyframeRoute {
     Local {
@@ -46,6 +71,11 @@ pub(super) enum ResolvedKeyframeRoute {
     },
 }
 
+/// Source-keyed keyframe request after route resolution.
+///
+/// Multiple consumers can ask for the same source during one packet-loop turn.
+/// Coalescing keeps the request stream proportional to source media instead of
+/// fanout count and upgrades request kind when a stronger request is observed.
 #[derive(Clone)]
 pub(super) struct CoalescedKeyframeRequest {
     source_transport_media_id: TransportMediaId,
@@ -75,6 +105,12 @@ impl CoalescedKeyframeRequest {
     }
 }
 
+/// Resolve and flush every keyframe request staged during the current turn.
+///
+/// Requests are drained from packet-loop buffers, resolved from consumer-local
+/// MID to source transport media id, sorted by source and coalesced before any
+/// request is dispatched. Missing source state means the route changed before
+/// the feedback was flushed and is treated as a benign stale request.
 pub(super) fn flush_pending_keyframe_requests(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
@@ -127,6 +163,11 @@ pub(super) fn flush_pending_keyframe_requests(
     }
 }
 
+/// Dispatch one source-keyed keyframe request.
+///
+/// Local producers are marked through the worker's normal keyframe request path.
+/// Remote producers pass through route-control de-duplication before the request
+/// leaves the worker so repeated feedback does not flood another relay target.
 fn flush_coalesced_keyframe_request(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
@@ -192,6 +233,11 @@ fn flush_coalesced_keyframe_request(
     }
 }
 
+/// Resolve a producer transport media id to the control path that owns it.
+///
+/// The source can be local to this worker through `mid_registry`, or remote
+/// through the remote source registry populated by relay setup. Missing entries
+/// mean the route changed before the feedback was flushed.
 fn resolve_keyframe_route(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,

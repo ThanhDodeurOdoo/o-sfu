@@ -1,3 +1,17 @@
+//! Transport event observation for packet-loop sessions.
+//!
+//! # Boundary role
+//!
+//! `str0m` emits many events while the packet loop drains a session. Only a
+//! small subset changes the SFU's observable transport state. This module owns
+//! that translation so session draining can stay focused on moving `str0m`
+//! outputs into packet-loop buffers.
+//!
+//! Observations here update read-side state only. They do not own the transport
+//! state machine and they do not decide room policy. They update metrics,
+//! best-effort snapshots, diagnostics and source-policy wakeups derived from
+//! transport events.
+
 use std::sync::{Arc, Mutex};
 
 use str0m::{Event, IceConnectionState, bwe::BweKind};
@@ -11,6 +25,11 @@ use crate::runtime::{
     transport_adapter::{SourcePolicySignal, TransportSessionKey},
 };
 
+/// Log a transport event at the level useful for packet-loop diagnostics.
+///
+/// Connection transitions are debug-level because they describe lifecycle.
+/// Other events are trace-level to avoid turning the media path into a logging
+/// hot spot during normal calls.
 pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     match event {
         Event::IceConnectionStateChange(state) => {
@@ -39,6 +58,11 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     }
 }
 
+/// Project selected `str0m` events into metrics, snapshots and diagnostics.
+///
+/// Snapshot writes are best-effort. If the snapshot lock is unavailable, the
+/// packet loop keeps running because the worker-owned `RtcBootstrapState`
+/// remains authoritative for media behavior.
 pub(super) fn observe_rtc_event(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     diagnostics: &Arc<DiagnosticsStore>,
@@ -82,6 +106,11 @@ pub(super) fn observe_rtc_event(
     );
 }
 
+/// Store receiver bandwidth estimates and wake source-policy recomputation.
+///
+/// Bandwidth estimates can change source selection, but that policy is owned by
+/// the room layer. The packet loop records the latest estimate in the snapshot
+/// and marks the room dirty only when the value changed.
 fn observe_receiver_bandwidth(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_policy_signal: &SourcePolicySignal,
@@ -103,6 +132,7 @@ fn observe_receiver_bandwidth(
     source_policy_signal.mark_dirty(session_key.room_instance_id());
 }
 
+/// Convert `str0m` ICE connection state into the metrics enum.
 pub fn transport_ice_state(state: IceConnectionState) -> TransportIceState {
     match state {
         IceConnectionState::New => TransportIceState::New,
@@ -113,6 +143,10 @@ pub fn transport_ice_state(state: IceConnectionState) -> TransportIceState {
     }
 }
 
+/// Convert a `str0m` event into the public transport-health snapshot value.
+///
+/// Not every event is a health transition. `None` means the event should not
+/// update the session health snapshot.
 pub fn transport_health_from_event(event: &Event) -> Option<TransportSessionHealth> {
     match event {
         Event::Connected => Some(TransportSessionHealth::Connected),

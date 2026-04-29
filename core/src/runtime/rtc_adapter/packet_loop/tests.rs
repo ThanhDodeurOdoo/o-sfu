@@ -1,3 +1,11 @@
+//! Regression coverage for packet-loop contracts.
+//!
+//! These tests exercise the packet-loop helpers at their boundary points:
+//! ingress demux caching, relay fanout, packet sink accounting, route-control
+//! observations, keyframe feedback coalescing and scheduling deadlines. They
+//! intentionally avoid running a full async worker unless the contract under
+//! test requires worker scheduling behavior.
+
 use std::{
     collections::BTreeSet,
     net::SocketAddr,

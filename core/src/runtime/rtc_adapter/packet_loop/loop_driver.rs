@@ -1,3 +1,25 @@
+//! Packet-loop worker driver.
+//!
+//! # Boundary role
+//!
+//! This module owns the async task that ties the RTC worker together. It is the
+//! only packet-loop file that awaits socket I/O or worker-channel input. The
+//! rest of the packet-loop modules are synchronous helpers that run while the
+//! worker owns mutable access to `RtcBootstrapState`.
+//!
+//! The driver preserves the worker ordering contract:
+//!
+//! - drain already queued commands before touching media
+//! - pump dirty or timed-out sessions and bounded relay packets
+//! - flush all staged UDP transmits outside any shared-state lock
+//! - wait for the next shutdown, command, timeout or UDP datagram event
+//! - try to route one received datagram into its owning `str0m::Rtc`
+//!
+//! Shared observable state is updated through narrow side channels. The packet
+//! loop owns authoritative media state, while snapshots, metrics, diagnostics,
+//! packet sinks, relay registries and source-policy signals are outputs or
+//! configuration dependencies.
+
 use std::{
     io::Error as IoError,
     net::{IpAddr, SocketAddr},
@@ -37,27 +59,55 @@ use crate::{
     },
 };
 
+/// Immutable configuration and shared side channels for one packet-loop worker.
+///
+/// The config is built by `RtcTransportShard` when the worker is booted. Values
+/// copied into session creation are immutable shard settings. `Arc` fields are
+/// shared services that the packet loop may update or query without exposing
+/// direct access to `RtcBootstrapState`.
 pub struct PacketLoopConfig {
+    /// Public ICE-lite address advertised by sessions created on this shard.
     pub public_ip: IpAddr,
+    /// Maximum inbound bitrate applied when new RTC adapter sessions are created.
     pub max_bitrate_in_bps: u64,
+    /// Maximum outbound bitrate applied when new RTC adapter sessions are created.
     pub max_bitrate_out_bps: u64,
+    /// Video bitrate policy projected into session and route-control decisions.
     pub video_bitrate_limits: VideoBitrateLimits,
+    /// UDP port range used when the worker opens or reuses its shard socket.
     pub rtc_port_range: RtcPortRange,
+    /// Codec feature flags used while constructing session offers.
     pub codec_flags: MediaCodecFlags,
+    /// Ordered codec preferences used while constructing session offers.
     pub codec_preferences: CodecPreferences,
+    /// Cold-path diagnostics sink for transport health changes.
     pub diagnostics: Arc<DiagnosticsStore>,
+    /// Room-scoped packet sinks such as recording taps.
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
+    /// Registry of worker or node relay targets for published media.
     pub relay_registry: Arc<RelayRegistry>,
+    /// Wakeup mechanism for room-owned source policy recomputation.
     pub source_policy_signal: Arc<SourcePolicySignal>,
+    /// Central metrics catalog updated by packet-loop observations.
     pub metrics: Arc<RuntimeMetrics>,
 }
 
+/// Socket snapshot used for the wait phase of one packet-loop turn.
+///
+/// The `Arc<UdpSocket>` is cloned before the loop awaits so no borrow of
+/// `RtcBootstrapState` crosses an await point. `next_timeout` is computed from
+/// dirty sessions, `str0m` timeouts and delayed selected-RID keyframe refreshes.
 struct SnapshotInfo {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
     next_timeout: Option<Instant>,
 }
 
+/// External input that resumes the worker after the pump phase.
+///
+/// A timeout wake is represented as `Datagram { received_size: 0, .. }`. That
+/// keeps the driver on one input path while letting `next_timeout_deadline`
+/// wake ready sessions without fabricating a command.
 enum NextLoopInput {
     Command(RtcWorkerCommand),
     #[cfg(any(test, feature = "testing-transport"))]
@@ -69,20 +119,21 @@ enum NextLoopInput {
     },
 }
 
-/// The main entry point for the media packet processing loop.
+/// Run the shard-local media packet loop until shutdown or worker-channel close.
 ///
-/// This function runs indefinitely (until the `shutdown_token` is cancelled),
-/// orchestrating the high-frequency tasks of the RTC adapter:
+/// # Concurrency model
 ///
-/// 1. **Command Processing**: Drains control commands that modify the topology or state.
-/// 2. **Media Pumping**: Drains media from all active users and relay channels.
-/// 3. **Packet Transmission**: Flushes all pending transmissions (media, keyframe requests)
-///    to the underlying UDP socket.
-/// 4. **Socket Reception**: Waits for incoming UDP datagrams and routes them to the
-///    appropriate user.
+/// This task owns `RtcBootstrapState`, routing hints, the UDP receive buffer and
+/// `PacketLoopBuffers`. Other tasks communicate with it through channels,
+/// shared read-side snapshots and cancellation. No `MutexGuard` is held across
+/// socket sends or receives.
 ///
-/// This loop is "biased" towards control commands and shutdown to ensure the
-/// SFU remains responsive to management even under heavy media load.
+/// # Hot-path behavior
+///
+/// The loop batches work in turns. A turn may produce many transmits and
+/// forwards, but it waits for only one next external input before looping.
+/// Relay draining is bounded so a relay burst cannot starve commands or socket
+/// ingress indefinitely.
 pub async fn run_packet_loop(
     config: PacketLoopConfig,
     bitrate_state: Arc<Mutex<RtcBitrateState>>,
@@ -197,6 +248,13 @@ fn drain_pending_worker_commands(
     }
 }
 
+/// Apply the event that woke the worker after the pump phase.
+///
+/// Commands mutate authoritative worker state and conservatively invalidate
+/// ingress routing hints. Datagram inputs are routed into the owning
+/// `str0m::Rtc` if the receive buffer contains a non-empty packet. A
+/// zero-length datagram input is the driver's internal timeout wake and only
+/// causes the next turn to poll ready sessions.
 fn handle_loop_input(
     bootstrap_state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
@@ -255,6 +313,12 @@ fn handle_loop_input(
     }
 }
 
+/// Execute one normal worker command against authoritative worker state.
+///
+/// The command handler owns all control-plane mutation for the RTC adapter. The
+/// packet-loop driver only supplies the shard context and then clears cached
+/// ingress routing state. This is conservative because some commands change
+/// which session owns a source tuple or ICE username fragment.
 fn handle_worker_command_and_clear_routing_cache(
     bootstrap_state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
@@ -284,6 +348,11 @@ fn handle_worker_command_and_clear_routing_cache(
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
+/// Execute one testing-only worker command and invalidate ingress routing hints.
+///
+/// Debug commands can mutate the same worker-owned state as normal commands, so
+/// they follow the same conservative cache invalidation under the testing
+/// feature.
 fn handle_debug_worker_command_and_clear_routing_cache(
     bootstrap_state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
@@ -312,6 +381,15 @@ fn handle_debug_worker_command_and_clear_routing_cache(
     routing_state.clear_on_topology_change();
 }
 
+/// Drain synchronous worker work and return the socket state for async waiting.
+///
+/// This is the center of one packet-loop turn. It clears reusable buffers,
+/// drains session outputs, drains bounded relay input, flushes route-control
+/// feedback, records packet observations, plans fanout and executes forwarding.
+/// The returned snapshot contains only the socket handle and next deadline
+/// needed after the mutable borrow of worker state ends. If the worker has not
+/// opened a shared socket yet, the function clears staged buffers and returns
+/// without polling media.
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -366,6 +444,11 @@ fn snapshot_and_pump(
     })
 }
 
+/// Return the next time the loop must wake without external input.
+///
+/// Dirty sessions are always due immediately because a previous input or local
+/// send has queued more `str0m` output. Otherwise the deadline is the earlier of
+/// the next `str0m` timeout and the next delayed selected-RID keyframe refresh.
 pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Instant> {
     if state.has_dirty_sessions() {
         return Some(Instant::now());
@@ -383,6 +466,10 @@ pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Ins
 }
 
 #[cfg(not(any(test, feature = "testing-transport")))]
+/// Wait for the next event that should resume the worker loop.
+///
+/// Shutdown and commands are biased ahead of socket receive. When no socket has
+/// been opened yet, only shutdown and commands can wake the worker.
 async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
@@ -432,6 +519,11 @@ async fn wait_for_next_loop_input(
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
+/// Wait for the next event in builds that expose a testing debug channel.
+///
+/// The debug channel is intentionally ordered with normal commands in the
+/// biased select because tests use it to observe and mutate worker state
+/// deterministically.
 async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
@@ -509,6 +601,10 @@ fn handle_socket_receive_result(
     }
 }
 
+/// Convert a deadline into the socket receive timeout used by `tokio::time`.
+///
+/// A deadline that is already due becomes a one millisecond timeout. This yields
+/// back to Tokio instead of spinning if the loop reaches an expired deadline.
 fn socket_wait_duration(next_timeout: Instant) -> Duration {
     let timeout_duration = next_timeout.saturating_duration_since(Instant::now());
     if timeout_duration.is_zero() {
