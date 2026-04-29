@@ -17,8 +17,9 @@ pub(super) use tower::util::ServiceExt;
 pub(super) use super::super::app;
 pub(super) use crate::{
     config::{
-        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
+        UserConfig, VideoBitrateLimits,
     },
     runtime::{
         ConnectionId, RuntimeState,
@@ -38,8 +39,8 @@ pub(super) use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::{
-            RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
-            rtp_capabilities,
+            RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
+            RoomRuntimePolicy, rtp_capabilities,
         },
         testing::build_test_runtime_state,
         transport_adapter::RuntimeTransportAdapter,
@@ -56,24 +57,34 @@ pub(super) struct TestRuntimeState {
 
 pub(super) fn test_config() -> Config {
     Config {
-        auth_key: TEST_AUTH_KEY.to_owned(),
-        bind_address: SocketAddr::from(([127, 0, 0, 1], 8070)),
-        authentication_timeout_ms: 10_000,
-        room_size: 100,
-        diagnostics: DiagnosticsConfig::default(),
-        user_timeout_ms: 10_000,
-        ping_interval_ms: 60_000,
-        trust_proxy_headers: false,
-        feature_flags: RuntimeFeatureFlags::default(),
-        codec_flags: MediaCodecFlags::default(),
-        codec_preferences: CodecPreferences::default(),
+        auth: AuthConfig {
+            key: TEST_AUTH_KEY.to_owned(),
+            authentication_timeout_ms: 10_000,
+        },
+        http: HttpConfig {
+            bind_address: SocketAddr::from(([127, 0, 0, 1], 8070)),
+            trust_proxy_headers: false,
+        },
+        user: UserConfig {
+            room_size: 100,
+            timeout_ms: 10_000,
+            ping_interval_ms: 60_000,
+        },
+        transport: TransportConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            max_bitrate_in_bps: 8_000_000,
+            max_bitrate_out_bps: 10_000_000,
+            video_bitrate_limits: VideoBitrateLimits::default(),
+            rtc_media_worker_count: 1,
+        },
+        codecs: CodecConfig {
+            flags: MediaCodecFlags::default(),
+            preferences: CodecPreferences::default(),
+        },
+        features: RuntimeFeatureFlags::default(),
         telemetry: TelemetryConfig::default(),
-        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        rtc_port_range: RtcPortRange::new(40_000, 49_999),
-        max_bitrate_in_bps: 8_000_000,
-        max_bitrate_out_bps: 10_000_000,
-        video_bitrate_limits: VideoBitrateLimits::default(),
-        rtc_media_worker_count: 1,
+        diagnostics: DiagnosticsConfig::default(),
     }
 }
 
@@ -89,17 +100,19 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
         RoomManagerConfig::new(
             1,
             RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(config.room_size),
-                config.feature_flags,
+                RoomAdmissionPolicy::new(config.user.room_size),
+                config.features,
                 rtp_capabilities::router_rtp_capabilities_with_preferences(
-                    config.codec_flags,
-                    config.codec_preferences,
+                    config.codecs.flags,
+                    config.codecs.preferences,
                 ),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::clone(&diagnostics),
-        Arc::clone(&metrics),
+        RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::clone(&diagnostics),
+            metrics: Arc::clone(&metrics),
+        },
     ));
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let state = build_test_runtime_state(

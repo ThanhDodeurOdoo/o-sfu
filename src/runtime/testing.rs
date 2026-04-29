@@ -12,14 +12,14 @@ use tokio::{
 };
 
 use super::{
-    RuntimeDeps, RuntimeState, build_transport_adapter,
+    RuntimeServices, RuntimeState, build_transport_adapter,
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
     options::RuntimeOptions,
     room::{
-        ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
-        rtp_capabilities::router_rtp_capabilities,
+        ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps,
+        RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities,
     },
     transport_adapter::RuntimeTransportAdapter,
 };
@@ -172,7 +172,7 @@ impl Drop for TestServer {
 /// Returns an error when the test listener cannot bind or the local socket address cannot be read.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let options = RuntimeOptions::from_config(&config);
-    let deps = RuntimeDeps::default();
+    let services = RuntimeServices::default();
     let room_manager = Arc::new(RoomManager::new(
         RoomManagerConfig::new(
             options.core.routing.media_worker_count,
@@ -182,17 +182,19 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
                 router_rtp_capabilities(options.core.codecs.flags),
             ),
         ),
-        Arc::clone(&deps.recording_media_tap),
-        Arc::clone(&deps.diagnostics),
-        Arc::clone(&deps.metrics),
+        RoomManagerDeps {
+            recording_media_tap: Arc::clone(&services.recording_media_tap),
+            diagnostics: Arc::clone(&services.diagnostics),
+            metrics: Arc::clone(&services.metrics),
+        },
     ));
-    let transport_adapter = build_transport_adapter(&options.core, &deps)?;
-    let bind_address = config.bind_address;
+    let transport_adapter = build_transport_adapter(&options.core, &services)?;
+    let bind_address = config.http.bind_address;
     let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),
-        Arc::clone(&deps.diagnostics),
-        Arc::clone(&deps.metrics),
+        Arc::clone(&services.diagnostics),
+        Arc::clone(&services.metrics),
         transport_adapter,
     );
     let listener = TcpListener::bind(bind_address).await?;

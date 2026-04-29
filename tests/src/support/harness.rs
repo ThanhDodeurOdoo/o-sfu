@@ -11,8 +11,9 @@ use std::{
 use futures_util::{SinkExt, StreamExt};
 use o_sfu::{
     config::{
-        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
+        UserConfig, VideoBitrateLimits,
     },
     testing::{
         auth::{
@@ -39,24 +40,34 @@ pub const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 #[must_use]
 pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
     Config {
-        auth_key: TEST_AUTH_KEY.to_owned(),
-        bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-        authentication_timeout_ms,
-        room_size,
-        user_timeout_ms: 10_000,
-        ping_interval_ms: 60_000,
-        trust_proxy_headers: true,
-        feature_flags: RuntimeFeatureFlags::default(),
-        codec_flags: MediaCodecFlags::default(),
-        codec_preferences: CodecPreferences::default(),
-        diagnostics: DiagnosticsConfig::default(),
+        auth: AuthConfig {
+            key: TEST_AUTH_KEY.to_owned(),
+            authentication_timeout_ms,
+        },
+        http: HttpConfig {
+            bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            trust_proxy_headers: true,
+        },
+        user: UserConfig {
+            room_size,
+            timeout_ms: 10_000,
+            ping_interval_ms: 60_000,
+        },
+        transport: TransportConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            max_bitrate_in_bps: 8_000_000,
+            max_bitrate_out_bps: 10_000_000,
+            video_bitrate_limits: VideoBitrateLimits::default(),
+            rtc_media_worker_count: 1,
+        },
+        codecs: CodecConfig {
+            flags: MediaCodecFlags::default(),
+            preferences: CodecPreferences::default(),
+        },
+        features: RuntimeFeatureFlags::default(),
         telemetry: TelemetryConfig::default(),
-        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        rtc_port_range: RtcPortRange::new(40_000, 49_999),
-        max_bitrate_in_bps: 8_000_000,
-        max_bitrate_out_bps: 10_000_000,
-        video_bitrate_limits: VideoBitrateLimits::default(),
-        rtc_media_worker_count: 1,
+        diagnostics: DiagnosticsConfig::default(),
     }
 }
 

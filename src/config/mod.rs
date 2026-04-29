@@ -15,6 +15,6 @@ pub(crate) use self::log_view::ConfigLogView;
 pub use self::{
     diagnostics::DiagnosticsConfig,
     feature_flags::RuntimeFeatureFlags,
-    settings::Config,
+    settings::{AuthConfig, CodecConfig, Config, HttpConfig, TransportConfig, UserConfig},
     telemetry::{TelemetryConfig, TelemetryLogFormat, TelemetryResource, TraceExportConfig},
 };

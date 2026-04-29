@@ -25,8 +25,9 @@ pub(super) use tokio_tungstenite::{
 
 pub(super) use crate::{
     config::{
-        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
+        UserConfig, VideoBitrateLimits,
     },
     runtime::{
         RuntimeState,
@@ -36,7 +37,7 @@ pub(super) use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::{
-            Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
+            Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomRuntimePolicy, rtp_capabilities,
         },
         testing::{build_test_runtime_state, decode_protocol_welcome_batch},
@@ -81,24 +82,34 @@ pub(super) fn test_config(
     room_size: usize,
 ) -> Config {
     Config {
-        auth_key: TEST_AUTH_KEY.to_owned(),
-        bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-        authentication_timeout_ms,
-        room_size,
-        user_timeout_ms,
-        ping_interval_ms,
-        trust_proxy_headers: false,
-        feature_flags: RuntimeFeatureFlags::default(),
-        codec_flags: MediaCodecFlags::default(),
-        codec_preferences: CodecPreferences::default(),
-        diagnostics: DiagnosticsConfig::default(),
+        auth: AuthConfig {
+            key: TEST_AUTH_KEY.to_owned(),
+            authentication_timeout_ms,
+        },
+        http: HttpConfig {
+            bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            trust_proxy_headers: false,
+        },
+        user: UserConfig {
+            room_size,
+            timeout_ms: user_timeout_ms,
+            ping_interval_ms,
+        },
+        transport: TransportConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            max_bitrate_in_bps: 8_000_000,
+            max_bitrate_out_bps: 10_000_000,
+            video_bitrate_limits: VideoBitrateLimits::default(),
+            rtc_media_worker_count: 1,
+        },
+        codecs: CodecConfig {
+            flags: MediaCodecFlags::default(),
+            preferences: CodecPreferences::default(),
+        },
+        features: RuntimeFeatureFlags::default(),
         telemetry: TelemetryConfig::default(),
-        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        rtc_port_range: RtcPortRange::new(40_000, 49_999),
-        max_bitrate_in_bps: 8_000_000,
-        max_bitrate_out_bps: 10_000_000,
-        video_bitrate_limits: VideoBitrateLimits::default(),
-        rtc_media_worker_count: 1,
+        diagnostics: DiagnosticsConfig::default(),
     }
 }
 
@@ -148,23 +159,25 @@ async fn spawn_test_server_impl(
         ping_interval_ms,
         room_size,
     );
-    config.feature_flags = feature_flags;
+    config.features = feature_flags;
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let room_manager = Arc::new(RoomManager::new(
         RoomManagerConfig::new(
             1,
             RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(config.room_size),
+                RoomAdmissionPolicy::new(config.user.room_size),
                 feature_flags,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::clone(&diagnostics),
-        Arc::clone(&metrics),
+        RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::clone(&diagnostics),
+            metrics: Arc::clone(&metrics),
+        },
     ));
-    let bind_address = config.bind_address;
+    let bind_address = config.http.bind_address;
     let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),

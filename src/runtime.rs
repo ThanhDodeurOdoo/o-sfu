@@ -48,7 +48,8 @@ use options::{HttpOptions, RuntimeOptions, SocketOptions};
 pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
 use room::{
-    RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy, rtp_capabilities,
+    RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
+    rtp_capabilities,
 };
 use telemetry::init_tracing;
 use transport_adapter::SourcePolicyPort;
@@ -86,13 +87,13 @@ pub(super) struct RuntimeState {
 }
 
 #[derive(Debug, Clone)]
-struct RuntimeDeps {
+pub(super) struct RuntimeServices {
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     recording_media_tap: Arc<MediaTap>,
 }
 
-impl Default for RuntimeDeps {
+impl Default for RuntimeServices {
     fn default() -> Self {
         Self {
             diagnostics: Arc::new(DiagnosticsStore::default()),
@@ -105,20 +106,20 @@ impl Default for RuntimeDeps {
 impl Runtime {
     pub fn new(config: &Config) -> Result<Self> {
         let options = RuntimeOptions::from_config(config);
-        let deps = RuntimeDeps::default();
-        let transport_adapter = build_transport_adapter(&options.core, &deps)?;
+        let services = RuntimeServices::default();
+        let transport_adapter = build_transport_adapter(&options.core, &services)?;
         let room_runtime_policy = build_room_runtime_policy(&options);
         info!("{}", config.log_view(process::id()));
         info!(
             event = telemetry::schema::event::RUNTIME_BOOT,
             "runtime configuration loaded"
         );
-        let room_manager = build_room_manager(&options, room_runtime_policy, &deps);
+        let room_manager = build_room_manager(&options, room_runtime_policy, &services);
         Ok(Self {
             options,
             room_manager,
-            diagnostics: deps.diagnostics,
-            metrics: deps.metrics,
+            diagnostics: services.diagnostics,
+            metrics: services.metrics,
             transport_adapter,
         })
     }
@@ -231,14 +232,14 @@ async fn sync_source_packet_selection_policies(
 
 fn build_transport_adapter(
     options: &CoreOptions,
-    deps: &RuntimeDeps,
+    services: &RuntimeServices,
 ) -> Result<RuntimeTransportAdapter> {
     Ok(MediaTransport::from_core_options(
         options,
         MediaTransportDeps {
-            diagnostics: Arc::clone(&deps.diagnostics),
-            packet_sink_registry: Arc::clone(&deps.recording_media_tap),
-            metrics: Arc::clone(&deps.metrics),
+            diagnostics: Arc::clone(&services.diagnostics),
+            packet_sink_registry: Arc::clone(&services.recording_media_tap),
+            metrics: Arc::clone(&services.metrics),
         },
     )?)
 }
@@ -257,13 +258,15 @@ fn build_room_runtime_policy(options: &RuntimeOptions) -> RoomRuntimePolicy {
 fn build_room_manager(
     options: &RuntimeOptions,
     runtime_policy: RoomRuntimePolicy,
-    deps: &RuntimeDeps,
+    services: &RuntimeServices,
 ) -> Arc<RoomManager> {
     Arc::new(RoomManager::new(
         RoomManagerConfig::new(options.core.routing.media_worker_count, runtime_policy),
-        Arc::clone(&deps.recording_media_tap),
-        Arc::clone(&deps.diagnostics),
-        Arc::clone(&deps.metrics),
+        RoomManagerDeps {
+            recording_media_tap: Arc::clone(&services.recording_media_tap),
+            diagnostics: Arc::clone(&services.diagnostics),
+            metrics: Arc::clone(&services.metrics),
+        },
     ))
 }
 

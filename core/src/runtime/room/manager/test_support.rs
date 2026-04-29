@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities},
-    JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerJoinError,
+    JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomManagerJoinError,
 };
 use crate::{
     MediaCodecFlags, RuntimeFeatureFlags,
@@ -48,9 +48,11 @@ impl RoomManager {
     pub fn for_test_with_config(config: RoomManagerConfig) -> Self {
         Self::new(
             config,
-            Arc::new(MediaTap::default()),
-            Arc::new(DiagnosticsStore::default()),
-            Arc::new(RuntimeMetrics::default()),
+            RoomManagerDeps {
+                recording_media_tap: Arc::new(MediaTap::default()),
+                diagnostics: Arc::new(DiagnosticsStore::default()),
+                metrics: Arc::new(RuntimeMetrics::default()),
+            },
         )
     }
 

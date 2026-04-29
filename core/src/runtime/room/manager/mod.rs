@@ -46,6 +46,13 @@ impl RoomManagerConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RoomManagerDeps {
+    pub recording_media_tap: Arc<MediaTap>,
+    pub diagnostics: Arc<DiagnosticsStore>,
+    pub metrics: Arc<RuntimeMetrics>,
+}
+
 /// Observability view for one live room
 ///
 /// This merge immutable directory metadata with the current per-room
@@ -116,24 +123,19 @@ pub struct RoomManager {
 
 impl RoomManager {
     #[must_use]
-    pub fn new(
-        config: RoomManagerConfig,
-        recording_media_tap: Arc<MediaTap>,
-        diagnostics: Arc<DiagnosticsStore>,
-        metrics: Arc<RuntimeMetrics>,
-    ) -> Self {
+    pub fn new(config: RoomManagerConfig, deps: RoomManagerDeps) -> Self {
         let factory = RoomFactory::new(
             config.media_worker_count,
             config.runtime_policy,
-            recording_media_tap,
-            Arc::clone(&diagnostics),
-            Arc::clone(&metrics),
+            deps.recording_media_tap,
+            Arc::clone(&deps.diagnostics),
+            Arc::clone(&deps.metrics),
         );
         Self {
             directory: RwLock::new(RoomDirectory::default()),
-            diagnostics,
+            diagnostics: deps.diagnostics,
             factory,
-            metrics,
+            metrics: deps.metrics,
         }
     }
 

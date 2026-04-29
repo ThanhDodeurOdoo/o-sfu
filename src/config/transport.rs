@@ -3,21 +3,11 @@ use std::{net::IpAddr, num::NonZeroUsize};
 use anyhow::{Context, Result, anyhow, ensure};
 use o_sfu_core::{RtcPortRange, VideoBitrateLimits};
 
-use super::parsing::parse_optional_env;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct LoadedTransportConfig {
-    pub(super) public_ip: IpAddr,
-    pub(super) max_bitrate_in_bps: u64,
-    pub(super) max_bitrate_out_bps: u64,
-    pub(super) video_bitrate_limits: VideoBitrateLimits,
-    pub(super) rtc_port_range: RtcPortRange,
-    pub(super) rtc_media_worker_count: usize,
-}
+use super::{TransportConfig, parsing::parse_optional_env};
 
 pub(super) fn load_transport_config(
     mut get_var: impl FnMut(&str) -> Option<String>,
-) -> Result<LoadedTransportConfig> {
+) -> Result<TransportConfig> {
     if get_var("TRANSPORT_BACKEND").is_some() {
         return Err(anyhow!(
             "TRANSPORT_BACKEND is no longer supported; o-sfu always boots the RTC transport"
@@ -96,7 +86,7 @@ pub(super) fn load_transport_config(
         !public_ip.is_multicast(),
         "PUBLIC_IP cannot be a multicast address"
     );
-    Ok(LoadedTransportConfig {
+    Ok(TransportConfig {
         public_ip,
         max_bitrate_in_bps,
         max_bitrate_out_bps,
@@ -110,7 +100,7 @@ pub(super) fn load_transport_config(
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
-    use super::{LoadedTransportConfig, RtcPortRange, VideoBitrateLimits, load_transport_config};
+    use super::{RtcPortRange, TransportConfig, VideoBitrateLimits, load_transport_config};
 
     #[test]
     fn load_transport_config_accepts_public_ip_and_defaults() {
@@ -120,7 +110,7 @@ mod tests {
         });
         assert_eq!(
             config.ok(),
-            Some(LoadedTransportConfig {
+            Some(TransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
                 max_bitrate_in_bps: 8_000_000,
                 max_bitrate_out_bps: 10_000_000,

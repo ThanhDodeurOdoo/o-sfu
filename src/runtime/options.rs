@@ -58,38 +58,38 @@ impl RuntimeOptions {
     #[must_use]
     pub(crate) fn from_config(config: &Config) -> Self {
         let auth = AuthOptions {
-            key: config.auth_key.clone(),
-            authentication_timeout_ms: config.authentication_timeout_ms,
+            key: config.auth.key.clone(),
+            authentication_timeout_ms: config.auth.authentication_timeout_ms,
         };
         let room = RoomOptions {
-            max_users: config.room_size,
+            max_users: config.user.room_size,
         };
         let user = UserOptions {
-            timeout_ms: config.user_timeout_ms,
-            ping_interval_ms: config.ping_interval_ms,
+            timeout_ms: config.user.timeout_ms,
+            ping_interval_ms: config.user.ping_interval_ms,
         };
         let recording_policy = RecordingPolicyOptions {
-            audio_enabled: config.feature_flags.audio_recording,
-            video_enabled: config.feature_flags.video_recording,
-            transcription_enabled: config.feature_flags.transcription
-                && (config.feature_flags.audio_recording || config.feature_flags.video_recording),
+            audio_enabled: config.features.audio_recording,
+            video_enabled: config.features.video_recording,
+            transcription_enabled: config.features.transcription
+                && (config.features.audio_recording || config.features.video_recording),
         };
         let core = CoreOptions::new(
             MediaOptions {
-                public_ip: config.public_ip,
-                rtc_port_range: config.rtc_port_range,
+                public_ip: config.transport.public_ip,
+                rtc_port_range: config.transport.rtc_port_range,
                 bitrate_limits: SessionBitrateLimits::new(
-                    config.max_bitrate_in_bps,
-                    config.max_bitrate_out_bps,
+                    config.transport.max_bitrate_in_bps,
+                    config.transport.max_bitrate_out_bps,
                 ),
-                video_bitrate_limits: config.video_bitrate_limits,
+                video_bitrate_limits: config.transport.video_bitrate_limits,
             },
             RoutingOptions {
-                media_worker_count: config.rtc_media_worker_count,
+                media_worker_count: config.transport.rtc_media_worker_count,
             },
             CodecOptions {
-                flags: config.codec_flags,
-                preferences: config.codec_preferences,
+                flags: config.codecs.flags,
+                preferences: config.codecs.preferences,
             },
             ObservabilityOptions {
                 transport_diagnostics_enabled: true,
@@ -97,15 +97,15 @@ impl RuntimeOptions {
             },
         );
         let http = HttpOptions {
-            bind_address: config.bind_address,
+            bind_address: config.http.bind_address,
             auth: auth.clone(),
             diagnostics: config.diagnostics.clone(),
-            trust_proxy_headers: config.trust_proxy_headers,
+            trust_proxy_headers: config.http.trust_proxy_headers,
         };
         let websocket = SocketOptions {
             auth,
             user,
-            trust_proxy_headers: config.trust_proxy_headers,
+            trust_proxy_headers: config.http.trust_proxy_headers,
         };
         Self {
             room,
@@ -132,68 +132,82 @@ mod tests {
 
     use super::RuntimeOptions;
     use crate::config::{
-        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
+        UserConfig, VideoBitrateLimits,
     };
 
     #[test]
     fn runtime_options_group_config_by_runtime_boundary() {
         let config = Config {
-            auth_key: "dGVzdC1rZXk=".to_owned(),
-            bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
-            authentication_timeout_ms: 1_500,
-            room_size: 42,
-            diagnostics: DiagnosticsConfig {
-                auth_token: Some("operator-secret".to_owned()),
+            auth: AuthConfig {
+                key: "dGVzdC1rZXk=".to_owned(),
+                authentication_timeout_ms: 1_500,
             },
-            user_timeout_ms: 7_000,
-            ping_interval_ms: 11_000,
-            trust_proxy_headers: true,
-            feature_flags: RuntimeFeatureFlags {
+            http: HttpConfig {
+                bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
+                trust_proxy_headers: true,
+            },
+            user: UserConfig {
+                room_size: 42,
+                timeout_ms: 7_000,
+                ping_interval_ms: 11_000,
+            },
+            transport: TransportConfig {
+                public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+                max_bitrate_in_bps: 1_234_000,
+                max_bitrate_out_bps: 5_678_000,
+                video_bitrate_limits: VideoBitrateLimits::new(4_321_000),
+                rtc_port_range: RtcPortRange::new(50_000, 50_099),
+                rtc_media_worker_count: 4,
+            },
+            codecs: CodecConfig {
+                flags: MediaCodecFlags::default().with_h264(true),
+                preferences: CodecPreferences::default(),
+            },
+            features: RuntimeFeatureFlags {
                 transcription: true,
                 audio_recording: true,
                 video_recording: false,
             },
-            codec_flags: MediaCodecFlags::default().with_h264(true),
-            codec_preferences: CodecPreferences::default(),
             telemetry: TelemetryConfig::default(),
-            public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-            max_bitrate_in_bps: 1_234_000,
-            max_bitrate_out_bps: 5_678_000,
-            video_bitrate_limits: VideoBitrateLimits::new(4_321_000),
-            rtc_port_range: RtcPortRange::new(50_000, 50_099),
-            rtc_media_worker_count: 4,
+            diagnostics: DiagnosticsConfig {
+                auth_token: Some("operator-secret".to_owned()),
+            },
         };
 
         let options = RuntimeOptions::from_config(&config);
 
-        assert_eq!(options.http.auth.key, config.auth_key.as_str());
+        assert_eq!(options.http.auth.key, config.auth.key.as_str());
         assert_eq!(options.room.max_users, 42);
         assert_eq!(options.websocket.user.timeout_ms, 7_000);
         assert!(options.recording_policy.transcription_enabled);
         assert!(options.recording_policy.audio_enabled);
         assert!(!options.recording_policy.video_enabled);
-        assert_eq!(options.feature_flags(), config.feature_flags);
-        assert_eq!(options.core.media.public_ip, config.public_ip);
-        assert_eq!(options.core.media.rtc_port_range, config.rtc_port_range);
+        assert_eq!(options.feature_flags(), config.features);
+        assert_eq!(options.core.media.public_ip, config.transport.public_ip);
+        assert_eq!(
+            options.core.media.rtc_port_range,
+            config.transport.rtc_port_range
+        );
         assert_eq!(
             options.core.media.bitrate_limits.max_bitrate_in_bps(),
-            config.max_bitrate_in_bps
+            config.transport.max_bitrate_in_bps
         );
         assert_eq!(
             options.core.media.video_bitrate_limits,
-            config.video_bitrate_limits
+            config.transport.video_bitrate_limits
         );
         assert_eq!(options.core.routing.media_worker_count, 4);
-        assert_eq!(options.core.codecs.flags, config.codec_flags);
-        assert_eq!(options.core.codecs.preferences, config.codec_preferences);
-        assert_eq!(options.http.bind_address, config.bind_address);
-        assert_eq!(options.http.auth.key, config.auth_key.as_str());
+        assert_eq!(options.core.codecs.flags, config.codecs.flags);
+        assert_eq!(options.core.codecs.preferences, config.codecs.preferences);
+        assert_eq!(options.http.bind_address, config.http.bind_address);
+        assert_eq!(options.http.auth.key, config.auth.key.as_str());
         assert_eq!(options.http.diagnostics, config.diagnostics);
         assert!(options.http.trust_proxy_headers);
         assert_eq!(
             options.websocket.auth.authentication_timeout_ms,
-            config.authentication_timeout_ms
+            config.auth.authentication_timeout_ms
         );
         assert_eq!(options.websocket.user.ping_interval_ms, 11_000);
         assert!(options.websocket.trust_proxy_headers);
@@ -202,28 +216,38 @@ mod tests {
     #[test]
     fn transcription_feature_is_part_of_recording_policy() {
         let mut config = Config {
-            auth_key: "dGVzdC1rZXk=".to_owned(),
-            bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
-            authentication_timeout_ms: 1_500,
-            room_size: 42,
-            diagnostics: DiagnosticsConfig::default(),
-            user_timeout_ms: 7_000,
-            ping_interval_ms: 11_000,
-            trust_proxy_headers: true,
-            feature_flags: RuntimeFeatureFlags {
+            auth: AuthConfig {
+                key: "dGVzdC1rZXk=".to_owned(),
+                authentication_timeout_ms: 1_500,
+            },
+            http: HttpConfig {
+                bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
+                trust_proxy_headers: true,
+            },
+            user: UserConfig {
+                room_size: 42,
+                timeout_ms: 7_000,
+                ping_interval_ms: 11_000,
+            },
+            transport: TransportConfig {
+                public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+                max_bitrate_in_bps: 1_234_000,
+                max_bitrate_out_bps: 5_678_000,
+                video_bitrate_limits: VideoBitrateLimits::default(),
+                rtc_port_range: RtcPortRange::new(50_000, 50_099),
+                rtc_media_worker_count: 4,
+            },
+            codecs: CodecConfig {
+                flags: MediaCodecFlags::default(),
+                preferences: CodecPreferences::default(),
+            },
+            features: RuntimeFeatureFlags {
                 transcription: true,
                 audio_recording: false,
                 video_recording: false,
             },
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: CodecPreferences::default(),
             telemetry: TelemetryConfig::default(),
-            public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-            max_bitrate_in_bps: 1_234_000,
-            max_bitrate_out_bps: 5_678_000,
-            video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(50_000, 50_099),
-            rtc_media_worker_count: 4,
+            diagnostics: DiagnosticsConfig::default(),
         };
 
         let options = RuntimeOptions::from_config(&config);
@@ -238,7 +262,7 @@ mod tests {
             }
         );
 
-        config.feature_flags.audio_recording = true;
+        config.features.audio_recording = true;
         let options = RuntimeOptions::from_config(&config);
 
         assert!(options.recording_policy.transcription_enabled);

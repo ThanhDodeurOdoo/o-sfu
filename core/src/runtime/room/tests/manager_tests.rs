@@ -125,9 +125,11 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
                 super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::clone(&metrics),
+        super::super::RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
     ));
     let config = RoomConfig::default();
 
@@ -281,9 +283,11 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
                 super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::clone(&metrics),
+        super::super::RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
     ));
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let room = manager
@@ -342,9 +346,11 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
                 super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::clone(&metrics),
+        super::super::RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
     );
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let room = manager
@@ -406,9 +412,11 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
                 super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::clone(&metrics),
+        super::super::RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
     );
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let room = manager
@@ -487,9 +495,11 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
                 super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::clone(&metrics),
+        super::super::RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
     );
     let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
     let room = manager

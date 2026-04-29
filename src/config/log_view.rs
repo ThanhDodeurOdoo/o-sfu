@@ -19,8 +19,8 @@ impl fmt::Display for ConfigLogView<'_> {
         let config = self.config;
         writeln!(formatter, "booted runtime systems:")?;
         writeln!(formatter, "  - pid={}", self.process_id)?;
-        writeln!(formatter, "  - bind_address={}", config.bind_address)?;
-        writeln!(formatter, "  - public_ip={}", config.public_ip)?;
+        writeln!(formatter, "  - bind_address={}", config.http.bind_address)?;
+        writeln!(formatter, "  - public_ip={}", config.transport.public_ip)?;
         self.write_telemetry(formatter)?;
         self.write_timing_and_admission(formatter)?;
         self.write_rtc_transport(formatter)?;
@@ -74,30 +74,30 @@ impl ConfigLogView<'_> {
         writeln!(
             formatter,
             "    - authentication_timeout_ms={}",
-            config.authentication_timeout_ms
+            config.auth.authentication_timeout_ms
         )?;
         writeln!(
             formatter,
             "    - user_timeout_ms={}",
-            config.user_timeout_ms
+            config.user.timeout_ms
         )?;
         writeln!(
             formatter,
             "    - ping_interval_ms={}",
-            config.ping_interval_ms
+            config.user.ping_interval_ms
         )?;
-        writeln!(formatter, "    - room_size={}", config.room_size)?;
+        writeln!(formatter, "    - room_size={}", config.user.room_size)?;
         writeln!(
             formatter,
             "    - trust_proxy_headers={}",
-            config.trust_proxy_headers
+            config.http.trust_proxy_headers
         )?;
         writeln!(
             formatter,
             "    - diagnostics_access={}",
             if config.diagnostics.auth_token.is_some() {
                 "bearer_token"
-            } else if config.bind_address.ip().is_loopback() {
+            } else if config.http.bind_address.ip().is_loopback() {
                 "loopback_only"
             } else {
                 "disabled"
@@ -111,32 +111,35 @@ impl ConfigLogView<'_> {
         writeln!(
             formatter,
             "    - max_bitrate_in_bps={}",
-            config.max_bitrate_in_bps
+            config.transport.max_bitrate_in_bps
         )?;
         writeln!(
             formatter,
             "    - max_bitrate_out_bps={}",
-            config.max_bitrate_out_bps
+            config.transport.max_bitrate_out_bps
         )?;
         writeln!(
             formatter,
             "    - max_video_bitrate_bps={}",
-            config.video_bitrate_limits.max_video_bitrate_bps()
+            config
+                .transport
+                .video_bitrate_limits
+                .max_video_bitrate_bps()
         )?;
         writeln!(
             formatter,
             "    - rtc_port_range_min={}",
-            config.rtc_port_range.min()
+            config.transport.rtc_port_range.min()
         )?;
         writeln!(
             formatter,
             "    - rtc_port_range_max={}",
-            config.rtc_port_range.max()
+            config.transport.rtc_port_range.max()
         )?;
         writeln!(
             formatter,
             "    - rtc_media_worker_count={}",
-            config.rtc_media_worker_count
+            config.transport.rtc_media_worker_count
         )
     }
 
@@ -146,17 +149,17 @@ impl ConfigLogView<'_> {
         writeln!(
             formatter,
             "    - transcription={}",
-            config.feature_flags.transcription
+            config.features.transcription
         )?;
         writeln!(
             formatter,
             "    - audio_recording={}",
-            config.feature_flags.audio_recording
+            config.features.audio_recording
         )?;
         writeln!(
             formatter,
             "    - video_recording={}",
-            config.feature_flags.video_recording
+            config.features.video_recording
         )
     }
 
@@ -166,36 +169,37 @@ impl ConfigLogView<'_> {
         writeln!(
             formatter,
             "    - opus={}",
-            config.codec_flags.opus_enabled()
+            config.codecs.flags.opus_enabled()
         )?;
         writeln!(
             formatter,
             "    - pcmu={}",
-            config.codec_flags.pcmu_enabled()
+            config.codecs.flags.pcmu_enabled()
         )?;
         writeln!(
             formatter,
             "    - pcma={}",
-            config.codec_flags.pcma_enabled()
+            config.codecs.flags.pcma_enabled()
         )?;
-        writeln!(formatter, "    - vp8={}", config.codec_flags.vp8_enabled())?;
+        writeln!(formatter, "    - vp8={}", config.codecs.flags.vp8_enabled())?;
         writeln!(
             formatter,
             "    - h264={}",
-            config.codec_flags.h264_enabled()
+            config.codecs.flags.h264_enabled()
         )?;
         writeln!(
             formatter,
             "    - h265={}",
-            config.codec_flags.h265_enabled()
+            config.codecs.flags.h265_enabled()
         )?;
-        writeln!(formatter, "    - vp9={}", config.codec_flags.vp9_enabled())?;
-        writeln!(formatter, "    - av1={}", config.codec_flags.av1_enabled())?;
+        writeln!(formatter, "    - vp9={}", config.codecs.flags.vp9_enabled())?;
+        writeln!(formatter, "    - av1={}", config.codecs.flags.av1_enabled())?;
         writeln!(
             formatter,
             "    - audio_preference={}",
             config
-                .codec_preferences
+                .codecs
+                .preferences
                 .audio_order()
                 .map(o_sfu_core::AudioCodecPreference::wire_name)
                 .join(",")
@@ -204,7 +208,8 @@ impl ConfigLogView<'_> {
             formatter,
             "    - video_preference={}",
             config
-                .codec_preferences
+                .codecs
+                .preferences
                 .video_order()
                 .map(o_sfu_core::VideoCodecPreference::wire_name)
                 .join(",")
@@ -218,30 +223,41 @@ mod tests {
 
     use super::ConfigLogView;
     use crate::config::{
-        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
+        UserConfig, VideoBitrateLimits,
     };
 
     fn test_config(bind_address: SocketAddr) -> Config {
         Config {
-            auth_key: "test-key".to_owned(),
-            bind_address,
-            authentication_timeout_ms: 10_000,
-            room_size: 100,
-            diagnostics: DiagnosticsConfig::default(),
-            user_timeout_ms: 10_000,
-            ping_interval_ms: 60_000,
-            trust_proxy_headers: false,
-            feature_flags: RuntimeFeatureFlags::default(),
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: CodecPreferences::default(),
+            auth: AuthConfig {
+                key: "test-key".to_owned(),
+                authentication_timeout_ms: 10_000,
+            },
+            http: HttpConfig {
+                bind_address,
+                trust_proxy_headers: false,
+            },
+            user: UserConfig {
+                room_size: 100,
+                timeout_ms: 10_000,
+                ping_interval_ms: 60_000,
+            },
+            transport: TransportConfig {
+                public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                max_bitrate_in_bps: 8_000_000,
+                max_bitrate_out_bps: 10_000_000,
+                video_bitrate_limits: VideoBitrateLimits::default(),
+                rtc_port_range: RtcPortRange::new(40_000, 49_999),
+                rtc_media_worker_count: 1,
+            },
+            codecs: CodecConfig {
+                flags: MediaCodecFlags::default(),
+                preferences: CodecPreferences::default(),
+            },
+            features: RuntimeFeatureFlags::default(),
             telemetry: TelemetryConfig::default(),
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            max_bitrate_in_bps: 8_000_000,
-            max_bitrate_out_bps: 10_000_000,
-            video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(40_000, 49_999),
-            rtc_media_worker_count: 1,
+            diagnostics: DiagnosticsConfig::default(),
         }
     }
 

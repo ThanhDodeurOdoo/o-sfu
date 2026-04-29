@@ -6,7 +6,7 @@ use crate::{
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         recording::MediaTap,
-        room::{RoomManagerConfig, RoomRuntimePolicy, rtp_capabilities},
+        room::{RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities},
     },
 };
 
@@ -54,9 +54,11 @@ async fn build_recording_room_with(
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             ),
         ),
-        Arc::new(MediaTap::default()),
-        Arc::new(DiagnosticsStore::default()),
-        Arc::clone(&metrics),
+        RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
     );
     let room = manager
         .serve_room(

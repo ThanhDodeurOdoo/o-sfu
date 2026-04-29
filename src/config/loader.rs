@@ -3,7 +3,8 @@ use std::{env, net::SocketAddr};
 use anyhow::{Context, Result, ensure};
 
 use super::{
-    ConfigLogView, codec_flags::load_media_codec_flags, codec_preferences::load_codec_preferences,
+    AuthConfig, CodecConfig, ConfigLogView, HttpConfig, UserConfig,
+    codec_flags::load_media_codec_flags, codec_preferences::load_codec_preferences,
     diagnostics::load_diagnostics_config, feature_flags::load_runtime_feature_flags,
     parsing::parse_optional_env, settings::Config, telemetry::load_telemetry_config,
     transport::load_transport_config,
@@ -75,24 +76,27 @@ impl Config {
             "PING_INTERVAL_MS must be greater than zero"
         );
         Ok(Self {
-            auth_key,
-            bind_address,
-            authentication_timeout_ms,
-            room_size,
-            diagnostics,
-            user_timeout_ms,
-            ping_interval_ms,
-            trust_proxy_headers,
-            feature_flags,
-            codec_flags,
-            codec_preferences,
+            auth: AuthConfig {
+                key: auth_key,
+                authentication_timeout_ms,
+            },
+            http: HttpConfig {
+                bind_address,
+                trust_proxy_headers,
+            },
+            user: UserConfig {
+                room_size,
+                timeout_ms: user_timeout_ms,
+                ping_interval_ms,
+            },
+            transport,
+            codecs: CodecConfig {
+                flags: codec_flags,
+                preferences: codec_preferences,
+            },
+            features: feature_flags,
             telemetry,
-            public_ip: transport.public_ip,
-            max_bitrate_in_bps: transport.max_bitrate_in_bps,
-            max_bitrate_out_bps: transport.max_bitrate_out_bps,
-            video_bitrate_limits: transport.video_bitrate_limits,
-            rtc_port_range: transport.rtc_port_range,
-            rtc_media_worker_count: transport.rtc_media_worker_count,
+            diagnostics,
         })
     }
 }
@@ -125,24 +129,30 @@ mod tests {
         let Some(config) = config.ok() else {
             return;
         };
-        assert_eq!(config.bind_address.to_string(), "0.0.0.0:8070");
-        assert_eq!(config.auth_key, "dGVzdC1rZXk=");
-        assert_eq!(config.authentication_timeout_ms, 10_000);
-        assert_eq!(config.room_size, 100);
-        assert_eq!(config.user_timeout_ms, 10_000);
-        assert_eq!(config.ping_interval_ms, 60_000);
-        assert!(!config.trust_proxy_headers);
-        assert_eq!(config.feature_flags, RuntimeFeatureFlags::default());
-        assert_eq!(config.codec_flags, MediaCodecFlags::default());
-        assert_eq!(config.codec_preferences, CodecPreferences::default());
+        assert_eq!(config.http.bind_address.to_string(), "0.0.0.0:8070");
+        assert_eq!(config.auth.key, "dGVzdC1rZXk=");
+        assert_eq!(config.auth.authentication_timeout_ms, 10_000);
+        assert_eq!(config.user.room_size, 100);
+        assert_eq!(config.user.timeout_ms, 10_000);
+        assert_eq!(config.user.ping_interval_ms, 60_000);
+        assert!(!config.http.trust_proxy_headers);
+        assert_eq!(config.features, RuntimeFeatureFlags::default());
+        assert_eq!(config.codecs.flags, MediaCodecFlags::default());
+        assert_eq!(config.codecs.preferences, CodecPreferences::default());
         assert_eq!(config.diagnostics, DiagnosticsConfig::default());
         assert_eq!(config.telemetry, TelemetryConfig::default());
-        assert_eq!(config.public_ip.to_string(), "127.0.0.1");
-        assert_eq!(config.max_bitrate_in_bps, 8_000_000);
-        assert_eq!(config.max_bitrate_out_bps, 10_000_000);
-        assert_eq!(config.video_bitrate_limits, VideoBitrateLimits::default());
-        assert_eq!(config.rtc_port_range, RtcPortRange::new(40_000, 49_999));
-        assert_eq!(config.rtc_media_worker_count, 1);
+        assert_eq!(config.transport.public_ip.to_string(), "127.0.0.1");
+        assert_eq!(config.transport.max_bitrate_in_bps, 8_000_000);
+        assert_eq!(config.transport.max_bitrate_out_bps, 10_000_000);
+        assert_eq!(
+            config.transport.video_bitrate_limits,
+            VideoBitrateLimits::default()
+        );
+        assert_eq!(
+            config.transport.rtc_port_range,
+            RtcPortRange::new(40_000, 49_999)
+        );
+        assert_eq!(config.transport.rtc_media_worker_count, 1);
     }
 
     #[test]
@@ -157,7 +167,7 @@ mod tests {
         let Some(config) = config.ok() else {
             return;
         };
-        assert!(config.trust_proxy_headers);
+        assert!(config.http.trust_proxy_headers);
     }
 
     #[test]

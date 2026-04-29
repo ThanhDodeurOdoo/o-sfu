@@ -7,22 +7,47 @@ use super::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub auth_key: String,
-    pub bind_address: SocketAddr,
-    pub authentication_timeout_ms: u64,
-    pub room_size: usize,
-    pub diagnostics: DiagnosticsConfig,
-    pub user_timeout_ms: u64,
-    pub ping_interval_ms: u64,
-    pub trust_proxy_headers: bool,
-    pub feature_flags: RuntimeFeatureFlags,
-    pub codec_flags: MediaCodecFlags,
-    pub codec_preferences: CodecPreferences,
+    pub auth: AuthConfig,
+    pub http: HttpConfig,
+    pub user: UserConfig,
+    pub transport: TransportConfig,
+    pub codecs: CodecConfig,
+    pub features: RuntimeFeatureFlags,
     pub telemetry: TelemetryConfig,
+    pub diagnostics: DiagnosticsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub key: String,
+    pub authentication_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpConfig {
+    pub bind_address: SocketAddr,
+    pub trust_proxy_headers: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserConfig {
+    pub room_size: usize,
+    pub timeout_ms: u64,
+    pub ping_interval_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransportConfig {
     pub public_ip: IpAddr,
     pub max_bitrate_in_bps: u64,
     pub max_bitrate_out_bps: u64,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodecConfig {
+    pub flags: MediaCodecFlags,
+    pub preferences: CodecPreferences,
 }

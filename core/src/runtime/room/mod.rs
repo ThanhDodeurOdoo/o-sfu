@@ -50,7 +50,7 @@ pub use controller::{
 pub use events::RoomEventMessage;
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
-    JoinUserRequest, RoomManager, RoomManagerConfig, RuntimeRoomDirectorySnapshot,
+    JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
     RuntimeRoomStatsSnapshot,
 };
 #[cfg(any(test, feature = "testing-transport"))]

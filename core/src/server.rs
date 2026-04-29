@@ -32,8 +32,8 @@ pub mod room {
     pub use crate::runtime::room::{
         ConsumerRouteState, JoinUserRequest, RemoteTrackBootstrap, Room, RoomAdmissionPolicy,
         RoomConfig, RoomEventMessage, RoomEventRequest, RoomJoinError, RoomManager,
-        RoomManagerConfig, RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext,
-        RoomRuntimePolicy, RoomUserPermissions, RoomUserStatsSnapshot,
+        RoomManagerConfig, RoomManagerDeps, RoomManagerJoinError, RoomMediaCounts,
+        RoomRuntimeContext, RoomRuntimePolicy, RoomUserPermissions, RoomUserStatsSnapshot,
         RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, TrackBindingUpdate,
         UserCloseReason, UserOutbound, rtp_capabilities,
     };
