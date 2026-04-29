@@ -297,17 +297,17 @@ fn populate_local_forwards(
 /// be active while one consumer is muted, paused or waiting for a selected
 /// simulcast layer to become decodable.
 fn destination_packet_gate_permits(
-    source_transport_media_id: RouteTransportMediaId,
+    _source_transport_media_id: RouteTransportMediaId,
     destination: &MediaRouteDestination,
     metadata: PacketLayerMetadata,
 ) -> bool {
     if !destination.active {
-        debug!(
-            ?source_transport_media_id,
-            consumer_session_key = ?destination.dest_session,
-            consumer_transport_media_id = ?destination.dest_transport_media_id,
-            "skipped forwarding because destination route is inactive"
-        );
+        //debug!(
+        //    ?source_transport_media_id,
+        //    consumer_session_key = ?destination.dest_session,
+        //    consumer_transport_media_id = ?destination.dest_transport_media_id,
+        //    "skipped forwarding because destination route is inactive"
+        //);
         return false;
     }
     if destination.packet_gate.permits(metadata) {
