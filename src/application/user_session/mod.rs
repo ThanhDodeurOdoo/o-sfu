@@ -108,6 +108,12 @@ pub enum UserDisconnectReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnpublishMediaDisposition {
+    RolledBackStagedPublish,
+    RemovedLivePublication,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserError {
     ProtocolViolation,
     Kicked,
@@ -206,16 +212,18 @@ impl User {
     )]
     pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        if self.state.negotiation.has_queued_publish(stream_type)
-            || self.media().has_staged_publish(stream_type).await
+        let has_queued_publish = self.state.negotiation.has_queued_publish(stream_type);
         {
-            return Ok(UserOutput::new());
-        }
-        if self.media().is_stream_published(stream_type).await {
-            self.media()
-                .set_publication_activity(stream_type, PublicationActivity::Active)
-                .await;
-            return Ok(UserOutput::new());
+            let media = self.media();
+            if has_queued_publish || media.has_staged_publish(stream_type).await {
+                return Ok(UserOutput::new());
+            }
+            if media.is_stream_published(stream_type).await {
+                media
+                    .set_publication_activity(stream_type, PublicationActivity::Active)
+                    .await;
+                return Ok(UserOutput::new());
+            }
         }
         if self.state.negotiation.awaiting_answer() {
             self.state.negotiation.queue_publish_slot(stream_type);
@@ -233,14 +241,26 @@ impl User {
         if self.state.negotiation.clear_queued_publish(stream_type) {
             return Ok(UserOutput::new());
         }
-        if self.media().rollback_staged_publish(stream_type).await {
-            let _disposition = self.state.negotiation.request_renegotiation();
-            return Ok(UserOutput::new());
+        let media_disposition = {
+            let media = self.media();
+            if media.rollback_staged_publish(stream_type).await {
+                Some(UnpublishMediaDisposition::RolledBackStagedPublish)
+            } else if media.unpublish(stream_type).await {
+                Some(UnpublishMediaDisposition::RemovedLivePublication)
+            } else {
+                None
+            }
+        };
+        match media_disposition {
+            Some(UnpublishMediaDisposition::RolledBackStagedPublish) => {
+                let _disposition = self.state.negotiation.request_renegotiation();
+                Ok(UserOutput::new())
+            }
+            Some(UnpublishMediaDisposition::RemovedLivePublication) => {
+                self.request_renegotiation().await
+            }
+            None => Ok(UserOutput::new()),
         }
-        if !self.media().unpublish(stream_type).await {
-            return Ok(UserOutput::new());
-        }
-        self.request_renegotiation().await
     }
 
     #[instrument(
@@ -529,17 +549,16 @@ impl User {
         answer_sdp: &str,
         response_to: &RequestId,
     ) -> Result<(), UserError> {
+        let media = self.media();
         let result = match &pending.action {
             PendingUserAction::EstablishSession {
                 offered_capabilities,
             } => {
-                self.media()
+                media
                     .apply_initial_answer(answer_sdp, offered_capabilities)
                     .await
             }
-            PendingUserAction::RefreshSession => {
-                self.media().apply_renegotiation_answer(answer_sdp).await
-            }
+            PendingUserAction::RefreshSession => media.apply_renegotiation_answer(answer_sdp).await,
         };
         if let Err(error) = result {
             self.log_negotiation_apply_error(response_to, pending, error);

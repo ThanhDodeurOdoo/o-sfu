@@ -8,7 +8,8 @@
 //!   [`MediaCodecFlags`], [`CodecPreferences`], and [`RuntimeFeatureFlags`];
 //! - [`SfuCore`] and its borrow-based [`MediaSession`] handle, used by the
 //!   server application to express endpoint health checks, offer/answer
-//!   negotiation, publication, subscription, and cleanup intent;
+//!   negotiation, publication, subscription, and cleanup intent. `SfuCore`
+//!   constructs sessions; media operations live on `MediaSession`;
 //! - [`NegotiationOffer`], [`UploadSlot`], and [`UploadEncoding`], the
 //!   transport-neutral negotiation vocabulary exposed by the core front door;
 //! - [`MediaRoom`] and [`MediaSessionContext`], the room bridge implemented by
