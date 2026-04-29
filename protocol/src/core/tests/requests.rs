@@ -102,9 +102,14 @@ fn protocol_core_request_timeout_resolves_pending_request_as_failed() {
 
     assert_eq!(
         timeout_commands,
-        vec![Command::ResolvePendingRequest {
-            request_id,
-            ok: false,
-        }]
+        vec![
+            Command::CancelTimer {
+                id: *timeout_timer_id,
+            },
+            Command::ResolvePendingRequest {
+                request_id,
+                ok: false,
+            },
+        ]
     );
 }

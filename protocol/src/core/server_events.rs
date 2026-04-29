@@ -10,7 +10,7 @@ use crate::{
 
 pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMessage) -> Commands {
     match message {
-        ServerMessage::Welcome(payload) => core.on_welcome(payload),
+        ServerMessage::Welcome(payload) => core.accept_welcome(payload),
         ServerMessage::Tracks(bindings) => replace_track_snapshot(core, bindings),
         ServerMessage::PeerInfo(payload) | ServerMessage::PeerJoined(payload) => {
             peer_info_commands(payload)

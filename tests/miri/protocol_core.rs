@@ -151,18 +151,28 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
     assert!(core.on_timer(99_999).is_empty());
     assert_eq!(
         core.on_timer(stop_timeout_timer_id),
-        vec![Command::ResolvePendingRequest {
-            request_id: stop_request_id,
-            ok: false,
-        }]
+        vec![
+            Command::CancelTimer {
+                id: stop_timeout_timer_id,
+            },
+            Command::ResolvePendingRequest {
+                request_id: stop_request_id,
+                ok: false,
+            },
+        ]
     );
     assert!(core.on_timer(stop_timeout_timer_id).is_empty());
     assert_eq!(
         core.on_timer(start_timeout_timer_id),
-        vec![Command::ResolvePendingRequest {
-            request_id: start_request_id,
-            ok: false,
-        }]
+        vec![
+            Command::CancelTimer {
+                id: start_timeout_timer_id,
+            },
+            Command::ResolvePendingRequest {
+                request_id: start_request_id,
+                ok: false,
+            },
+        ]
     );
 }
 

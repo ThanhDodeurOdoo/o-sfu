@@ -6,7 +6,8 @@ use crate::{
         BundleSessionInfoSnapshotById, BundleUpdate, bundle_session_info_key,
     },
     core::{
-        Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
+        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore,
+        ProtocolEvent,
     },
     shared::{AvailableFeatures, RecordingState, StreamType, UserId},
     signaling::{NegotiationUploadSlot, RequestId, SourceDescriptor, TrackBinding},
@@ -155,7 +156,7 @@ fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
 }
 
 #[must_use]
-pub fn host_commands(commands: Vec<Command>) -> Vec<HostCommand> {
+pub fn host_commands(commands: CommandBatch) -> Vec<HostCommand> {
     let mut host_commands = Vec::new();
     for command in commands {
         match command {
@@ -258,7 +259,9 @@ mod tests {
     use super::{CoreSnapshot, HostCommand, connection_state_tag, host_commands};
     use crate::{
         bundle_api::BundleConnectionState,
-        core::{Command, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent},
+        core::{
+            Command, CommandBatch, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
+        },
         shared::{StreamType, UserId},
         signaling::{RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding},
     };
@@ -288,7 +291,7 @@ mod tests {
 
     #[test]
     fn host_command_bridge_converts_commands_to_camel_case_payloads() {
-        let commands = host_commands(vec![
+        let commands = host_commands(CommandBatch::from_test_commands(vec![
             Command::ApplyNegotiation {
                 request_id: RequestId::new("7"),
                 kind: NegotiationKind::Renegotiate,
@@ -317,7 +320,7 @@ mod tests {
             Command::DetachTrack {
                 stream_type: StreamType::Screen,
             },
-        ]);
+        ]));
 
         let encoded = serde_json::to_value(commands).unwrap_or_default();
 
@@ -362,7 +365,7 @@ mod tests {
 
     #[test]
     fn host_command_bridge_projects_source_snapshots() {
-        let commands = host_commands(vec![Command::EmitEvent {
+        let commands = host_commands(CommandBatch::from_test_commands(vec![Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![SourceDescriptor {
                     source_id: String::from("source-7"),
@@ -378,7 +381,7 @@ mod tests {
                     }],
                 }],
             },
-        }]);
+        }]));
 
         assert_eq!(
             serde_json::to_value(commands).unwrap_or_default(),
@@ -403,11 +406,11 @@ mod tests {
 
     #[test]
     fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
-        let commands = host_commands(vec![Command::EmitEvent {
+        let commands = host_commands(CommandBatch::from_test_commands(vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: UserId::Integer(9),
             },
-        }]);
+        }]));
 
         let encoded = serde_json::to_value(commands).unwrap_or_default();
 
@@ -433,10 +436,12 @@ mod tests {
 
     #[test]
     fn host_command_bridge_preserves_simple_commands() {
-        let command = host_commands(vec![Command::CloseWebSocket { code: 4002 }])
-            .into_iter()
-            .next()
-            .unwrap_or(HostCommand::ClosePeerConnection);
+        let command = host_commands(CommandBatch::from_test_commands(vec![
+            Command::CloseWebSocket { code: 4002 },
+        ]))
+        .into_iter()
+        .next()
+        .unwrap_or(HostCommand::ClosePeerConnection);
 
         let encoded = serde_json::to_value(command).unwrap_or_default();
 

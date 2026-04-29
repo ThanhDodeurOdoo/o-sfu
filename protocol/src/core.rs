@@ -2,7 +2,7 @@
 //! Pure client-side signaling state machine for the `o-sfu` protocol.
 //!
 //! `ProtocolCore` never perform I/O directly. Every public transition returns
-//! [`Commands`], an ordered batch of side effects for the host to execute in
+//! [`CommandBatch`], an ordered batch of side effects for the host to execute in
 //! sequence. The host owns the actual WebSocket, peer-connection, and timer
 //! integration, then feeds the resulting events back into the core.
 //!
@@ -20,9 +20,9 @@
 //!
 //! The command system is more cumbersome than inlining I/O calls, but that
 //! cost is what keeps the protocol verifiable and portable. Browser hosts
-//! should consume the commands through the TypeScript runtime contract wrapper,
-//! which validates the highest-risk batch ordering before the runtime executes
-//! them:
+//! should consume the commands as [`CommandBatch`] values. Rust owns the
+//! canonical batch-ordering contract, and the TypeScript runtime contract
+//! wrapper repeats the same checks before browser side effects run:
 //!
 //! - an initial offer must create the peer connection immediately before
 //!   applying the remote description;
@@ -34,6 +34,7 @@
 
 use std::collections::BTreeMap;
 
+mod command_batch;
 mod connection_lifecycle;
 mod outbound_batch;
 mod request_flow;
@@ -43,6 +44,7 @@ mod sticky_replay;
 #[cfg(feature = "verification-models")]
 pub mod verification;
 
+pub use command_batch::{CommandBatch, CommandBatchError};
 use outbound_batch::{FlushMode, OutboundBatcher};
 use request_tracker::RequestTracker;
 use sticky_replay::StickyReplayState;
@@ -75,7 +77,7 @@ const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 /// One side-effect intent emitted by [`ProtocolCore`].
 ///
 /// The state machine itself is pure: it never touches I/O. Instead each
-/// transition returns [`Commands`] that the host (wasm glue, native driver,
+/// transition returns [`CommandBatch`] that the host (wasm glue, native driver,
 /// test harness) must execute in order. That keeps transport work, timers, and
 /// projection updates visible at the protocol boundary instead of being buried
 /// in host-specific control flow.
@@ -138,12 +140,7 @@ pub enum Command {
     },
 }
 
-/// Ordered side effects emitted by one protocol-core transition.
-///
-/// A command batch is the full host work produced by applying one input to the
-/// protocol state machine. The host must execute the commands in order before
-/// feeding any resulting transport or timer events back into [`ProtocolCore`].
-pub type Commands = Vec<Command>;
+pub(crate) type Commands = Vec<Command>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolEvent {
@@ -270,23 +267,28 @@ impl ProtocolCore {
         url: impl Into<String>,
         jwt: impl Into<String>,
         room: Option<String>,
-    ) -> Commands {
-        connection_lifecycle::connect(self, url.into(), jwt.into(), room)
+    ) -> CommandBatch {
+        command_batch(connection_lifecycle::connect(
+            self,
+            url.into(),
+            jwt.into(),
+            room,
+        ))
     }
 
     /// Authenticates a newly opened socket with the stored connect context.
     ///
     /// Recovery reuses the same JWT and optional room that `connect` captured,
     /// which keeps every socket attempt tied to one explicit admission context.
-    pub fn on_ws_open(&mut self) -> Commands {
+    pub fn on_ws_open(&mut self) -> CommandBatch {
         if !matches!(
             self.state,
             BundleConnectionState::Connecting | BundleConnectionState::Recovering
         ) {
-            return Vec::new();
+            return CommandBatch::default();
         }
         let Some(connect_context) = self.connect_context.as_ref() else {
-            return Vec::new();
+            return CommandBatch::default();
         };
         let Some(envelope) = ClientEnvelope::Message(ClientMessage::Auth(AuthPayload {
             jwt: connect_context.jwt.clone(),
@@ -294,9 +296,9 @@ impl ProtocolCore {
         }))
         .into_envelope()
         .ok() else {
-            return Vec::new();
+            return CommandBatch::default();
         };
-        self.enqueue_envelope(envelope, FlushMode::Immediate)
+        command_batch(self.enqueue_envelope(envelope, FlushMode::Immediate))
     }
 
     /// handle ws message
@@ -304,18 +306,18 @@ impl ProtocolCore {
     /// Malformed batches or envelopes are treated as protocol violations and
     /// close the socket immediately so partially-applied server state cannot
     /// survive atfer a framing error.
-    pub fn on_ws_message(&mut self, frame: &str) -> Commands {
+    pub fn on_ws_message(&mut self, frame: &str) -> CommandBatch {
         let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(frame) else {
-            return protocol_error_commands();
+            return command_batch(protocol_error_commands());
         };
         let mut commands = Vec::new();
         for envelope in batch {
             let Ok(server_envelope) = ServerEnvelope::decode(envelope) else {
-                return protocol_error_commands();
+                return command_batch(protocol_error_commands());
             };
             commands.extend(self.handle_server_envelope(server_envelope));
         }
-        commands
+        command_batch(commands)
     }
 
     /// Commits the authenticated server snapshot and "replays" client wanted state
@@ -323,7 +325,11 @@ impl ProtocolCore {
     /// The welcome payload is the point where feature flags and recording state
     /// become authoritative again after a reconnect. Only after that snapshot is
     /// accepted do we replay remembered uploads, downloads, and user info.
-    pub fn on_welcome(&mut self, payload: WelcomePayload) -> Commands {
+    pub fn on_welcome(&mut self, payload: WelcomePayload) -> CommandBatch {
+        command_batch(self.accept_welcome(payload))
+    }
+
+    fn accept_welcome(&mut self, payload: WelcomePayload) -> Commands {
         if !matches!(
             self.state,
             BundleConnectionState::Connecting | BundleConnectionState::Recovering
@@ -355,18 +361,18 @@ impl ProtocolCore {
     /// The host should call this only once the peer connection is usable for
     /// media, because it is what upgrades the core from authenticated signaling
     /// state to a fully connected user.
-    pub fn on_transport_ready(&mut self) -> Commands {
-        connection_lifecycle::on_transport_ready(self)
+    pub fn on_transport_ready(&mut self) -> CommandBatch {
+        command_batch(connection_lifecycle::on_transport_ready(self))
     }
 
     /// Stores the desired publication state and sends it when signaling is ready.
     ///
     /// Publish intent is sticky across reconnects, which lets UI toggles be issued
     /// before authentication completes without losing the latest desired state.
-    pub fn publish(&mut self, stream_type: StreamType, active: bool) -> Commands {
+    pub fn publish(&mut self, stream_type: StreamType, active: bool) -> CommandBatch {
         self.sticky_replay.set_publish_active(stream_type, active);
         if !self.can_send_client_messages() {
-            return Vec::new();
+            return CommandBatch::default();
         }
         let Some(envelope) = ClientEnvelope::Message(if active {
             ClientMessage::Publish(StreamIntentPayload { stream_type })
@@ -375,9 +381,9 @@ impl ProtocolCore {
         })
         .into_envelope()
         .ok() else {
-            return Vec::new();
+            return CommandBatch::default();
         };
-        self.enqueue_envelope(envelope, FlushMode::Batched)
+        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
     }
 
     /// Remembers the latest per-peer subscription intent for reconnect replay.
@@ -385,11 +391,11 @@ impl ProtocolCore {
     /// Repeated updates merge at the sticky layer, so callers can send partial
     /// audio/camera/screen adjustments without rebuilding the full preference set
     /// on every change or after recovery.
-    pub fn subscribe(&mut self, user_id: UserId, states: DownloadStates) -> Commands {
+    pub fn subscribe(&mut self, user_id: UserId, states: DownloadStates) -> CommandBatch {
         self.sticky_replay
             .remember_subscription_states(&user_id, &states);
         if !self.can_send_client_messages() {
-            return Vec::new();
+            return CommandBatch::default();
         }
         let Some(envelope) = ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
             user_id,
@@ -397,9 +403,9 @@ impl ProtocolCore {
         }))
         .into_envelope()
         .ok() else {
-            return Vec::new();
+            return CommandBatch::default();
         };
-        self.enqueue_envelope(envelope, FlushMode::Batched)
+        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
     }
 
     /// Persists the laetst local user metadata patch for the current room.
@@ -407,18 +413,18 @@ impl ProtocolCore {
     /// User info is replayed after reconnect so transient transport failures do
     /// not silently reset presence indicators such as mute, hand raise, or camera
     /// state back to server defaults.
-    pub fn update_info(&mut self, info: UserInfo) -> Commands {
+    pub fn update_info(&mut self, info: UserInfo) -> CommandBatch {
         self.sticky_replay.remember_info(&info);
         if !self.can_send_client_messages() {
-            return Vec::new();
+            return CommandBatch::default();
         }
         let Some(envelope) = ClientEnvelope::Message(ClientMessage::Info(info))
             .into_envelope()
             .ok()
         else {
-            return Vec::new();
+            return CommandBatch::default();
         };
-        self.enqueue_envelope(envelope, FlushMode::Batched)
+        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
     }
 
     /// Sends a best-effort broadcast to the current room.
@@ -426,25 +432,25 @@ impl ProtocolCore {
     /// Broadcast payloads are intentionally not sticky: if the client is not yet
     /// authenticated, the message is dropped instead of being replayed later out
     /// of its original conversational contexte.
-    pub fn broadcast(&mut self, message: JsonPayload) -> Commands {
+    pub fn broadcast(&mut self, message: JsonPayload) -> CommandBatch {
         if !self.can_send_client_messages() {
-            return Vec::new();
+            return CommandBatch::default();
         }
         let Some(envelope) =
             ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload { message }))
                 .into_envelope()
                 .ok()
         else {
-            return Vec::new();
+            return CommandBatch::default();
         };
-        self.enqueue_envelope(envelope, FlushMode::Batched)
+        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
     }
 
-    pub fn start_recording(&mut self, options: RecordingOptions) -> Commands {
-        request_flow::start_recording(self, options)
+    pub fn start_recording(&mut self, options: RecordingOptions) -> CommandBatch {
+        command_batch(request_flow::start_recording(self, options))
     }
-    pub fn stop_recording(&mut self) -> Commands {
-        request_flow::stop_recording(self)
+    pub fn stop_recording(&mut self) -> CommandBatch {
+        command_batch(request_flow::stop_recording(self))
     }
 
     /// Replies to the currently pending negotiation request.
@@ -457,16 +463,21 @@ impl ProtocolCore {
         request_id: &RequestId,
         kind: NegotiationKind,
         sdp: impl Into<String>,
-    ) -> Commands {
-        request_flow::submit_negotiation_answer(self, request_id, kind, sdp.into())
+    ) -> CommandBatch {
+        command_batch(request_flow::submit_negotiation_answer(
+            self,
+            request_id,
+            kind,
+            sdp.into(),
+        ))
     }
 
-    pub fn disconnect(&mut self) -> Commands {
-        connection_lifecycle::disconnect(self)
+    pub fn disconnect(&mut self) -> CommandBatch {
+        command_batch(connection_lifecycle::disconnect(self))
     }
 
-    pub fn on_ws_close(&mut self, code: u16) -> Commands {
-        connection_lifecycle::on_ws_close(self, code)
+    pub fn on_ws_close(&mut self, code: u16) -> CommandBatch {
+        command_batch(connection_lifecycle::on_ws_close(self, code))
     }
 
     /// Dispatches all timer callbacks through one entry point.
@@ -474,17 +485,17 @@ impl ProtocolCore {
     /// Timer ids are part of the protocol-core contract: recovery, outbound batch
     /// flushing, and request timeouts each reserve their own namespace and must be
     /// routed back here by the host in the order they fire.
-    pub fn on_timer(&mut self, timer_id: u32) -> Commands {
+    pub fn on_timer(&mut self, timer_id: u32) -> CommandBatch {
         if timer_id == RECOVERY_TIMER_ID {
-            return self.handle_recovery_timer();
+            return command_batch(self.handle_recovery_timer());
         }
         if timer_id == BATCH_FLUSH_TIMER_ID {
-            return self.flush_pending_batch(false);
+            return command_batch(self.flush_pending_batch(false));
         }
         if let Some(commands) = self.request_tracker.resolve_timeout(timer_id) {
-            return commands;
+            return command_batch(commands);
         }
-        Vec::new()
+        CommandBatch::default()
     }
 
     fn handle_recovery_timer(&mut self) -> Commands {
@@ -609,6 +620,10 @@ fn protocol_error_commands() -> Commands {
     vec![Command::CloseWebSocket {
         code: u16::from(WebSocketCloseCode::ProtocolError),
     }]
+}
+
+fn command_batch(commands: Commands) -> CommandBatch {
+    CommandBatch::from_core_commands(commands)
 }
 
 /// Grows reconnect delay by 1.5x while keeping the backoff bounded.

@@ -233,6 +233,8 @@ function validateHostCommands(value: unknown, context: string): HostCommand[] {
     return commands;
 }
 
+// Rust `CommandBatch` validation is canonical; this guard keeps browser hosts
+// defensive around dynamically loaded or stale protocol bindings.
 function validateHostCommandOrder(commands: HostCommand[], context: string): void {
     for (let index = 0; index < commands.length; index += 1) {
         const command = commands[index];

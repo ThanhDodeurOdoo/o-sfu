@@ -164,10 +164,13 @@ impl RequestTracker {
     pub(super) fn resolve_timeout(&mut self, timer_id: u32) -> Option<Commands> {
         let request_id = self.request_timeouts.remove(&timer_id)?;
         let commands = if self.pending_requests.remove(&request_id).is_some() {
-            vec![Command::ResolvePendingRequest {
-                request_id,
-                ok: false,
-            }]
+            vec![
+                Command::CancelTimer { id: timer_id },
+                Command::ResolvePendingRequest {
+                    request_id,
+                    ok: false,
+                },
+            ]
         } else {
             Vec::new()
         };

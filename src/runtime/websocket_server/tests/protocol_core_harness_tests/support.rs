@@ -15,7 +15,7 @@ pub(super) use o_sfu_protocol::{
     signaling::{EnvelopeBatch, RequestId, ServerMessage, TrackBinding},
 };
 use o_sfu_protocol::{
-    core::{Command, NegotiationKind, ProtocolCore},
+    core::{Command, CommandBatch, NegotiationKind, ProtocolCore},
     host_bridge::{HostCommand, host_commands},
     shared::{RecordingStateUpdate, UserPermissions},
     signaling::RecordingOptions,
@@ -256,21 +256,23 @@ impl ProtocolHarnessPeer {
             Some(rtc_peer) => rtc_peer.answer_offer(&pending.sdp)?,
             None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
         };
-        let mut commands =
+        let commands =
             self.core
                 .submit_negotiation_answer(&pending.request_id, pending.kind, &answer_sdp);
-        commands.extend(self.core.on_transport_ready());
-        self.run_commands(commands).await
+        let mut raw_commands = commands.into_vec();
+        raw_commands.extend(self.core.on_transport_ready());
+        self.run_commands(CommandBatch::try_from_vec(raw_commands).ok()?)
+            .await
     }
 
-    pub(super) async fn run_commands(&mut self, commands: Vec<Command>) -> Option<()> {
-        let mut pending: VecDeque<_> = commands.into();
+    pub(super) async fn run_commands(&mut self, commands: CommandBatch) -> Option<()> {
+        let mut pending: VecDeque<_> = commands.into_vec().into();
         while let Some(command) = pending.pop_front() {
             let follow_up = match command {
                 Command::Connect { url } => {
                     let websocket = connect_async(url).await.ok()?;
                     self.websocket = Some(websocket.0);
-                    self.core.on_ws_open()
+                    self.core.on_ws_open().into_vec()
                 }
                 Command::SendWebSocket(frame) => {
                     self.websocket
@@ -285,7 +287,8 @@ impl ProtocolHarnessPeer {
                     Vec::new()
                 }
                 command @ Command::EmitEvent { .. } => {
-                    for host_command in host_commands(vec![command]) {
+                    let batch = CommandBatch::try_from_vec(vec![command]).ok()?;
+                    for host_command in host_commands(batch) {
                         if let HostCommand::EmitUpdate { update } = host_command {
                             self.updates.push(update);
                         }
@@ -323,11 +326,12 @@ impl ProtocolHarnessPeer {
                         Some(rtc_peer) => rtc_peer.answer_offer(&sdp)?,
                         None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
                     };
-                    let mut follow_up =
+                    let follow_up =
                         self.core
                             .submit_negotiation_answer(&request_id, kind, &answer_sdp);
-                    follow_up.extend(self.core.on_transport_ready());
-                    follow_up
+                    let mut raw_follow_up = follow_up.into_vec();
+                    raw_follow_up.extend(self.core.on_transport_ready());
+                    raw_follow_up
                 }
                 Command::ScheduleTimer { id, ms } => {
                     self.timers.insert(id, ms);
@@ -341,10 +345,17 @@ impl ProtocolHarnessPeer {
                     self.websocket.as_mut()?.close(None).await.ok()?;
                     Vec::new()
                 }
-                command @ (Command::RegisterPendingRequest { .. }
-                | Command::ResolvePendingRequest { .. }) => {
+                Command::RegisterPendingRequest { request_id, kind } => {
                     self.pending_request_commands
-                        .extend(host_commands(vec![command]));
+                        .push(HostCommand::RegisterPendingRequest {
+                            request_id,
+                            request_kind: kind.into(),
+                        });
+                    Vec::new()
+                }
+                Command::ResolvePendingRequest { request_id, ok } => {
+                    self.pending_request_commands
+                        .push(HostCommand::ResolvePendingRequest { request_id, ok });
                     Vec::new()
                 }
             };

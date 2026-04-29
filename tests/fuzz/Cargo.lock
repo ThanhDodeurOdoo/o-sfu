@@ -1097,6 +1097,7 @@ dependencies = [
  "bitflags",
  "futures-util",
  "hmac",
+ "o-sfu-core",
  "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",
@@ -1121,6 +1122,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "o-sfu-core"
+version = "0.3.0"
+dependencies = [
+ "bitflags",
+ "futures-util",
+ "o-sfu-model",
+ "o-sfu-rfc",
+ "o-sfu-router",
+ "serde",
+ "serde_json",
+ "str0m",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "o-sfu-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -1131,9 +1152,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "o-sfu-model"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "o-sfu-protocol"
 version = "0.3.0"
 dependencies = [
+ "o-sfu-model",
  "o-sfu-rfc",
  "serde",
  "serde-wasm-bindgen",
