@@ -88,7 +88,7 @@ impl PacketLayerMetadata {
         }
     }
 
-    const fn rid(self) -> Option<Rid> {
+    pub(in crate::runtime::rtc_adapter) const fn rid(self) -> Option<Rid> {
         self.rid
     }
 

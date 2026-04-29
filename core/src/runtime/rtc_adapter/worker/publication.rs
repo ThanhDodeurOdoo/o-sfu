@@ -15,7 +15,7 @@ use o_sfu_router::{
 };
 use str0m::{
     bwe::Bitrate,
-    change::SdpAnswer,
+    change::{DirectApi, SdpAnswer},
     format::PayloadParams,
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
     rtp::Extension,
@@ -65,11 +65,8 @@ pub(super) fn refresh_negotiated_producer_parameters(
         let Some(session_state) = state.users.get_mut(session_key) else {
             return refreshed_parameters;
         };
-        session_state
-            .sdp_negotiation
-            .negotiated_producer_parameters
-            .retain(|mid, _parameters| !producer_mid_set.contains(mid));
-        let Ok(answer) = SdpAnswer::from_sdp_string(answer_sdp) else {
+        let Some(answer) = answer_for_projection(session_state, &producer_mid_set, answer_sdp)
+        else {
             return refreshed_parameters;
         };
         for media_line in answer
@@ -96,21 +93,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 continue;
             }
             let primary_payload_type = payload_params.first().map(|params| *params.pt());
-            let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
-            for params in &payload_params {
-                formats.push(project_media_format(media_kind, params));
-                if let Some(resend_payload_type) = params.resend() {
-                    formats.push(
-                        RouterMediaFormat::new(
-                            media_kind,
-                            rfc_rtp::codec_name::RTX,
-                            *resend_payload_type,
-                            params.spec().clock_rate.get(),
-                        )
-                        .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, params.pt().to_string()),
-                    );
-                }
-            }
+            let formats = project_media_formats(media_kind, &payload_params);
             let header_extensions = media_line
                 .extmaps()
                 .into_iter()
@@ -130,12 +113,12 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 rids,
                 primary_ssrcs,
             );
-            if bindings.is_empty() {
-                continue;
-            }
             apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in_bps);
-            let parameters = RouterRtpParameters::new(formats, header_extensions, bindings)
-                .with_mid(mid.to_string());
+            let Some(parameters) =
+                build_projected_parameters(mid, formats, header_extensions, bindings)
+            else {
+                continue;
+            };
             session_state
                 .sdp_negotiation
                 .negotiated_producer_parameters
@@ -152,6 +135,30 @@ pub(super) fn refresh_negotiated_producer_parameters(
     refreshed_parameters
 }
 
+fn answer_for_projection(
+    session_state: &mut RtcSessionState,
+    producer_mid_set: &BTreeSet<Mid>,
+    answer_sdp: &str,
+) -> Option<SdpAnswer> {
+    session_state
+        .sdp_negotiation
+        .negotiated_producer_parameters
+        .retain(|mid, _parameters| !producer_mid_set.contains(mid));
+    SdpAnswer::from_sdp_string(answer_sdp).ok()
+}
+
+fn build_projected_parameters(
+    mid: Mid,
+    formats: Vec<RouterMediaFormat>,
+    header_extensions: Vec<RouterHeaderExtension>,
+    bindings: Vec<StreamBinding>,
+) -> Option<RouterRtpParameters> {
+    if bindings.is_empty() {
+        return None;
+    }
+    Some(RouterRtpParameters::new(formats, header_extensions, bindings).with_mid(mid.to_string()))
+}
+
 fn apply_projected_recv_streams(
     session_state: &mut RtcSessionState,
     mid: Mid,
@@ -160,24 +167,33 @@ fn apply_projected_recv_streams(
 ) {
     let mut api = session_state.rtc.direct_api();
     for binding in bindings {
-        let Some(ssrc) = binding.ssrc() else {
-            continue;
-        };
-        let rid = binding.rid().map(Rid::from);
-        if api.stream_rx_by_mid(mid, rid).is_some() {
-            if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-                stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
-            }
-            continue;
-        }
-        api.expect_stream_rx(ssrc.into(), None, mid, rid);
-        if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-            stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
-        }
+        apply_projected_recv_stream(&mut api, mid, binding, max_bitrate_in_bps);
     }
     #[cfg(any(test, feature = "testing-transport"))]
     {
         session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
+    }
+}
+
+fn apply_projected_recv_stream(
+    api: &mut DirectApi<'_>,
+    mid: Mid,
+    binding: &StreamBinding,
+    max_bitrate_in_bps: u64,
+) {
+    let Some(ssrc) = binding.ssrc() else {
+        return;
+    };
+    let rid = binding.rid().map(Rid::from);
+    if api.stream_rx_by_mid(mid, rid).is_some() {
+        if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
+            stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+        }
+        return;
+    }
+    api.expect_stream_rx(ssrc.into(), None, mid, rid);
+    if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
+        stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
     }
 }
 
@@ -250,6 +266,28 @@ fn project_media_format(
         format = format.with_rtcp_feedback(feedback);
     }
     format
+}
+
+fn project_media_formats(
+    media_kind: RouterMediaKind,
+    payload_params: &[PayloadParams],
+) -> Vec<RouterMediaFormat> {
+    let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
+    for params in payload_params {
+        formats.push(project_media_format(media_kind, params));
+        if let Some(resend_payload_type) = params.resend() {
+            formats.push(
+                RouterMediaFormat::new(
+                    media_kind,
+                    rfc_rtp::codec_name::RTX,
+                    *resend_payload_type,
+                    params.spec().clock_rate.get(),
+                )
+                .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, params.pt().to_string()),
+            );
+        }
+    }
+    formats
 }
 
 fn apply_codec_parameters(mut format: RouterMediaFormat, format_params: &str) -> RouterMediaFormat {

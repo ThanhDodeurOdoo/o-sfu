@@ -1,9 +1,9 @@
 use std::{mem::take, time::Instant};
 
-use o_sfu_rfc::rtp::frame_marking;
+use o_sfu_rfc::rtp::{frame_marking, vp8};
 use str0m::{
-    media::{ExtensionValues, Rid},
-    rtp::{RtpHeader, RtpPacket},
+    media::{ExtensionValues, Mid, Rid},
+    rtp::{RtpHeader, RtpPacket, Ssrc},
 };
 
 use super::{
@@ -86,6 +86,26 @@ impl ForwardedPacket {
 
     pub(super) fn route_control_voice_activity(&self) -> Option<bool> {
         self.route_control_extension_values().voice_activity
+    }
+
+    pub(super) fn route_control_vp8_keyframe(&self) -> bool {
+        vp8::payload_starts_keyframe(self.payload.as_slice())
+    }
+
+    pub(super) fn route_control_ssrc(&self) -> Ssrc {
+        match &self.data {
+            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data.rtp_packet.header.ssrc,
+            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data.header.ssrc,
+        }
+    }
+
+    pub(super) fn route_control_mid(&self) -> Option<Mid> {
+        self.route_control_extension_values().mid
+    }
+
+    pub(super) fn route_control_rid_extension(&self) -> Option<Rid> {
+        let extensions = self.route_control_extension_values();
+        extensions.rid.or(extensions.rid_repair)
     }
 
     pub(super) fn share_for_relay(&self, source_transport_media_id: TransportMediaId) -> Self {

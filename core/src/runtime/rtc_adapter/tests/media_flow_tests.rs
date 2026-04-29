@@ -172,7 +172,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 }
 
 #[tokio::test]
-async fn rtc_consumer_rid_policy_drives_the_aggregate_packet_gate() {
+async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate() {
     let adapter = RtcTransportAdapter::default();
     let producer_session_key = transport_key(1, 21, UserId::Integer(21));
     let first_consumer_session_key = transport_key(1, 22, UserId::Integer(22));
@@ -218,10 +218,7 @@ async fn rtc_consumer_rid_policy_drives_the_aggregate_packet_gate() {
     let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should exist after first consumer registration");
-    assert_eq!(
-        route_entry.effective_packet_gate,
-        DebugPacketGate::Rid(String::from("hi"))
-    );
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
     let _second_consumer_media_id = adapter
         .add_send_media(
@@ -242,7 +239,7 @@ async fn rtc_consumer_rid_policy_drives_the_aggregate_packet_gate() {
 }
 
 #[tokio::test]
-async fn rtc_consumer_packet_gate_updates_the_aggregate_packet_gate() {
+async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggregate_gate() {
     let adapter = RtcTransportAdapter::default();
     let producer_session_key = transport_key(1, 123, UserId::Integer(123));
     let consumer_session_key = transport_key(1, 124, UserId::Integer(124));
@@ -281,10 +278,7 @@ async fn rtc_consumer_packet_gate_updates_the_aggregate_packet_gate() {
     let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should exist after consumer registration");
-    assert_eq!(
-        route_entry.effective_packet_gate,
-        DebugPacketGate::Rid(String::from("hi"))
-    );
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
     assert!(
         adapter
@@ -303,10 +297,7 @@ async fn rtc_consumer_packet_gate_updates_the_aggregate_packet_gate() {
     let route_entry = route_entry_by_media_id(&adapter, source_media_id)
         .await
         .expect("route entry should still exist after consumer gate update");
-    assert_eq!(
-        route_entry.effective_packet_gate,
-        DebugPacketGate::Rid(String::from("lo"))
-    );
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
     assert!(
         adapter

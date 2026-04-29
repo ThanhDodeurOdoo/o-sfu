@@ -12,7 +12,7 @@ use std::{
     mem::take,
     net::SocketAddr,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
@@ -54,6 +54,11 @@ pub(super) struct RtcSessionState {
     pub(super) max_bitrate_out_bps: Option<u64>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
+    /// Receiver-local RTP identity state keyed by consumer transport media.
+    ///
+    /// This belongs to the destination session because the browser sees one
+    /// local RTP stream per consumer route, independent from whichever
+    /// publisher SSRC or RID currently feeds that route.
     pub(super) local_send_rewrites: HashMap<LocalSendRewriteKey, LocalSendRewriteState>,
 }
 
@@ -85,6 +90,19 @@ pub(super) struct RtcBootstrapState {
     pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
     pub(super) producer_ssrc_rid_registry: BTreeMap<ProducerSsrcLookupKey, Rid>,
     pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
+    /// Recently observed producer RIDs, keyed by source media id.
+    ///
+    /// This is packet-path liveness, not signaling truth. It decides when a
+    /// strict selected-RID gate can become effective and when a stale selected
+    /// gate must go pending again.
+    pub(super) live_producer_rids: BTreeMap<TransportMediaId, Vec<ProducerRidLiveness>>,
+    /// Delayed selected-RID keyframe refreshes owned by the packet loop clock.
+    ///
+    /// Chrome can need more than one PLI after a RID first becomes live. The
+    /// queue is source keyed so retries survive normal packet-loop turns
+    /// without adding room-policy work to the hot path.
+    pub(super) pending_rid_keyframe_refreshes:
+        BTreeMap<TransportMediaId, Vec<PendingRidKeyframeRefresh>>,
     pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
@@ -99,6 +117,10 @@ pub(super) struct RtcBootstrapState {
 impl RtcBootstrapState {
     pub(super) fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
         self.dirty_sessions.insert(session_key.clone());
+    }
+
+    pub(super) fn has_dirty_sessions(&self) -> bool {
+        !self.dirty_sessions.is_empty()
     }
 
     pub(super) fn take_ready_sessions(&mut self, now: Instant) -> BTreeSet<TransportSessionKey> {
@@ -154,6 +176,175 @@ impl RtcBootstrapState {
     pub(super) fn clear_session_schedule(&mut self, session_key: &TransportSessionKey) {
         self.dirty_sessions.remove(session_key);
         self.session_timeouts.remove(session_key);
+    }
+
+    pub(super) fn observe_producer_rid_packet(
+        &mut self,
+        transport_media_id: TransportMediaId,
+        rid: Rid,
+        now: Instant,
+    ) -> bool {
+        let live_rids = self
+            .live_producer_rids
+            .entry(transport_media_id)
+            .or_default();
+        if let Some(liveness) = live_rids.iter_mut().find(|liveness| liveness.rid() == rid) {
+            liveness.observe(now);
+            return false;
+        }
+        live_rids.push(ProducerRidLiveness::new(rid, now));
+        true
+    }
+
+    pub(super) fn producer_rid_is_ready(
+        &self,
+        transport_media_id: TransportMediaId,
+        rid: Rid,
+        now: Instant,
+        max_age: Duration,
+    ) -> bool {
+        self.live_producer_rids
+            .get(&transport_media_id)
+            .and_then(|rids| rids.iter().find(|liveness| liveness.rid() == rid))
+            .is_some_and(|liveness| liveness.is_ready(now, max_age))
+    }
+
+    pub(super) fn forget_live_producer_rids(&mut self, transport_media_id: TransportMediaId) {
+        self.live_producer_rids.remove(&transport_media_id);
+        self.pending_rid_keyframe_refreshes
+            .remove(&transport_media_id);
+    }
+
+    pub(super) fn schedule_rid_keyframe_refresh(
+        &mut self,
+        transport_media_id: TransportMediaId,
+        rid: Rid,
+        request_at: Instant,
+    ) {
+        self.pending_rid_keyframe_refreshes
+            .entry(transport_media_id)
+            .or_default()
+            .push(PendingRidKeyframeRefresh::new(rid, request_at));
+    }
+
+    pub(super) fn drain_due_rid_keyframe_refreshes(
+        &mut self,
+        transport_media_id: TransportMediaId,
+        rid: Rid,
+        now: Instant,
+    ) -> usize {
+        let Some(refreshes) = self
+            .pending_rid_keyframe_refreshes
+            .get_mut(&transport_media_id)
+        else {
+            return 0;
+        };
+        let mut due_count = 0;
+        refreshes.retain(|refresh| {
+            let due = refresh.rid() == rid && refresh.is_due(now);
+            if due {
+                due_count += 1;
+            }
+            !due
+        });
+        if refreshes.is_empty() {
+            self.pending_rid_keyframe_refreshes
+                .remove(&transport_media_id);
+        }
+        due_count
+    }
+
+    pub(super) fn drain_due_rid_keyframe_refreshes_for_all(
+        &mut self,
+        now: Instant,
+    ) -> Vec<(TransportMediaId, Rid)> {
+        let mut due_refreshes = Vec::new();
+        let mut empty_sources = Vec::new();
+        for (transport_media_id, refreshes) in &mut self.pending_rid_keyframe_refreshes {
+            refreshes.retain(|refresh| {
+                if refresh.is_due(now) {
+                    due_refreshes.push((*transport_media_id, refresh.rid()));
+                    false
+                } else {
+                    true
+                }
+            });
+            if refreshes.is_empty() {
+                empty_sources.push(*transport_media_id);
+            }
+        }
+        for transport_media_id in empty_sources {
+            self.pending_rid_keyframe_refreshes
+                .remove(&transport_media_id);
+        }
+        due_refreshes
+    }
+
+    pub(super) fn next_rid_keyframe_refresh_deadline(&self) -> Option<Instant> {
+        self.pending_rid_keyframe_refreshes
+            .values()
+            .flat_map(|refreshes| refreshes.iter().map(PendingRidKeyframeRefresh::request_at))
+            .min()
+    }
+}
+
+/// Packet-path readiness for one producer RID.
+///
+/// This is intentionally time based. A RID that was live once may go quiet
+/// after browser encoder adaptation, so strict gates consult freshness instead
+/// of treating the first packet as permanent readiness.
+#[derive(Debug, Clone)]
+pub(super) struct ProducerRidLiveness {
+    rid: Rid,
+    last_seen: Instant,
+}
+
+impl ProducerRidLiveness {
+    fn new(rid: Rid, observed_at: Instant) -> Self {
+        Self {
+            rid,
+            last_seen: observed_at,
+        }
+    }
+
+    const fn rid(&self) -> Rid {
+        self.rid
+    }
+
+    fn observe(&mut self, observed_at: Instant) {
+        self.last_seen = observed_at;
+    }
+
+    fn is_ready(&self, now: Instant, max_age: Duration) -> bool {
+        now.duration_since(self.last_seen) <= max_age
+    }
+}
+
+/// Scheduled keyframe retry for one selected producer RID.
+///
+/// The retry is tied to the source media id by the surrounding map. It is not a
+/// room policy update and it should not outlive source removal.
+#[derive(Debug, Clone)]
+pub(super) struct PendingRidKeyframeRefresh {
+    rid: Rid,
+    request_at: Instant,
+}
+
+impl PendingRidKeyframeRefresh {
+    fn new(rid: Rid, request_at: Instant) -> Self {
+        Self { rid, request_at }
+    }
+
+    const fn rid(&self) -> Rid {
+        self.rid
+    }
+
+    const fn request_at(&self) -> Instant {
+        self.request_at
+    }
+
+    fn is_due(&self, now: Instant) -> bool {
+        self.request_at <= now
     }
 }
 

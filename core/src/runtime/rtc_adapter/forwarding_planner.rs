@@ -230,14 +230,6 @@ fn destination_packet_gate_permits(
     if destination.packet_gate.permits(metadata) {
         return true;
     }
-    debug!(
-        ?source_transport_media_id,
-        consumer_session_key = ?destination.dest_session,
-        consumer_transport_media_id = ?destination.dest_transport_media_id,
-        ?metadata,
-        packet_gate = ?destination.packet_gate,
-        "dropped RTP packet by destination packet gate"
-    );
     false
 }
 
@@ -373,8 +365,10 @@ mod tests {
                     dest_session: consumer_session.clone(),
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -432,8 +426,10 @@ mod tests {
                     dest_session: consumer_session,
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -499,8 +495,10 @@ mod tests {
                     dest_session: consumer_session,
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -589,8 +587,10 @@ mod tests {
                     dest_session: consumer_session,
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -665,8 +665,10 @@ mod tests {
                     dest_session: remote_consumer_session,
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("aud-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -801,15 +803,19 @@ mod tests {
                         dest_session: lo_consumer_session.clone(),
                         dest_transport_media_id: lo_consumer_transport_media_id,
                         dest_mid: Mid::from("cam-down-lo"),
+                        dest_payload_type: None,
                         active: true,
                         packet_gate: PacketLayerGate::Rid("lo".into()),
+                        pending_packet_gate: None,
                     },
                     MediaRouteDestination {
                         dest_session: hi_consumer_session.clone(),
                         dest_transport_media_id: hi_consumer_transport_media_id,
                         dest_mid: Mid::from("cam-down-hi"),
+                        dest_payload_type: None,
                         active: true,
                         packet_gate: PacketLayerGate::Rid("hi".into()),
+                        pending_packet_gate: None,
                     },
                 ],
             },
@@ -892,19 +898,23 @@ mod tests {
                         dest_session: base_consumer_session.clone(),
                         dest_transport_media_id: base_consumer_transport_media_id,
                         dest_mid: Mid::from("cam-down-base"),
+                        dest_payload_type: None,
                         active: true,
                         packet_gate: PacketLayerGate::OperatingPoint(
                             PacketOperatingPointGate::new(Some("hi".into()), 0),
                         ),
+                        pending_packet_gate: None,
                     },
                     MediaRouteDestination {
                         dest_session: high_consumer_session.clone(),
                         dest_transport_media_id: high_consumer_transport_media_id,
                         dest_mid: Mid::from("cam-down-high"),
+                        dest_payload_type: None,
                         active: true,
                         packet_gate: PacketLayerGate::OperatingPoint(
                             PacketOperatingPointGate::new(Some("hi".into()), 2),
                         ),
+                        pending_packet_gate: None,
                     },
                 ],
             },
@@ -1087,8 +1097,10 @@ mod tests {
                     dest_session: gated_consumer_session,
                     dest_transport_media_id: gated_consumer_transport_media_id,
                     dest_mid: Mid::from("cam-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -1100,8 +1112,10 @@ mod tests {
                     dest_session: open_consumer_session.clone(),
                     dest_transport_media_id: open_consumer_transport_media_id,
                     dest_mid: Mid::from("screen-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );
@@ -1190,8 +1204,10 @@ mod tests {
                     dest_session: consumer_session.clone(),
                     dest_transport_media_id: consumer_transport_media_id,
                     dest_mid: Mid::from("cam-down"),
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 }],
             },
         );

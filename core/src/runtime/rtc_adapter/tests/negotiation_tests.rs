@@ -64,9 +64,7 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
 }
 
 #[tokio::test]
-// FIXME(simulcast): Restore this to advertise the initial VP8 RID receive surface
-// once browser consumers receive one selected downstream layer instead of all publisher RIDs.
-async fn rtc_initial_session_offer_guards_simulcast_receive_surface() {
+async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     let adapter = RtcTransportAdapter::default();
     let session_key = transport_key(1, 134, UserId::Integer(134));
 
@@ -77,27 +75,27 @@ async fn rtc_initial_session_offer_guards_simulcast_receive_surface() {
         .into_parts();
 
     assert!(
-        !offer_sdp.contains(&sdp_rid_line(
+        offer_sdp.contains(&sdp_rid_line(
             "lo",
             webrtc::sdp::rid::DIRECTION_RECV,
             Some(150_000)
         )),
-        "video offers must not claim the low receive RID while RID simulcast is guarded"
+        "video offers should claim the low receive RID on the production VP8 path"
     );
     assert!(
-        !offer_sdp.contains(&sdp_rid_line(
+        offer_sdp.contains(&sdp_rid_line(
             "hi",
             webrtc::sdp::rid::DIRECTION_RECV,
-            Some(900_000)
+            Some(4_000_000)
         )),
-        "video offers must not claim the high receive RID while RID simulcast is guarded"
+        "video offers should claim the high receive RID on the production VP8 path"
     );
     assert!(
-        !offer_sdp.contains(&sdp_simulcast_line(
+        offer_sdp.contains(&sdp_simulcast_line(
             webrtc::sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
-        "video offers must not claim simulcast until receivers consume one selected downlink layer"
+        "video offers should advertise VP8 RID simulcast receive metadata"
     );
     assert!(
         offer_sdp.contains(&format!(
@@ -108,14 +106,22 @@ async fn rtc_initial_session_offer_guards_simulcast_receive_surface() {
         )),
         "video offers should retain the keyframe feedback surface used after layer switches"
     );
+    assert!(
+        !offer_sdp.contains("a=rtpmap:97 rtx/90000") && !offer_sdp.contains("a=fmtp:97 apt=96"),
+        "VP8 simulcast offers should not negotiate RTX until RID repair packets are demuxed safely"
+    );
     let video_slot = upload_slots
         .iter()
         .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("initial offer should include a video upload slot");
     assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
-    assert!(
-        video_slot.simulcast_encodings.is_empty(),
-        "upload-slot metadata must stay single-encoding until selected-layer downlink projection exists"
+    assert_eq!(video_slot.simulcast_encodings.len(), 2);
+    assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
+    assert_eq!(video_slot.simulcast_encodings[0].max_bitrate, Some(150_000));
+    assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
+    assert_eq!(
+        video_slot.simulcast_encodings[1].max_bitrate,
+        Some(4_000_000)
     );
 }
 
@@ -239,17 +245,11 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
         vec![
             (RouterMediaKind::Audio, String::from("opus")),
             (RouterMediaKind::Video, String::from("VP8")),
-            (RouterMediaKind::Video, String::from("rtx")),
         ]
     );
     assert!(
-        projected.codecs().any(|codec| {
-            codec.codec_name() == "rtx"
-                && codec
-                    .parameters()
-                    .any(|(key, value)| key == "apt" && value == "96")
-        }),
-        "the projected client capability set should preserve RTX support from the answered SDP"
+        projected.codecs().all(|codec| codec.codec_name() != "rtx"),
+        "the production VP8 receive surface should not negotiate RTX until RID repair packets are demuxed safely"
     );
     assert!(
         projected.codecs().all(|codec| codec.codec_name() != "H264"),
@@ -258,9 +258,7 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
 }
 
 #[tokio::test]
-// FIXME(simulcast): Restore full RID offer and answer projection checks after
-// selected-layer downlink projection and live RID readiness are implemented.
-async fn rtc_simulcast_publish_intent_falls_back_to_single_encoding_while_guarded() {
+async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
     let adapter = rtc_adapter_with_bitrate_limits(2_222_222, 3_333_333);
     let session_key = transport_key(1, 135, UserId::Integer(135));
 
@@ -285,6 +283,9 @@ async fn rtc_simulcast_publish_intent_falls_back_to_single_encoding_while_guarde
         )
         .await
         .expect("simulcast publish intent should stage a renegotiation offer");
+    let negotiated_mid = resolve_mid(&adapter, transport_media_id)
+        .await
+        .expect("simulcast publish should expose the staged mid");
 
     let renegotiation_offer = adapter
         .create_session_renegotiation_offer(&session_key)
@@ -292,27 +293,27 @@ async fn rtc_simulcast_publish_intent_falls_back_to_single_encoding_while_guarde
         .expect("staged simulcast renegotiation offer should be available")
         .into_sdp();
     assert!(
-        !renegotiation_offer.contains(&sdp_rid_line(
+        renegotiation_offer.contains(&sdp_rid_line(
             "lo",
             webrtc::sdp::rid::DIRECTION_RECV,
             Some(150_000)
         )),
-        "simulcast publish offers must not expose low RID receive metadata while RID routing is guarded"
+        "simulcast publish offers should expose low RID receive metadata"
     );
     assert!(
-        !renegotiation_offer.contains(&sdp_rid_line(
+        renegotiation_offer.contains(&sdp_rid_line(
             "hi",
             webrtc::sdp::rid::DIRECTION_RECV,
             Some(900_000)
         )),
-        "simulcast publish offers must not expose high RID receive metadata while RID routing is guarded"
+        "simulcast publish offers should expose high RID receive metadata"
     );
     assert!(
-        !renegotiation_offer.contains(&sdp_simulcast_line(
+        renegotiation_offer.contains(&sdp_simulcast_line(
             webrtc::sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
-        "simulcast publish offers must fall back to a single receive stream until selected-layer downlink projection exists"
+        "simulcast publish offers should advertise the selected-layer receive ladder"
     );
 
     let answer_sdp = remote
@@ -322,6 +323,11 @@ async fn rtc_simulcast_publish_intent_falls_back_to_single_encoding_while_guarde
         )
         .expect("remote simulcast answer should build")
         .to_sdp_string();
+    let answer_sdp = answer_with_simulcast_send_rids(
+        &answer_sdp,
+        negotiated_mid.to_string().as_str(),
+        &[("lo", Some(150_000)), ("hi", Some(900_000))],
+    );
     let applied_answer = adapter
         .apply_session_answer(&session_key, &answer_sdp)
         .await
@@ -338,13 +344,15 @@ async fn rtc_simulcast_publish_intent_falls_back_to_single_encoding_while_guarde
         .await
         .expect("answered simulcast publish should project router RTP parameters");
     let encodings = negotiated_parameters.encodings().collect::<Vec<_>>();
-    assert_eq!(encodings.len(), 1);
-    let Some(encoding) = encodings.first() else {
-        return;
-    };
-    assert_eq!(encoding.rid(), None);
-    assert!(encoding.ssrc().is_some());
-    assert_eq!(encoding.max_bitrate(), None);
+    assert_eq!(encodings.len(), 2);
+    assert_eq!(encodings[0].rid(), Some("lo"));
+    assert_eq!(encodings[0].max_bitrate(), Some(150_000));
+    assert_eq!(encodings[1].rid(), Some("hi"));
+    assert_eq!(encodings[1].max_bitrate(), Some(900_000));
+    assert!(
+        encodings.iter().any(|encoding| encoding.ssrc().is_some()),
+        "answer projection should preserve at least one browser-owned SSRC for the negotiated RID ladder"
+    );
 }
 
 #[tokio::test]
@@ -434,9 +442,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     );
 }
 
-#[tokio::test]
-// FIXME(simulcast): Restore the server-owned RID ladder expectation once Task 18
-// prevents that ladder from being forwarded as multiple downstream browser streams.
 async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
  {
     let adapter = RtcTransportAdapter::default();
@@ -481,22 +486,45 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
             .any(|codec| codec.as_str() == "VP8"),
         "empty protocol publish intent should use the server-owned VP8 upload profile"
     );
-    assert!(
-        video_upload_slot.simulcast_encodings.is_empty(),
-        "empty protocol publish intents must use the single-encoding fallback while RID simulcast is guarded"
+    assert_eq!(video_upload_slot.simulcast_encodings.len(), 2);
+    assert_eq!(video_upload_slot.simulcast_encodings[0].rid, "lo");
+    assert_eq!(
+        video_upload_slot.simulcast_encodings[0].max_bitrate,
+        Some(150_000)
+    );
+    assert_eq!(video_upload_slot.simulcast_encodings[1].rid, "hi");
+    assert_eq!(
+        video_upload_slot.simulcast_encodings[1].max_bitrate,
+        Some(4_000_000)
     );
     assert!(
-        !renegotiation_sdp.contains(&sdp_simulcast_line(
+        renegotiation_sdp.contains(&sdp_simulcast_line(
             webrtc::sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
-        "empty protocol publish intents must not emit the server-owned RID ladder while it is guarded"
+        "empty protocol publish intents should emit the server-owned RID ladder"
     );
     let negotiated_mid = resolve_mid(&adapter, transport_media_id)
         .await
         .expect("transport media should expose its negotiated mid");
+    let answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_sdp)
+                .expect("default simulcast offer should parse"),
+        )
+        .expect("remote default simulcast answer should build")
+        .to_sdp_string();
+    let answer_sdp = answer_with_simulcast_send_rids(
+        &answer_sdp,
+        negotiated_mid.to_string().as_str(),
+        &[("lo", Some(150_000)), ("hi", Some(4_000_000))],
+    );
 
-    apply_offer_answer(&adapter, &session_key, &mut remote, renegotiation_sdp).await;
+    adapter
+        .apply_session_answer(&session_key, &answer_sdp)
+        .await
+        .expect("default simulcast answer should apply");
 
     assert!(
         session_stream_rx_ssrc(&adapter, &session_key, negotiated_mid)
@@ -1016,6 +1044,33 @@ fn sdp_simulcast_line(direction: &str, rids: &[&str]) -> String {
         direction,
         rids.join(&webrtc::sdp::simulcast::STREAM_SEPARATOR.to_string())
     )
+}
+
+fn answer_with_simulcast_send_rids(
+    answer_sdp: &str,
+    mid: &str,
+    rids: &[(&str, Option<u64>)],
+) -> String {
+    let marker = format!("a=mid:{mid}\r\n");
+    let mut replacement = marker.clone();
+    for (rid, max_bitrate) in rids {
+        replacement.push_str(&sdp_rid_line(
+            rid,
+            webrtc::sdp::rid::DIRECTION_SEND,
+            *max_bitrate,
+        ));
+        replacement.push_str("\r\n");
+    }
+    let rid_values = rids
+        .iter()
+        .map(|(rid, _max_bitrate)| *rid)
+        .collect::<Vec<_>>();
+    replacement.push_str(&sdp_simulcast_line(
+        webrtc::sdp::simulcast::DIRECTION_SEND,
+        &rid_values,
+    ));
+    replacement.push_str("\r\n");
+    answer_sdp.replacen(&marker, &replacement, 1)
 }
 
 fn build_remote_rtc(port: u16) -> Rtc {

@@ -1,18 +1,19 @@
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::{
-    media::{KeyframeRequestKind, MediaKind, Mid, Rid},
+    media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
     rtp::Ssrc,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    AddSendMediaRequest, RemoteKeyframeRequest, request_keyframe_for_source,
+    AddSendMediaRequest, RemoteKeyframeRequest, drain_due_rid_keyframe_refreshes,
+    observe_source_rid_readiness, refresh_source_packet_gate, request_keyframe_for_source,
     respond_add_send_media, respond_remove_media, respond_request_consumer_keyframe,
     respond_request_remote_keyframe, respond_set_consumer_packet_gate,
     respond_set_consumer_packet_gates, respond_set_remote_source_packet_gate,
@@ -29,7 +30,7 @@ use crate::{
             demux::{MediaRouteDestination, MediaRouteEntry},
             media_registry::RegisteredMediaHandle,
             relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
-            route_control::PacketLayerGate,
+            route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::RtcBootstrapState,
             test_support::test_transport_session_key,
         },
@@ -74,6 +75,121 @@ fn prepare_source_session_with_rid(
         session_key: source_session.clone(),
         mid: source_mid,
     })
+}
+
+fn add_source_rid_stream(
+    state: &mut RtcBootstrapState,
+    source_session: &TransportSessionKey,
+    source_mid: Mid,
+    ssrc: u32,
+    rid: Rid,
+) {
+    assert!(state.users.contains_key(source_session));
+    if let Some(source_session_state) = state.users.get_mut(source_session) {
+        source_session_state.rtc.direct_api().expect_stream_rx(
+            Ssrc::from(ssrc),
+            None,
+            source_mid,
+            Some(rid),
+        );
+    }
+}
+
+fn assert_consumer_packet_gate(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    consumer_session: &TransportSessionKey,
+    packet_gate: &PacketLayerGate,
+    pending_packet_gate: Option<&PacketLayerGate>,
+) {
+    assert!(
+        state
+            .media_route_index
+            .get(&source_transport_media_id)
+            .is_some_and(
+                |route_entry| route_entry.destinations.iter().any(|destination| {
+                    destination.dest_session == *consumer_session
+                        && &destination.packet_gate == packet_gate
+                        && destination.pending_packet_gate.as_ref() == pending_packet_gate
+                })
+            )
+    );
+}
+
+struct PendingSelectedRidRoute {
+    state: RtcBootstrapState,
+    metrics: RuntimeMetrics,
+    source_session: TransportSessionKey,
+    consumer_session: TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    selected_rid: Rid,
+    fallback_rid: Rid,
+}
+
+fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
+    let source_session = test_transport_session_key(231, 0, 232, UserId::Integer(233));
+    let consumer_session = test_transport_session_key(231, 0, 234, UserId::Integer(235));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let fallback_rid = Rid::from("lo");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_301,
+        Some(selected_rid),
+    );
+    add_source_rid_stream(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_302,
+        fallback_rid,
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
+            }],
+        },
+    );
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_set_consumer_packet_gate(
+        &mut state,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+        PacketLayerGate::Rid(selected_rid),
+        response_tx,
+    );
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    PendingSelectedRidRoute {
+        state,
+        metrics,
+        source_session,
+        consumer_session,
+        source_transport_media_id,
+        selected_rid,
+        fallback_rid,
+    }
 }
 
 #[test]
@@ -182,8 +298,10 @@ fn consumer_keyframe_request_marks_local_video_source_dirty() {
                 dest_session: consumer_session.clone(),
                 dest_transport_media_id: consumer_transport_media_id,
                 dest_mid: consumer_mid,
+                dest_payload_type: None,
                 active: true,
                 packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
             }],
         },
     );
@@ -234,8 +352,10 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
                 dest_session: consumer_session.clone(),
                 dest_transport_media_id: consumer_transport_media_id,
                 dest_mid: consumer_mid,
+                dest_payload_type: None,
                 active: true,
                 packet_gate: PacketLayerGate::Rid(selected_rid),
+                pending_packet_gate: None,
             }],
         },
     );
@@ -310,8 +430,10 @@ fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
                 dest_session: consumer_session.clone(),
                 dest_transport_media_id: consumer_transport_media_id,
                 dest_mid: consumer_mid,
+                dest_payload_type: None,
                 active: true,
                 packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
             }],
         },
     );
@@ -365,8 +487,10 @@ fn consumer_keyframe_request_forwards_remote_video_refresh() {
                 dest_session: consumer_session.clone(),
                 dest_transport_media_id: consumer_transport_media_id,
                 dest_mid: consumer_mid,
+                dest_payload_type: None,
                 active: true,
                 packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
             }],
         },
     );
@@ -432,8 +556,10 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
                 dest_session: consumer_session.clone(),
                 dest_transport_media_id: consumer_transport_media_id,
                 dest_mid: consumer_mid,
+                dest_payload_type: None,
                 active: true,
                 packet_gate: PacketLayerGate::Rid(selected_rid),
+                pending_packet_gate: None,
             }],
         },
     );
@@ -498,19 +624,24 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
                     dest_session: first_consumer_session.clone(),
                     dest_transport_media_id: first_consumer_transport_media_id,
                     dest_mid: first_consumer_mid,
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 },
                 MediaRouteDestination {
                     dest_session: second_consumer_session.clone(),
                     dest_transport_media_id: second_consumer_transport_media_id,
                     dest_mid: second_consumer_mid,
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 },
             ],
         },
     );
+    state.observe_producer_rid_packet(source_transport_media_id, Rid::from("lo"), Instant::now());
 
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
@@ -543,6 +674,389 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
             .route_control
             .effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Open)
+    );
+}
+
+#[test]
+fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
+    let PendingSelectedRidRoute {
+        mut state,
+        metrics,
+        source_session,
+        consumer_session,
+        source_transport_media_id,
+        selected_rid,
+        fallback_rid,
+    } = prepare_pending_selected_rid_route();
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
+    );
+    assert_eq!(
+        state
+            .route_control
+            .effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Block)
+    );
+
+    let now = Instant::now();
+    assert_eq!(
+        state
+            .route_control
+            .decide_keyframe_request(source_transport_media_id, now),
+        KeyframeRequestDecision::Forward
+    );
+
+    assert!(!observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        fallback_rid,
+        false,
+        now,
+    ));
+
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
+    );
+    assert_eq!(
+        state
+            .route_control
+            .effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Block)
+    );
+
+    assert!(!state.dirty_sessions.contains(&source_session));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 0);
+
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        fallback_rid,
+        true,
+        now + Duration::from_millis(10),
+    ));
+
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Rid(fallback_rid),
+        Some(&PacketLayerGate::Rid(selected_rid)),
+    );
+    assert_eq!(
+        state
+            .route_control
+            .effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Rid(fallback_rid))
+    );
+    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+}
+
+#[test]
+fn selected_rid_packet_gate_switches_from_bootstrap_fallback_on_selected_keyframe() {
+    let PendingSelectedRidRoute {
+        mut state,
+        metrics,
+        source_session,
+        consumer_session,
+        source_transport_media_id,
+        selected_rid,
+        fallback_rid,
+    } = prepare_pending_selected_rid_route();
+    let now = Instant::now();
+
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        fallback_rid,
+        true,
+        now,
+    ));
+
+    assert!(!observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        selected_rid,
+        false,
+        now + Duration::from_millis(10),
+    ));
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Rid(fallback_rid),
+        Some(&PacketLayerGate::Rid(selected_rid)),
+    );
+
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        selected_rid,
+        true,
+        now + Duration::from_millis(20),
+    ));
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Rid(selected_rid),
+        None,
+    );
+}
+
+#[test]
+fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
+    let source_session = test_transport_session_key(431, 0, 432, UserId::Integer(433));
+    let consumer_session = test_transport_session_key(431, 0, 434, UserId::Integer(435));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_351,
+        Some(selected_rid),
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session,
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: Some(PacketLayerGate::Rid(selected_rid)),
+            }],
+        },
+    );
+
+    let now = Instant::now();
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        selected_rid,
+        true,
+        now,
+    ));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+
+    for (elapsed_ms, expected_forwarded) in [
+        (700, 1),
+        (1_200, 2),
+        (2_700, 3),
+        (5_200, 4),
+        (8_200, 5),
+        (13_200, 6),
+    ] {
+        assert!(!observe_source_rid_readiness(
+            &mut state,
+            &metrics,
+            &source_session,
+            source_transport_media_id,
+            selected_rid,
+            true,
+            now + Duration::from_millis(elapsed_ms),
+        ));
+        assert_eq!(
+            metrics.snapshot().rtc_route_control_forwarded,
+            expected_forwarded
+        );
+    }
+}
+
+#[test]
+fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
+    let source_session = test_transport_session_key(531, 0, 532, UserId::Integer(533));
+    let consumer_session = test_transport_session_key(531, 0, 534, UserId::Integer(535));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_451,
+        Some(selected_rid),
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session,
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: test_transport_session_key(531, 0, 534, UserId::Integer(535)),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: Some(PacketLayerGate::Rid(selected_rid)),
+            }],
+        },
+    );
+
+    let now = Instant::now();
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        selected_rid,
+        true,
+        now,
+    ));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+
+    drain_due_rid_keyframe_refreshes(&mut state, &metrics, now + Duration::from_millis(1_200));
+
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 2);
+    assert!(state.dirty_sessions.contains(&source_session));
+}
+
+#[test]
+fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
+    let source_session = test_transport_session_key(331, 0, 332, UserId::Integer(333));
+    let consumer_session = test_transport_session_key(331, 0, 334, UserId::Integer(335));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let fallback_rid = Rid::from("lo");
+    let mut state = RtcBootstrapState::default();
+    let metrics = RuntimeMetrics::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_401,
+        Some(selected_rid),
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate: PacketLayerGate::Rid(selected_rid),
+                pending_packet_gate: None,
+            }],
+        },
+    );
+    refresh_source_packet_gate(&mut state, source_transport_media_id);
+
+    let now = Instant::now();
+    let stale_observed_at = now
+        .checked_sub(Duration::from_secs(3))
+        .map_or(now, |observed_at| observed_at);
+    state.observe_producer_rid_packet(source_transport_media_id, selected_rid, stale_observed_at);
+
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        fallback_rid,
+        false,
+        now,
+    ));
+
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
+    );
+    assert_eq!(
+        state
+            .route_control
+            .effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Block)
+    );
+    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+
+    assert!(!observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        selected_rid,
+        false,
+        now + Duration::from_millis(10),
+    ));
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
+    );
+
+    assert!(observe_source_rid_readiness(
+        &mut state,
+        &metrics,
+        &source_session,
+        source_transport_media_id,
+        selected_rid,
+        true,
+        now + Duration::from_millis(20),
+    ));
+
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Rid(selected_rid),
+        None,
     );
 }
 
@@ -586,15 +1100,19 @@ fn batched_consumer_packet_gates_refresh_remote_source_once() {
                     dest_session: first_consumer_session.clone(),
                     dest_transport_media_id: first_consumer_transport_media_id,
                     dest_mid: first_consumer_mid,
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 },
                 MediaRouteDestination {
                     dest_session: second_consumer_session.clone(),
                     dest_transport_media_id: second_consumer_transport_media_id,
                     dest_mid: second_consumer_mid,
+                    dest_payload_type: None,
                     active: true,
                     packet_gate: PacketLayerGate::Open,
+                    pending_packet_gate: None,
                 },
             ],
         },
@@ -627,7 +1145,7 @@ fn batched_consumer_packet_gates_refresh_remote_source_once() {
             source_session_key,
             source_transport_media_id: forwarded_source_transport_media_id,
             target_id,
-            packet_gate: PacketLayerGate::Open,
+            packet_gate: PacketLayerGate::Block,
         }) if source_session_key == source_session
             && forwarded_source_transport_media_id == source_transport_media_id
             && target_id == RelayTargetId::new(16)
@@ -671,7 +1189,7 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
 }
 
 #[test]
-fn add_send_media_declares_every_simulcast_send_stream() {
+fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() {
     let source_session = test_transport_session_key(151, 0, 156, UserId::Integer(157));
     let consumer_session = test_transport_session_key(151, 0, 158, UserId::Integer(159));
     let source_mid = Mid::from("cam-up");
@@ -693,8 +1211,14 @@ fn add_send_media_declares_every_simulcast_send_stream() {
         vec![],
         vec![],
         vec![
-            StreamBinding::new().with_ssrc(72_001).with_rid("lo"),
-            StreamBinding::new().with_ssrc(72_002).with_rid("hi"),
+            StreamBinding::new()
+                .with_ssrc(72_001)
+                .with_rid("lo")
+                .with_payload_type(96),
+            StreamBinding::new()
+                .with_ssrc(72_002)
+                .with_rid("hi")
+                .with_payload_type(96),
         ],
     )
     .with_mid(consumer_mid.to_string());
@@ -722,15 +1246,27 @@ fn add_send_media_declares_every_simulcast_send_stream() {
         return;
     };
     let mut direct_api = consumer_session_state.rtc.direct_api();
+    assert!(direct_api.stream_tx_by_mid(consumer_mid, None).is_some());
     assert!(
         direct_api
             .stream_tx_by_mid(consumer_mid, Some(Rid::from("lo")))
-            .is_some()
+            .is_none()
     );
     assert!(
         direct_api
             .stream_tx_by_mid(consumer_mid, Some(Rid::from("hi")))
-            .is_some()
+            .is_none()
+    );
+    assert!(
+        state
+            .media_route_index
+            .get(&source_transport_media_id)
+            .is_some_and(
+                |route_entry| route_entry.destinations.iter().any(|destination| {
+                    destination.dest_transport_media_id == TransportMediaId::new(1)
+                        && destination.dest_payload_type == Some(Pt::from(96))
+                })
+            )
     );
 }
 

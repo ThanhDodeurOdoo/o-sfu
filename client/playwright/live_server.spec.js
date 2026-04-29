@@ -176,7 +176,7 @@ test("live browser negotiation keeps RTX pairs when optional codecs are enabled"
         if (codecs.vp9Profiles.size > 0) {
             expect(codecs.vp9Profiles).toEqual(new Set(["0", "2"]));
         }
-        for (const payloadType of codecs.videoCodecPayloadTypes) {
+        for (const payloadType of [...codecs.h264PayloadTypes, ...codecs.vp9PayloadTypes]) {
             expect(codecs.rtxAssociations.has(payloadType)).toBeTruthy();
         }
     } finally {

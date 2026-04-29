@@ -24,4 +24,6 @@ mod session;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use dispatcher::handle_debug_worker_command;
 pub use dispatcher::{WorkerCommandContext, handle_worker_command};
-pub use media::request_keyframe_for_source;
+pub(super) use media::{
+    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, request_keyframe_for_source,
+};

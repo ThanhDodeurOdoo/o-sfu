@@ -4,6 +4,7 @@ pub use super::commands::debug::DebugRouteEntry;
 pub use super::forwarded_packet::test_support::{
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
     sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
+    sample_forwarded_packet_without_mid,
 };
 use crate::runtime::{
     ConnectionId, RoomInstanceId, UserId, transport_adapter::TransportSessionKey,

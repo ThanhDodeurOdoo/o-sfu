@@ -41,12 +41,12 @@ impl SourcePolicyEffectPlan {
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
+        let consumer_packets = state
+            .consumer_packet_selection_updates(active_speaker_sources, receiver_bandwidth_snapshot);
+        let featured_sessions = state.featured_session_updates(active_speaker_sources);
         Self {
-            consumer_packets: state.consumer_packet_selection_updates(
-                active_speaker_sources,
-                receiver_bandwidth_snapshot,
-            ),
-            featured_sessions: state.featured_session_updates(active_speaker_sources),
+            consumer_packets,
+            featured_sessions,
         }
     }
 

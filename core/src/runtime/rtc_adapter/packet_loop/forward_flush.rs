@@ -10,7 +10,7 @@ use super::{
         forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
         media_registry::RegisteredMediaHandle,
         state::RtcBootstrapState,
-        worker::request_keyframe_for_source,
+        worker::{observe_source_rid_readiness, request_keyframe_for_source},
     },
     buffers::PacketLoopBuffers,
 };
@@ -31,6 +31,16 @@ pub(super) fn record_incoming_stats(
     );
     for packet in pending_packets {
         if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
+            if packet.route_control_mid().is_some() {
+                // MID proves which producer this packet belongs to. Persist the
+                // SSRC before the browser stops sending MID/RID extensions.
+                state.learn_producer_ssrc_binding(
+                    packet.source_session_key(),
+                    transport_media_id,
+                    packet.route_control_ssrc(),
+                    packet.route_control_rid_extension(),
+                );
+            }
             let payload_len = packet.payload_len();
             let voice_activity = packet.route_control_voice_activity();
             let audio_level = packet.route_control_audio_level();
@@ -44,6 +54,18 @@ pub(super) fn record_incoming_stats(
                 dirty_source_policy_channel_ids
                     .push(packet.source_session_key().room_instance_id());
             }
+            let metadata = packet.route_control_layer_metadata(state);
+            let activated_selected_rid = metadata.rid().is_some_and(|rid| {
+                observe_source_rid_readiness(
+                    state,
+                    metrics,
+                    packet.source_session_key(),
+                    transport_media_id,
+                    rid,
+                    packet.route_control_vp8_keyframe(),
+                    packet.received_at(),
+                )
+            });
             let first_ingress = state
                 .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
                 .unwrap_or(false);
@@ -55,13 +77,15 @@ pub(super) fn record_incoming_stats(
                     payload_bytes = payload_len,
                     "observed first RTP ingress for published media"
                 );
-                request_first_video_keyframe(
-                    state,
-                    metrics,
-                    packet.source_session_key(),
-                    transport_media_id,
-                    packet.received_at(),
-                );
+                if !activated_selected_rid {
+                    request_first_video_keyframe(
+                        state,
+                        metrics,
+                        packet.source_session_key(),
+                        transport_media_id,
+                        packet.received_at(),
+                    );
+                }
             }
             metrics.record_rtp_ingress(payload_len);
         }
@@ -79,8 +103,6 @@ fn request_first_video_keyframe(
     if !source_is_video(state, source_session_key, transport_media_id) {
         return;
     }
-    // FIXME(simulcast): replace this first-RTP retry with a pending per-RID
-    // keyframe refresh queue once live layer detection owns RID readiness.
     request_keyframe_for_source(
         state,
         metrics,

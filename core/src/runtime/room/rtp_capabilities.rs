@@ -10,7 +10,6 @@ const AUDIO_PAYLOAD_TYPE_PCMU: u8 = 0;
 const AUDIO_PAYLOAD_TYPE_PCMA: u8 = 8;
 const AUDIO_PAYLOAD_TYPE_OPUS: u8 = 111;
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
-const VIDEO_PAYLOAD_TYPE_VP8_RTX: u8 = 97;
 const VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED: u8 = 102;
 const VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED_RTX: u8 = 103;
 const VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED: u8 = 104;
@@ -85,10 +84,6 @@ fn push_video_codec(codecs: &mut Vec<MediaCodecCapability>, codec: VideoCodecPre
         VideoCodecPreference::Vp8 => {
             codecs.push(video_codec_capability(
                 rtp::CodecName::Vp8,
-                VIDEO_PAYLOAD_TYPE_VP8,
-            ));
-            codecs.push(video_rtx_codec_capability(
-                VIDEO_PAYLOAD_TYPE_VP8_RTX,
                 VIDEO_PAYLOAD_TYPE_VP8,
             ));
         }
@@ -274,7 +269,7 @@ mod tests {
             .codecs()
             .map(|codec| codec.codec_name().to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(codec_names, vec!["opus", "VP8", "rtx"]);
+        assert_eq!(codec_names, vec!["opus", "VP8"]);
     }
 
     #[test]
@@ -296,7 +291,7 @@ mod tests {
                     String::from("opus"),
                     String::from("PCMU"),
                     String::from("VP8"),
-                    String::from("rtx"),
+                    String::from("H264"),
                 ][..]
             )
         );
@@ -355,7 +350,7 @@ mod tests {
                 })
             })
             .collect::<BTreeSet<_>>();
-        assert!(rtx_associations.contains(&96));
+        assert!(!rtx_associations.contains(&96));
         assert!(rtx_associations.contains(&102));
         assert!(rtx_associations.contains(&104));
         assert!(rtx_associations.contains(&106));

@@ -10,6 +10,7 @@ use str0m::{
     media::{Mid, Rid},
     rtp::Ssrc,
 };
+use tracing::{debug, warn};
 
 use super::{commands::RemoteSourceControl, state::RtcBootstrapState};
 use crate::runtime::{
@@ -165,6 +166,7 @@ impl RtcBootstrapState {
             self.producer_mid_registry
                 .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
             self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+            self.forget_live_producer_rids(transport_media_id);
             self.route_control.forget_source(transport_media_id);
             self.remove_incoming_bitrate_counter(transport_media_id);
         } else if let RegisteredMediaHandle::Consumer {
@@ -223,6 +225,7 @@ impl RtcBootstrapState {
         } else {
             self.remote_source_registry
                 .remove(&source_transport_media_id);
+            self.forget_live_producer_rids(source_transport_media_id);
             self.route_control.forget_source(source_transport_media_id);
         }
     }
@@ -246,6 +249,7 @@ impl RtcBootstrapState {
         }
         self.remote_source_registry
             .remove(&source_transport_media_id);
+        self.forget_live_producer_rids(source_transport_media_id);
         self.route_control.forget_source(source_transport_media_id);
     }
 
@@ -257,6 +261,14 @@ impl RtcBootstrapState {
             });
         self.route_control
             .retain_sources(|source_transport_media_id| {
+                self.mid_registry
+                    .contains_key(&source_transport_media_id.as_u64())
+                    || self
+                        .remote_source_registry
+                        .contains_key(source_transport_media_id)
+            });
+        self.live_producer_rids
+            .retain(|source_transport_media_id, _rids| {
                 self.mid_registry
                     .contains_key(&source_transport_media_id.as_u64())
                     || self
@@ -326,6 +338,78 @@ impl RtcBootstrapState {
                 source_ssrc,
             ))
             .copied()
+    }
+
+    /// Learn the SSRC chosen by a RID-only publisher from RTP header metadata.
+    ///
+    /// Chrome can answer simulcast offers with RIDs but no SSRC attributes.
+    /// Str0m can still demux the first packets through MID/RID header
+    /// extensions. The adapter must persist that discovery here because later
+    /// packets may only carry the SSRC. Without this late binding, packet
+    /// routing, RID gate metadata and bitrate accounting lose the producer as
+    /// soon as the browser stops repeating MID/RID extensions.
+    ///
+    /// The binding is accepted only for the already resolved producer media id.
+    /// A same-session SSRC collision with a different media id is treated as a
+    /// suspicious transport fact and ignored rather than stealing ownership.
+    pub(super) fn learn_producer_ssrc_binding(
+        &mut self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        ssrc: Ssrc,
+        rid: Option<Rid>,
+    ) {
+        let Some(RegisteredMediaHandle::Producer {
+            session_key: registered_session_key,
+            mid,
+        }) = self.media_handle(transport_media_id)
+        else {
+            return;
+        };
+        if registered_session_key != session_key {
+            return;
+        }
+        let mid = *mid;
+        let key = ProducerSsrcLookupKey::new(session_key.clone(), ssrc);
+        if let Some(existing_transport_media_id) = self.producer_ssrc_registry.get(&key).copied()
+            && existing_transport_media_id != transport_media_id
+        {
+            warn!(
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id(),
+                ?transport_media_id,
+                ?existing_transport_media_id,
+                ?mid,
+                ?ssrc,
+                ?rid,
+                "ignored dynamic producer SSRC binding because SSRC already belongs to another media"
+            );
+            return;
+        }
+
+        let inserted = self
+            .producer_ssrc_registry
+            .insert(key.clone(), transport_media_id)
+            .is_none();
+        let previous_rid = rid.and_then(|rid| self.producer_ssrc_rid_registry.insert(key, rid));
+        let ssrcs = self
+            .producer_ssrcs_by_media
+            .entry(transport_media_id)
+            .or_default();
+        if !ssrcs.contains(&ssrc) {
+            ssrcs.push(ssrc);
+        }
+        if inserted || previous_rid != rid {
+            debug!(
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id(),
+                ?transport_media_id,
+                ?mid,
+                ?ssrc,
+                ?rid,
+                "learned dynamic producer SSRC binding from RTP header extensions"
+            );
+        }
     }
 
     pub(super) fn consumer_source_transport_media_id_for_mid(

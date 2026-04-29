@@ -5,19 +5,35 @@ use std::{
     net::SocketAddr,
 };
 
-use str0m::media::Mid;
+use str0m::media::{Mid, Pt};
 
 use super::route_control::PacketLayerGate;
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
 /// A single forwarding destination within the media route index.
+///
+/// One source can have manny destinations, each with its own selected packet
+/// gate. The destination also carries the consumer-negotiated RTP identity so
+/// local forwarding can present one browser stream even when the publisher
+/// source is simulcast.
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteDestination {
     pub(super) dest_session: TransportSessionKey,
     pub(super) dest_transport_media_id: TransportMediaId,
     pub(super) dest_mid: Mid,
+    /// Payload type negotiated for this consumer stream.
+    ///
+    /// Source payload types can differ from consumer payload types after router
+    /// negotiation, so forwarding must not reuse the publisher value blindly.
+    pub(super) dest_payload_type: Option<Pt>,
     pub(super) active: bool,
+    /// Effective transport gate used by the packet loop right now.
     pub(super) packet_gate: PacketLayerGate,
+    /// Selected strict gate that is waiting for a decodable live RID.
+    ///
+    /// Pending gates keepp a route from opening to multiple publisher RIDs wile
+    /// some browsers may is still bringing up or refreshing the selected layer.
+    pub(super) pending_packet_gate: Option<PacketLayerGate>,
 }
 
 #[derive(Debug, Clone)]

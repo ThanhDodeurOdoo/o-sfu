@@ -16,7 +16,7 @@ use std::{
 use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use str0m::{
     bwe::Bitrate,
-    change::{SdpAnswer, SdpApi},
+    change::{DirectApi, SdpAnswer, SdpApi},
     media::{Direction, MediaKind, Mid},
     rtp::Ssrc,
 };
@@ -223,7 +223,6 @@ fn worker_apply_session_answer(
         .staged_offer_upload_slots
         .clear();
     apply_pending_recv_streams(session_state, max_bitrate_in_bps);
-    let local_ice_ufrag = session_state.local_ice_ufrag.clone();
     session_state.dtls_started = true;
     let _ = session_state;
     let refreshed_parameters = refresh_negotiated_producer_parameters(
@@ -244,14 +243,6 @@ fn worker_apply_session_answer(
             session_key,
             remote_candidate_addrs.iter().copied(),
         );
-    debug!(
-        user_id = ?session_key.user_id(),
-        media_worker_id = session_key.media_worker_id(),
-        %local_ice_ufrag,
-        remote_candidate_addr_count = remote_candidate_addrs.len(),
-        remote_candidate_addrs = ?remote_candidate_addrs,
-        "registered answered remote candidate addresses for rtc user"
-    );
     Ok(AppliedSessionAnswer::from_negotiated_producers(
         producer_handles
             .into_iter()
@@ -297,17 +288,7 @@ fn apply_pending_recv_streams(
         .collect::<Vec<_>>();
     let mut api = session_state.rtc.direct_api();
     for (mid, stream) in &pending_recv_streams {
-        if let Some(existing_ssrc) = api
-            .stream_rx_by_mid(*mid, stream.rid)
-            .map(|stream_rx| Ssrc::from(*stream_rx.ssrc()))
-            && existing_ssrc != stream.ssrc
-        {
-            api.remove_stream_rx(existing_ssrc);
-        }
-        api.expect_stream_rx(stream.ssrc, None, *mid, stream.rid);
-        if let Some(stream_rx) = api.stream_rx_by_mid(*mid, stream.rid) {
-            stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
-        }
+        apply_pending_recv_stream(&mut api, *mid, stream, max_bitrate_in_bps);
     }
     #[cfg(any(test, feature = "testing-transport"))]
     {
@@ -318,6 +299,32 @@ fn apply_pending_recv_streams(
             .sdp_negotiation
             .pending_recv_streams
             .remove(&mid);
+    }
+}
+
+fn apply_pending_recv_stream(
+    api: &mut DirectApi<'_>,
+    mid: Mid,
+    stream: &super::super::state::PendingRecvStream,
+    max_bitrate_in_bps: u64,
+) {
+    if let Some(existing_ssrc) = api
+        .stream_rx_by_mid(mid, stream.rid)
+        .map(|stream_rx| Ssrc::from(*stream_rx.ssrc()))
+        && existing_ssrc != stream.ssrc
+    {
+        api.remove_stream_rx(existing_ssrc);
+        debug!(
+            ?mid,
+            rid = ?stream.rid,
+            previous_ssrc = ?existing_ssrc,
+            next_ssrc = ?stream.ssrc,
+            "replaced stale recv stream SSRC while applying answer"
+        );
+    }
+    api.expect_stream_rx(stream.ssrc, None, mid, stream.rid);
+    if let Some(stream_rx) = api.stream_rx_by_mid(mid, stream.rid) {
+        stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
     }
 }
 

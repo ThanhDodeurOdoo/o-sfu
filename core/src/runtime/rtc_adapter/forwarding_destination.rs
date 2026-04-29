@@ -72,6 +72,7 @@ impl PacketForward {
                 LocalPacketDestination::new(
                     route_destination.dest_transport_media_id,
                     route_destination.dest_mid,
+                    route_destination.dest_payload_type,
                 ),
             )),
         }
@@ -198,6 +199,9 @@ impl LocalRtcPacketDestination {
             packet.local_send_packet(),
             is_last_destination,
         )?;
+        if payload_bytes.is_some() {
+            state.mark_session_dirty(&self.session_key);
+        }
         Ok(ForwardSendOutcome::LocalRtc { payload_bytes })
     }
 }
@@ -326,8 +330,10 @@ mod tests {
             dest_session: dest_session.clone(),
             dest_transport_media_id: TransportMediaId::default(),
             dest_mid: Mid::from("aud-down"),
+            dest_payload_type: None,
             active: true,
             packet_gate: PacketLayerGate::Open,
+            pending_packet_gate: None,
         };
 
         let forward = PacketForward::from_local_route_destination(4, &route_destination);

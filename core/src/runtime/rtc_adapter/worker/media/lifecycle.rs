@@ -225,7 +225,7 @@ fn session_has_other_mid_user(
 }
 
 /// Returns whether the shard already handed out a local offer and is still
-/// waiting for the macthing answer. That state accepts queued removals, but it
+/// waiting for the matching answer. That state accepts queued removals, but it
 /// must reject new additions that would need a second concurrent offer
 fn offer_is_awaiting_answer(session_state: &RtcSessionState) -> bool {
     session_state.sdp_negotiation.pending_offer.is_some()
@@ -499,6 +499,8 @@ fn worker_add_send_media(
         source_route_kind = route_source.label(),
         ?transport_media_id,
         ?media_kind,
+        consumer_payload_type = ?super::control::consumer_payload_type(consumer_rtp_parameters),
+        downstream_rid_policy = "single_ridless_stream",
         "declared send-only media and registered media route for consumer"
     );
     Ok(transport_media_id)
@@ -551,16 +553,20 @@ fn declare_direct_send_media(
     if !has_media {
         api.declare_media(mid, media_kind);
     }
-    let mut declared_stream = false;
-    for encoding in consumer_rtp_parameters.encodings() {
-        let ssrc = encoding.ssrc().map_or_else(|| api.new_ssrc(), Ssrc::from);
-        api.declare_stream_tx(ssrc, None, mid, encoding.rid().map(Into::into));
-        declared_stream = true;
-    }
-    if !declared_stream {
-        let ssrc = api.new_ssrc();
-        api.declare_stream_tx(ssrc, None, mid, None);
-    }
+    let source_encoding_count = consumer_rtp_parameters.encodings().count();
+    let negotiated_ssrc = consumer_rtp_parameters
+        .encodings()
+        .find_map(|encoding| encoding.ssrc().map(Ssrc::from));
+    let ssrc = negotiated_ssrc.unwrap_or_else(|| api.new_ssrc());
+    api.declare_stream_tx(ssrc, None, mid, None);
+    debug!(
+        ?mid,
+        ?media_kind,
+        ?ssrc,
+        source_encoding_count,
+        downstream_rid_policy = "single_ridless_stream",
+        "declared browser consumer RTP stream"
+    );
 }
 
 fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {

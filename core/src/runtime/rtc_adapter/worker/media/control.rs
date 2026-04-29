@@ -35,11 +35,12 @@
 //! worker dispatcher. The lower worker functions keep the ownership checks close
 //! to the state they protect.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{KeyframeRequestKind, Mid, Rid};
+use str0m::media::{KeyframeRequestKind, Mid, Pt, Rid};
 use tokio::sync::oneshot;
+use tracing::{debug, warn};
 
 use super::{
     super::super::{
@@ -70,6 +71,15 @@ enum RouteSourceAccess {
     Existing,
     Register(Option<RemoteSourceControl>),
 }
+
+const SELECTED_RID_READY_MAX_AGE: Duration = Duration::from_secs(2);
+const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(1_100),
+    Duration::from_millis(2_500),
+    Duration::from_millis(5_000),
+    Duration::from_millis(8_000),
+    Duration::from_millis(13_000),
+];
 
 pub fn respond_set_producer_active(
     state: &mut RtcBootstrapState,
@@ -192,6 +202,130 @@ pub fn respond_set_remote_source_packet_gate(
         .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
 }
 
+/// Update packet-path readiness for one incoming producer RID.
+///
+/// This is the bridge between RTP observation and route control. It may move
+/// pending consumer gates to their selected RID, install a single fallback RID
+/// while the selected layer waits for a keyframe, or suspend a stale strict gate
+/// that no longer has fresh packets. It only mutates transport state and queues
+/// keyframe refreshes. Room policy remains the owner of which RID is selected.
+pub fn observe_source_rid_readiness(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Rid,
+    is_keyframe: bool,
+    now: Instant,
+) -> bool {
+    let first_observed = state.observe_producer_rid_packet(source_transport_media_id, rid, now);
+    if first_observed {
+        debug!(
+            user_id = ?source_session_key.user_id(),
+            media_worker_id = source_session_key.media_worker_id(),
+            ?source_transport_media_id,
+            ?rid,
+            is_keyframe,
+            "observed first live RTP for producer RID"
+        );
+    }
+    let suspended_stale_gate = suspend_stale_packet_gates(
+        state,
+        metrics,
+        source_session_key,
+        source_transport_media_id,
+        rid,
+        now,
+    );
+    let has_pending_selected_gate =
+        has_pending_packet_gate_for_rid(state, source_transport_media_id, rid);
+    let activated_pending_gate =
+        is_keyframe && activate_pending_packet_gates_for_rid(state, source_transport_media_id, rid);
+    let activated_bootstrap_fallback_gate = !activated_pending_gate
+        && is_keyframe
+        && activate_bootstrap_fallback_packet_gates_for_rid(state, source_transport_media_id, rid);
+    if activated_pending_gate {
+        refresh_source_packet_gate(state, source_transport_media_id);
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            rid,
+            now,
+        );
+        schedule_live_rid_keyframe_retries(state, source_transport_media_id, rid, now);
+    } else if activated_bootstrap_fallback_gate {
+        refresh_source_packet_gate(state, source_transport_media_id);
+        request_pending_selected_rid_keyframes(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            now,
+        );
+    } else if has_pending_selected_gate {
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            rid,
+            now,
+        );
+    } else if suspended_stale_gate {
+        refresh_source_packet_gate(state, source_transport_media_id);
+    }
+    drain_live_rid_keyframe_retries(
+        state,
+        metrics,
+        source_session_key,
+        source_transport_media_id,
+        rid,
+        now,
+    );
+    activated_pending_gate || activated_bootstrap_fallback_gate || suspended_stale_gate
+}
+
+/// Drain selected-RID keyframe retries whose packet-loop deadlines have passed.
+///
+/// Retries live in `RtcBootstrapState` so they can fire even if the selected
+/// RID does not keep sending packets. Missing source ownership is expected
+/// after teardown and is handled as a dropped best-effort refresh.
+pub fn drain_due_rid_keyframe_refreshes(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    now: Instant,
+) {
+    for (source_transport_media_id, rid) in state.drain_due_rid_keyframe_refreshes_for_all(now) {
+        let Some(source_session_key) =
+            keyframe_refresh_source_session(state, source_transport_media_id)
+        else {
+            warn!(
+                ?source_transport_media_id,
+                ?rid,
+                "dropped selected RID keyframe refresh because source ownership is unavailable"
+            );
+            continue;
+        };
+        debug!(
+            user_id = ?source_session_key.user_id(),
+            media_worker_id = source_session_key.media_worker_id(),
+            ?source_transport_media_id,
+            ?rid,
+            "draining scheduled selected RID keyframe refresh"
+        );
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            &source_session_key,
+            source_transport_media_id,
+            rid,
+            now,
+        );
+    }
+}
+
 /// Reduces negotiated consumer RTP parameters into the route-level packet gate.
 ///
 /// A single selected RID means this route should forward only that simulcast
@@ -216,6 +350,53 @@ pub(super) fn consumer_packet_gate(
     selected_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
 }
 
+fn consumer_packet_gate_for_source(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    consumer_rtp_parameters: &RouterRtpParameters,
+) -> (PacketLayerGate, Option<PacketLayerGate>) {
+    guarded_packet_gate(
+        state,
+        source_transport_media_id,
+        consumer_packet_gate(consumer_rtp_parameters),
+    )
+}
+
+/// Split a selected-RID gate into effective and pending transport state.
+///
+/// The effective gate is what the packet loop enforces now. The pending gate is
+/// the target selected by room policy. Keeping both lets bootstrap forwarding
+/// stay decodable without losing the receiver's intended layer.
+fn guarded_packet_gate(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    packet_gate: PacketLayerGate,
+) -> (PacketLayerGate, Option<PacketLayerGate>) {
+    let Some(rid) = packet_gate_rid(&packet_gate) else {
+        return (packet_gate, None);
+    };
+    if state.producer_rid_is_ready(
+        source_transport_media_id,
+        rid,
+        Instant::now(),
+        SELECTED_RID_READY_MAX_AGE,
+    ) {
+        return (packet_gate, None);
+    }
+    debug!(
+        ?source_transport_media_id,
+        ?rid,
+        requested_packet_gate = ?packet_gate,
+        "blocked selected RID route until selected producer RID has live RTP"
+    );
+    (PacketLayerGate::Block, Some(packet_gate))
+}
+
+/// Ensure the source side of a route is valid before adding a destination.
+///
+/// Local sources must still be owned by the requesting session. Remote sources
+/// are registered with relay control so later source-gate updates can be pushed
+/// back to the worker that owns the producer.
 pub(super) fn ensure_route_source_registered(
     state: &mut RtcBootstrapState,
     route_owner_session_key: &TransportSessionKey,
@@ -239,6 +420,11 @@ pub(super) fn ensure_route_source_registered(
 /// remote-source relay activity that depends on this route existing. Room policy
 /// may later replace the gate for this one consumer without changing other
 /// destinations on the same source.
+///
+/// A strict selected-RID route is not made effective until packet-path
+/// liveness proves that RID exists for this producer. The pending gate keeps
+/// the room-selected target attached to the destination while the effective
+/// gate remains blocked or temporarily points at one decodable fallback RID.
 pub(super) fn register_consumer_route(
     state: &mut RtcBootstrapState,
     consumer_session_key: &TransportSessionKey,
@@ -248,6 +434,9 @@ pub(super) fn register_consumer_route(
     route_source: RouteSourceKind,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) {
+    let (packet_gate, pending_packet_gate) =
+        consumer_packet_gate_for_source(state, source_transport_media_id, consumer_rtp_parameters);
+    let dest_payload_type = consumer_payload_type(consumer_rtp_parameters);
     state
         .media_route_index
         .entry(source_transport_media_id)
@@ -260,13 +449,27 @@ pub(super) fn register_consumer_route(
             dest_session: consumer_session_key.clone(),
             dest_transport_media_id: consumer_transport_media_id,
             dest_mid: consumer_mid,
+            dest_payload_type,
             active: true,
-            packet_gate: consumer_packet_gate(consumer_rtp_parameters),
+            packet_gate,
+            pending_packet_gate,
         });
     refresh_source_packet_gate(state, source_transport_media_id);
     if matches!(route_source, RouteSourceKind::Remote) {
         update_remote_route_active(state, source_transport_media_id, true);
     }
+}
+
+pub(super) fn consumer_payload_type(consumer_rtp_parameters: &RouterRtpParameters) -> Option<Pt> {
+    consumer_rtp_parameters
+        .encodings()
+        .find_map(|encoding| encoding.payload_type().map(Pt::from))
+        .or_else(|| {
+            consumer_rtp_parameters
+                .formats()
+                .find(|format| !format.codec().is_rtx())
+                .map(|format| Pt::from(format.payload_type()))
+        })
 }
 
 pub(super) fn remove_consumer_route(
@@ -506,6 +709,8 @@ fn update_consumer_packet_gate(
         }
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
+    let (packet_gate, pending_packet_gate) =
+        guarded_packet_gate(state, source_transport_media_id, packet_gate);
     {
         let route_entry = state
             .media_route_index
@@ -519,8 +724,11 @@ fn update_consumer_packet_gate(
                     && destination.dest_transport_media_id == consumer_transport_media_id
             })
             .ok_or(TransportAdapterError::TransportUnavailable)?;
-        if destination.packet_gate != packet_gate {
+        if destination.packet_gate != packet_gate
+            || destination.pending_packet_gate != pending_packet_gate
+        {
             destination.packet_gate = packet_gate;
+            destination.pending_packet_gate = pending_packet_gate;
             return Ok(true);
         }
     }
@@ -602,10 +810,11 @@ fn worker_request_consumer_keyframe(
             else {
                 return Err(TransportAdapterError::TransportUnavailable);
             };
-            match state
-                .route_control
-                .decide_keyframe_request(source_transport_media_id, now)
-            {
+            match state.route_control.decide_keyframe_request_for_rid(
+                source_transport_media_id,
+                destination_rid,
+                now,
+            ) {
                 KeyframeRequestDecision::Forward => {
                     source_control.request_keyframe(
                         source_session_key,
@@ -625,10 +834,374 @@ fn worker_request_consumer_keyframe(
 }
 
 fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
-    match &destination.packet_gate {
+    destination
+        .pending_packet_gate
+        .as_ref()
+        .and_then(packet_gate_rid)
+        .or_else(|| packet_gate_rid(&destination.packet_gate))
+}
+
+fn packet_gate_rid(packet_gate: &PacketLayerGate) -> Option<Rid> {
+    match packet_gate {
         PacketLayerGate::Rid(rid) => Some(*rid),
         PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
         PacketLayerGate::Open | PacketLayerGate::Block => None,
+    }
+}
+
+fn has_pending_packet_gate_for_rid(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    live_rid: Rid,
+) -> bool {
+    state
+        .media_route_index
+        .get(&source_transport_media_id)
+        .is_some_and(|route_entry| {
+            route_entry.destinations.iter().any(|destination| {
+                destination
+                    .pending_packet_gate
+                    .as_ref()
+                    .and_then(packet_gate_rid)
+                    == Some(live_rid)
+            })
+        })
+}
+
+/// Make the selected strict RID gate effective after a keyframe for that RID.
+///
+/// A RID can become live on delta frames before it is decodable by a receiver.
+/// Activation waits for the VP8 keyframe check performed by the caller.
+fn activate_pending_packet_gates_for_rid(
+    state: &mut RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    live_rid: Rid,
+) -> bool {
+    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
+        return false;
+    };
+    let mut changed = false;
+    for destination in &mut route_entry.destinations {
+        if destination
+            .pending_packet_gate
+            .as_ref()
+            .and_then(packet_gate_rid)
+            != Some(live_rid)
+        {
+            continue;
+        }
+        if let Some(packet_gate) = destination.pending_packet_gate.take() {
+            debug!(
+                ?source_transport_media_id,
+                consumer_session_key = ?destination.dest_session,
+                consumer_transport_media_id = ?destination.dest_transport_media_id,
+                ?live_rid,
+                activated_packet_gate = ?packet_gate,
+                "activated deferred strict RID packet gate after producer RID became live"
+            );
+            destination.packet_gate = packet_gate;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Allow one decodable fallback RID while the selected RID remains pending.
+///
+/// This is a bootstrap-only compromise. It avoids black screens when Chrome
+/// starts `lo` first, but still keeps each consumer on exactly one publisher RID
+/// at a time.
+fn activate_bootstrap_fallback_packet_gates_for_rid(
+    state: &mut RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    live_rid: Rid,
+) -> bool {
+    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
+        return false;
+    };
+    let mut changed = false;
+    for destination in &mut route_entry.destinations {
+        let Some(selected_rid) = destination
+            .pending_packet_gate
+            .as_ref()
+            .and_then(packet_gate_rid)
+        else {
+            continue;
+        };
+        if selected_rid == live_rid || !matches!(destination.packet_gate, PacketLayerGate::Block) {
+            continue;
+        }
+        debug!(
+            ?source_transport_media_id,
+            consumer_session_key = ?destination.dest_session,
+            consumer_transport_media_id = ?destination.dest_transport_media_id,
+            fallback_rid = ?live_rid,
+            pending_selected_rid = ?selected_rid,
+            "activated bootstrap fallback RID packet gate while selected producer RID is pending"
+        );
+        destination.packet_gate = PacketLayerGate::Rid(live_rid);
+        changed = true;
+    }
+    changed
+}
+
+/// Move stale strict gates back to pending when their selected RID goes quiet.
+///
+/// Browser encoders can pause a simulcast layer after it was once live. When
+/// packets arrive for another RID and the selected RID is no longer fresh, this
+/// prevents the consumer route from staying strict on a silent layer.
+fn suspend_stale_packet_gates(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    incoming_rid: Rid,
+    now: Instant,
+) -> bool {
+    let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
+        return false;
+    };
+    let stale_rids = route_entry
+        .destinations
+        .iter()
+        .filter(|destination| destination.pending_packet_gate.is_none())
+        .filter_map(|destination| packet_gate_rid(&destination.packet_gate))
+        .filter(|selected_rid| *selected_rid != incoming_rid)
+        .filter(|selected_rid| {
+            !state.producer_rid_is_ready(
+                source_transport_media_id,
+                *selected_rid,
+                now,
+                SELECTED_RID_READY_MAX_AGE,
+            )
+        })
+        .fold(Vec::new(), |mut stale_rids, selected_rid| {
+            if !stale_rids.contains(&selected_rid) {
+                stale_rids.push(selected_rid);
+            }
+            stale_rids
+        });
+    if stale_rids.is_empty() {
+        return false;
+    }
+    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
+        return false;
+    };
+    let mut changed = false;
+    for destination in &mut route_entry.destinations {
+        if destination.pending_packet_gate.is_some() {
+            continue;
+        }
+        let Some(selected_rid) = packet_gate_rid(&destination.packet_gate) else {
+            continue;
+        };
+        if !stale_rids.contains(&selected_rid) {
+            continue;
+        }
+        let selected_packet_gate = destination.packet_gate.clone();
+        debug!(
+            ?source_transport_media_id,
+            consumer_session_key = ?destination.dest_session,
+            consumer_transport_media_id = ?destination.dest_transport_media_id,
+            ?incoming_rid,
+            stale_rid = ?selected_rid,
+            pending_packet_gate = ?selected_packet_gate,
+            "blocked stale selected RID route until selected producer RID resumes"
+        );
+        destination.packet_gate = PacketLayerGate::Block;
+        destination.pending_packet_gate = Some(selected_packet_gate);
+        changed = true;
+    }
+    for stale_rid in stale_rids {
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            stale_rid,
+            now,
+        );
+    }
+    changed
+}
+
+fn request_pending_selected_rid_keyframes(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    now: Instant,
+) {
+    for rid in pending_selected_rids(state, source_transport_media_id) {
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            rid,
+            now,
+        );
+    }
+}
+
+fn pending_selected_rids(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) -> Vec<Rid> {
+    state
+        .media_route_index
+        .get(&source_transport_media_id)
+        .map(|route_entry| {
+            route_entry
+                .destinations
+                .iter()
+                .filter_map(|destination| {
+                    destination
+                        .pending_packet_gate
+                        .as_ref()
+                        .and_then(packet_gate_rid)
+                })
+                .fold(Vec::new(), |mut rids, rid| {
+                    if !rids.contains(&rid) {
+                        rids.push(rid);
+                    }
+                    rids
+                })
+        })
+        .unwrap_or_default()
+}
+
+fn request_live_rid_keyframe(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Rid,
+    now: Instant,
+) {
+    debug!(
+        user_id = ?source_session_key.user_id(),
+        media_worker_id = source_session_key.media_worker_id(),
+        ?source_transport_media_id,
+        ?rid,
+        "requesting selected RID producer keyframe"
+    );
+    if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_some() {
+        request_keyframe_for_source(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            Some(rid),
+            KeyframeRequestKind::Pli,
+            now,
+        );
+        return;
+    }
+    let Some((registered_source_session_key, source_control)) = state
+        .remote_source_registration(source_transport_media_id)
+        .map(|registration| {
+            (
+                registration.source_session_key().clone(),
+                registration.source_control().clone(),
+            )
+        })
+    else {
+        warn!(
+            user_id = ?source_session_key.user_id(),
+            media_worker_id = source_session_key.media_worker_id(),
+            ?source_transport_media_id,
+            ?rid,
+            "could not request selected RID keyframe because source ownership is unavailable"
+        );
+        return;
+    };
+    if registered_source_session_key != *source_session_key {
+        warn!(
+            observed_source_user_id = ?source_session_key.user_id(),
+            observed_media_worker_id = source_session_key.media_worker_id(),
+            registered_source_user_id = ?registered_source_session_key.user_id(),
+            registered_media_worker_id = registered_source_session_key.media_worker_id(),
+            ?source_transport_media_id,
+            ?rid,
+            "could not request selected RID keyframe because source ownership changed"
+        );
+        return;
+    }
+    match state.route_control.decide_keyframe_request_for_rid(
+        source_transport_media_id,
+        Some(rid),
+        now,
+    ) {
+        KeyframeRequestDecision::Forward => {
+            source_control.request_keyframe(
+                registered_source_session_key,
+                source_transport_media_id,
+                Some(rid),
+                KeyframeRequestKind::Pli,
+            );
+            metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+        }
+        KeyframeRequestDecision::Absorb => {
+            metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+        }
+    }
+}
+
+fn schedule_live_rid_keyframe_retries(
+    state: &mut RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    rid: Rid,
+    now: Instant,
+) {
+    for delay in SELECTED_RID_KEYFRAME_RETRY_DELAYS {
+        state.schedule_rid_keyframe_refresh(source_transport_media_id, rid, now + delay);
+    }
+    debug!(
+        ?source_transport_media_id,
+        ?rid,
+        retry_count = SELECTED_RID_KEYFRAME_RETRY_DELAYS.len(),
+        "scheduled follow-up selected RID keyframe refreshes"
+    );
+}
+
+fn drain_live_rid_keyframe_retries(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Rid,
+    now: Instant,
+) {
+    let due_count = state.drain_due_rid_keyframe_refreshes(source_transport_media_id, rid, now);
+    for _ in 0..due_count {
+        debug!(
+            user_id = ?source_session_key.user_id(),
+            media_worker_id = source_session_key.media_worker_id(),
+            ?source_transport_media_id,
+            ?rid,
+            "draining follow-up selected RID keyframe refresh"
+        );
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            rid,
+            now,
+        );
+    }
+}
+
+fn keyframe_refresh_source_session(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) -> Option<TransportSessionKey> {
+    match state.media_handle(source_transport_media_id) {
+        Some(RegisteredMediaHandle::Producer { session_key, .. }) => Some(session_key.clone()),
+        Some(RegisteredMediaHandle::Consumer { .. }) | None => state
+            .remote_source_registration(source_transport_media_id)
+            .map(|registration| registration.source_session_key().clone()),
     }
 }
 

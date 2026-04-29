@@ -21,7 +21,7 @@ use super::{
         relay_registry::RelayRegistry,
         routing_miss::PacketLoopRoutingState,
         state::{RtcBootstrapState, RtcSnapshotState},
-        worker::{WorkerCommandContext, handle_worker_command},
+        worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes, handle_worker_command},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
@@ -342,6 +342,7 @@ fn snapshot_and_pump(
         &mut buffers.pending_packets,
         MAX_RELAY_PACKETS_PER_ITERATION,
     );
+    drain_due_rid_keyframe_refreshes(state, &config.metrics, now);
     flush_pending_keyframe_requests(state, &config.metrics, buffers);
     record_incoming_stats(
         state,
@@ -361,8 +362,24 @@ fn snapshot_and_pump(
     Some(SnapshotInfo {
         socket,
         candidate_addr,
-        next_timeout: state.next_timeout_deadline(),
+        next_timeout: next_timeout_deadline(state),
     })
+}
+
+pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Instant> {
+    if state.has_dirty_sessions() {
+        return Some(Instant::now());
+    }
+    match (
+        state.next_timeout_deadline(),
+        state.next_rid_keyframe_refresh_deadline(),
+    ) {
+        (Some(session_deadline), Some(refresh_deadline)) => {
+            Some(session_deadline.min(refresh_deadline))
+        }
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
 }
 
 #[cfg(not(any(test, feature = "testing-transport")))]

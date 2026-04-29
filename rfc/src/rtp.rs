@@ -6,6 +6,7 @@
 //! - RTP stream identifier SDES items: <https://www.rfc-editor.org/rfc/rfc8852>
 //! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
 //! - Layer Refresh Request feedback: <https://www.rfc-editor.org/rfc/rfc9627>
+//! - RTP payload format for VP8: <https://www.rfc-editor.org/rfc/rfc7741>
 
 use std::fmt;
 
@@ -116,6 +117,222 @@ pub mod codec_name {
     ///
     /// Reference: RFC 4588.
     pub const RTX: &str = "rtx";
+}
+
+/// VP8 RTP payload helpers.
+pub mod vp8 {
+    const X_BIT: u8 = 0b1000_0000;
+    const S_BIT: u8 = 0b0001_0000;
+    const PARTITION_ID_MASK: u8 = 0b0000_1111;
+    const I_BIT: u8 = 0b1000_0000;
+    const L_BIT: u8 = 0b0100_0000;
+    const T_BIT: u8 = 0b0010_0000;
+    const K_BIT: u8 = 0b0001_0000;
+    const LONG_PICTURE_ID_BIT: u8 = 0b1000_0000;
+    const VP8_INTERFRAME_BIT: u8 = 0b0000_0001;
+    const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
+    const LONG_PICTURE_ID_MASK: u16 = 0x7fff;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PayloadDescriptor {
+        picture_id: Option<PictureId>,
+        tl0_pic_idx: Option<Tl0PicIdx>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PayloadDescriptorRewrite {
+        pub picture_id: Option<u16>,
+        pub tl0_pic_idx: Option<u8>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PictureId {
+        value: u16,
+        encoding: PictureIdEncoding,
+        offset: usize,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Tl0PicIdx {
+        value: u8,
+        offset: usize,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PictureIdEncoding {
+        Short,
+        Long,
+    }
+
+    impl PayloadDescriptor {
+        #[must_use]
+        pub const fn picture_id(self) -> Option<u16> {
+            match self.picture_id {
+                Some(picture_id) => Some(picture_id.value),
+                None => None,
+            }
+        }
+
+        #[must_use]
+        pub const fn tl0_pic_idx(self) -> Option<u8> {
+            match self.tl0_pic_idx {
+                Some(tl0_pic_idx) => Some(tl0_pic_idx.value),
+                None => None,
+            }
+        }
+    }
+
+    /// Detects the first RTP packet of a VP8 keyframe.
+    ///
+    /// RFC 7741 section 4.2 defines the VP8 payload descriptor. A decodable
+    /// keyframe starts at partition 0 (`S=1`, `PartID=0`) and the VP8 payload
+    /// header starts with `P=0`.
+    #[must_use]
+    pub fn payload_starts_keyframe(payload: &[u8]) -> bool {
+        let Some((&descriptor, rest)) = payload.split_first() else {
+            return false;
+        };
+        if descriptor & S_BIT == 0 || descriptor & PARTITION_ID_MASK != 0 {
+            return false;
+        }
+        let payload_header = if descriptor & X_BIT == 0 {
+            rest.first()
+        } else {
+            extended_payload_header(rest)
+        };
+        payload_header.is_some_and(|header| header & VP8_INTERFRAME_BIT == 0)
+    }
+
+    /// Parse the RFC 7741 VP8 payload descriptor fields that must stay
+    /// continuous when an SFU rewrites multiple publisher SSRCs into one
+    /// downstream browser stream.
+    #[must_use]
+    pub fn payload_descriptor(payload: &[u8]) -> Option<PayloadDescriptor> {
+        let (&descriptor, mut rest) = payload.split_first()?;
+        if descriptor & X_BIT == 0 {
+            return Some(PayloadDescriptor {
+                picture_id: None,
+                tl0_pic_idx: None,
+            });
+        }
+        let (&extension, remaining) = rest.split_first()?;
+        rest = remaining;
+        let mut offset = 2;
+        let picture_id = if extension & I_BIT != 0 {
+            let parsed = parse_picture_id(rest, offset)?;
+            offset += parsed.encoding.len();
+            rest = payload.get(offset..)?;
+            Some(parsed)
+        } else {
+            None
+        };
+        let tl0_pic_idx = if extension & L_BIT != 0 {
+            let value = *rest.first()?;
+            let parsed = Tl0PicIdx { value, offset };
+            offset += 1;
+            rest = payload.get(offset..)?;
+            Some(parsed)
+        } else {
+            None
+        };
+        if extension & (T_BIT | K_BIT) != 0 {
+            rest.first()?;
+        }
+        Some(PayloadDescriptor {
+            picture_id,
+            tl0_pic_idx,
+        })
+    }
+
+    pub fn rewrite_payload_descriptor(
+        payload: &mut [u8],
+        descriptor: PayloadDescriptor,
+        rewrite: PayloadDescriptorRewrite,
+    ) {
+        if let (Some(picture_id), Some(value)) = (descriptor.picture_id, rewrite.picture_id) {
+            rewrite_picture_id(payload, picture_id, value);
+        }
+        if let (Some(tl0_pic_idx), Some(value)) = (descriptor.tl0_pic_idx, rewrite.tl0_pic_idx)
+            && let Some(byte) = payload.get_mut(tl0_pic_idx.offset)
+        {
+            *byte = value;
+        }
+    }
+
+    fn extended_payload_header(payload: &[u8]) -> Option<&u8> {
+        let (&extension, mut rest) = payload.split_first()?;
+        if extension & I_BIT != 0 {
+            let (&picture_id, remaining) = rest.split_first()?;
+            rest = if picture_id & LONG_PICTURE_ID_BIT != 0 {
+                remaining.get(1..)?
+            } else {
+                remaining
+            };
+        }
+        if extension & L_BIT != 0 {
+            rest = rest.get(1..)?;
+        }
+        if extension & T_BIT != 0 || extension & K_BIT != 0 {
+            rest = rest.get(1..)?;
+        }
+        rest.first()
+    }
+
+    fn parse_picture_id(payload: &[u8], offset: usize) -> Option<PictureId> {
+        let (&first, remaining) = payload.split_first()?;
+        if first & LONG_PICTURE_ID_BIT == 0 {
+            return Some(PictureId {
+                value: u16::from(first) & SHORT_PICTURE_ID_MASK,
+                encoding: PictureIdEncoding::Short,
+                offset,
+            });
+        }
+        let second = *remaining.first()?;
+        Some(PictureId {
+            value: (u16::from(first & !LONG_PICTURE_ID_BIT) << 8) | u16::from(second),
+            encoding: PictureIdEncoding::Long,
+            offset,
+        })
+    }
+
+    fn rewrite_picture_id(payload: &mut [u8], picture_id: PictureId, value: u16) {
+        match picture_id.encoding {
+            PictureIdEncoding::Short => {
+                if let Some(byte) = payload.get_mut(picture_id.offset)
+                    && let Ok(value) = u8::try_from(value & SHORT_PICTURE_ID_MASK)
+                {
+                    *byte = value;
+                }
+            }
+            PictureIdEncoding::Long => {
+                let value = value & LONG_PICTURE_ID_MASK;
+                if let Some(bytes) = payload.get_mut(picture_id.offset..picture_id.offset + 2) {
+                    let Some((first, rest)) = bytes.split_first_mut() else {
+                        return;
+                    };
+                    let Some(second) = rest.first_mut() else {
+                        return;
+                    };
+                    let (Ok(high), Ok(low)) =
+                        (u8::try_from(value >> 8), u8::try_from(value & 0xff))
+                    else {
+                        return;
+                    };
+                    *first = LONG_PICTURE_ID_BIT | high;
+                    *second = low;
+                }
+            }
+        }
+    }
+
+    impl PictureIdEncoding {
+        const fn len(self) -> usize {
+            match self {
+                Self::Short => 1,
+                Self::Long => 2,
+            }
+        }
+    }
 }
 
 /// RTP payload-format MIME subtype names commonly used by WebRTC endpoints.
@@ -656,5 +873,81 @@ mod tests {
         assert!(header_extension::is_one_byte_id(
             header_extension::ONE_BYTE_ID_MIN
         ));
+    }
+
+    #[test]
+    fn vp8_payload_keyframe_detection_follows_payload_descriptor() {
+        assert!(!super::vp8::payload_starts_keyframe(&[]));
+        assert!(super::vp8::payload_starts_keyframe(&[0x10, 0x00]));
+        assert!(!super::vp8::payload_starts_keyframe(&[0x10, 0x01]));
+        assert!(!super::vp8::payload_starts_keyframe(&[0x00, 0x00]));
+        assert!(!super::vp8::payload_starts_keyframe(&[0x11, 0x00]));
+        assert!(super::vp8::payload_starts_keyframe(&[
+            0x90, 0x80, 0x42, 0x00,
+        ]));
+        assert!(super::vp8::payload_starts_keyframe(&[
+            0x90, 0x80, 0x80, 0x42, 0x00,
+        ]));
+        assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x80]));
+    }
+
+    #[test]
+    fn vp8_payload_descriptor_rewrite_updates_long_picture_id_and_tl0() {
+        let mut payload = vec![0x90, 0xc0, 0x80, 0x02, 0x09, 0x00];
+        let descriptor = super::vp8::payload_descriptor(&payload);
+        assert!(descriptor.is_some());
+        let Some(descriptor) = descriptor else {
+            return;
+        };
+
+        assert_eq!(descriptor.picture_id(), Some(2));
+        assert_eq!(descriptor.tl0_pic_idx(), Some(9));
+
+        super::vp8::rewrite_payload_descriptor(
+            &mut payload,
+            descriptor,
+            super::vp8::PayloadDescriptorRewrite {
+                picture_id: Some(0x1234),
+                tl0_pic_idx: Some(44),
+            },
+        );
+
+        let rewritten = super::vp8::payload_descriptor(&payload);
+        assert!(rewritten.is_some());
+        let Some(rewritten) = rewritten else {
+            return;
+        };
+        assert_eq!(rewritten.picture_id(), Some(0x1234));
+        assert_eq!(rewritten.tl0_pic_idx(), Some(44));
+        assert_eq!(payload, vec![0x90, 0xc0, 0x92, 0x34, 44, 0x00]);
+    }
+
+    #[test]
+    fn vp8_payload_descriptor_rewrite_keeps_short_picture_id_width() {
+        let mut payload = vec![0x90, 0x80, 0x02, 0x00];
+        let descriptor = super::vp8::payload_descriptor(&payload);
+        assert!(descriptor.is_some());
+        let Some(descriptor) = descriptor else {
+            return;
+        };
+
+        assert_eq!(descriptor.picture_id(), Some(2));
+
+        super::vp8::rewrite_payload_descriptor(
+            &mut payload,
+            descriptor,
+            super::vp8::PayloadDescriptorRewrite {
+                picture_id: Some(0x1234),
+                tl0_pic_idx: None,
+            },
+        );
+
+        let rewritten = super::vp8::payload_descriptor(&payload);
+        assert!(rewritten.is_some());
+        let Some(rewritten) = rewritten else {
+            return;
+        };
+        assert_eq!(rewritten.picture_id(), Some(0x34));
+        assert_eq!(payload, vec![0x90, 0x80, 0x34, 0x00]);
     }
 }

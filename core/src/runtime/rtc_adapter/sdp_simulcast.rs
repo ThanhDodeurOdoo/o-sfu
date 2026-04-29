@@ -4,9 +4,7 @@
 //! keeps SDP RID and simulcast details at the RTC boundary and only exposes the
 //! normalized encoding facts needed by offer generation and answer projection.
 
-#[cfg(test)]
-use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_rfc::webrtc;
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{
     MediaKind, Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast,
@@ -160,23 +158,14 @@ fn default_layer_specs(
 }
 
 fn bootstrap_simulcast_enabled(media_kind: MediaKind, codec_flags: MediaCodecFlags) -> bool {
-    // FIXME(simulcast): Re-enable RID simulcast offers after the RTC adapter
-    // forwards a single selected layer to each browser consumer, mediasoup-style.
-    // media_kind.is_video() && codec_flags.vp8_enabled()
-    let _ = (media_kind, codec_flags);
-    false
+    media_kind.is_video() && codec_flags.vp8_enabled()
 }
 
 fn publish_simulcast_enabled(media_kind: MediaKind, rtp_parameters: &RouterRtpParameters) -> bool {
-    // FIXME(simulcast): Re-enable RID simulcast offers after consumer RTP
-    // parameters are projected as one selected downlink encoding instead of
-    // exposing publisher RID layers directly to the receiver.
-    // media_kind.is_video()
-    //     && rtp_parameters
-    //         .formats()
-    //         .any(|format| format.codec() == &rfc_rtp::CodecName::Vp8)
-    let _ = (media_kind, rtp_parameters);
-    false
+    media_kind.is_video()
+        && rtp_parameters
+            .formats()
+            .any(|format| format.codec() == &rfc_rtp::CodecName::Vp8)
 }
 
 fn publish_uses_default_profile(rtp_parameters: &RouterRtpParameters) -> bool {
@@ -307,9 +296,7 @@ mod tests {
     }
 
     #[test]
-    // FIXME(simulcast): Restore this to require VP8 RID metadata once selected-layer
-    // downlink projection can consume RID simulcast without exposing all layers to receivers.
-    fn publish_simulcast_metadata_is_guarded_until_downlink_projection_is_ready() {
+    fn publish_simulcast_metadata_requires_video_vp8_rid_metadata() {
         let h264 = video_parameters(rfc_rtp::CodecName::H264);
 
         assert!(publish_recv_simulcast(MediaKind::Video, &h264).is_none());
@@ -317,8 +304,20 @@ mod tests {
 
         let vp8 = video_parameters(rfc_rtp::CodecName::Vp8);
 
-        assert!(publish_recv_simulcast(MediaKind::Video, &vp8).is_none());
-        assert!(publish_upload_encodings(MediaKind::Video, &vp8).is_empty());
+        assert!(publish_recv_simulcast(MediaKind::Video, &vp8).is_some());
+        assert_eq!(
+            publish_upload_encodings(MediaKind::Video, &vp8),
+            vec![
+                SessionUploadEncoding {
+                    rid: DEFAULT_LOW_RID.to_owned(),
+                    max_bitrate: None,
+                },
+                SessionUploadEncoding {
+                    rid: DEFAULT_HIGH_RID.to_owned(),
+                    max_bitrate: None,
+                },
+            ]
+        );
     }
 
     fn video_parameters(codec: rfc_rtp::CodecName) -> RouterRtpParameters {

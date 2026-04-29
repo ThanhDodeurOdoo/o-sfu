@@ -156,10 +156,11 @@ fn flush_coalesced_keyframe_request(
             source_session_key,
             source_control,
         } => {
-            match state
-                .route_control
-                .decide_keyframe_request(coalesced_request.source_transport_media_id, now)
-            {
+            match state.route_control.decide_keyframe_request_for_rid(
+                coalesced_request.source_transport_media_id,
+                coalesced_request.rid,
+                now,
+            ) {
                 KeyframeRequestDecision::Forward => {
                     debug!(
                         ?source_session_key,

@@ -5,11 +5,11 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use str0m::{
-    media::{KeyframeRequestKind, MediaKind, Mid},
+    media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
 use tokio::sync::mpsc;
@@ -41,6 +41,7 @@ use crate::{
             state::{RtcBootstrapState, RtcSnapshotState},
             test_support::{
                 sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
+                sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
                 test_transport_session_key,
             },
         },
@@ -363,6 +364,47 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 }
 
 #[test]
+fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() {
+    let producer_session = test_transport_session_key(88, 0, 89, UserId::Integer(90));
+    let producer_mid = Mid::from("cam-up");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: producer_session.clone(),
+        mid: producer_mid,
+    });
+    let metrics = RuntimeMetrics::default();
+    let mut buffers = PacketLoopBuffers::new();
+
+    buffers
+        .pending_packets
+        .push(sample_forwarded_packet_with_rid(
+            producer_session.clone(),
+            "cam-up",
+            Some("hi"),
+            b"payload",
+        ));
+    record_incoming_stats(
+        &mut state,
+        &SourcePolicySignal::default(),
+        &metrics,
+        &mut buffers,
+    );
+
+    let mut packet_without_extensions =
+        sample_forwarded_packet_without_mid(producer_session, 4321, b"payload");
+    assert_eq!(
+        packet_without_extensions.resolve_source_transport_media_id(&state),
+        Some(source_transport_media_id)
+    );
+    assert_eq!(
+        packet_without_extensions
+            .route_control_layer_metadata(&state)
+            .rid(),
+        Some(Rid::from("hi"))
+    );
+}
+
+#[test]
 fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     let source_session = test_transport_session_key(118, 0, 119, UserId::Integer(120));
     let source_transport_media_id = TransportMediaId::new(121);
@@ -420,6 +462,73 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
 }
 
 #[test]
+fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_051));
+    let producer_session = test_transport_session_key(218, 0, 219, UserId::Integer(220));
+    let consumer_session = test_transport_session_key(218, 0, 221, UserId::Integer(222));
+    let consumer_mid = Mid::from("cam-down");
+    let mut state = RtcBootstrapState::default();
+    let mut buffers = PacketLoopBuffers::new();
+    let metrics = RuntimeMetrics::default();
+
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &consumer_session,
+            candidate_addr,
+            10_000_000,
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
+        return;
+    };
+    let mut direct_api = consumer_session_state.rtc.direct_api();
+    direct_api.declare_media(consumer_mid, MediaKind::Video);
+    direct_api.declare_stream_tx(Ssrc::from(223_001_u32), None, consumer_mid, None);
+
+    buffers.pending_packets.push(sample_forwarded_packet(
+        producer_session,
+        "cam-up",
+        b"payload",
+    ));
+    buffers.forwards.push(
+        super::super::forwarding_destination::PacketForward::from_local_route_destination(
+            0,
+            &MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: TransportMediaId::new(223),
+                dest_mid: consumer_mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
+            },
+        ),
+    );
+
+    flush_forward_routes(&mut state, &metrics, &mut buffers);
+
+    assert!(state.dirty_sessions.contains(&consumer_session));
+    assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc, 1);
+}
+
+#[test]
+fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
+    let mut state = RtcBootstrapState::default();
+    let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
+    let future_timeout = Instant::now() + Duration::from_secs(30);
+
+    state.update_session_timeout(&session, Some(future_timeout));
+    state.mark_session_dirty(&session);
+
+    let deadline = super::loop_driver::next_timeout_deadline(&mut state);
+
+    assert!(deadline.is_some_and(|deadline| deadline <= Instant::now()));
+}
+
+#[test]
 fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_tracking() {
     let producer_session = test_transport_session_key(28, 0, 29, UserId::Integer(30));
     let consumer_session = test_transport_session_key(28, 0, 31, UserId::Integer(32));
@@ -445,8 +554,10 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
                 dest_session: consumer_session,
                 dest_transport_media_id: consumer_transport_media_id,
                 dest_mid: Mid::from("aud-down"),
+                dest_payload_type: None,
                 active: true,
                 packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
             }],
         },
     );

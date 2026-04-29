@@ -7,6 +7,9 @@ mod lifecycle;
 mod tests;
 mod types;
 
+pub(in crate::runtime::rtc_adapter) use control::{
+    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness,
+};
 pub(super) use control::{
     refresh_source_packet_gate, respond_request_consumer_keyframe, respond_set_consumer_active,
     respond_set_consumer_packet_gate, respond_set_consumer_packet_gates,

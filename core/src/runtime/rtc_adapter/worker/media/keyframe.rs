@@ -219,7 +219,7 @@ fn should_absorb_keyframe_request(
     if matches!(
         state
             .route_control
-            .decide_keyframe_request(source_transport_media_id, now),
+            .decide_keyframe_request_for_rid(source_transport_media_id, rid, now),
         KeyframeRequestDecision::Absorb
     ) {
         debug!(

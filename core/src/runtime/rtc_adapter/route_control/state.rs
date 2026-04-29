@@ -7,6 +7,7 @@
 
 use std::{cmp::Reverse, collections::BTreeMap, time::Instant};
 
+use str0m::media::Rid;
 use tracing::debug;
 
 use super::{
@@ -33,16 +34,17 @@ impl RouteControlState {
         source_transport_media_id: TransportMediaId,
         now: Instant,
     ) -> KeyframeRequestDecision {
+        self.decide_keyframe_request_for_rid(source_transport_media_id, None, now)
+    }
+
+    pub(in crate::runtime::rtc_adapter) fn decide_keyframe_request_for_rid(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        rid: Option<Rid>,
+        now: Instant,
+    ) -> KeyframeRequestDecision {
         let source_control = self.sources.entry(source_transport_media_id).or_default();
-        let Some(window) = source_control.keyframe_request else {
-            source_control.keyframe_request = Some(KeyframeRequestWindow::new(now));
-            return KeyframeRequestDecision::Forward;
-        };
-        if window.is_open(now) {
-            return KeyframeRequestDecision::Absorb;
-        }
-        source_control.keyframe_request = Some(KeyframeRequestWindow::new(now));
-        KeyframeRequestDecision::Forward
+        source_control.decide_keyframe_request(rid, now)
     }
 
     pub(in crate::runtime::rtc_adapter) fn decide_packet_route(
@@ -58,15 +60,7 @@ impl RouteControlState {
             .unwrap_or(PacketLayerGate::Open)
         {
             gate if gate.permits(metadata) => PacketRouteDecision::Forward,
-            gate => {
-                debug!(
-                    ?source_transport_media_id,
-                    ?metadata,
-                    ?gate,
-                    "dropped RTP packet by source packet gate"
-                );
-                PacketRouteDecision::Drop
-            }
+            _gate => PacketRouteDecision::Drop,
         }
     }
 
@@ -274,13 +268,42 @@ impl RouteControlState {
 
 #[derive(Debug, Default)]
 struct SourceRouteControl {
-    keyframe_request: Option<KeyframeRequestWindow>,
+    keyframe_requests: Vec<KeyframeRequestState>,
     source_audio_policy: Option<SourceAudioPolicyState>,
     local_packet_gate: Option<PacketLayerGate>,
     relay_packet_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct KeyframeRequestState {
+    rid: Option<Rid>,
+    window: KeyframeRequestWindow,
+}
+
 impl SourceRouteControl {
+    fn decide_keyframe_request(
+        &mut self,
+        rid: Option<Rid>,
+        now: Instant,
+    ) -> KeyframeRequestDecision {
+        let Some(request_state) = self
+            .keyframe_requests
+            .iter_mut()
+            .find(|request_state| request_state.rid == rid)
+        else {
+            self.keyframe_requests.push(KeyframeRequestState {
+                rid,
+                window: KeyframeRequestWindow::new(now),
+            });
+            return KeyframeRequestDecision::Forward;
+        };
+        if request_state.window.is_open(now) {
+            return KeyframeRequestDecision::Absorb;
+        }
+        request_state.window = KeyframeRequestWindow::new(now);
+        KeyframeRequestDecision::Forward
+    }
+
     fn active_speaker_source(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -336,7 +359,7 @@ impl SourceRouteControl {
     }
 
     fn is_empty(&self) -> bool {
-        self.keyframe_request.is_none()
+        self.keyframe_requests.is_empty()
             && self.source_audio_policy.is_none()
             && self.local_packet_gate.is_none()
             && self.relay_packet_gates.is_empty()
@@ -346,6 +369,8 @@ impl SourceRouteControl {
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
+
+    use str0m::media::Rid;
 
     use super::{
         KeyframeRequestDecision, PacketLayerGate, PacketLayerMetadata, PacketRouteDecision,
@@ -387,6 +412,42 @@ mod tests {
         );
         assert_eq!(
             state.decide_keyframe_request(source_transport_media_id, now + Duration::from_secs(1)),
+            KeyframeRequestDecision::Forward
+        );
+    }
+
+    #[test]
+    fn route_control_coalesces_explicit_rids_independently() {
+        let mut state = RouteControlState::default();
+        let source_transport_media_id = TransportMediaId::new(118);
+        let now = Instant::now();
+
+        assert_eq!(
+            state.decide_keyframe_request(source_transport_media_id, now),
+            KeyframeRequestDecision::Forward
+        );
+        assert_eq!(
+            state.decide_keyframe_request_for_rid(
+                source_transport_media_id,
+                Some(Rid::from("hi")),
+                now
+            ),
+            KeyframeRequestDecision::Forward
+        );
+        assert_eq!(
+            state.decide_keyframe_request_for_rid(
+                source_transport_media_id,
+                Some(Rid::from("hi")),
+                now
+            ),
+            KeyframeRequestDecision::Absorb
+        );
+        assert_eq!(
+            state.decide_keyframe_request_for_rid(
+                source_transport_media_id,
+                Some(Rid::from("lo")),
+                now
+            ),
             KeyframeRequestDecision::Forward
         );
     }

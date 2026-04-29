@@ -12,7 +12,12 @@ use std::{
 };
 
 use o_sfu_rfc::webrtc;
-use str0m::{Candidate, Rtc, bwe::Bitrate};
+use str0m::{
+    Candidate, Rtc,
+    bwe::Bitrate,
+    format::{Codec, FormatParams},
+    media::Frequency,
+};
 use tokio::net::UdpSocket;
 use tracing::info;
 
@@ -21,6 +26,9 @@ use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::transport_adapter::{TransportAdapterError, TransportSessionKey},
 };
+
+const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
+
 pub(super) fn bind_shared_rtc_socket(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
@@ -102,15 +110,25 @@ pub(super) fn ensure_session_rtc_state(
 }
 
 fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
-    Rtc::builder()
+    let mut config = Rtc::builder()
         .clear_codecs()
         .enable_opus(codec_flags.opus_enabled())
         .enable_pcmu(codec_flags.pcmu_enabled())
         .enable_pcma(codec_flags.pcma_enabled())
-        .enable_vp8(codec_flags.vp8_enabled())
+        .set_rtp_mode(true);
+    if codec_flags.vp8_enabled() {
+        config.codec_config().add_config(
+            VIDEO_PAYLOAD_TYPE_VP8.into(),
+            None,
+            Codec::Vp8,
+            Frequency::NINETY_KHZ,
+            None,
+            FormatParams::default(),
+        );
+    }
+    config
         .enable_h264(codec_flags.h264_enabled())
         .enable_h265(codec_flags.h265_enabled())
         .enable_vp9(codec_flags.vp9_enabled())
         .enable_av1(codec_flags.av1_enabled())
-        .set_rtp_mode(true)
 }
