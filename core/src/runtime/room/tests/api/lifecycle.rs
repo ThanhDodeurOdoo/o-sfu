@@ -177,6 +177,16 @@ impl RoomTestLifecycle<'_> {
             .await;
     }
 
+    pub async fn force_cleanup_retry_cycle(self, transport_adapter: &RuntimeTransportAdapter) {
+        self.room
+            .force_cleanup_retry_cycle_for_test(transport_adapter)
+            .await;
+    }
+
+    pub fn pending_cleanup_retry_count(self) -> usize {
+        self.room.pending_cleanup_retry_count_for_test()
+    }
+
     pub async fn start_recording(self, user_id: &UserId, options: RecordingOptions) -> bool {
         let Some(connection_id) = self
             .room

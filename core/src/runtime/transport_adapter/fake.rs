@@ -77,6 +77,9 @@ pub struct FakeWebRtcAdapter {
     next_media_id: Arc<AtomicU64>,
     media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
     failed_media_removals: Arc<Mutex<BTreeSet<TransportMediaId>>>,
+    blocked_media_removals: Arc<Mutex<BTreeSet<TransportMediaId>>>,
+    failed_session_closes: Arc<Mutex<BTreeSet<TransportSessionKey>>>,
+    blocked_session_closes: Arc<Mutex<BTreeSet<TransportSessionKey>>>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<UserId, u64>>>,
@@ -156,6 +159,66 @@ impl FakeWebRtcAdapter {
             }
             Err(poisoned) => {
                 poisoned.into_inner().insert(transport_media_id);
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn fail_remove_media_until_allowed(&self, transport_media_id: TransportMediaId) {
+        match self.blocked_media_removals.lock() {
+            Ok(mut removals) => {
+                removals.insert(transport_media_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(transport_media_id);
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn allow_remove_media(&self, transport_media_id: TransportMediaId) {
+        match self.blocked_media_removals.lock() {
+            Ok(mut removals) => {
+                removals.remove(&transport_media_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&transport_media_id);
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn fail_next_close_session(&self, session_key: TransportSessionKey) {
+        match self.failed_session_closes.lock() {
+            Ok(mut sessions) => {
+                sessions.insert(session_key);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(session_key);
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn fail_close_session_until_allowed(&self, session_key: TransportSessionKey) {
+        match self.blocked_session_closes.lock() {
+            Ok(mut sessions) => {
+                sessions.insert(session_key);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(session_key);
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn allow_close_session(&self, session_key: &TransportSessionKey) {
+        match self.blocked_session_closes.lock() {
+            Ok(mut sessions) => {
+                sessions.remove(session_key);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(session_key);
             }
         }
     }
@@ -399,6 +462,17 @@ impl FakeWebRtcAdapter {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
+        let should_fail_once = match self.failed_session_closes.lock() {
+            Ok(mut sessions) => sessions.remove(session_key),
+            Err(poisoned) => poisoned.into_inner().remove(session_key),
+        };
+        let should_fail_until_allowed = match self.blocked_session_closes.lock() {
+            Ok(sessions) => sessions.contains(session_key),
+            Err(poisoned) => poisoned.into_inner().contains(session_key),
+        };
+        if should_fail_once || should_fail_until_allowed {
+            return Err(TransportAdapterError::TransportUnavailable);
+        }
         match self.media_owners.lock() {
             Ok(mut media_owners) => {
                 media_owners.retain(|_, owner| owner != session_key);
@@ -428,7 +502,11 @@ impl FakeWebRtcAdapter {
             Ok(mut removals) => removals.remove(&transport_media_id),
             Err(poisoned) => poisoned.into_inner().remove(&transport_media_id),
         };
-        if should_fail {
+        let should_fail_until_allowed = match self.blocked_media_removals.lock() {
+            Ok(removals) => removals.contains(&transport_media_id),
+            Err(poisoned) => poisoned.into_inner().contains(&transport_media_id),
+        };
+        if should_fail || should_fail_until_allowed {
             return Err(TransportAdapterError::TransportUnavailable);
         }
         match self.negotiated_producer_parameters.lock() {

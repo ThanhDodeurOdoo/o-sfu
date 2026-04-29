@@ -182,6 +182,14 @@ pub(super) enum TransportUserLifetimeBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportCleanupFailureKind {
+    Terminal,
+    RetryExhausted,
+    QueueFull,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordingActionOutcome {
     StartAccepted,
     StartRejected,
@@ -366,6 +374,13 @@ impl_metric_label!(TransportUserLifetimeBucket {
     Le10Seconds => 1,
     Le60Seconds => 2,
     Le300Seconds => 3,
+});
+
+impl_metric_label!(TransportCleanupFailureKind {
+    Terminal => 0,
+    RetryExhausted => 1,
+    QueueFull => 2,
+    Shutdown => 3,
 });
 
 impl_metric_label!(RecordingActionOutcome {

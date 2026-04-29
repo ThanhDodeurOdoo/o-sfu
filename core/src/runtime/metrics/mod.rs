@@ -9,6 +9,7 @@ mod tests;
 pub use catalog::RuntimeMetrics;
 pub use labels::{
     HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-    RtpForwardDestinationKind, RtpRelayDropKind, TransportIceState, WsSessionLoopExitReason,
+    RtpForwardDestinationKind, RtpRelayDropKind, TransportCleanupFailureKind, TransportIceState,
+    WsSessionLoopExitReason,
 };
 pub use snapshot::{DurationHistogramSnapshot, HttpInflightSnapshot, RuntimeMetricsSnapshot};

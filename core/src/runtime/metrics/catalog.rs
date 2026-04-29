@@ -16,9 +16,9 @@ use super::{
         ControlPlaneDurationBucket, HttpDisconnectResponseStatus, HttpRoomResponseStatus,
         HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
-        SourceSelectionKind, TransportHealthTransition, TransportIceState,
-        TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
-        WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthTransition,
+        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
 use crate::runtime::{
@@ -68,6 +68,9 @@ pub struct RuntimeMetrics {
     pub(super) transport_user_lifetime_buckets: CounterFamily<TransportUserLifetimeBucket>,
     pub(super) transport_user_lifetime_count: Counter,
     pub(super) transport_user_lifetime_sum_micros: Counter,
+    pub(super) transport_cleanup_retries: Counter,
+    pub(super) transport_cleanup_retry_successes: Counter,
+    pub(super) transport_cleanup_failures: CounterFamily<TransportCleanupFailureKind>,
     pub(super) rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
     pub(super) rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
     pub(super) rtc_datagram_fallback_scans: Counter,
@@ -401,6 +404,18 @@ impl RuntimeMetrics {
             self.transport_user_lifetime_buckets
                 .increment(TransportUserLifetimeBucket::Le300Seconds);
         }
+    }
+
+    pub fn record_transport_cleanup_retry_scheduled(&self) {
+        self.transport_cleanup_retries.increment();
+    }
+
+    pub fn record_transport_cleanup_retry_succeeded(&self) {
+        self.transport_cleanup_retry_successes.increment();
+    }
+
+    pub fn record_transport_cleanup_failure(&self, kind: TransportCleanupFailureKind) {
+        self.transport_cleanup_failures.increment(kind);
     }
 
     pub fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {

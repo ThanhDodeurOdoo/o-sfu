@@ -179,4 +179,31 @@ pub(super) fn append_transport_lifecycle_metrics(
         snapshot.transport_user_lifetime_sum_micros,
         snapshot.transport_user_lifetime_count,
     );
+    append_counter(
+        output,
+        "osfu_transport_cleanup_retries_total",
+        "Total room-owned transport cleanup retry attempts scheduled after cleanup failures.",
+        snapshot.transport_cleanup_retries,
+    );
+    append_counter(
+        output,
+        "osfu_transport_cleanup_retry_successes_total",
+        "Total room-owned transport cleanup retry attempts that eventually succeeded.",
+        snapshot.transport_cleanup_retry_successes,
+    );
+    append_labeled_counter_family(
+        output,
+        "osfu_transport_cleanup_failures_total",
+        "Total room-owned transport cleanup failures by final handling kind.",
+        "kind",
+        &[
+            LabeledValue::new("terminal", snapshot.transport_cleanup_failures_terminal),
+            LabeledValue::new(
+                "retry_exhausted",
+                snapshot.transport_cleanup_failures_retry_exhausted,
+            ),
+            LabeledValue::new("queue_full", snapshot.transport_cleanup_failures_queue_full),
+            LabeledValue::new("shutdown", snapshot.transport_cleanup_failures_shutdown),
+        ],
+    );
 }

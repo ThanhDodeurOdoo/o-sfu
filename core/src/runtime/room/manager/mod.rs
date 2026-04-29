@@ -449,6 +449,7 @@ impl RoomManager {
         let removed = directory.remove_if_current(room_id, room);
         drop(directory);
         if removed {
+            room.abandon_cleanup_retries_for_shutdown();
             self.metrics.add_active_rooms(-1);
             self.diagnostics.forget_room(room_id);
         }

@@ -45,7 +45,8 @@ mod tests {
         },
         runtime::metrics::{
             HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-            RtpForwardDestinationKind, RuntimeMetrics, TransportIceState, WsSessionLoopExitReason,
+            RtpForwardDestinationKind, RuntimeMetrics, TransportCleanupFailureKind,
+            TransportIceState, WsSessionLoopExitReason,
         },
     };
 
@@ -122,6 +123,11 @@ mod tests {
         assert!(rendered.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"+Inf\"} 1"));
         assert!(rendered.contains("osfu_transport_user_lifetime_seconds_sum 1.5"));
         assert!(rendered.contains("osfu_transport_user_lifetime_seconds_count 1"));
+        assert!(rendered.contains("osfu_transport_cleanup_retries_total 1"));
+        assert!(rendered.contains("osfu_transport_cleanup_retry_successes_total 1"));
+        assert!(
+            rendered.contains("osfu_transport_cleanup_failures_total{kind=\"retry_exhausted\"} 1")
+        );
     }
 
     fn sample_metrics() -> RuntimeMetrics {
@@ -159,6 +165,9 @@ mod tests {
         metrics.record_transport_ice_state_change(TransportIceState::Connected);
         metrics.record_transport_dtls_connected();
         metrics.record_transport_user_lifetime(Duration::from_millis(1500));
+        metrics.record_transport_cleanup_retry_scheduled();
+        metrics.record_transport_cleanup_retry_succeeded();
+        metrics.record_transport_cleanup_failure(TransportCleanupFailureKind::RetryExhausted);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
         metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);

@@ -4,9 +4,9 @@ use super::{
         ControlPlaneDurationBucket, HttpDisconnectResponseStatus, HttpRoomResponseStatus,
         HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
-        SourceSelectionKind, TransportHealthTransition, TransportIceState,
-        TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
-        WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthTransition,
+        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
 use crate::runtime::WebSocketCloseCode;
@@ -140,6 +140,12 @@ pub struct RuntimeMetricsSnapshot {
     pub transport_user_lifetime_le_300_seconds: u64,
     pub transport_user_lifetime_count: u64,
     pub transport_user_lifetime_sum_micros: u64,
+    pub transport_cleanup_retries: u64,
+    pub transport_cleanup_retry_successes: u64,
+    pub transport_cleanup_failures_terminal: u64,
+    pub transport_cleanup_failures_retry_exhausted: u64,
+    pub transport_cleanup_failures_queue_full: u64,
+    pub transport_cleanup_failures_shutdown: u64,
     pub rtc_datagram_routes_indexed: u64,
     pub rtc_datagram_routes_scan: u64,
     pub rtc_datagram_drops_recent_miss_cache: u64,
@@ -263,6 +269,12 @@ struct TransportLifecycleSnapshot {
     user_lifetime_le_300_seconds: u64,
     user_lifetime_count: u64,
     user_lifetime_sum_micros: u64,
+    cleanup_retries: u64,
+    cleanup_retry_successes: u64,
+    cleanup_failures_terminal: u64,
+    cleanup_failures_retry_exhausted: u64,
+    cleanup_failures_queue_full: u64,
+    cleanup_failures_shutdown: u64,
 }
 
 struct RtcDatagramSnapshot {
@@ -424,6 +436,13 @@ impl RuntimeMetrics {
                 .user_lifetime_le_300_seconds,
             transport_user_lifetime_count: transport_lifecycle.user_lifetime_count,
             transport_user_lifetime_sum_micros: transport_lifecycle.user_lifetime_sum_micros,
+            transport_cleanup_retries: transport_lifecycle.cleanup_retries,
+            transport_cleanup_retry_successes: transport_lifecycle.cleanup_retry_successes,
+            transport_cleanup_failures_terminal: transport_lifecycle.cleanup_failures_terminal,
+            transport_cleanup_failures_retry_exhausted: transport_lifecycle
+                .cleanup_failures_retry_exhausted,
+            transport_cleanup_failures_queue_full: transport_lifecycle.cleanup_failures_queue_full,
+            transport_cleanup_failures_shutdown: transport_lifecycle.cleanup_failures_shutdown,
             rtc_datagram_routes_indexed: rtc_datagram.routes_indexed,
             rtc_datagram_routes_scan: rtc_datagram.routes_scan,
             rtc_datagram_drops_recent_miss_cache: rtc_datagram.drops_recent_miss_cache,
@@ -702,6 +721,20 @@ impl RuntimeMetrics {
                 .load(TransportUserLifetimeBucket::Le300Seconds),
             user_lifetime_count: self.transport_user_lifetime_count.load(),
             user_lifetime_sum_micros: self.transport_user_lifetime_sum_micros.load(),
+            cleanup_retries: self.transport_cleanup_retries.load(),
+            cleanup_retry_successes: self.transport_cleanup_retry_successes.load(),
+            cleanup_failures_terminal: self
+                .transport_cleanup_failures
+                .load(TransportCleanupFailureKind::Terminal),
+            cleanup_failures_retry_exhausted: self
+                .transport_cleanup_failures
+                .load(TransportCleanupFailureKind::RetryExhausted),
+            cleanup_failures_queue_full: self
+                .transport_cleanup_failures
+                .load(TransportCleanupFailureKind::QueueFull),
+            cleanup_failures_shutdown: self
+                .transport_cleanup_failures
+                .load(TransportCleanupFailureKind::Shutdown),
         }
     }
 

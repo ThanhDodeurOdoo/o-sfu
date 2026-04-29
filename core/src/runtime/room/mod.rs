@@ -18,6 +18,7 @@
 //!    `- source_policy_sync -> room-owned video policy refresh bridge
 //! ```
 
+mod cleanup;
 mod controller;
 mod definition;
 mod directory;

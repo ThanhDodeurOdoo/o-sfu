@@ -1,4 +1,13 @@
 use super::fixtures::*;
+use crate::{
+    MediaCodecFlags, RuntimeFeatureFlags,
+    runtime::{
+        diagnostics::DiagnosticsStore,
+        metrics::RuntimeMetrics,
+        recording::MediaTap,
+        room::{RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities},
+    },
+};
 
 #[tokio::test]
 async fn join_user_enforces_capacity() {
@@ -484,6 +493,249 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
         )
     })
     .await;
+}
+
+#[tokio::test]
+async fn media_cleanup_failure_retries_until_success() {
+    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_users_with_fake().await;
+
+    assert!(
+        room.test_api()
+            .media()
+            .publish_track(
+                &UserId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&UserId::Integer(1))
+        .await
+        .expect("publisher should have a live connection");
+    let transport_media_id = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(&UserId::Integer(1), connection_id, StreamType::Camera)
+        .await
+        .expect("published camera should expose a transport media id");
+    fake.fail_next_remove_media(transport_media_id);
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .leave_session_runtime(&UserId::Integer(1), connection_id, &transport_adapter)
+            .await
+    );
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
+    assert!(fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeWebRtcEvent::MediaRemoved {
+            user_id: UserId::Integer(1),
+            transport_media_id: removed_media_id,
+        } if *removed_media_id == transport_media_id
+    )));
+}
+
+#[tokio::test]
+async fn user_close_failure_retries_until_success() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (transport_adapter, fake) = fake_adapter();
+    let (tx, _rx) = test_sender();
+    let user_id = UserId::Integer(1);
+    let connection_id = room
+        .add_user(
+            user_id.clone(),
+            None,
+            UserPermissions::default(),
+            tx,
+            &transport_adapter,
+        )
+        .await
+        .expect("user should join");
+    let session_key = room.transport_user_key(&user_id, connection_id);
+    fake.fail_next_close_session(session_key);
+
+    assert!(
+        room.remove_user(&user_id, connection_id, &transport_adapter)
+            .await
+    );
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
+    assert!(fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeWebRtcEvent::SessionClosed {
+            user_id: closed_user_id,
+        } if *closed_user_id == user_id
+    )));
+}
+
+#[tokio::test]
+async fn cleanup_retry_exhaustion_drops_pending_retry() {
+    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_users_with_fake().await;
+
+    assert!(
+        room.test_api()
+            .media()
+            .publish_track(
+                &UserId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&UserId::Integer(1))
+        .await
+        .expect("publisher should have a live connection");
+    let transport_media_id = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(&UserId::Integer(1), connection_id, StreamType::Camera)
+        .await
+        .expect("published camera should expose a transport media id");
+    fake.fail_remove_media_until_allowed(transport_media_id);
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .leave_session_runtime(&UserId::Integer(1), connection_id, &transport_adapter)
+            .await
+    );
+    room.test_api()
+        .lifecycle()
+        .force_cleanup_retry_cycle(&transport_adapter)
+        .await;
+    room.test_api()
+        .lifecycle()
+        .force_cleanup_retry_cycle(&transport_adapter)
+        .await;
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
+    assert!(!fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeWebRtcEvent::MediaRemoved {
+            transport_media_id: removed_media_id,
+            ..
+        } if *removed_media_id == transport_media_id
+    )));
+}
+
+#[tokio::test]
+async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let manager = RoomManager::new(
+        RoomManagerConfig::new(
+            1,
+            RoomRuntimePolicy::new(
+                RoomAdmissionPolicy::new(100),
+                RuntimeFeatureFlags::default(),
+                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            ),
+        ),
+        RoomManagerDeps {
+            recording_media_tap: Arc::new(MediaTap::default()),
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            metrics: Arc::clone(&metrics),
+        },
+    );
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (transport_adapter, fake) = fake_adapter();
+    let (tx, _rx) = test_sender();
+    let user_id = UserId::Integer(1);
+    let connection_id = room
+        .add_user(
+            user_id.clone(),
+            None,
+            UserPermissions::default(),
+            tx,
+            &transport_adapter,
+        )
+        .await
+        .expect("user should join");
+    let session_key = room.transport_user_key(&user_id, connection_id);
+    fake.fail_close_session_until_allowed(session_key);
+
+    assert!(
+        manager
+            .close_session(room.uuid(), &user_id, connection_id, &transport_adapter)
+            .await
+    );
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_rooms, 0);
+    assert_eq!(snapshot.transport_cleanup_failures_shutdown, 1);
+}
+
+#[tokio::test]
+async fn state_only_cleanup_does_not_enqueue_transport_retry() {
+    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_users_with_fake().await;
+
+    assert!(
+        room.test_api()
+            .media()
+            .publish_track(
+                &UserId::Integer(1),
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &transport_adapter,
+            )
+            .await
+            .is_some()
+    );
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&UserId::Integer(1))
+        .await
+        .expect("publisher should have a live connection");
+    let transport_media_id = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(&UserId::Integer(1), connection_id, StreamType::Camera)
+        .await
+        .expect("published camera should expose a transport media id");
+    fake.fail_next_remove_media(transport_media_id);
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .leave_session_without_transport_cleanup(
+                &UserId::Integer(1),
+                connection_id,
+                &transport_adapter,
+            )
+            .await
+    );
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
+    assert!(!fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeWebRtcEvent::MediaRemoved {
+            transport_media_id: removed_media_id,
+            ..
+        } if *removed_media_id == transport_media_id
+    )));
 }
 
 #[tokio::test]

@@ -32,12 +32,17 @@
 //! what kind of work can it send back to a user?" this is the file that
 //! should answer that without requiring a deep read of the rest of `room/`.
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, Mutex as StdMutex},
+};
 
 use o_sfu_router::RouterId;
 use tokio::sync::{Mutex, RwLock};
 
 use super::{
+    cleanup::CleanupReconciler,
     definition::RoomDefinition,
     events::RoomEventMessage,
     lifecycle::UserCloseReason,
@@ -445,6 +450,14 @@ pub struct Room {
     /// Keeping this here avoids threading metrics handles through every room
     /// transition call that may want to report lifecycle changes.
     pub(super) metrics: Arc<RuntimeMetrics>,
+    /// Room-owned reconciliation queue for transport cleanup that failed after
+    /// state ownership was already removed.
+    ///
+    /// This lives on `Room` instead of `RoomState` because retry bookkeeping
+    /// must survive the state transition that forgot the user or media object.
+    /// Callers may lock it for short synchronous updates only, then must drop
+    /// the guard before awaiting transport adapter work.
+    pub(super) cleanup_reconciler: StdMutex<CleanupReconciler>,
     /// Staged publish reservations that live across the offer/answer gap.
     ///
     /// This stays outside `RoomState` because it tracks async transport work
@@ -499,6 +512,7 @@ impl Room {
             definition,
             recording_service: Arc::clone(&recording_service),
             metrics,
+            cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
             pending_publish_transactions: Mutex::new(PendingPublishTransactions::default()),
             state: RwLock::new(RoomState::new(
                 runtime_context.router,
