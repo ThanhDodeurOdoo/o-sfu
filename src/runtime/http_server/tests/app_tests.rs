@@ -5,7 +5,10 @@ use o_sfu_router::{
 
 use super::fixtures::*;
 use crate::{
-    core::server::session::{StreamType, UserId, UserPermissions},
+    core::{
+        SessionNegotiationOutcome,
+        server::session::{StreamType, UserId, UserPermissions},
+    },
     runtime::room::Room,
 };
 
@@ -21,14 +24,15 @@ async fn publish_video_stream(
     ssrc: u64,
     transport_adapter: &RuntimeTransportAdapter,
 ) {
-    assert!(
+    assert_eq!(
         room.apply_session_negotiated(
             user_id,
             connection_id,
             sample_client_rtp_capabilities(),
             transport_adapter,
         )
-        .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
     assert!(
         room.test_api()

@@ -3,7 +3,10 @@ use o_sfu_router::MediaCapabilities;
 use crate::{
     ConnectionId,
     runtime::{DownloadStates, StreamType, UserId, UserInfo},
-    transport::{AppliedSessionAnswer, MediaPort, ObservabilityPort, TransportSessionKey},
+    transport::{
+        AppliedSessionAnswer, MediaPort, ObservabilityPort, TransportAdapterError,
+        TransportSessionKey,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -62,6 +65,62 @@ impl PublicationActivity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportEffectOutcome {
+    Applied,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionNegotiationOutcome {
+    Applied,
+    StaleConnection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishStageOutcome {
+    Staged,
+    Duplicate,
+    DuplicateAfterReservation { cleanup: TransportEffectOutcome },
+    Rejected,
+}
+
+impl PublishStageOutcome {
+    #[must_use]
+    pub const fn staged(self) -> bool {
+        matches!(self, Self::Staged)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollbackStagedPublishOutcome {
+    RolledBack { cleanup: TransportEffectOutcome },
+    NotStaged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpublishOutcome {
+    Unpublished,
+    MissingPublication,
+    TransportCleanupFailed,
+    StateCommitRejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationActivityOutcome {
+    Applied {
+        transport_update: TransportEffectOutcome,
+    },
+    MissingPublication,
+    StalePublication,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionUpdateOutcome {
+    Applied,
+    StaleConnection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserInfoRefresh {
     Needed,
     NotNeeded,
@@ -116,13 +175,13 @@ where
         session: &MediaSessionContext<'_>,
         capabilities: MediaCapabilities,
         media_port: &T,
-    ) -> bool;
+    ) -> SessionNegotiationOutcome;
 
     async fn apply_session_refreshed(
         &self,
         session: &MediaSessionContext<'_>,
         media_port: &T,
-    ) -> bool;
+    ) -> SessionNegotiationOutcome;
 
     async fn has_staged_publish(
         &self,
@@ -142,7 +201,7 @@ where
         stream_type: StreamType,
         activity: PublicationActivity,
         media_port: &T,
-    );
+    ) -> PublicationActivityOutcome;
 
     async fn update_subscription(
         &self,
@@ -150,7 +209,7 @@ where
         target_user_id: &UserId,
         states: &DownloadStates,
         media_port: &T,
-    );
+    ) -> SubscriptionUpdateOutcome;
 
     async fn update_user_info(
         &self,
@@ -165,14 +224,14 @@ where
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &T,
-    ) -> bool;
+    ) -> Result<PublishStageOutcome, TransportAdapterError>;
 
     async fn rollback_staged_publish(
         &self,
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &T,
-    ) -> bool;
+    ) -> RollbackStagedPublishOutcome;
 
     async fn rollback_connection_publishes(
         &self,
@@ -192,5 +251,5 @@ where
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &T,
-    ) -> bool;
+    ) -> UnpublishOutcome;
 }

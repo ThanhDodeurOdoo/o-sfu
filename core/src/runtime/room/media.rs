@@ -6,7 +6,8 @@ use super::{
     state::ConsumerBootstrapOrigin,
 };
 use crate::{
-    PublicationActivity,
+    PublicationActivity, PublicationActivityOutcome, SubscriptionUpdateOutcome,
+    TransportEffectOutcome, UnpublishOutcome,
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId,
         diagnostics::DiagnosticsEventData,
@@ -86,13 +87,13 @@ impl Room {
         stream_type: StreamType,
         activity: PublicationActivity,
         media_port: &impl MediaPort,
-    ) {
+    ) -> PublicationActivityOutcome {
         let active = activity.is_active();
         let Some(producer_target) = ({
             let state = self.state.read().await;
             state.producer_route_target(user_id, connection_id, stream_type)
         }) else {
-            return;
+            return PublicationActivityOutcome::MissingPublication;
         };
         let transport_user_key =
             self.transport_user_key(user_id, producer_target.owner_connection_id());
@@ -100,9 +101,9 @@ impl Room {
             let mut state = self.state.write().await;
             state.apply_producer_activity(user_id, &producer_target, stream_type, active)
         }) else {
-            return;
+            return PublicationActivityOutcome::StalePublication;
         };
-        if media_port
+        let transport_update = if media_port
             .set_producer_active(
                 &transport_user_key,
                 outcome.transport_media_id,
@@ -117,7 +118,10 @@ impl Room {
                 active = outcome.active,
                 "transport adapter failed to update producer route activity"
             );
-        }
+            TransportEffectOutcome::Failed
+        } else {
+            TransportEffectOutcome::Applied
+        };
         self.diagnostics.record(
             DiagnosticsEventData::for_user(
                 self.uuid(),
@@ -131,6 +135,7 @@ impl Room {
             .insert_field("stream_type", format!("{stream_type:?}").to_lowercase()),
         );
         outcome.fanout.emit();
+        PublicationActivityOutcome::Applied { transport_update }
     }
 
     /// Persist the subscriber's download intent and project the resulting route
@@ -142,9 +147,12 @@ impl Room {
         target_user_id: &UserId,
         states: &DownloadStates,
         media_port: &(impl MediaPort + ObservabilityPort),
-    ) {
+    ) -> SubscriptionUpdateOutcome {
         let effect_plan = {
             let mut state = self.state.write().await;
+            if state.user_for_connection(user_id, connection_id).is_none() {
+                return SubscriptionUpdateOutcome::StaleConnection;
+            }
             let media_counts_before = RoomMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
@@ -172,6 +180,7 @@ impl Room {
         effect_plan.execute(self, media_port).await;
         self.sync_source_packet_selection_policy(Some(media_port), media_port)
             .await;
+        SubscriptionUpdateOutcome::Applied
     }
 
     pub async fn is_stream_published(&self, user_id: &UserId, stream_type: StreamType) -> bool {
@@ -188,7 +197,7 @@ impl Room {
         connection_id: ConnectionId,
         stream_type: StreamType,
         media_port: &impl MediaPort,
-    ) -> bool {
+    ) -> UnpublishOutcome {
         let Some(effect_plan) = ({
             let state = self.state.read().await;
             state
@@ -202,7 +211,7 @@ impl Room {
                     )
                 })
         }) else {
-            return false;
+            return UnpublishOutcome::MissingPublication;
         };
         effect_plan.execute(self, media_port).await
     }

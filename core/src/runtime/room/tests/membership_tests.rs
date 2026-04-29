@@ -523,15 +523,15 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
         )
         .await
     );
-    assert!(
-        !room
-            .apply_session_negotiated(
-                &UserId::Integer(1),
-                first_connection,
-                test_client_rtp_capabilities(),
-                &transport_adapter,
-            )
-            .await
+    assert_eq!(
+        room.apply_session_negotiated(
+            &UserId::Integer(1),
+            first_connection,
+            test_client_rtp_capabilities(),
+            &transport_adapter,
+        )
+        .await,
+        SessionNegotiationOutcome::StaleConnection
     );
     assert!(
         !room
@@ -545,14 +545,15 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
         "stale negotiation callbacks must not make the replacement user publish-ready"
     );
 
-    assert!(
+    assert_eq!(
         room.apply_session_negotiated(
             &UserId::Integer(1),
             second_connection,
             test_client_rtp_capabilities(),
             &transport_adapter,
         )
-        .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
     assert!(
         room.test_api()
@@ -570,7 +571,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
 async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
     let mut scenario = setup_stale_refresh_scenario().await;
 
-    assert!(
+    assert_eq!(
         scenario
             .room
             .apply_session_negotiated(
@@ -579,7 +580,8 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
                 test_client_rtp_capabilities(),
                 &scenario.transport_adapter,
             )
-            .await
+            .await,
+        SessionNegotiationOutcome::Applied
     );
     assert!(
         drain_outbound(&mut scenario.second_subscriber_rx)
@@ -598,8 +600,8 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
     })
     .await;
 
-    assert!(
-        !scenario
+    assert_eq!(
+        scenario
             .room
             .apply_session_refreshed(
                 &UserId::Integer(2),
@@ -607,6 +609,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
                 &scenario.transport_adapter,
             )
             .await,
+        SessionNegotiationOutcome::StaleConnection,
         "stale refresh callbacks must not target the replacement connection"
     );
     assert!(
@@ -614,7 +617,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
         "stale refresh callbacks must not emit duplicate bootstrap on the replacement connection"
     );
 
-    assert!(
+    assert_eq!(
         scenario
             .room
             .apply_session_refreshed(
@@ -623,6 +626,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
                 &scenario.transport_adapter,
             )
             .await,
+        SessionNegotiationOutcome::Applied,
         "the current connection should still accept refresh follow-up callbacks"
     );
     assert!(
@@ -671,14 +675,15 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
         .await
         .unwrap();
 
-    assert!(
+    assert_eq!(
         room.apply_session_negotiated(
             &UserId::Integer(1),
             publisher_connection,
             test_client_rtp_capabilities(),
             &transport_adapter,
         )
-        .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
     assert!(
         room.test_api()

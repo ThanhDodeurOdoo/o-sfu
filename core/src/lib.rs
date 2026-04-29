@@ -102,7 +102,11 @@ pub use options::{
     MediaOptions, ObservabilityOptions, RoutingOptions, RtcPortRange, RuntimeFeatureFlags,
     SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
-pub use room::{MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh};
+pub use room::{
+    MediaRoom, MediaSessionContext, PublicationActivity, PublicationActivityOutcome,
+    PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
+    SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
+};
 pub use runtime::transport_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
     RuntimeTransportAdapter,

@@ -131,14 +131,15 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         panic!("published camera should expose a transport media id");
     };
 
-    assert!(
+    assert_eq!(
         room.unpublish_track(
             &UserId::Integer(1),
             test_connection_id(0),
             StreamType::Camera,
             &adapter,
         )
-        .await
+        .await,
+        UnpublishOutcome::Unpublished
     );
 
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
@@ -1046,8 +1047,8 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
         .await
         .expect("closing the publisher transport should succeed");
 
-    assert!(
-        !scenario
+    assert_eq!(
+        scenario
             .room
             .unpublish_track(
                 &scenario.publisher_user_id,
@@ -1056,6 +1057,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
                 &scenario.transport_adapter,
             )
             .await,
+        UnpublishOutcome::TransportCleanupFailed,
         "unpublish should abort when transport cleanup fails"
     );
 
@@ -1855,14 +1857,15 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         "subscriber should receive exactly one bootstrap request for the published track"
     );
 
-    assert!(
+    assert_eq!(
         room.unpublish_track(
             &UserId::Integer(1),
             test_connection_id(0),
             StreamType::Camera,
             &transport_adapter
         )
-        .await
+        .await,
+        UnpublishOutcome::Unpublished
     );
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
     assert_eq!(room.test_api().inspect().consumer_count().await, 0);
@@ -2260,23 +2263,25 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
     )
     .await;
 
-    assert!(
+    assert_eq!(
         room.apply_session_negotiated(
             &publisher_user_id,
             publisher_connection_id,
             test_client_rtp_capabilities(),
             &transport_adapter,
         )
-        .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
-    assert!(
+    assert_eq!(
         room.apply_session_negotiated(
             &subscriber_user_id,
             subscriber_connection_id,
             test_client_rtp_capabilities(),
             &transport_adapter,
         )
-        .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
 
     RealRtcRefreshScenario {
@@ -2332,9 +2337,12 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         1
     );
 
-    assert!(
-        rollback_staged_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+    assert_eq!(
+        room.rollback_staged_publish(&user_id, connection_id, StreamType::Camera, &adapter)
+            .await,
+        RollbackStagedPublishOutcome::RolledBack {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
     );
 
     assert_eq!(
@@ -2362,6 +2370,110 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         )),
         "rolling back a staged publish should remove the staged transport media"
     );
+}
+
+#[tokio::test]
+async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
+    let (room, adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_users_with_fake().await;
+    let user_id = UserId::Integer(1);
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&user_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert_eq!(
+        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter)
+            .await
+            .expect("first stage should not hit transport failure"),
+        crate::PublishStageOutcome::Staged
+    );
+    assert_eq!(
+        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter)
+            .await
+            .expect("duplicate stage should not hit transport failure"),
+        crate::PublishStageOutcome::Duplicate
+    );
+    assert_eq!(
+        staged_publish_count(&room, &user_id, connection_id).await,
+        1
+    );
+    assert_eq!(
+        fake.snapshot_events()
+            .iter()
+            .filter(|event| matches!(
+                event,
+                FakeWebRtcEvent::PublishMediaRequested { user_id: owner, .. }
+                    if *owner == user_id
+            ))
+            .count(),
+        1,
+        "the pre-await duplicate check should avoid reserving a second transport media"
+    );
+    assert_eq!(
+        room.rollback_staged_publish(&user_id, connection_id, StreamType::Camera, &adapter)
+            .await,
+        RollbackStagedPublishOutcome::RolledBack {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
+    );
+}
+
+#[tokio::test]
+async fn explicit_unpublish_missing_publication_is_a_domain_noop() {
+    let (room, adapter, _fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_users_with_fake().await;
+    let user_id = UserId::Integer(1);
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&user_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert_eq!(
+        room.unpublish_track(&user_id, connection_id, StreamType::Camera, &adapter)
+            .await,
+        UnpublishOutcome::MissingPublication
+    );
+}
+
+#[tokio::test]
+async fn staged_publish_rollback_reports_cleanup_failure_without_state_ownership() {
+    let (room, adapter, fake, _publisher_rx, _subscriber_rx) =
+        setup_two_ready_users_with_fake().await;
+    let user_id = UserId::Integer(1);
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&user_id)
+        .await
+        .expect("publisher should have a live connection");
+
+    assert!(
+        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
+            .await
+    );
+    let transport_media_id =
+        staged_publish_transport_media_id(&room, &user_id, connection_id, StreamType::Camera)
+            .await
+            .expect("staged publish should expose its transport media id");
+    fake.fail_next_remove_media(transport_media_id);
+
+    assert_eq!(
+        room.rollback_staged_publish(&user_id, connection_id, StreamType::Camera, &adapter)
+            .await,
+        RollbackStagedPublishOutcome::RolledBack {
+            cleanup: crate::TransportEffectOutcome::Failed
+        }
+    );
+    assert_eq!(
+        staged_publish_count(&room, &user_id, connection_id).await,
+        0
+    );
+    assert_eq!(room.test_api().inspect().producer_count().await, 0);
 }
 
 #[tokio::test]
@@ -2678,11 +2790,20 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
         .expect("publisher should have a live connection");
 
     let (first_stage, second_stage) = tokio::join!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,),
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,),
+        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter,),
+        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter,),
     );
 
-    assert_ne!(first_stage, second_stage);
+    let outcomes = [
+        first_stage.expect("first stage attempt should not hit transport failure"),
+        second_stage.expect("second stage attempt should not hit transport failure"),
+    ];
+    assert!(outcomes.contains(&crate::PublishStageOutcome::Staged));
+    assert!(
+        outcomes.contains(&crate::PublishStageOutcome::DuplicateAfterReservation {
+            cleanup: crate::TransportEffectOutcome::Applied,
+        })
+    );
     assert_eq!(
         staged_publish_count(&room, &user_id, connection_id).await,
         1

@@ -17,11 +17,15 @@ pub(super) use super::super::{
     topology::RoomTopology,
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
-pub(super) use crate::runtime::{
-    ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
-    transport_adapter::{
-        ActiveSpeakerSource, NegotiationPort, RuntimeTransportAdapter, TransportMediaId,
-        test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+pub(super) use crate::{
+    PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome, UnpublishOutcome,
+    runtime::{
+        ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions,
+        VideoLayoutIntent,
+        transport_adapter::{
+            ActiveSpeakerSource, NegotiationPort, RuntimeTransportAdapter, TransportMediaId,
+            test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+        },
     },
 };
 
@@ -205,6 +209,7 @@ pub(super) async fn refresh_session_consumers(
         transport_adapter,
     )
     .await
+        == SessionNegotiationOutcome::Applied
 }
 
 pub(super) async fn stage_negotiated_publish(
@@ -216,6 +221,7 @@ pub(super) async fn stage_negotiated_publish(
 ) -> bool {
     room.stage_negotiated_publish(user_id, connection_id, stream_type, transport_adapter)
         .await
+        .is_ok_and(PublishStageOutcome::staged)
 }
 
 pub(super) async fn rollback_staged_publish(
@@ -225,8 +231,11 @@ pub(super) async fn rollback_staged_publish(
     stream_type: StreamType,
     transport_adapter: &RuntimeTransportAdapter,
 ) -> bool {
-    room.rollback_staged_publish(user_id, connection_id, stream_type, transport_adapter)
-        .await
+    matches!(
+        room.rollback_staged_publish(user_id, connection_id, stream_type, transport_adapter)
+            .await,
+        RollbackStagedPublishOutcome::RolledBack { .. }
+    )
 }
 
 pub(super) async fn commit_staged_publishes(

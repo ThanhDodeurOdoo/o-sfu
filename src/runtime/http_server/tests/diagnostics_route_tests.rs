@@ -15,7 +15,10 @@ use o_sfu_router::{
 
 use super::fixtures::*;
 use crate::{
-    core::server::session::{StreamType, UserId, UserPermissions},
+    core::{
+        SessionNegotiationOutcome,
+        server::session::{StreamType, UserId, UserPermissions},
+    },
     runtime::{
         diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
         room::Room,
@@ -34,14 +37,15 @@ async fn make_session_ready(
     let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
         panic!("user should exist before publishing");
     };
-    assert!(
+    assert_eq!(
         room.apply_session_negotiated(
             user_id,
             connection_id,
             sample_client_rtp_capabilities(),
             transport_adapter,
         )
-        .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
 }
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -76,6 +76,7 @@ pub struct FakeWebRtcAdapter {
     events: Arc<Mutex<Vec<FakeWebRtcEvent>>>,
     next_media_id: Arc<AtomicU64>,
     media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
+    failed_media_removals: Arc<Mutex<BTreeSet<TransportMediaId>>>,
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<UserId, u64>>>,
@@ -143,6 +144,18 @@ impl FakeWebRtcAdapter {
             }
             Err(poisoned) => {
                 poisoned.into_inner().publish_media = delay;
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn fail_next_remove_media(&self, transport_media_id: TransportMediaId) {
+        match self.failed_media_removals.lock() {
+            Ok(mut removals) => {
+                removals.insert(transport_media_id);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(transport_media_id);
             }
         }
     }
@@ -411,6 +424,13 @@ impl FakeWebRtcAdapter {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
+        let should_fail = match self.failed_media_removals.lock() {
+            Ok(mut removals) => removals.remove(&transport_media_id),
+            Err(poisoned) => poisoned.into_inner().remove(&transport_media_id),
+        };
+        if should_fail {
+            return Err(TransportAdapterError::TransportUnavailable);
+        }
         match self.negotiated_producer_parameters.lock() {
             Ok(mut parameters) => {
                 parameters.remove(&transport_media_id);

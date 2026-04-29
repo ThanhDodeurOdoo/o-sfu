@@ -2,7 +2,8 @@ use o_sfu_router::MediaCapabilities;
 
 use crate::{
     ConnectionId, CoreOptions, MediaRoom, MediaSessionContext, PublicationActivity,
-    UserInfoRefresh,
+    PublicationActivityOutcome, PublishStageOutcome, RollbackStagedPublishOutcome,
+    SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{DownloadStates, StreamType, UserId, UserInfo},
     transport::{
         AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
@@ -69,8 +70,8 @@ pub enum MediaEndpointHealth {
 pub enum SfuCoreError {
     Transport(TransportAdapterError),
     CapabilityProjection(TransportAdapterError),
-    UserStateCommitRejected,
-    UserStateRefreshRejected,
+    SessionNegotiationRejected(SessionNegotiationOutcome),
+    SessionRefreshRejected(SessionNegotiationOutcome),
 }
 
 #[derive(Debug, Clone)]
@@ -176,16 +177,16 @@ where
             .transport_adapter
             .negotiated_client_rtp_capabilities(answer_sdp, &offered_capabilities.0)
             .map_err(SfuCoreError::CapabilityProjection)?;
-        if !self
+        let outcome = self
             .room
             .apply_session_negotiated(
                 &self.context,
                 client_capabilities,
                 &self.core.transport_adapter,
             )
-            .await
-        {
-            return Err(SfuCoreError::UserStateCommitRejected);
+            .await;
+        if outcome != SessionNegotiationOutcome::Applied {
+            return Err(SfuCoreError::SessionNegotiationRejected(outcome));
         }
         self.commit_staged_publishes(&applied_answer).await;
         Ok(())
@@ -193,12 +194,12 @@ where
 
     pub async fn apply_renegotiation_answer(&self, answer_sdp: &str) -> Result<(), SfuCoreError> {
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
-        if !self
+        let outcome = self
             .room
             .apply_session_refreshed(&self.context, &self.core.transport_adapter)
-            .await
-        {
-            return Err(SfuCoreError::UserStateRefreshRejected);
+            .await;
+        if outcome != SessionNegotiationOutcome::Applied {
+            return Err(SfuCoreError::SessionRefreshRejected(outcome));
         }
         self.commit_staged_publishes(&applied_answer).await;
         Ok(())
@@ -220,7 +221,7 @@ where
         &self,
         stream_type: StreamType,
         activity: PublicationActivity,
-    ) {
+    ) -> PublicationActivityOutcome {
         self.room
             .set_publication_active(
                 &self.context,
@@ -228,10 +229,14 @@ where
                 activity,
                 &self.core.transport_adapter,
             )
-            .await;
+            .await
     }
 
-    pub async fn update_subscription(&self, target_user_id: &UserId, states: &DownloadStates) {
+    pub async fn update_subscription(
+        &self,
+        target_user_id: &UserId,
+        states: &DownloadStates,
+    ) -> SubscriptionUpdateOutcome {
         self.room
             .update_subscription(
                 &self.context,
@@ -239,7 +244,7 @@ where
                 states,
                 &self.core.transport_adapter,
             )
-            .await;
+            .await
     }
 
     pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
@@ -248,13 +253,20 @@ where
             .await;
     }
 
-    pub async fn stage_publish(&self, stream_type: StreamType) -> bool {
+    pub async fn stage_publish(
+        &self,
+        stream_type: StreamType,
+    ) -> Result<PublishStageOutcome, SfuCoreError> {
         self.room
             .stage_publish(&self.context, stream_type, &self.core.transport_adapter)
             .await
+            .map_err(SfuCoreError::Transport)
     }
 
-    pub async fn rollback_staged_publish(&self, stream_type: StreamType) -> bool {
+    pub async fn rollback_staged_publish(
+        &self,
+        stream_type: StreamType,
+    ) -> RollbackStagedPublishOutcome {
         self.room
             .rollback_staged_publish(&self.context, stream_type, &self.core.transport_adapter)
             .await
@@ -266,7 +278,7 @@ where
             .await;
     }
 
-    pub async fn unpublish(&self, stream_type: StreamType) -> bool {
+    pub async fn unpublish(&self, stream_type: StreamType) -> UnpublishOutcome {
         self.room
             .unpublish(&self.context, stream_type, &self.core.transport_adapter)
             .await

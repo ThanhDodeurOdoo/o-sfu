@@ -38,12 +38,16 @@ use super::{
     },
     stream_role::UserStreamIntent,
 };
-use crate::runtime::{
-    ConnectionId, StreamType, UserId,
-    diagnostics::DiagnosticsEventData,
-    telemetry::schema::event as telemetry_event,
-    transport_adapter::{
-        AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort, TransportMediaId,
+use crate::{
+    PublishStageOutcome, RollbackStagedPublishOutcome, TransportEffectOutcome,
+    runtime::{
+        ConnectionId, StreamType, UserId,
+        diagnostics::DiagnosticsEventData,
+        telemetry::schema::event as telemetry_event,
+        transport_adapter::{
+            AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort,
+            TransportAdapterError, TransportMediaId,
+        },
     },
 };
 
@@ -416,10 +420,10 @@ impl PendingPublishTransaction {
         room: &Room,
         media_port: &impl MediaPort,
         failure_message: &str,
-    ) {
+    ) -> TransportEffectOutcome {
         self.reservation
             .cleanup(room, media_port, failure_message)
-            .await;
+            .await
     }
 }
 
@@ -449,16 +453,23 @@ impl StagedMediaReservation {
     /// Cleanup is best-effort because the transport user may already be
     /// closing. The important ownership fact is that this transaction made the
     /// cleanup decision and must not be committed afterward.
-    async fn cleanup(mut self, room: &Room, media_port: &impl MediaPort, failure_message: &str) {
-        room.cleanup_transport_media(
-            &self.owner_user_id,
-            self.owner_connection_id,
-            self.transport_media_id,
-            media_port,
-            failure_message,
-        )
-        .await;
+    async fn cleanup(
+        mut self,
+        room: &Room,
+        media_port: &impl MediaPort,
+        failure_message: &str,
+    ) -> TransportEffectOutcome {
+        let outcome = room
+            .cleanup_transport_media(
+                &self.owner_user_id,
+                self.owner_connection_id,
+                self.transport_media_id,
+                media_port,
+                failure_message,
+            )
+            .await;
         self.state = StagedMediaReservationState::Released;
+        outcome
     }
 
     /// Transfers ownership from the staged transaction to the committed
@@ -565,14 +576,14 @@ impl Room {
         connection_id: ConnectionId,
         stream_type: StreamType,
         media_port: &impl MediaPort,
-    ) -> bool {
+    ) -> Result<PublishStageOutcome, TransportAdapterError> {
         let media_kind = media_kind_for_stream_type(stream_type);
         let validated_descriptor = {
             let state = self.state.read().await;
             state.validate_publish_descriptor(user_id, connection_id, stream_type, media_kind)
         };
         let Some(validated_descriptor) = validated_descriptor else {
-            return false;
+            return Ok(PublishStageOutcome::Rejected);
         };
         // Cheap duplicate rejection goes first so we avoid reserving transport
         // media when the same stream is already staged.
@@ -581,7 +592,7 @@ impl Room {
             connection_id,
             stream_type,
         ) {
-            return false;
+            return Ok(PublishStageOutcome::Duplicate);
         }
         let session_key = self.transport_user_key(user_id, connection_id);
         let transport_media_id = match media_port
@@ -593,14 +604,14 @@ impl Room {
             .await
         {
             Ok(transport_media_id) => transport_media_id,
-            Err(_error) => {
+            Err(error) => {
                 warn!(
                     ?user_id,
                     connection_id = ?connection_id,
                     ?stream_type,
                     "failed to stage negotiated publish stream"
                 );
-                return false;
+                return Err(error);
             }
         };
         // The transport await above leaves a race window where another publish
@@ -617,16 +628,16 @@ impl Room {
                 .err()
         };
         if let Some(staged_publish) = duplicate_stage {
-            staged_publish
+            let cleanup = staged_publish
                 .cleanup_reserved_media(
                     self,
                     media_port,
                     "transport adapter failed to remove duplicated staged publish media",
                 )
                 .await;
-            return false;
+            return Ok(PublishStageOutcome::DuplicateAfterReservation { cleanup });
         }
-        true
+        Ok(PublishStageOutcome::Staged)
     }
 
     /// Cancels one staged publish before it becomes a live producer.
@@ -640,7 +651,7 @@ impl Room {
         connection_id: ConnectionId,
         stream_type: StreamType,
         media_port: &impl MediaPort,
-    ) -> bool {
+    ) -> RollbackStagedPublishOutcome {
         // Explicit unpublish before commit only needs transport cleanup because
         // the producer never became live in room state.
         let staged_publish = self.pending_publish_transactions.lock().await.take(
@@ -649,16 +660,16 @@ impl Room {
             stream_type,
         );
         let Some(staged_publish) = staged_publish else {
-            return false;
+            return RollbackStagedPublishOutcome::NotStaged;
         };
-        staged_publish
+        let cleanup = staged_publish
             .cleanup_reserved_media(
                 self,
                 media_port,
                 "transport adapter failed to remove staged publish media during rollback",
             )
             .await;
-        true
+        RollbackStagedPublishOutcome::RolledBack { cleanup }
     }
 
     /// Cleans up every staged publish owned by a websocket connection.
@@ -752,7 +763,7 @@ impl Room {
         transport_media_id: TransportMediaId,
         media_port: &impl MediaPort,
         failure_message: &str,
-    ) {
+    ) -> TransportEffectOutcome {
         if media_port
             .remove_media(
                 &self.transport_user_key(user_id, connection_id),
@@ -767,7 +778,9 @@ impl Room {
                 ?transport_media_id,
                 "{failure_message}"
             );
+            return TransportEffectOutcome::Failed;
         }
+        TransportEffectOutcome::Applied
     }
 
     /// Removes a batch of committed transport media where the caller needs to

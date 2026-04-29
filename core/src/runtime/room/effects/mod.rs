@@ -14,7 +14,10 @@
 
 use tracing::warn;
 
-use crate::runtime::{StreamType, UserId};
+use crate::{
+    UnpublishOutcome,
+    runtime::{StreamType, UserId},
+};
 
 mod source_policy;
 pub(super) use source_policy::SourcePolicyEffectPlan;
@@ -456,7 +459,11 @@ impl UnpublishEffectPlan {
         }
     }
 
-    pub(super) async fn execute(self, room: &Room, media_port: &impl MediaPort) -> bool {
+    pub(super) async fn execute(
+        self,
+        room: &Room,
+        media_port: &impl MediaPort,
+    ) -> UnpublishOutcome {
         // Explicit unpublish tears down transport state first so a later state
         // commit failure cannot leave routable media alive for a track the room
         // already considers removed.
@@ -464,7 +471,7 @@ impl UnpublishEffectPlan {
             .cleanup_transport_removals_strict(media_port, &self.transport_removals)
             .await
         {
-            return false;
+            return UnpublishOutcome::TransportCleanupFailed;
         }
         let (media_counts_before, outcome, media_counts_after) = {
             let mut state = room.state.write().await;
@@ -488,10 +495,10 @@ impl UnpublishEffectPlan {
                 stream_type = ?self.stream_type,
                 "transport cleanup succeeded but room state commit failed"
             );
-            return false;
+            return UnpublishOutcome::StateCommitRejected;
         };
         MediaCountDelta::new(media_counts_before, media_counts_after).record(room);
         outcome.emit(&self.user_id, self.stream_type);
-        true
+        UnpublishOutcome::Unpublished
     }
 }

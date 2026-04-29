@@ -11,7 +11,7 @@ use super::{
     user_negotiation::UserNegotiationUpdate,
 };
 use crate::{
-    UserInfoRefresh,
+    SessionNegotiationOutcome, UserInfoRefresh,
     runtime::{
         ConnectionId, UserId, UserInfo, UserPermissions,
         diagnostics::DiagnosticsEventData,
@@ -483,7 +483,7 @@ impl Room {
         connection_id: ConnectionId,
         capabilities: MediaCapabilities,
         media_port: &impl MediaPort,
-    ) -> bool {
+    ) -> SessionNegotiationOutcome {
         let update = {
             let mut state = self.state.write().await;
             state.set_user_negotiated(user_id, connection_id, &capabilities)
@@ -498,21 +498,21 @@ impl Room {
         connection_id: ConnectionId,
         update: UserNegotiationUpdate,
         media_port: &impl MediaPort,
-    ) -> bool {
+    ) -> SessionNegotiationOutcome {
         if !update.session_present {
-            return false;
+            return SessionNegotiationOutcome::StaleConnection;
         }
         if update.became_consumer_ready {
             if !self
                 .bootstrap_missing_consumers_for_connection(user_id, connection_id, media_port)
                 .await
             {
-                return false;
+                return SessionNegotiationOutcome::StaleConnection;
             }
             self.request_active_video_consumer_keyframes(user_id, connection_id, media_port)
                 .await;
         }
-        true
+        SessionNegotiationOutcome::Applied
     }
 
     pub(crate) async fn apply_session_refreshed(
@@ -520,15 +520,20 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         media_port: &impl MediaPort,
-    ) -> bool {
+    ) -> SessionNegotiationOutcome {
         if !self
             .request_active_video_consumer_keyframes(user_id, connection_id, media_port)
             .await
         {
-            return false;
+            return SessionNegotiationOutcome::StaleConnection;
         }
-        self.bootstrap_missing_consumers_for_connection(user_id, connection_id, media_port)
+        if !self
+            .bootstrap_missing_consumers_for_connection(user_id, connection_id, media_port)
             .await
+        {
+            return SessionNegotiationOutcome::StaleConnection;
+        }
+        SessionNegotiationOutcome::Applied
     }
 
     async fn request_active_video_consumer_keyframes(

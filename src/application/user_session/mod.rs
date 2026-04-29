@@ -13,8 +13,10 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     core::{
-        MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity, RuntimeSfuCore,
-        RuntimeTransportAdapter, SfuCoreError, UploadEncoding, UploadSlot, UserInfoRefresh,
+        MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity,
+        RollbackStagedPublishOutcome, RuntimeSfuCore, RuntimeTransportAdapter,
+        SessionNegotiationOutcome, SfuCoreError, SubscriptionUpdateOutcome, TransportEffectOutcome,
+        UnpublishOutcome, UploadEncoding, UploadSlot, UserInfoRefresh,
     },
     runtime::{
         ConnectionId,
@@ -109,8 +111,9 @@ pub enum UserDisconnectReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnpublishMediaDisposition {
-    RolledBackStagedPublish,
+    RolledBackStagedPublish { cleanup: TransportEffectOutcome },
     RemovedLivePublication,
+    UnpublishFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,7 +233,7 @@ impl User {
             let _disposition = self.state.negotiation.request_renegotiation();
             return Ok(UserOutput::new());
         }
-        if !self.stage_publish_slot(stream_type).await {
+        if !self.stage_publish_slot(stream_type).await? {
             return Ok(UserOutput::new());
         }
         self.request_renegotiation().await
@@ -243,22 +246,33 @@ impl User {
         }
         let media_disposition = {
             let media = self.media();
-            if media.rollback_staged_publish(stream_type).await {
-                Some(UnpublishMediaDisposition::RolledBackStagedPublish)
-            } else if media.unpublish(stream_type).await {
-                Some(UnpublishMediaDisposition::RemovedLivePublication)
-            } else {
-                None
+            match media.rollback_staged_publish(stream_type).await {
+                RollbackStagedPublishOutcome::RolledBack { cleanup } => {
+                    Some(UnpublishMediaDisposition::RolledBackStagedPublish { cleanup })
+                }
+                RollbackStagedPublishOutcome::NotStaged => match media.unpublish(stream_type).await
+                {
+                    UnpublishOutcome::Unpublished => {
+                        Some(UnpublishMediaDisposition::RemovedLivePublication)
+                    }
+                    UnpublishOutcome::MissingPublication => None,
+                    UnpublishOutcome::TransportCleanupFailed
+                    | UnpublishOutcome::StateCommitRejected => {
+                        Some(UnpublishMediaDisposition::UnpublishFailed)
+                    }
+                },
             }
         };
         match media_disposition {
-            Some(UnpublishMediaDisposition::RolledBackStagedPublish) => {
+            Some(UnpublishMediaDisposition::RolledBackStagedPublish { cleanup }) => {
+                Self::log_staged_publish_rollback(stream_type, cleanup);
                 let _disposition = self.state.negotiation.request_renegotiation();
                 Ok(UserOutput::new())
             }
             Some(UnpublishMediaDisposition::RemovedLivePublication) => {
                 self.request_renegotiation().await
             }
+            Some(UnpublishMediaDisposition::UnpublishFailed) => Err(UserError::InternalError),
             None => Ok(UserOutput::new()),
         }
     }
@@ -285,13 +299,17 @@ impl User {
             outcome = "request_received",
             "received subscribe intent"
         );
-        self.media()
+        let outcome = self
+            .media()
             .update_subscription(target_user_id, states)
             .await;
+        if outcome == SubscriptionUpdateOutcome::StaleConnection {
+            return Err(UserError::ProtocolViolation);
+        }
         info!(
             event = telemetry_event::SUBSCRIBE_SUCCEEDED,
             operation = "consume_prepare",
-            outcome = "applied",
+            outcome = ?outcome,
             "applied subscribe intent"
         );
         Ok(UserOutput::new())
@@ -536,7 +554,7 @@ impl User {
         resolved: &ResolvedUserNegotiation,
     ) -> Result<UserOutput, UserError> {
         let needs_follow_up =
-            self.stage_queued_publish_slots().await || resolved.queued_renegotiation;
+            self.stage_queued_publish_slots().await? || resolved.queued_renegotiation;
         if !needs_follow_up {
             return Ok(UserOutput::new());
         }
@@ -603,14 +621,20 @@ impl User {
                 "capability_projection_failed",
                 "failed to project client RTP capabilities from the answered SDP",
             ),
-            SfuCoreError::UserStateCommitRejected => (
+            SfuCoreError::SessionNegotiationRejected(outcome) => (
                 "answer_apply",
-                "room_commit_failed",
+                match outcome {
+                    SessionNegotiationOutcome::Applied => "room_commit_unexpected",
+                    SessionNegotiationOutcome::StaleConnection => "stale_connection",
+                },
                 "failed to commit negotiated user state after initial answer",
             ),
-            SfuCoreError::UserStateRefreshRejected => (
+            SfuCoreError::SessionRefreshRejected(outcome) => (
                 "renegotiation_apply",
-                "room_refresh_failed",
+                match outcome {
+                    SessionNegotiationOutcome::Applied => "room_refresh_unexpected",
+                    SessionNegotiationOutcome::StaleConnection => "stale_connection",
+                },
                 "failed to refresh user state after renegotiation answer",
             ),
         };
@@ -628,40 +652,59 @@ impl User {
         );
     }
 
-    async fn stage_publish_slot(&self, stream_type: StreamType) -> bool {
+    async fn stage_publish_slot(&self, stream_type: StreamType) -> Result<bool, UserError> {
         let media_kind = media_kind_for_stream_type(stream_type);
-        let staged = self.media().stage_publish(stream_type).await;
-        if staged {
-            info!(
-                event = telemetry_event::PUBLISH_PREPARED,
-                operation = "publish_prepare",
-                outcome = "staged",
-                media_kind = ?media_kind,
-                stream_type = ?stream_type,
-                "staged publish stream for negotiation"
-            );
+        let outcome = self
+            .media()
+            .stage_publish(stream_type)
+            .await
+            .map_err(|error| {
+                warn!(
+                    event = telemetry_event::PUBLISH_ABORTED,
+                    operation = "publish_prepare",
+                    outcome = "transport_error",
+                    media_kind = ?media_kind,
+                    stream_type = ?stream_type,
+                    ?error,
+                    "failed to stage publish stream for negotiation"
+                );
+                UserError::InternalError
+            })?;
+        let event = if outcome.staged() {
+            telemetry_event::PUBLISH_PREPARED
         } else {
-            info!(
-                event = telemetry_event::PUBLISH_ABORTED,
-                operation = "publish_prepare",
-                outcome = "ignored",
-                media_kind = ?media_kind,
-                stream_type = ?stream_type,
-                "publish intent did not stage new media"
-            );
-        }
-        staged
+            telemetry_event::PUBLISH_ABORTED
+        };
+        info!(
+            event,
+            operation = "publish_prepare",
+            outcome = ?outcome,
+            media_kind = ?media_kind,
+            stream_type = ?stream_type,
+            "processed publish staging intent"
+        );
+        Ok(outcome.staged())
     }
 
-    async fn stage_queued_publish_slots(&mut self) -> bool {
+    async fn stage_queued_publish_slots(&mut self) -> Result<bool, UserError> {
         let queued_publish_slots = self.state.negotiation.take_queued_publish_slots();
         let mut staged_any = false;
         for slot in queued_publish_slots {
-            if self.stage_publish_slot(slot).await {
+            if self.stage_publish_slot(slot).await? {
                 staged_any = true;
             }
         }
-        staged_any
+        Ok(staged_any)
+    }
+
+    fn log_staged_publish_rollback(stream_type: StreamType, cleanup: TransportEffectOutcome) {
+        info!(
+            event = telemetry_event::PUBLISH_ABORTED,
+            operation = "publish_rollback",
+            outcome = ?cleanup,
+            stream_type = ?stream_type,
+            "rolled back staged publish stream before commit"
+        );
     }
 
     fn record_staged_publishes_committed() {
@@ -743,7 +786,7 @@ fn map_core_negotiation_error(error: SfuCoreError) -> UserError {
     match error {
         SfuCoreError::Transport(_) => UserError::InternalError,
         SfuCoreError::CapabilityProjection(_)
-        | SfuCoreError::UserStateCommitRejected
-        | SfuCoreError::UserStateRefreshRejected => UserError::ProtocolViolation,
+        | SfuCoreError::SessionNegotiationRejected(_)
+        | SfuCoreError::SessionRefreshRejected(_) => UserError::ProtocolViolation,
     }
 }

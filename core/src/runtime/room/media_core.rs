@@ -2,12 +2,14 @@ use o_sfu_router::MediaCapabilities;
 
 use super::Room;
 use crate::{
-    MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh,
+    MediaRoom, MediaSessionContext, PublicationActivity, PublicationActivityOutcome,
+    PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
+    SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId, UserInfo,
         transport_adapter::RuntimeTransportAdapter,
     },
-    transport::{AppliedSessionAnswer, TransportSessionKey},
+    transport::{AppliedSessionAnswer, TransportAdapterError, TransportSessionKey},
 };
 
 struct RoomMediaSession<'a, 'session> {
@@ -37,7 +39,7 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
         self.context.connection_id()
     }
 
-    async fn apply_negotiated(self, capabilities: MediaCapabilities) -> bool {
+    async fn apply_negotiated(self, capabilities: MediaCapabilities) -> SessionNegotiationOutcome {
         self.room
             .apply_session_negotiated(
                 self.user_id(),
@@ -48,7 +50,7 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
             .await
     }
 
-    async fn apply_refreshed(self) -> bool {
+    async fn apply_refreshed(self) -> SessionNegotiationOutcome {
         self.room
             .apply_session_refreshed(self.user_id(), self.connection_id(), self.media_port)
             .await
@@ -58,7 +60,7 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
         self,
         stream_type: StreamType,
         activity: PublicationActivity,
-    ) {
+    ) -> PublicationActivityOutcome {
         self.room
             .set_publication_active_runtime(
                 self.user_id(),
@@ -67,10 +69,14 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
                 activity,
                 self.media_port,
             )
-            .await;
+            .await
     }
 
-    async fn update_subscription(self, target_user_id: &UserId, states: &DownloadStates) {
+    async fn update_subscription(
+        self,
+        target_user_id: &UserId,
+        states: &DownloadStates,
+    ) -> SubscriptionUpdateOutcome {
         self.room
             .update_subscription_runtime(
                 self.user_id(),
@@ -79,7 +85,7 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
                 states,
                 self.media_port,
             )
-            .await;
+            .await
     }
 
     async fn update_user_info(self, info: UserInfo, refresh: UserInfoRefresh) {
@@ -94,7 +100,10 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
             .await;
     }
 
-    async fn stage_publish(self, stream_type: StreamType) -> bool {
+    async fn stage_publish(
+        self,
+        stream_type: StreamType,
+    ) -> Result<PublishStageOutcome, TransportAdapterError> {
         self.room
             .stage_negotiated_publish(
                 self.user_id(),
@@ -105,7 +114,10 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
             .await
     }
 
-    async fn rollback_staged_publish(self, stream_type: StreamType) -> bool {
+    async fn rollback_staged_publish(
+        self,
+        stream_type: StreamType,
+    ) -> RollbackStagedPublishOutcome {
         self.room
             .rollback_staged_publish(
                 self.user_id(),
@@ -138,7 +150,7 @@ impl<'a, 'session> RoomMediaSession<'a, 'session> {
             .await;
     }
 
-    async fn unpublish(self, stream_type: StreamType) -> bool {
+    async fn unpublish(self, stream_type: StreamType) -> UnpublishOutcome {
         self.room
             .unpublish_track(
                 self.user_id(),
@@ -168,7 +180,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         capabilities: MediaCapabilities,
         media_port: &RuntimeTransportAdapter,
-    ) -> bool {
+    ) -> SessionNegotiationOutcome {
         RoomMediaSession::new(self, session, media_port)
             .apply_negotiated(capabilities)
             .await
@@ -178,7 +190,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         &self,
         session: &MediaSessionContext<'_>,
         media_port: &RuntimeTransportAdapter,
-    ) -> bool {
+    ) -> SessionNegotiationOutcome {
         RoomMediaSession::new(self, session, media_port)
             .apply_refreshed()
             .await
@@ -208,10 +220,10 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         stream_type: StreamType,
         activity: PublicationActivity,
         media_port: &RuntimeTransportAdapter,
-    ) {
+    ) -> PublicationActivityOutcome {
         RoomMediaSession::new(self, session, media_port)
             .set_publication_activity(stream_type, activity)
-            .await;
+            .await
     }
 
     async fn update_subscription(
@@ -220,10 +232,10 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         target_user_id: &UserId,
         states: &DownloadStates,
         media_port: &RuntimeTransportAdapter,
-    ) {
+    ) -> SubscriptionUpdateOutcome {
         RoomMediaSession::new(self, session, media_port)
             .update_subscription(target_user_id, states)
-            .await;
+            .await
     }
 
     async fn update_user_info(
@@ -243,7 +255,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &RuntimeTransportAdapter,
-    ) -> bool {
+    ) -> Result<PublishStageOutcome, TransportAdapterError> {
         RoomMediaSession::new(self, session, media_port)
             .stage_publish(stream_type)
             .await
@@ -254,7 +266,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &RuntimeTransportAdapter,
-    ) -> bool {
+    ) -> RollbackStagedPublishOutcome {
         RoomMediaSession::new(self, session, media_port)
             .rollback_staged_publish(stream_type)
             .await
@@ -286,7 +298,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         media_port: &RuntimeTransportAdapter,
-    ) -> bool {
+    ) -> UnpublishOutcome {
         RoomMediaSession::new(self, session, media_port)
             .unpublish(stream_type)
             .await
