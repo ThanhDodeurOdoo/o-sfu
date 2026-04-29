@@ -8,8 +8,7 @@ use o_sfu_protocol::{
     },
 };
 use o_sfu_router::MediaKind;
-use tokio::runtime::Handle;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     core::{
@@ -183,6 +182,9 @@ impl User {
     }
 
     pub async fn close(&mut self) {
+        if self.cleanup_finished {
+            return;
+        }
         self.media().rollback_connection_publishes().await;
         self.cleanup_finished = true;
     }
@@ -722,18 +724,15 @@ impl Drop for User {
         if self.cleanup_finished {
             return;
         }
-        let media_core = self.media_core.clone();
-        let room = Arc::clone(&self.room);
-        let user_id = self.id.clone();
-        let connection_id = self.connection_id;
-        if let Ok(runtime_handle) = Handle::try_current() {
-            runtime_handle.spawn(async move {
-                media_core
-                    .session(room.as_ref(), &user_id, connection_id)
-                    .rollback_connection_publishes()
-                    .await;
-            });
-        }
+        error!(
+            user_id = ?self.id,
+            connection_id = ?self.connection_id,
+            "dropped websocket user without completing explicit cleanup"
+        );
+        debug_assert!(
+            self.cleanup_finished,
+            "websocket user dropped before explicit cleanup completed"
+        );
     }
 }
 

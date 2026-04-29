@@ -101,10 +101,10 @@ pub fn sample_simulcast_video_rtp_parameters(mid: Option<&str>) -> MediaStream {
     )
 }
 
-fn with_optional_mid(parameters: MediaStream, mid: Option<&str>) -> MediaStream {
+fn with_optional_mid(stream: MediaStream, mid: Option<&str>) -> MediaStream {
     match mid {
-        Some(mid) => parameters.with_mid(mid.to_owned()),
-        None => parameters,
+        Some(mid) => stream.with_mid(mid.to_owned()),
+        None => stream,
     }
 }
 

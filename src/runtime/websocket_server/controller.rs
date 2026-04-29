@@ -111,11 +111,13 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         let exit_reason = super::session_loop::run(super::session_loop::UserLoop {
             writer: &mut ws_writer,
             reader: &mut ws_reader,
+            room_manager: state.rooms.as_ref(),
             room: user_session.room.as_ref(),
             user_id: &user_session.user_id,
             connection_id: user_session.connection_id,
             outbound_rx: &mut user_session.outbound_rx,
             user: &mut user_session.user,
+            transport_adapter: &state.transport_adapter,
             user_timeout_ms: state.websocket_options.user.timeout_ms,
             ping_interval_ms: state.websocket_options.user.ping_interval_ms,
             metrics: &state.metrics,
@@ -129,16 +131,6 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             ?exit_reason,
             "closing websocket user"
         );
-        user_session.user.close().await;
-        let _ = state
-            .rooms
-            .close_session(
-                user_session.room.uuid(),
-                &user_session.user_id,
-                user_session.connection_id,
-                &state.transport_adapter,
-            )
-            .await;
     }
     .instrument(telemetry::ws_upgrade_span())
     .await;

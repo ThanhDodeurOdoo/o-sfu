@@ -18,11 +18,14 @@ use tracing::{debug, info, warn};
 use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
 use crate::{
     application::user_session::{User, UserError, UserOutput, UserSignal},
-    core::server::room::{Room, RoomEventMessage, RoomEventRequest, UserCloseReason, UserOutbound},
+    core::server::room::{
+        Room, RoomEventMessage, RoomEventRequest, RoomManager, UserCloseReason, UserOutbound,
+    },
     runtime::{
         ConnectionId,
         metrics::{RuntimeMetrics, WsSessionLoopExitReason},
         telemetry::schema::event as telemetry_event,
+        transport_adapter::RuntimeTransportAdapter,
         websocket_server::{
             ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
         },
@@ -47,11 +50,13 @@ impl LivenessState {
 pub(super) struct UserLoop<'a> {
     pub(super) writer: &'a mut WsWriter,
     pub(super) reader: &'a mut WsReader,
+    pub(super) room_manager: &'a RoomManager,
     pub(super) room: &'a Room,
     pub(super) user_id: &'a UserId,
     pub(super) connection_id: ConnectionId,
     pub(super) outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
     pub(super) user: &'a mut User,
+    pub(super) transport_adapter: &'a RuntimeTransportAdapter,
     pub(super) user_timeout_ms: u64,
     pub(super) ping_interval_ms: u64,
     pub(super) metrics: &'a RuntimeMetrics,
@@ -59,6 +64,59 @@ pub(super) struct UserLoop<'a> {
 
 pub(super) async fn run(session: UserLoop<'_>) -> WsSessionLoopExitReason {
     let UserLoop {
+        writer,
+        reader,
+        room_manager,
+        room,
+        user_id,
+        connection_id,
+        outbound_rx,
+        user,
+        transport_adapter,
+        user_timeout_ms,
+        ping_interval_ms,
+        metrics,
+    } = session;
+    let exit_reason = run_until_exit(UserLoopState {
+        writer,
+        reader,
+        room,
+        user_id,
+        connection_id,
+        outbound_rx,
+        user,
+        user_timeout_ms,
+        ping_interval_ms,
+        metrics,
+    })
+    .await;
+    finalize_user_session(
+        room_manager,
+        room,
+        user_id,
+        connection_id,
+        user,
+        transport_adapter,
+    )
+    .await;
+    exit_reason
+}
+
+struct UserLoopState<'a> {
+    writer: &'a mut WsWriter,
+    reader: &'a mut WsReader,
+    room: &'a Room,
+    user_id: &'a UserId,
+    connection_id: ConnectionId,
+    outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
+    user: &'a mut User,
+    user_timeout_ms: u64,
+    ping_interval_ms: u64,
+    metrics: &'a RuntimeMetrics,
+}
+
+async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
+    let UserLoopState {
         writer,
         reader,
         room,
@@ -132,6 +190,20 @@ pub(super) async fn run(session: UserLoop<'_>) -> WsSessionLoopExitReason {
             }
         }
     }
+}
+
+async fn finalize_user_session(
+    room_manager: &RoomManager,
+    room: &Room,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    user: &mut User,
+    transport_adapter: &RuntimeTransportAdapter,
+) {
+    user.close().await;
+    let _removed = room_manager
+        .close_session(room.uuid(), user_id, connection_id, transport_adapter)
+        .await;
 }
 
 async fn handle_ping_tick(
