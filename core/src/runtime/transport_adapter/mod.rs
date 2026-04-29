@@ -20,10 +20,7 @@ mod transport_backend;
 #[path = "transport_backend_test.rs"]
 mod transport_backend;
 
-pub use config::{
-    MediaTransportDeps, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-    RtcTransportAdapterShardSetConfig,
-};
+pub use config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig};
 pub use runtime_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
     RuntimeTransportAdapter,

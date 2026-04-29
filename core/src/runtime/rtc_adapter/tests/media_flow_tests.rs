@@ -3,7 +3,7 @@ use crate::runtime::transport_adapter::SourcePacketGate;
 
 #[tokio::test]
 async fn rtc_transport_bootstrap_starts_packet_loop() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     assert!(!adapter.packet_loop_started());
     let session_key = transport_key(1, 15, UserId::Integer(15));
     let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
@@ -14,7 +14,7 @@ async fn rtc_transport_bootstrap_starts_packet_loop() {
 
 #[tokio::test]
 async fn rtc_metrics_track_live_transport_users_without_double_counting() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 16, UserId::Integer(16));
 
     assert_eq!(adapter.metrics.snapshot().active_transport_users, 0);
@@ -40,7 +40,7 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
 
 #[tokio::test]
 async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 18, UserId::Integer(18));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
     let bootstrap_result = prepare_transport_session(&adapter, &session_key).await;
@@ -107,7 +107,7 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
 
 #[tokio::test]
 async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let producer_session_key = transport_key(1, 19, UserId::Integer(19));
     let consumer_session_key = transport_key(1, 20, UserId::Integer(20));
     let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_000);
@@ -173,7 +173,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 
 #[tokio::test]
 async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let producer_session_key = transport_key(1, 21, UserId::Integer(21));
     let first_consumer_session_key = transport_key(1, 22, UserId::Integer(22));
     let second_consumer_session_key = transport_key(1, 23, UserId::Integer(23));
@@ -240,7 +240,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
 
 #[tokio::test]
 async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggregate_gate() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let producer_session_key = transport_key(1, 123, UserId::Integer(123));
     let consumer_session_key = transport_key(1, 124, UserId::Integer(124));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 81_000);
@@ -321,7 +321,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
 
 #[tokio::test]
 async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let producer_session_key = transport_key(1, 125, UserId::Integer(125));
     let stale_producer_session_key = transport_key(1, 126, UserId::Integer(125));
     let consumer_session_key = transport_key(1, 127, UserId::Integer(127));
@@ -374,7 +374,7 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
 
 #[tokio::test]
 async fn rtc_route_activity_updates_producer_and_consumer_flags() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let producer_session_key = transport_key(1, 23, UserId::Integer(23));
     let consumer_session_key = transport_key(1, 24, UserId::Integer(24));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 91_000);
@@ -454,7 +454,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 21, UserId::Integer(21));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 77_777);
 
@@ -491,7 +491,7 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
 
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 22, UserId::Integer(22));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 88_888);
 
@@ -525,7 +525,7 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
 
 #[tokio::test]
 async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 23, UserId::Integer(23));
     let rtp_parameters = sample_router_rtp_parameters("cam-up", 99_999);
 
@@ -563,7 +563,7 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
 
 #[tokio::test]
 async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let first_session_key = transport_key(9, 31, UserId::Integer(31));
     let second_session_key = transport_key(9, 32, UserId::Integer(32));
     let first_rtp_parameters = sample_router_rtp_parameters("aud-up-1", 93_001);
@@ -617,7 +617,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
 
 #[tokio::test]
 async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(9, 41, UserId::Integer(41));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 94_001);
 
@@ -648,8 +648,8 @@ async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
 
 #[tokio::test]
 async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
-    let source_adapter = RtcTransportAdapter::default();
-    let target_adapter = RtcTransportAdapter::default();
+    let source_adapter = RtcTransportShard::default();
+    let target_adapter = RtcTransportShard::default();
     let source_transport_media_id = TransportMediaId::new(91);
 
     assert!(

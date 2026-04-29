@@ -92,7 +92,7 @@ struct FakeWebRtcAdapterDelays {
 
 #[allow(
     clippy::unused_async,
-    reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+    reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
 )]
 impl FakeWebRtcAdapter {
     fn record_event(&self, event: FakeWebRtcEvent) {
@@ -273,7 +273,7 @@ impl FakeWebRtcAdapter {
 impl FakeWebRtcAdapter {
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self.active_speaker_sources.lock() {
@@ -336,7 +336,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn create_initial_session_offer(
         &self,
@@ -349,7 +349,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn create_session_renegotiation_offer(
         &self,
@@ -362,7 +362,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn apply_session_answer(
         &self,
@@ -380,7 +380,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn close_session(
         &self,
@@ -404,7 +404,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn remove_media(
         &self,
@@ -437,7 +437,7 @@ impl FakeWebRtcAdapter {
     #[cfg(any(test, feature = "testing-transport"))]
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn negotiated_producer_parameters(
         &self,
@@ -459,7 +459,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn publish_media(
         &self,
@@ -500,7 +500,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn consume_media(
         &self,
@@ -524,7 +524,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn set_producer_active(
         &self,
@@ -544,7 +544,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn set_consumer_active(
         &self,
@@ -564,7 +564,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn set_consumer_packet_gate(
         &self,
@@ -604,7 +604,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the rtc adapter and runtime call sites"
+        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn request_consumer_keyframe(
         &self,

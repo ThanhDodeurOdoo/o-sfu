@@ -1,4 +1,4 @@
-//! Media handle tracking for the RTC transport adapter.
+//! Media handle tracking for the RTC transport shard.
 //!
 //! Owns the transport-media registry and the negotiation-facing producer
 //! `(session_key, mid)` reverse lookup within `RtcBootstrapState`, plus the

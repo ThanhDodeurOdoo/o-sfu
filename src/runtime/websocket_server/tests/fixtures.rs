@@ -41,8 +41,8 @@ pub(super) use crate::{
         },
         testing::{build_test_runtime_state, decode_protocol_welcome_batch},
         transport_adapter::{
-            RtcTransport, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-            RuntimeTransportAdapter, SessionBitrateLimits,
+            MediaTransportDeps, RtcTransport, RtcTransportConfig, RuntimeTransportAdapter,
+            SessionBitrateLimits,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         },
     },
@@ -243,7 +243,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
 )]
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     match RtcTransport::builder()
-        .transport_config(RtcTransportAdapterConfig {
+        .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: VideoBitrateLimits::default(),
@@ -251,7 +251,7 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
         })
-        .deps(RtcTransportAdapterDeps {
+        .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),

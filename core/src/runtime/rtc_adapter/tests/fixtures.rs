@@ -19,7 +19,7 @@ pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
-    RtcTransportAdapter,
+    RtcTransportShard,
     commands::debug::{DebugPacketGate, DebugRouteEntry},
     shared_payload::SharedPayload,
     state::TransportSessionHealth,
@@ -33,9 +33,9 @@ pub(super) use crate::{
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
         transport_adapter::{
-            ActiveSpeakerSource, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-            SessionBitrateLimits, SessionOffer, SourcePolicySignal, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, MediaTransportDeps, RtcTransportConfig, SessionBitrateLimits,
+            SessionOffer, SourcePolicySignal, TransportAdapterError, TransportMediaId,
+            TransportSessionKey,
         },
     },
 };
@@ -82,7 +82,7 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
 pub(super) fn rtc_adapter_with_bitrate_limits(
     max_bitrate_in_bps: u64,
     max_bitrate_out_bps: u64,
-) -> RtcTransportAdapter {
+) -> RtcTransportShard {
     rtc_adapter_for_test(
         max_bitrate_in_bps,
         max_bitrate_out_bps,
@@ -91,7 +91,7 @@ pub(super) fn rtc_adapter_with_bitrate_limits(
     )
 }
 
-pub(super) fn rtc_adapter_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportAdapter {
+pub(super) fn rtc_adapter_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportShard {
     rtc_adapter_for_test(
         8_000_000,
         10_000_000,
@@ -103,7 +103,7 @@ pub(super) fn rtc_adapter_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcT
 pub(super) fn rtc_adapter_with_codec_policy(
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
-) -> RtcTransportAdapter {
+) -> RtcTransportShard {
     rtc_adapter_for_test(8_000_000, 10_000_000, codec_flags, codec_preferences)
 }
 
@@ -112,9 +112,9 @@ fn rtc_adapter_for_test(
     max_bitrate_out_bps: u64,
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
-) -> RtcTransportAdapter {
-    RtcTransportAdapter::new(
-        &RtcTransportAdapterConfig {
+) -> RtcTransportShard {
+    RtcTransportShard::new(
+        &RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -122,7 +122,7 @@ fn rtc_adapter_for_test(
             codec_flags,
             codec_preferences,
         },
-        &RtcTransportAdapterDeps {
+        &MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
@@ -132,14 +132,14 @@ fn rtc_adapter_for_test(
 }
 
 pub(super) async fn prepare_transport_session(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
     adapter.create_initial_session_offer(session_key).await
 }
 
 pub(super) fn set_transport_health(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
     health: TransportSessionHealth,
 ) {
@@ -147,7 +147,7 @@ pub(super) fn set_transport_health(
 }
 
 pub(super) async fn remember_remote_addr(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     source_addr: SocketAddr,
     session_key: &TransportSessionKey,
 ) {
@@ -157,25 +157,25 @@ pub(super) async fn remember_remote_addr(
 }
 
 pub(super) async fn remote_addr_owner(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     source_addr: SocketAddr,
 ) -> Option<TransportSessionKey> {
     adapter.debug_remote_addr_owner(source_addr).await
 }
 
-pub(super) async fn has_any_remote_addr_session(adapter: &RtcTransportAdapter) -> bool {
+pub(super) async fn has_any_remote_addr_session(adapter: &RtcTransportShard) -> bool {
     adapter.debug_has_any_remote_addr_session().await
 }
 
 pub(super) async fn resolve_mid(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     transport_media_id: TransportMediaId,
 ) -> Option<Mid> {
     adapter.debug_resolve_mid(transport_media_id).await
 }
 
 pub(super) async fn session_stream_rx_ssrc(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
     mid: Mid,
 ) -> Option<u32> {
@@ -183,7 +183,7 @@ pub(super) async fn session_stream_rx_ssrc(
 }
 
 pub(super) async fn session_stream_tx_ssrc(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
     mid: Mid,
 ) -> Option<u32> {
@@ -191,21 +191,21 @@ pub(super) async fn session_stream_tx_ssrc(
 }
 
 pub(super) async fn session_max_bitrate_in(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
 ) -> Option<u64> {
     adapter.debug_session_max_bitrate_in(session_key).await
 }
 
 pub(super) async fn session_max_bitrate_out(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
 ) -> Option<u64> {
     adapter.debug_session_max_bitrate_out(session_key).await
 }
 
 pub(super) async fn route_entry_by_media_id(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
     adapter
@@ -214,7 +214,7 @@ pub(super) async fn route_entry_by_media_id(
 }
 
 pub(super) async fn record_incoming_media(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     payload_bytes: usize,
@@ -226,7 +226,7 @@ pub(super) async fn record_incoming_media(
 }
 
 pub(super) async fn observe_audio_activity(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     transport_media_id: TransportMediaId,
     voice_activity: Option<bool>,
     audio_level_dbov: Option<i8>,
@@ -238,30 +238,30 @@ pub(super) async fn observe_audio_activity(
 }
 
 pub(super) fn activate_relay_route(
-    source_adapter: &RtcTransportAdapter,
+    source_adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
-    target_adapter: &RtcTransportAdapter,
+    target_adapter: &RtcTransportShard,
 ) -> Result<(), TransportAdapterError> {
     source_adapter.debug_activate_relay_route(source_transport_media_id, target_adapter)
 }
 
 pub(super) fn deactivate_relay_route(
-    source_adapter: &RtcTransportAdapter,
+    source_adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
-    target_adapter: &RtcTransportAdapter,
+    target_adapter: &RtcTransportShard,
 ) {
     source_adapter.debug_deactivate_relay_route(source_transport_media_id, target_adapter);
 }
 
 pub(super) fn relay_target_count_for_source(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
 ) -> usize {
     adapter.debug_relay_target_count_for_source(source_transport_media_id)
 }
 
 pub(super) fn active_relay_target_count_for_source(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
 ) -> usize {
     adapter.debug_active_relay_target_count_for_source(source_transport_media_id)

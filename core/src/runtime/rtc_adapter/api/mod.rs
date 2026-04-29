@@ -1,6 +1,6 @@
-//! External API and orchestration layer for the RTC transport adapter.
+//! External API and orchestration layer for the RTC transport shard.
 //!
-//! This module provide the interface through which the rest of the SFU interacts
+//! This module provides the interface through which the rest of the SFU interacts
 //! with the WebRTC backend. It acts as the bridge between the high-level
 //! transport orchestration and the low-level media packet loops.
 //!
@@ -11,7 +11,7 @@
 //!   and observability without adding a second selector-facing service layer.
 //! * **Worker Lifecycle**: Manages the lazy bootstrapping and shutdown of the
 //!   [`packet_loop`] workers.
-//! * **Command Dispatch**: Translates facade method cals into `RtcWorkerCommand`
+//! * **Command Dispatch**: Translates facade method calls into `RtcWorkerCommand`
 //!   messages and handles the asynchronous coordination (request/response) with
 //!   the workers.
 //! * **Observability Bridge**: Projects the internal state of the packet loops
@@ -20,7 +20,7 @@
 //!
 //! ### Sub-Modules
 //!
-//! * [`facade`]: Defines the public `RtcTransportAdapter` struct plus the
+//! * [`facade`]: Defines the public `RtcTransportShard` struct plus the
 //!   concern-scoped backend methods that sit directly above the worker mailbox.
 //! * [`runtime`]: Implement the worker communication logic, lazy-boot orchestration,
 //!   and command-dispatching helpers.
@@ -32,5 +32,5 @@ mod runtime;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
-pub use facade::RtcTransportAdapter;
+pub use facade::RtcTransportShard;
 pub use runtime::WorkerHandleSlot;

@@ -24,8 +24,8 @@ use thiserror::Error;
 use tracing::warn;
 
 use super::{
-    config::{MediaTransportDeps, RtcTransportAdapterConfig, RtcTransportAdapterShardSetConfig},
-    shard_set::RtcTransportAdapterShardSet,
+    config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig},
+    shard_set::RtcTransportShardSet,
     transport_backend::MediaTransportBackend,
 };
 use crate::{
@@ -53,7 +53,7 @@ use crate::{
 /// registrations.
 #[derive(Debug, Clone)]
 pub struct RtcTransport {
-    pub(super) shards: Arc<RtcTransportAdapterShardSet>,
+    pub(super) shards: Arc<RtcTransportShardSet>,
 }
 
 impl RtcTransport {
@@ -76,19 +76,19 @@ impl RtcTransport {
     }
 
     fn from_shard_set_config(
-        config: &RtcTransportAdapterShardSetConfig,
+        config: &RtcTransportShardSetConfig,
     ) -> Result<Self, RtcTransportBuildError> {
         validate_worker_split(config.transport.rtc_port_range(), config.worker_count)?;
         Ok(Self::from_unchecked_shard_set_config(config))
     }
 
-    fn from_unchecked_shard_set_config(config: &RtcTransportAdapterShardSetConfig) -> Self {
+    fn from_unchecked_shard_set_config(config: &RtcTransportShardSetConfig) -> Self {
         Self {
-            shards: Arc::new(RtcTransportAdapterShardSet::new(config)),
+            shards: Arc::new(RtcTransportShardSet::new(config)),
         }
     }
 
-    pub(super) fn shards(&self) -> &Arc<RtcTransportAdapterShardSet> {
+    pub(super) fn shards(&self) -> &Arc<RtcTransportShardSet> {
         &self.shards
     }
 }
@@ -111,7 +111,7 @@ impl RtcTransport {
 pub struct RtcTransportBuilder {
     /// RTC-specific operator policy collected from runtime core options or a
     /// test fixture.
-    transport: Option<RtcTransportAdapterConfig>,
+    transport: Option<RtcTransportConfig>,
     /// Process services needed by the transport while it emits diagnostics,
     /// metrics and packet-sink fanout.
     deps: Option<MediaTransportDeps>,
@@ -137,7 +137,7 @@ impl RtcTransportBuilder {
     /// internals.
     #[must_use]
     pub fn core_options(mut self, options: &CoreOptions) -> Self {
-        self.transport = Some(RtcTransportAdapterConfig {
+        self.transport = Some(RtcTransportConfig {
             public_ip: options.media.public_ip,
             bitrate_limits: options.media.bitrate_limits,
             video_bitrate_limits: options.media.video_bitrate_limits,
@@ -154,7 +154,7 @@ impl RtcTransportBuilder {
     /// This is mainly useful for targeted tests that need a narrow port range
     /// or codec policy without constructing a full server config.
     #[must_use]
-    pub fn transport_config(mut self, config: RtcTransportAdapterConfig) -> Self {
+    pub fn transport_config(mut self, config: RtcTransportConfig) -> Self {
         self.transport = Some(config);
         self
     }
@@ -186,7 +186,7 @@ impl RtcTransportBuilder {
             .transport
             .ok_or(RtcTransportBuildError::MissingTransportConfig)?;
         let deps = self.deps.ok_or(RtcTransportBuildError::MissingDeps)?;
-        RtcTransport::from_shard_set_config(&RtcTransportAdapterShardSetConfig {
+        RtcTransport::from_shard_set_config(&RtcTransportShardSetConfig {
             worker_count: self.worker_count,
             transport,
             deps,
@@ -283,7 +283,7 @@ impl MediaTransport {
     /// This remains for transitional in-repository fixtures. Production code
     /// should use [`Self::from_core_options`] or [`RtcTransport::builder`].
     #[must_use]
-    pub fn rtc(config: &RtcTransportAdapterShardSetConfig) -> Self {
+    pub fn rtc(config: &RtcTransportShardSetConfig) -> Self {
         Self::from_rtc_transport(RtcTransport::from_unchecked_shard_set_config(config))
     }
 
@@ -339,7 +339,7 @@ impl NegotiationPort for RtcTransport {
         answer_sdp: &str,
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        RtcTransportAdapterShardSet::negotiated_client_rtp_capabilities(
+        RtcTransportShardSet::negotiated_client_rtp_capabilities(
             answer_sdp,
             offered_router_capabilities,
         )

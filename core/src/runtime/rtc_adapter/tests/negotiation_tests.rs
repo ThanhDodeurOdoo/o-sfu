@@ -21,7 +21,7 @@ use crate::{
 
 #[tokio::test]
 async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 34, UserId::Integer(34));
 
     let offer = adapter.create_initial_session_offer(&session_key).await;
@@ -65,7 +65,7 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
 
 #[tokio::test]
 async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 134, UserId::Integer(134));
 
     let (offer_sdp, upload_slots) = adapter
@@ -210,7 +210,7 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
 
 #[tokio::test]
 async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 38, UserId::Integer(38));
 
     let offer_sdp = adapter
@@ -357,7 +357,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
 
 #[tokio::test]
 async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 35, UserId::Integer(35));
 
     assert!(
@@ -444,7 +444,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
 
 async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
  {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 46, UserId::Integer(46));
 
     let mut remote = build_remote_rtc(55_007);
@@ -544,7 +544,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
 
 #[tokio::test]
 async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one_answer() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 48, UserId::Integer(48));
 
     let mut remote = build_remote_rtc(55_048);
@@ -607,7 +607,7 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
 
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let source_session_key = transport_key(1, 36, UserId::Integer(36));
     let consumer_session_key = transport_key(1, 37, UserId::Integer(37));
 
@@ -680,7 +680,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
 
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let source_session_key = transport_key(1, 39, UserId::Integer(39));
     let consumer_session_key = transport_key(1, 40, UserId::Integer(40));
 
@@ -769,7 +769,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
 
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 46, UserId::Integer(46));
 
     let mut remote = build_remote_rtc(55_007);
@@ -825,7 +825,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
 
 #[tokio::test]
 async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pending_producer() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 47, UserId::Integer(47));
 
     let mut remote = build_remote_rtc(55_008);
@@ -897,7 +897,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
 
 #[tokio::test]
 async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pending() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let source_session_key = transport_key(1, 42, UserId::Integer(42));
     let consumer_session_key = transport_key(1, 43, UserId::Integer(43));
 
@@ -997,7 +997,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
 
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
-    let adapter = RtcTransportAdapter::default();
+    let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 41, UserId::Integer(41));
 
     let offer = adapter
@@ -1109,7 +1109,7 @@ fn reduced_capability_probe_rtc() -> Rtc {
 }
 
 async fn apply_offer_answer(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
     remote: &mut Rtc,
     offer_sdp: String,
@@ -1130,7 +1130,7 @@ async fn apply_offer_answer(
 }
 
 async fn setup_queued_removal_sources(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     source_session_key: &TransportSessionKey,
 ) -> (TransportMediaId, TransportMediaId) {
     assert!(
@@ -1158,7 +1158,7 @@ async fn setup_queued_removal_sources(
 }
 
 async fn add_negotiated_consumer_media(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     consumer_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
@@ -1195,7 +1195,7 @@ async fn add_negotiated_consumer_media(
 }
 
 async fn add_negotiated_producer_media(
-    adapter: &RtcTransportAdapter,
+    adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
     mid: &str,
     ssrc: u32,

@@ -1,11 +1,11 @@
-//! Lifecycle and communication runtime for the RTC transport adapter.
+//! Lifecycle and communication runtime for the RTC transport shard.
 //!
 //! This module implements the internal machinery for managing the life of a
 //! background packet loop worker and dispatching commands to it.
 //!
 //! ### Worker Bootstrapping
 //!
-//! Workers are started lazily via [`RtcTransportAdapter::ensure_packet_loop_started`].
+//! Workers are started lazily via [`RtcTransportShard::ensure_packet_loop_started`].
 //! The first call to any facade method that requires worker interaction will
 //! trigger the spawning of the background tokio task that runs the packet loop.
 //!
@@ -41,7 +41,7 @@ use super::{
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
         state::TransportSessionHealth,
     },
-    facade::{RtcTransportAdapter, RtcTransportObservabilityFacade, RtcWorkerHandle},
+    facade::{RtcTransportObservabilityFacade, RtcTransportShard, RtcWorkerHandle},
 };
 use crate::runtime::{
     RoomInstanceId,
@@ -53,7 +53,7 @@ use crate::runtime::{
 
 /// Publication slot for the lazily booted packet-loop handle.
 ///
-/// The RTC adapter publishes a fully constructed worker handle into this slot
+/// The RTC shard publishes a fully constructed worker handle into this slot
 /// before any caller can start sending commands. Loom reuses the same slot logic
 /// with modeled synchronization primitives to check the publication contract.
 #[derive(Debug, Clone)]
@@ -86,7 +86,7 @@ impl<T: Clone> WorkerHandleSlot<T> {
     }
 }
 
-impl RtcTransportAdapter {
+impl RtcTransportShard {
     pub fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
         let Ok(worker_handle) = self.worker_handle.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);

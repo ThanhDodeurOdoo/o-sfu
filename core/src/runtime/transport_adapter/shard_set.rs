@@ -21,8 +21,8 @@ use str0m::media::MediaKind as Str0mMediaKind;
 use crate::{
     runtime::{
         RoomInstanceId,
-        rtc_adapter::{RelayCleanup, RtcTransportAdapter, client_rtp_capabilities_from_answer},
-        transport_adapter::config::RtcTransportAdapterShardSetConfig,
+        rtc_adapter::{RelayCleanup, RtcTransportShard, client_rtp_capabilities_from_answer},
+        transport_adapter::config::RtcTransportShardSetConfig,
     },
     transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
@@ -38,7 +38,7 @@ use crate::{
 ///
 /// The shard set is the last transport layer that knows about worker
 /// distribution. Above it, callers express media intent through transport
-/// ports. Below it, each [`RtcTransportAdapter`] owns one worker-local RTC
+/// ports. Below it, each [`RtcTransportShard`] owns one worker-local RTC
 /// state machine and packet loop.
 ///
 /// # Concurrency model
@@ -47,36 +47,36 @@ use crate::{
 /// Operations route to the selected shard and await the shard-owned async work.
 /// The shard set does not hold a global lock across those awaits.
 #[derive(Debug)]
-pub struct RtcTransportAdapterShardSet {
+pub struct RtcTransportShardSet {
     /// Worker used when there is only one shard or when a media-worker id maps
     /// to index zero.
-    primary_shard: Arc<RtcTransportAdapter>,
+    primary_shard: Arc<RtcTransportShard>,
     /// Additional worker shards addressed by media-worker id modulo shard
     /// count.
-    extra_shards: Vec<Arc<RtcTransportAdapter>>,
+    extra_shards: Vec<Arc<RtcTransportShard>>,
     /// Shared wakeup signal used by every shard to notify room-level source
     /// policy tasks about transport-observed changes.
     source_policy_signal: Arc<SourcePolicySignal>,
 }
 
-impl RtcTransportAdapterShardSet {
+impl RtcTransportShardSet {
     /// Builds RTC shards and installs one shared source-policy signal.
     ///
     /// Invalid worker or port-range combinations should already be rejected by
     /// `RtcTransportBuilder`. If a transitional caller bypasses that builder
     /// this constructor falls back to a single shard, preserving availability
     /// rather than panicking during startup.
-    pub(super) fn new(config: &RtcTransportAdapterShardSetConfig) -> Self {
+    pub(super) fn new(config: &RtcTransportShardSetConfig) -> Self {
         let source_policy_signal = Arc::new(SourcePolicySignal::default());
         let Some(shard_ranges) = config
-            .adapter_config()
+            .transport_config()
             .rtc_port_range()
             .split_for_workers(config.worker_count())
         else {
             return Self {
-                primary_shard: Arc::new(RtcTransportAdapter::new(
-                    config.adapter_config(),
-                    config.adapter_deps(),
+                primary_shard: Arc::new(RtcTransportShard::new(
+                    config.transport_config(),
+                    config.transport_deps(),
                     Arc::clone(&source_policy_signal),
                 )),
                 extra_shards: Vec::new(),
@@ -86,9 +86,9 @@ impl RtcTransportAdapterShardSet {
         let mut shard_ranges = shard_ranges.into_iter();
         let Some(primary_range) = shard_ranges.next() else {
             return Self {
-                primary_shard: Arc::new(RtcTransportAdapter::new(
-                    config.adapter_config(),
-                    config.adapter_deps(),
+                primary_shard: Arc::new(RtcTransportShard::new(
+                    config.transport_config(),
+                    config.transport_deps(),
                     Arc::clone(&source_policy_signal),
                 )),
                 extra_shards: Vec::new(),
@@ -96,16 +96,16 @@ impl RtcTransportAdapterShardSet {
             };
         };
         Self {
-            primary_shard: Arc::new(RtcTransportAdapter::new(
+            primary_shard: Arc::new(RtcTransportShard::new(
                 &config.shard_config_with_port_range(primary_range),
-                config.adapter_deps(),
+                config.transport_deps(),
                 Arc::clone(&source_policy_signal),
             )),
             extra_shards: shard_ranges
                 .map(|range| {
-                    Arc::new(RtcTransportAdapter::new(
+                    Arc::new(RtcTransportShard::new(
                         &config.shard_config_with_port_range(range),
-                        config.adapter_deps(),
+                        config.transport_deps(),
                         Arc::clone(&source_policy_signal),
                     ))
                 })
@@ -122,7 +122,7 @@ impl RtcTransportAdapterShardSet {
     pub(super) fn shard_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Arc<RtcTransportAdapter> {
+    ) -> Arc<RtcTransportShard> {
         self.shard_for_media_worker_id(session_key.media_worker_id())
     }
 
@@ -136,7 +136,7 @@ impl RtcTransportAdapterShardSet {
         &self,
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
-    ) -> Option<(Arc<RtcTransportAdapter>, Arc<RtcTransportAdapter>)> {
+    ) -> Option<(Arc<RtcTransportShard>, Arc<RtcTransportShard>)> {
         let consumer_shard = self.shard_for_user(consumer_session_key);
         let source_shard = self.shard_for_user(source_session_key);
         if Arc::ptr_eq(&consumer_shard, &source_shard) {
@@ -153,7 +153,7 @@ impl RtcTransportAdapterShardSet {
     /// state without requiring the caller to understand worker topology.
     pub(super) fn release_relay_cleanup(
         &self,
-        target_shard: &Arc<RtcTransportAdapter>,
+        target_shard: &Arc<RtcTransportShard>,
         relay_cleanup: &[RelayCleanup],
     ) {
         for cleanup in relay_cleanup {
@@ -638,7 +638,7 @@ impl RtcTransportAdapterShardSet {
         self.shard_index_for_media_worker_id(session_key.media_worker_id())
     }
 
-    fn shard_for_media_worker_id(&self, media_worker_id: usize) -> Arc<RtcTransportAdapter> {
+    fn shard_for_media_worker_id(&self, media_worker_id: usize) -> Arc<RtcTransportShard> {
         self.shard_for_index(self.shard_index_for_media_worker_id(media_worker_id))
     }
 
@@ -647,7 +647,7 @@ impl RtcTransportAdapterShardSet {
         media_worker_id % shard_count
     }
 
-    fn shard_for_index(&self, shard_index: usize) -> Arc<RtcTransportAdapter> {
+    fn shard_for_index(&self, shard_index: usize) -> Arc<RtcTransportShard> {
         if shard_index == 0 {
             return Arc::clone(&self.primary_shard);
         }
@@ -658,7 +658,7 @@ impl RtcTransportAdapterShardSet {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn all_shards(&self) -> impl Iterator<Item = &Arc<RtcTransportAdapter>> {
+    pub(super) fn all_shards(&self) -> impl Iterator<Item = &Arc<RtcTransportShard>> {
         iter::once(&self.primary_shard).chain(self.extra_shards.iter())
     }
 }

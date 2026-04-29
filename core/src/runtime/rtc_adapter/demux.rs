@@ -1,4 +1,4 @@
-//! IP hash-indexed demux and media route entries for the RTC transport adapter.
+//! IP hash-indexed demux and media route entries for the RTC transport shard.
 
 use std::{
     collections::{BTreeMap, HashMap},

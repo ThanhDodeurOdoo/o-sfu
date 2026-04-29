@@ -20,11 +20,11 @@ use crate::{
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
-        rtc_adapter::RtcTransportAdapter,
+        rtc_adapter::RtcTransportShard,
         transport_adapter::{
-            ActiveSpeakerSource, ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort,
-            RtcTransportAdapterConfig, RtcTransportAdapterDeps, SessionBitrateLimits, SessionOffer,
-            SessionPort, SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
+            ActiveSpeakerSource, ConsumerActivity, MediaPort, MediaTransportDeps, NegotiationPort,
+            ObservabilityPort, RtcTransportConfig, SessionBitrateLimits, SessionOffer, SessionPort,
+            SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
             TransportMediaId, TransportSessionKey, test_support::FakeWebRtcAdapter,
         },
     },
@@ -111,7 +111,7 @@ async fn consume_audio(
 }
 
 fn assert_relay_target_counts(
-    source_shard: &RtcTransportAdapter,
+    source_shard: &RtcTransportShard,
     source_media_id: TransportMediaId,
     total: usize,
     active: usize,
@@ -127,7 +127,7 @@ fn assert_relay_target_counts(
 }
 
 async fn assert_remote_source_owner(
-    consumer_shard: &RtcTransportAdapter,
+    consumer_shard: &RtcTransportShard,
     source_media_id: TransportMediaId,
     expected: Option<&TransportSessionKey>,
 ) {
@@ -140,7 +140,7 @@ async fn assert_remote_source_owner(
 }
 
 async fn assert_local_route_active(
-    source_shard: &RtcTransportAdapter,
+    source_shard: &RtcTransportShard,
     source_session: &TransportSessionKey,
     local_consumer_session: &TransportSessionKey,
     local_consumer_media_id: TransportMediaId,
@@ -160,7 +160,7 @@ async fn assert_local_route_active(
 }
 
 async fn assert_remote_route_activity(
-    consumer_shard: &RtcTransportAdapter,
+    consumer_shard: &RtcTransportShard,
     source_media_id: TransportMediaId,
     remote_consumer_session: &TransportSessionKey,
     remote_consumer_media_id: TransportMediaId,
@@ -186,7 +186,7 @@ async fn assert_remote_route_activity(
 )]
 fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> RuntimeTransportAdapter {
     match RtcTransport::builder()
-        .transport_config(RtcTransportAdapterConfig {
+        .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -194,7 +194,7 @@ fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> Runtim
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
         })
-        .deps(RtcTransportAdapterDeps {
+        .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
@@ -263,7 +263,7 @@ where
 #[test]
 fn rtc_transport_builder_uses_one_worker_by_default() {
     let result = RtcTransport::builder()
-        .transport_config(RtcTransportAdapterConfig {
+        .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -271,7 +271,7 @@ fn rtc_transport_builder_uses_one_worker_by_default() {
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
         })
-        .deps(RtcTransportAdapterDeps {
+        .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
@@ -284,7 +284,7 @@ fn rtc_transport_builder_uses_one_worker_by_default() {
 #[test]
 fn rtc_transport_builder_rejects_invalid_worker_count() {
     let result = RtcTransport::builder()
-        .transport_config(RtcTransportAdapterConfig {
+        .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -292,7 +292,7 @@ fn rtc_transport_builder_rejects_invalid_worker_count() {
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
         })
-        .deps(RtcTransportAdapterDeps {
+        .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
@@ -309,7 +309,7 @@ fn rtc_transport_builder_rejects_invalid_worker_count() {
 #[test]
 fn rtc_transport_builder_rejects_invalid_port_split() {
     let result = RtcTransport::builder()
-        .transport_config(RtcTransportAdapterConfig {
+        .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -317,7 +317,7 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
         })
-        .deps(RtcTransportAdapterDeps {
+        .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),

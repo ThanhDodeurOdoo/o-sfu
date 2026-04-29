@@ -30,7 +30,7 @@ use crate::{
 /// smaller configs from this one without changing bitrate, codec or public IP
 /// policy.
 #[derive(Debug, Clone)]
-pub struct RtcTransportAdapterConfig {
+pub struct RtcTransportConfig {
     /// Public address advertised in ICE candidates.
     ///
     /// This is deployment policy, not a local bind address. A wrong value can
@@ -51,7 +51,7 @@ pub struct RtcTransportAdapterConfig {
     pub codec_preferences: CodecPreferences,
 }
 
-impl RtcTransportAdapterConfig {
+impl RtcTransportConfig {
     /// Returns a copy scoped to one worker-owned UDP port range.
     ///
     /// This is used only by shard-set construction. Callers outside the shard
@@ -142,13 +142,6 @@ impl MediaTransportDeps {
     }
 }
 
-/// Compatibility alias for older in-repository construction sites.
-///
-/// New orchestration code should use [`MediaTransportDeps`]. The alias remains
-/// so RTC adapter internals can migrate without making unrelated test fixtures
-/// churn at the same time.
-pub type RtcTransportAdapterDeps = MediaTransportDeps;
-
 /// Internal shard-set construction input.
 ///
 /// # Design note
@@ -156,23 +149,23 @@ pub type RtcTransportAdapterDeps = MediaTransportDeps;
 /// Public runtime construction goes through `MediaTransport::from_core_options`
 /// or `RtcTransport::builder()`, which validate worker and port policy before
 /// creating transport state. This struct remains as the narrow handoff from the
-/// builder to the shard set, where worker-local RTC adapters are actually
+/// builder to the shard set, where worker-local RTC shards are actually
 /// created.
 #[derive(Debug, Clone)]
-pub struct RtcTransportAdapterShardSetConfig {
+pub struct RtcTransportShardSetConfig {
     /// Number of media workers that should receive transport shards.
     pub worker_count: usize,
     /// Shared operator policy before shard-local port splitting.
-    pub transport: RtcTransportAdapterConfig,
+    pub transport: RtcTransportConfig,
     /// Shared process services cloned into each shard.
-    pub deps: RtcTransportAdapterDeps,
+    pub deps: MediaTransportDeps,
 }
 
-impl RtcTransportAdapterShardSetConfig {
+impl RtcTransportShardSetConfig {
     #[must_use]
     pub fn new(
-        transport: RtcTransportAdapterConfig,
-        deps: RtcTransportAdapterDeps,
+        transport: RtcTransportConfig,
+        deps: MediaTransportDeps,
         worker_count: usize,
     ) -> Self {
         Self {
@@ -188,12 +181,12 @@ impl RtcTransportAdapterShardSetConfig {
     }
 
     #[must_use]
-    pub(super) fn adapter_config(&self) -> &RtcTransportAdapterConfig {
+    pub(super) fn transport_config(&self) -> &RtcTransportConfig {
         &self.transport
     }
 
     #[must_use]
-    pub(super) fn adapter_deps(&self) -> &RtcTransportAdapterDeps {
+    pub(super) fn transport_deps(&self) -> &MediaTransportDeps {
         &self.deps
     }
 
@@ -201,7 +194,7 @@ impl RtcTransportAdapterShardSetConfig {
     pub(super) fn shard_config_with_port_range(
         &self,
         rtc_port_range: RtcPortRange,
-    ) -> RtcTransportAdapterConfig {
+    ) -> RtcTransportConfig {
         self.transport.with_rtc_port_range(rtc_port_range)
     }
 }

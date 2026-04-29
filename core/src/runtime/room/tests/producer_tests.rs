@@ -19,9 +19,9 @@ use crate::{
         recording::MediaTap,
         room::Room,
         transport_adapter::{
-            MediaPort, NegotiationPort, RtcTransport, RtcTransportAdapterConfig,
-            RtcTransportAdapterDeps, SessionBitrateLimits, SessionOffer, SessionPort,
-            SourcePacketGate, TransportMediaId, TransportSessionKey, test_support::FakeWebRtcEvent,
+            MediaPort, MediaTransportDeps, NegotiationPort, RtcTransport, RtcTransportConfig,
+            SessionBitrateLimits, SessionOffer, SessionPort, SourcePacketGate, TransportMediaId,
+            TransportSessionKey, test_support::FakeWebRtcEvent,
         },
     },
 };
@@ -2725,7 +2725,7 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
 )]
 fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
     match RtcTransport::builder()
-        .transport_config(RtcTransportAdapterConfig {
+        .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -2733,7 +2733,7 @@ fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
         })
-        .deps(RtcTransportAdapterDeps {
+        .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),

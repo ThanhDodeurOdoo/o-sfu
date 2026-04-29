@@ -9,7 +9,7 @@ pub use super::fake::FakeWebRtcAdapter;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use super::fake::FakeWebRtcEvent;
 #[cfg(any(test, feature = "testing-transport"))]
-use super::shard_set::RtcTransportAdapterShardSet;
+use super::shard_set::RtcTransportShardSet;
 use super::{
     runtime_adapter::RuntimeTransportAdapter,
     transport_backend::{MediaTransportBackend, TestTransport},
@@ -299,7 +299,7 @@ impl RuntimeTransportAdapter {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn as_rtc_shard_set(&self) -> Option<&Arc<RtcTransportAdapterShardSet>> {
+    pub(super) fn as_rtc_shard_set(&self) -> Option<&Arc<RtcTransportShardSet>> {
         match &self.backend {
             MediaTransportBackend::Rtc(transport) => Some(transport.shards()),
             MediaTransportBackend::Test(_) => None,
@@ -392,7 +392,7 @@ impl RuntimeTransportAdapter {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl RtcTransportAdapterShardSet {
+impl RtcTransportShardSet {
     pub(super) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,

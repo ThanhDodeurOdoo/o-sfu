@@ -1,8 +1,8 @@
-//! Facades for the RTC transport adapter.
+//! Facades for the RTC transport shard.
 //!
 //! ### Key Structures
 //!
-//! * [`RtcTransportAdapter`]: The central handle for an RTC worker shard. It own
+//! * [`RtcTransportShard`]: The central handle for an RTC worker shard. It own
 //!   the relay registry and the handle to the background worker loop.
 //! * [`RtcTransportNegotiationFacade`]: Handles SDP-related operations like creating
 //!   offers and applying answers.
@@ -43,9 +43,9 @@ use crate::{
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         transport_adapter::{
-            AppliedSessionAnswer, ConsumerPacketGateUpdate, RtcTransportAdapterConfig,
-            RtcTransportAdapterDeps, SessionOffer, SourcePacketGate, SourcePolicySignal,
-            TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+            AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportDeps, RtcTransportConfig,
+            SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
+            TransportMediaId, TransportResult, TransportSessionKey,
         },
     },
 };
@@ -74,7 +74,7 @@ impl fmt::Debug for RtcWorkerHandle {
     }
 }
 
-pub struct RtcTransportAdapter {
+pub struct RtcTransportShard {
     pub(super) relay_target_id: RelayTargetId,
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_in_bps: u64,
@@ -93,28 +93,28 @@ pub struct RtcTransportAdapter {
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportNegotiationFacade<'a> {
-    adapter: &'a RtcTransportAdapter,
+    adapter: &'a RtcTransportShard,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportMediaFacade<'a> {
-    adapter: &'a RtcTransportAdapter,
+    adapter: &'a RtcTransportShard,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportSessionFacade<'a> {
-    adapter: &'a RtcTransportAdapter,
+    adapter: &'a RtcTransportShard,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportObservabilityFacade<'a> {
-    pub(super) adapter: &'a RtcTransportAdapter,
+    pub(super) adapter: &'a RtcTransportShard,
 }
 
-impl RtcTransportAdapter {
+impl RtcTransportShard {
     pub fn new(
-        config: &RtcTransportAdapterConfig,
-        deps: &RtcTransportAdapterDeps,
+        config: &RtcTransportConfig,
+        deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
     ) -> Self {
         Self {
@@ -413,7 +413,7 @@ impl RtcTransportMediaFacade<'_> {
 
     pub fn remote_source_control(
         self,
-        target: &RtcTransportAdapter,
+        target: &RtcTransportShard,
     ) -> Result<RemoteSourceControl, TransportAdapterError> {
         let worker_handle = self.adapter.ensure_packet_loop_started()?;
         Ok(RemoteSourceControl::new(
@@ -425,7 +425,7 @@ impl RtcTransportMediaFacade<'_> {
     pub fn activate_relay_route(
         self,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportAdapter,
+        target: &RtcTransportShard,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
         self.adapter.relay_registry.activate_source_target(
@@ -439,7 +439,7 @@ impl RtcTransportMediaFacade<'_> {
     pub fn deactivate_relay_route(
         self,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportAdapter,
+        target: &RtcTransportShard,
     ) {
         self.adapter
             .relay_registry
@@ -449,7 +449,7 @@ impl RtcTransportMediaFacade<'_> {
     pub fn set_relay_route_active(
         self,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportAdapter,
+        target: &RtcTransportShard,
         active: bool,
     ) {
         self.adapter.relay_registry.set_source_target_active(
@@ -479,10 +479,10 @@ fn packet_layer_gate(
     }
 }
 
-impl fmt::Debug for RtcTransportAdapter {
+impl fmt::Debug for RtcTransportShard {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RtcTransportAdapter")
+            .debug_struct("RtcTransportShard")
             .field("public_ip", &self.public_ip)
             .field("rtc_port_range", &self.rtc_port_range)
             .finish_non_exhaustive()

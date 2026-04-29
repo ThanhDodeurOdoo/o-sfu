@@ -16,7 +16,7 @@ use super::{
         },
         state::TransportSessionHealth,
     },
-    facade::{RtcTransportAdapter, RtcTransportMediaFacade, RtcTransportSessionFacade},
+    facade::{RtcTransportMediaFacade, RtcTransportSessionFacade, RtcTransportShard},
 };
 use crate::{
     MediaCodecFlags, RtcPortRange,
@@ -25,14 +25,14 @@ use crate::{
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
         transport_adapter::{
-            AppliedSessionAnswer, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-            SessionBitrateLimits, SessionOffer, SourcePolicySignal, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            AppliedSessionAnswer, MediaTransportDeps, RtcTransportConfig, SessionBitrateLimits,
+            SessionOffer, SourcePolicySignal, TransportAdapterError, TransportMediaId,
+            TransportSessionKey,
         },
     },
 };
 
-impl RtcTransportAdapter {
+impl RtcTransportShard {
     pub async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
@@ -458,10 +458,10 @@ impl RtcTransportMediaFacade<'_> {
     }
 }
 
-impl Default for RtcTransportAdapter {
+impl Default for RtcTransportShard {
     fn default() -> Self {
         Self::new(
-            &RtcTransportAdapterConfig {
+            &RtcTransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
                 video_bitrate_limits: crate::VideoBitrateLimits::default(),
@@ -469,7 +469,7 @@ impl Default for RtcTransportAdapter {
                 codec_flags: MediaCodecFlags::default(),
                 codec_preferences: crate::CodecPreferences::default(),
             },
-            &RtcTransportAdapterDeps {
+            &MediaTransportDeps {
                 diagnostics: Arc::new(DiagnosticsStore::default()),
                 packet_sink_registry: Arc::new(MediaTap::default()),
                 metrics: Arc::new(RuntimeMetrics::default()),

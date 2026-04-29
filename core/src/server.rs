@@ -79,9 +79,9 @@ pub mod transport {
                 client_rtp_capabilities_from_answer,
             },
             transport_adapter::{
-                MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportAdapterConfig,
-                RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig, RtcTransportBuildError,
-                RtcTransportBuilder, RuntimeTransportAdapter,
+                MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
+                RtcTransportBuilder, RtcTransportConfig, RtcTransportShardSetConfig,
+                RuntimeTransportAdapter,
             },
         },
         transport::*,
