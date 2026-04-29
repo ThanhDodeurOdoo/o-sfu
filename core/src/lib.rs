@@ -5,23 +5,24 @@
 //! - configuration values such as [`CoreOptions`], [`MediaOptions`],
 //!   [`RoutingOptions`], [`CodecOptions`], [`ObservabilityOptions`],
 //!   [`RtcPortRange`], [`SessionBitrateLimits`], [`VideoBitrateLimits`],
-//!   [`MediaCodecFlags`], [`CodecPreferences`], and [`RuntimeFeatureFlags`];
+//!   [`MediaCodecFlags`], [`CodecPreferences`], and [`RuntimeFeatureFlags`].
 //! - [`SfuCore`] and its borrow-based [`MediaSession`] handle, used by the
 //!   server application to express endpoint health checks, offer/answer
 //!   negotiation, publication, subscription, and cleanup intent. `SfuCore`
-//!   constructs sessions; media operations live on `MediaSession`;
+//!   constructs sessions, while media operations live on `MediaSession`.
 //! - [`NegotiationOffer`], [`UploadSlot`], and [`UploadEncoding`], the
-//!   transport-neutral negotiation vocabulary exposed by the core front door;
+//!   transport-neutral negotiation vocabulary exposed by the core front door.
 //! - [`MediaRoom`] and [`MediaSessionContext`], the room bridge implemented by
-//!   the runtime room engine;
-//! - semantic media intent types such as [`PublicationActivity`] and
-//!   [`UserInfoRefresh`] for caller-facing control decisions;
+//!   the runtime room engine.
+//! - semantic media intent and outcome types such as [`PublicationActivity`],
+//!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
+//!   caller-facing control decisions.
 //! - [`MediaTransport`], [`RtcTransport`], and [`RuntimeTransportAdapter`] as the
-//!   runtime media transport boundary over the concrete RTC adapter;
+//!   runtime media transport boundary over the concrete RTC adapter.
 //! - the transport concern traits in [`transport`], especially
 //!   [`TransportFacade`] when a caller needs one backend with negotiation,
 //!   media, and observability capabilities, and the narrower port traits when a
-//!   caller only needs one concern;
+//!   caller only needs one concern.
 //! - server-integration DTOs and facades under [`server`], including
 //!   diagnostics, metrics, room orchestration, recording taps, source
 //!   descriptors, and current transport construction seams.
@@ -32,7 +33,7 @@
 //! the stable media-core front door. The older media-signal vocabulary has moved
 //! under [`unstable::signals`] because it is not the current server
 //! orchestration path. New public items should first fit the front door above or
-//! the explicit server-integration namespace; otherwise they need an
+//! the explicit server-integration namespace. Otherwise they need an
 //! architecture note explaining why they are intentionally exposed.
 //!
 //! # Server-facing example
@@ -122,4 +123,9 @@ pub use sfu::{
 pub use sfu::{MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot};
 pub use transport::TransportFacade;
 
+/// Production media-core facade used by the server runtime.
+///
+/// This alias fixes [`SfuCore`] to the cfg-selected [`MediaTransport`] backend.
+/// Normal server application code should depend on this type instead of being
+/// generic over transport backends.
 pub type RuntimeSfuCore = SfuCore<MediaTransport>;

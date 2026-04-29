@@ -170,7 +170,7 @@ impl PendingPublishTransactions {
     /// stream.
     ///
     /// This is an idempotency check for websocket publish intents. It is only a
-    /// snapshot; callers that reserve transport media must still call `stage`
+    /// snapshot. Callers that reserve transport media must still call `stage`
     /// afterward to win the registry slot under the lock.
     pub(super) fn contains(
         &self,
@@ -559,17 +559,16 @@ impl Room {
             .contains(user_id, connection_id, stream_type)
     }
 
-    /// Validates the current room state and reserves transport media for a
-    /// negotiated publish.
+    /// Validates room ownership and reserves transport media for a negotiated publish.
     ///
-    /// The returned `true` means the publish is staged, not live. The caller
-    /// must still drive renegotiation and later call `commit_staged_publishes`
-    /// after the answer lands. The method avoids holding chanel state or
-    /// pending-registry locks across the transport call.
+    /// `PublishStageOutcome::Staged` means the publish is staged, not live.
+    /// The caller must still drive renegotiation and later call
+    /// `commit_staged_publishes` after the answer lands. The method avoids
+    /// holding room state or pending-registry locks across the transport call.
     ///
     /// If another task stages the same stream during the transport await, this
-    /// method consumes the duplicate reservation through cleanup and returns
-    /// `false`
+    /// method consumes the duplicate reservation through cleanup and reports
+    /// `PublishStageOutcome::DuplicateAfterReservation`.
     pub(crate) async fn stage_negotiated_publish(
         &self,
         user_id: &UserId,
@@ -642,9 +641,9 @@ impl Room {
 
     /// Cancels one staged publish before it becomes a live producer.
     ///
-    /// This is the explicit unpublish-before-answer path. `true` means a
-    /// reservation existed and cleanup was attempted. `false` means the stream
-    /// was not staged for this connection.
+    /// This is the explicit unpublish-before-answer path. A successful rollback
+    /// consumes the reservation even when transport cleanup fails, because the
+    /// publish must not remain commit-capable after the user requested removal.
     pub(crate) async fn rollback_staged_publish(
         &self,
         user_id: &UserId,
