@@ -55,8 +55,7 @@ use transport_adapter::SourcePolicyPort;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use transport_adapter::test_support::test_transport_session_key;
 pub(crate) use transport_adapter::{
-    MediaPort, ObservabilityPort, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-    RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+    MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort, RuntimeTransportAdapter,
     client_rtp_capabilities_from_answer,
 };
 pub use transport_adapter::{RemoteAddrDemux, TransportSessionKey};
@@ -104,11 +103,10 @@ impl Default for RuntimeDeps {
 }
 
 impl Runtime {
-    #[must_use]
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config) -> Result<Self> {
         let options = RuntimeOptions::from_config(config);
         let deps = RuntimeDeps::default();
-        let transport_adapter = build_transport_adapter(&options.core, &deps);
+        let transport_adapter = build_transport_adapter(&options.core, &deps)?;
         let room_runtime_policy = build_room_runtime_policy(&options);
         info!("{}", config.log_view(process::id()));
         info!(
@@ -116,13 +114,13 @@ impl Runtime {
             "runtime configuration loaded"
         );
         let room_manager = build_room_manager(&options, room_runtime_policy, &deps);
-        Self {
+        Ok(Self {
             options,
             room_manager,
             diagnostics: deps.diagnostics,
             metrics: deps.metrics,
             transport_adapter,
-        }
+        })
     }
 
     async fn run_until_stopped(self) -> Result<()> {
@@ -231,23 +229,18 @@ async fn sync_source_packet_selection_policies(
         .await;
 }
 
-fn build_transport_adapter(options: &CoreOptions, deps: &RuntimeDeps) -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        RtcTransportAdapterConfig {
-            public_ip: options.media.public_ip,
-            bitrate_limits: options.media.bitrate_limits,
-            video_bitrate_limits: options.media.video_bitrate_limits,
-            rtc_port_range: options.media.rtc_port_range,
-            codec_flags: options.codecs.flags,
-            codec_preferences: options.codecs.preferences,
-        },
-        RtcTransportAdapterDeps {
+fn build_transport_adapter(
+    options: &CoreOptions,
+    deps: &RuntimeDeps,
+) -> Result<RuntimeTransportAdapter> {
+    Ok(MediaTransport::from_core_options(
+        options,
+        MediaTransportDeps {
             diagnostics: Arc::clone(&deps.diagnostics),
             packet_sink_registry: Arc::clone(&deps.recording_media_tap),
             metrics: Arc::clone(&deps.metrics),
         },
-        options.routing.media_worker_count,
-    ))
+    )?)
 }
 
 fn build_room_runtime_policy(options: &RuntimeOptions) -> RoomRuntimePolicy {
@@ -282,7 +275,7 @@ fn build_room_manager(
 pub fn run() -> Result<()> {
     let config = Config::from_env()?;
     let _telemetry = init_tracing(&config.telemetry, process::id())?;
-    let runtime = Runtime::new(&config);
+    let runtime = Runtime::new(&config)?;
     Builder::new_multi_thread()
         .enable_all()
         .build()?

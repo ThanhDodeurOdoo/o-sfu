@@ -12,7 +12,7 @@ use o_sfu_router::{
 use str0m::media::Mid;
 use tokio::time::timeout;
 
-use super::RuntimeTransportAdapter;
+use super::{RtcTransport, RtcTransportBuildError, RuntimeTransportAdapter, TestTransport};
 use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
@@ -23,10 +23,9 @@ use crate::{
         rtc_adapter::RtcTransportAdapter,
         transport_adapter::{
             ActiveSpeakerSource, ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort,
-            RtcTransportAdapterConfig, RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig,
-            SessionBitrateLimits, SessionOffer, SessionPort, SourcePolicyPort,
-            SourcePolicyUpdateSubscription, TransportAdapterError, TransportMediaId,
-            TransportSessionKey, test_support::FakeWebRtcAdapter,
+            RtcTransportAdapterConfig, RtcTransportAdapterDeps, SessionBitrateLimits, SessionOffer,
+            SessionPort, SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
+            TransportMediaId, TransportSessionKey, test_support::FakeWebRtcAdapter,
         },
     },
 };
@@ -181,30 +180,31 @@ async fn assert_remote_route_activity(
     }));
 }
 
+#[allow(
+    clippy::panic,
+    reason = "transport adapter tests use fixed valid RTC ranges and should fail immediately if their fixture is invalid"
+)]
 fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(worker_count, rtc_port_range))
-}
-
-fn test_rtc_shard_set_config(
-    worker_count: usize,
-    rtc_port_range: RtcPortRange,
-) -> RtcTransportAdapterShardSetConfig {
-    RtcTransportAdapterShardSetConfig::new(
-        RtcTransportAdapterConfig {
+    match RtcTransport::builder()
+        .transport_config(RtcTransportAdapterConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
-        },
-        RtcTransportAdapterDeps {
+        })
+        .deps(RtcTransportAdapterDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-        },
-        worker_count,
-    )
+        })
+        .worker_count(worker_count)
+        .build()
+    {
+        Ok(transport) => RuntimeTransportAdapter::from_rtc_transport(transport),
+        Err(error) => panic!("fixed RTC transport test config should be valid: {error}"),
+    }
 }
 
 fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
@@ -245,6 +245,99 @@ fn subscribe_source_policy(
     source_policy_port: &impl SourcePolicyPort,
 ) -> SourcePolicyUpdateSubscription {
     source_policy_port.source_policy_subscription()
+}
+
+fn assert_runtime_transport<T>()
+where
+    T: NegotiationPort
+        + MediaPort
+        + ObservabilityPort
+        + SessionPort
+        + SourcePolicyPort
+        + Clone
+        + Send
+        + Sync,
+{
+}
+
+#[test]
+fn rtc_transport_builder_uses_one_worker_by_default() {
+    let result = RtcTransport::builder()
+        .transport_config(RtcTransportAdapterConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
+            rtc_port_range: RtcPortRange::new(46_200, 46_200),
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: crate::CodecPreferences::default(),
+        })
+        .deps(RtcTransportAdapterDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(MediaTap::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        })
+        .build();
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn rtc_transport_builder_rejects_invalid_worker_count() {
+    let result = RtcTransport::builder()
+        .transport_config(RtcTransportAdapterConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
+            rtc_port_range: RtcPortRange::new(46_210, 46_211),
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: crate::CodecPreferences::default(),
+        })
+        .deps(RtcTransportAdapterDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(MediaTap::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        })
+        .worker_count(0)
+        .build();
+
+    assert_eq!(
+        result.err(),
+        Some(RtcTransportBuildError::InvalidWorkerCount)
+    );
+}
+
+#[test]
+fn rtc_transport_builder_rejects_invalid_port_split() {
+    let result = RtcTransport::builder()
+        .transport_config(RtcTransportAdapterConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
+            rtc_port_range: RtcPortRange::new(46_220, 46_221),
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: crate::CodecPreferences::default(),
+        })
+        .deps(RtcTransportAdapterDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(MediaTap::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        })
+        .worker_count(3)
+        .build();
+
+    assert_eq!(
+        result.err(),
+        Some(RtcTransportBuildError::InvalidPortSplit {
+            worker_count: 3,
+            port_count: 2,
+        })
+    );
+}
+
+#[test]
+fn concrete_transports_satisfy_runtime_transport_ports() {
+    assert_runtime_transport::<RtcTransport>();
+    assert_runtime_transport::<TestTransport>();
 }
 
 #[test]
@@ -319,10 +412,7 @@ async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
 
 #[test]
 fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
-    let adapter = RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(
-        1,
-        RtcPortRange::new(46_100, 46_199),
-    ));
+    let adapter = test_rtc_adapter(1, RtcPortRange::new(46_100, 46_199));
 
     let projected = adapter.negotiated_client_rtp_capabilities(
         "v=0\r\ns=invalid-answer\r\n",
@@ -334,10 +424,7 @@ fn rtc_adapter_rejects_answers_without_projectable_client_capabilities() {
 
 #[tokio::test]
 async fn rtc_adapter_shards_room_bootstrap_by_explicit_media_worker() {
-    let adapter = RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(
-        2,
-        RtcPortRange::new(46_000, 46_003),
-    ));
+    let adapter = test_rtc_adapter(2, RtcPortRange::new(46_000, 46_003));
     let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
     let same_shard_session = test_session_key(12, 0, 1, UserId::Integer(3));
@@ -452,7 +539,7 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
     else {
         return;
     };
-    let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
+    let Some(shards) = adapter.as_rtc_shard_set() else {
         return;
     };
     let source_shard = shards.shard_for_user(&source_session);
@@ -515,10 +602,7 @@ async fn rtc_adapter_registers_and_prunes_cross_worker_remote_sources() {
 
 #[tokio::test]
 async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
-    let adapter = RuntimeTransportAdapter::rtc(&test_rtc_shard_set_config(
-        3,
-        RtcPortRange::new(46_300, 46_599),
-    ));
+    let adapter = test_rtc_adapter(3, RtcPortRange::new(46_300, 46_599));
     let source_session = test_session_key(30, 0, 1, UserId::Integer(1));
     let first_consumer_session = test_session_key(30, 1, 2, UserId::Integer(2));
     let second_consumer_session = test_session_key(30, 2, 3, UserId::Integer(3));
@@ -564,7 +648,7 @@ async fn rtc_adapter_keeps_independent_relay_targets_per_remote_worker() {
         return;
     };
 
-    let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
+    let Some(shards) = adapter.as_rtc_shard_set() else {
         return;
     };
     let source_shard = shards.shard_for_user(&source_session);
@@ -713,7 +797,7 @@ async fn rtc_adapter_gates_remote_relay_mailboxes_without_touching_local_routes(
         return;
     };
 
-    let RuntimeTransportAdapter::Rtc(shards) = &adapter else {
+    let Some(shards) = adapter.as_rtc_shard_set() else {
         return;
     };
     let source_shard = shards.shard_for_user(&source_session);

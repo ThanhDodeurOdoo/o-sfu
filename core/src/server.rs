@@ -69,6 +69,8 @@ pub mod transport {
             transport_adapter::test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         };
     }
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub use crate::runtime::transport_adapter::TestTransport;
     pub use crate::{
         SessionBitrateLimits,
         runtime::{
@@ -77,8 +79,9 @@ pub mod transport {
                 client_rtp_capabilities_from_answer,
             },
             transport_adapter::{
-                RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-                RtcTransportAdapterShardSetConfig, RuntimeTransportAdapter,
+                MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportAdapterConfig,
+                RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig, RtcTransportBuildError,
+                RtcTransportBuilder, RuntimeTransportAdapter,
             },
         },
         transport::*,

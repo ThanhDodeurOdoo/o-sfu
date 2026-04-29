@@ -19,8 +19,8 @@ use crate::{
         recording::MediaTap,
         room::Room,
         transport_adapter::{
-            MediaPort, NegotiationPort, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
-            RtcTransportAdapterShardSetConfig, SessionBitrateLimits, SessionOffer, SessionPort,
+            MediaPort, NegotiationPort, RtcTransport, RtcTransportAdapterConfig,
+            RtcTransportAdapterDeps, SessionBitrateLimits, SessionOffer, SessionPort,
             SourcePacketGate, TransportMediaId, TransportSessionKey, test_support::FakeWebRtcEvent,
         },
     },
@@ -2719,23 +2719,31 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
     );
 }
 
+#[allow(
+    clippy::panic,
+    reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
+)]
 fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        RtcTransportAdapterConfig {
+    match RtcTransport::builder()
+        .transport_config(RtcTransportAdapterConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(46_200, 46_299),
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
-        },
-        RtcTransportAdapterDeps {
+        })
+        .deps(RtcTransportAdapterDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-        },
-        1,
-    ))
+        })
+        .worker_count(1)
+        .build()
+    {
+        Ok(transport) => RuntimeTransportAdapter::from_rtc_transport(transport),
+        Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
+    }
 }
 
 async fn bootstrap_real_rtc_user(

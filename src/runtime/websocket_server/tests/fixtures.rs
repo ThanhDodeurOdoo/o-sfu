@@ -41,7 +41,7 @@ pub(super) use crate::{
         },
         testing::{build_test_runtime_state, decode_protocol_welcome_batch},
         transport_adapter::{
-            RtcTransportAdapterConfig, RtcTransportAdapterDeps, RtcTransportAdapterShardSetConfig,
+            RtcTransport, RtcTransportAdapterConfig, RtcTransportAdapterDeps,
             RuntimeTransportAdapter, SessionBitrateLimits,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         },
@@ -237,23 +237,31 @@ pub(super) async fn spawn_test_server_with_feature_flags(
     .await
 }
 
+#[allow(
+    clippy::panic,
+    reason = "the test fixture builds a constant valid RTC transport and failing here means the fixture itself is invalid"
+)]
 pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
-    RuntimeTransportAdapter::rtc(&RtcTransportAdapterShardSetConfig::new(
-        RtcTransportAdapterConfig {
+    match RtcTransport::builder()
+        .transport_config(RtcTransportAdapterConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(47_200, 47_299),
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
-        },
-        RtcTransportAdapterDeps {
+        })
+        .deps(RtcTransportAdapterDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(MediaTap::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-        },
-        1,
-    ))
+        })
+        .worker_count(1)
+        .build()
+    {
+        Ok(transport) => RuntimeTransportAdapter::from_rtc_transport(transport),
+        Err(error) => panic!("constant RTC test transport config should be valid: {error}"),
+    }
 }
 
 pub(super) async fn spawn_protocol_rtc_test_server(

@@ -186,7 +186,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         Arc::clone(&deps.diagnostics),
         Arc::clone(&deps.metrics),
     ));
-    let transport_adapter = build_transport_adapter(&options.core, &deps);
+    let transport_adapter = build_transport_adapter(&options.core, &deps)?;
     let bind_address = config.bind_address;
     let state = build_test_runtime_state(
         &config,

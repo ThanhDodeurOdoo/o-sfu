@@ -15,8 +15,8 @@
 //!   the runtime room engine;
 //! - semantic media intent types such as [`PublicationActivity`] and
 //!   [`UserInfoRefresh`] for caller-facing control decisions;
-//! - [`RuntimeTransportAdapter`], the production transport backend facade over
-//!   the concrete RTC adapter;
+//! - [`MediaTransport`], [`RtcTransport`], and [`RuntimeTransportAdapter`] as the
+//!   runtime media transport boundary over the concrete RTC adapter;
 //! - the transport concern traits in [`transport`], especially
 //!   [`TransportFacade`] when a caller needs one backend with negotiation,
 //!   media, and observability capabilities, and the narrower port traits when a
@@ -37,7 +37,7 @@
 //! # Server-facing example
 //!
 //! ```rust,no_run
-//! use o_sfu_core::{CoreOptions, RuntimeSfuCore, RuntimeTransportAdapter};
+//! use o_sfu_core::{CoreOptions, RuntimeSfuCore, RtcTransport};
 //! use o_sfu_core::server::room::Room;
 //! use o_sfu_core::server::session::UserId;
 //! use o_sfu_core::ConnectionId;
@@ -54,8 +54,8 @@
 //!     Ok(())
 //! }
 //!
-//! fn build_core(options: CoreOptions, transport: RuntimeTransportAdapter) -> RuntimeSfuCore {
-//!     RuntimeSfuCore::new(options, transport)
+//! fn build_core(options: CoreOptions, transport: RtcTransport) -> RuntimeSfuCore {
+//!     RuntimeSfuCore::new(options, o_sfu_core::MediaTransport::from_rtc_transport(transport))
 //! }
 //! ```
 //!
@@ -102,7 +102,10 @@ pub use options::{
     SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 pub use room::{MediaRoom, MediaSessionContext, PublicationActivity, UserInfoRefresh};
-pub use runtime::transport_adapter::RuntimeTransportAdapter;
+pub use runtime::transport_adapter::{
+    MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
+    RuntimeTransportAdapter,
+};
 pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,
     SfuCoreError, UploadEncoding, UploadSlot,
@@ -114,4 +117,4 @@ pub use sfu::{
 pub use sfu::{MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot};
 pub use transport::TransportFacade;
 
-pub type RuntimeSfuCore = SfuCore<RuntimeTransportAdapter>;
+pub type RuntimeSfuCore = SfuCore<MediaTransport>;
