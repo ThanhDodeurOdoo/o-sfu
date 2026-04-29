@@ -28,6 +28,23 @@ impl From<String> for UserId {
     }
 }
 
+impl UserId {
+    #[must_use]
+    pub fn normalized_for_runtime(self) -> Self {
+        match self {
+            Self::String(value) => value
+                .parse::<i64>()
+                .map_or(Self::String(value), Self::Integer),
+            Self::Integer(value) => Self::Integer(value),
+        }
+    }
+
+    #[must_use]
+    pub fn runtime_normalized(&self) -> Self {
+        self.clone().normalized_for_runtime()
+    }
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "feature flags mirror the compatibility startup surface with explicit optional room capabilities"
@@ -231,5 +248,30 @@ impl From<WebSocketCloseCode> for u16 {
             WebSocketCloseCode::Kicked => 4003,
             WebSocketCloseCode::RoomFull => 4004,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserId;
+
+    #[test]
+    fn user_id_normalization_keeps_numeric_runtime_identity_canonical() {
+        assert_eq!(
+            UserId::String("42".to_owned()).normalized_for_runtime(),
+            UserId::Integer(42)
+        );
+        assert_eq!(
+            UserId::Integer(42).normalized_for_runtime(),
+            UserId::Integer(42)
+        );
+    }
+
+    #[test]
+    fn user_id_normalization_preserves_arbitrary_string_ids() {
+        assert_eq!(
+            UserId::String("guest-42".to_owned()).normalized_for_runtime(),
+            UserId::String("guest-42".to_owned())
+        );
     }
 }

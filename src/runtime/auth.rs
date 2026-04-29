@@ -59,6 +59,16 @@ pub struct HttpDisconnectClaims {
     pub user_ids_by_room: BTreeMap<String, Vec<UserId>>,
 }
 
+impl HttpDisconnectClaims {
+    pub fn normalize_runtime_user_ids(&mut self) {
+        for user_ids in self.user_ids_by_room.values_mut() {
+            for user_id in user_ids {
+                *user_id = user_id.runtime_normalized();
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebSocketConnectClaims {
     #[serde(flatten)]
@@ -71,6 +81,12 @@ pub struct WebSocketConnectClaims {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<UserPermissions>,
+}
+
+impl WebSocketConnectClaims {
+    pub fn normalize_runtime_user_id(&mut self) {
+        self.user_id = self.user_id.runtime_normalized();
+    }
 }
 
 /// # Errors

@@ -214,11 +214,13 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
             state.metrics.record_http_disconnect_bad_request();
             return StatusCode::BAD_REQUEST.into_response();
         };
-        let Ok(claims) = auth::verify::<HttpDisconnectClaims>(token, &state.http_options.auth.key)
+        let Ok(mut claims) =
+            auth::verify::<HttpDisconnectClaims>(token, &state.http_options.auth.key)
         else {
             state.metrics.record_http_disconnect_unprocessable_entity();
             return StatusCode::UNPROCESSABLE_ENTITY.into_response();
         };
+        claims.normalize_runtime_user_ids();
         for (room_id, user_ids) in &claims.user_ids_by_room {
             state
                 .rooms

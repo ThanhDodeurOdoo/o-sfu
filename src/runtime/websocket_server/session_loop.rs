@@ -373,7 +373,8 @@ async fn dispatch_client_envelope(
             user.broadcast(message).await
         }
         ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
-            user.subscribe_to(&payload.user_id, &payload.states).await
+            let target_user_id = payload.user_id.normalized_for_runtime();
+            user.subscribe_to(&target_user_id, &payload.states).await
         }
         ClientEnvelope::Message(ClientMessage::Publish(payload)) => {
             user.publish(payload.stream_type).await

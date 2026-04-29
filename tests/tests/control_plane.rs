@@ -9,12 +9,14 @@ use o_sfu::{
     config::RtcPortRange,
     testing::{
         http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
-        server::spawn_test_server,
+        server::{TestServer, spawn_test_server},
     },
 };
 use o_sfu_protocol::{
-    shared::{StreamType, UserId, UserInfo},
-    signaling::{ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload},
+    shared::{DownloadStates, StreamType, UserId, UserInfo},
+    signaling::{
+        ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
+    },
 };
 use o_sfu_tests::support::{
     TEST_AUTH_KEY, TEST_ROOM_KEY, create_room, disconnect_sessions_via_http, metrics_text,
@@ -618,6 +620,133 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
     assert!(replacement.close().await.is_some());
+}
+
+#[tokio::test]
+async fn numeric_string_user_ids_share_one_runtime_identity() {
+    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let room = create_room(&server, "issuer-runtime-user-id-normalization", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
+        return;
+    };
+    let observer_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(7));
+    let numeric_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(42));
+    let string_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::String("42".to_owned()));
+    assert!(observer_token.is_some());
+    assert!(numeric_token.is_some());
+    assert!(string_token.is_some());
+    let (Some(observer_token), Some(numeric_token), Some(string_token)) =
+        (observer_token, numeric_token, string_token)
+    else {
+        return;
+    };
+
+    let peers = connect_protocol_pair(
+        &server,
+        &observer_token,
+        &numeric_token,
+        UserId::Integer(42),
+    )
+    .await;
+    assert!(peers.is_some());
+    let Some((mut observer, mut numeric_user)) = peers else {
+        return;
+    };
+
+    let replacement =
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &string_token).await;
+    assert!(replacement.is_some());
+    let Some((mut replacement, _welcome)) = replacement else {
+        return;
+    };
+
+    assert_peer_left(&mut observer, UserId::Integer(42)).await;
+    assert_peer_joined(&mut observer, UserId::Integer(42)).await;
+    assert_eq!(
+        numeric_user.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+
+    assert!(
+        observer
+            .send_message(ClientMessage::Subscribe(SubscribePayload {
+                user_id: UserId::String("42".to_owned()),
+                states: DownloadStates {
+                    audio: Some(true),
+                    ..DownloadStates::default()
+                },
+            }))
+            .await
+            .is_some()
+    );
+
+    assert_diagnostics_user(&server, &room, 42).await;
+
+    let status = disconnect_sessions_via_http(
+        &server,
+        BTreeMap::from([(room.clone(), vec![UserId::String("42".to_owned())])]),
+    )
+    .await;
+    assert_eq!(status, Some(StatusCode::OK));
+    assert_eq!(
+        replacement.read_close_code().await,
+        Some(CloseCode::Library(4003))
+    );
+    assert_peer_left(&mut observer, UserId::Integer(42)).await;
+}
+
+async fn assert_peer_left(client: &mut ProtocolWebSocketClient, user_id: UserId) {
+    let message = read_until_server_message(
+        client,
+        Duration::from_secs(1),
+        |message| matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == user_id),
+    )
+    .await;
+    assert!(message.is_some());
+}
+
+async fn assert_peer_joined(client: &mut ProtocolWebSocketClient, user_id: UserId) {
+    let message = read_until_server_message(client, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == user_id)
+    })
+    .await;
+    assert!(message.is_some());
+}
+
+async fn assert_diagnostics_user(server: &TestServer, room_id: &str, user_id: i64) {
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/internal/diagnostics/users/{user_id}",
+            server.http_base_url()
+        ))
+        .send()
+        .await;
+    assert!(response.is_ok());
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = response.json::<serde_json::Value>().await;
+    assert!(payload.is_ok());
+    let Some(payload) = payload.ok() else {
+        return;
+    };
+    assert_eq!(
+        payload.get("roomId").and_then(serde_json::Value::as_str),
+        Some(room_id)
+    );
+    assert_eq!(
+        payload
+            .get("user")
+            .and_then(|user| user.get("userId"))
+            .and_then(serde_json::Value::as_i64),
+        Some(user_id)
+    );
 }
 
 #[tokio::test]

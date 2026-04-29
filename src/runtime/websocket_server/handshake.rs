@@ -269,7 +269,7 @@ async fn resolve_handshake_room(
     remote_address: &str,
 ) -> Result<HandshakeRoomResolution, WebSocketCloseCode> {
     let Some(explicit_room_id) = auth_payload.channel.as_deref() else {
-        let claims = auth::verify::<WebSocketConnectClaims>(
+        let mut claims = auth::verify::<WebSocketConnectClaims>(
             &auth_payload.jwt,
             &state.websocket_options.auth.key,
         )
@@ -280,6 +280,7 @@ async fn resolve_handshake_room(
             );
             WebSocketCloseCode::AuthFailed
         })?;
+        claims.normalize_runtime_user_id();
         let room = resolve_global_claims_room(state, &claims, remote_address).await?;
         return Ok(HandshakeRoomResolution::GlobalClaims {
             room,
@@ -331,7 +332,7 @@ fn authenticate_room_scoped_claims(
     room_id: &str,
     remote_address: &str,
 ) -> Result<WebSocketConnectClaims, WebSocketCloseCode> {
-    if let Ok(claims) = auth::verify::<WebSocketConnectClaims>(token, key) {
+    if let Ok(mut claims) = auth::verify::<WebSocketConnectClaims>(token, key) {
         if claims.room_id != room_id {
             debug!(
                 expected_room_id = room_id,
@@ -340,6 +341,7 @@ fn authenticate_room_scoped_claims(
             );
             return Err(WebSocketCloseCode::AuthFailed);
         }
+        claims.normalize_runtime_user_id();
         return Ok(claims);
     }
 
@@ -350,13 +352,15 @@ fn authenticate_room_scoped_claims(
         );
         WebSocketCloseCode::AuthFailed
     })?;
-    Ok(WebSocketConnectClaims {
+    let mut claims = WebSocketConnectClaims {
         registered: claims.registered,
         room_id: room_id.to_owned(),
         user_id: claims.user_id,
         label: claims.label,
         permissions: claims.permissions,
-    })
+    };
+    claims.normalize_runtime_user_id();
+    Ok(claims)
 }
 
 async fn authenticate_session(
