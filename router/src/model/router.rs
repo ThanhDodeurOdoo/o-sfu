@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    Consumer, ConsumerCapability, ConsumerId, NoopRouterObserver, Producer, ProducerId,
-    RouterError, RouterEvent, RouterId, RouterObserver, Session, SessionId, Transport,
-    TransportDirection, TransportId,
+    Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, NoopRouterObserver, Producer,
+    ProducerId, ProducerRouteState, RouterError, RouterEvent, RouterId, RouterObserver, Session,
+    SessionId, Transport, TransportDirection, TransportId,
 };
 
 /// Pure routing state for one router instance.
@@ -123,7 +123,7 @@ impl<O: RouterObserver> Router<O> {
     ///
     /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist
     /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
-    /// producers, or [`RouterError::DuplicateProducer`] when the producer already exists.
+    /// producers or [`RouterError::DuplicateProducer`] when the producer already exists.
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
@@ -152,11 +152,20 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// The `capability` parameter is the result of the external capability negotiation
-    /// (e.g. [`crate::rtp_negotiation::can_consume`]). The router treats it as an opaque
-    /// compatibility gate: when [`ConsumerCapability::Incompatible`], the consumer is rejected
-    /// without inspecting RTP parameters. This keeps the full RTP capabillity matching logic
-    /// outside the router while allowing the router to enforce the gate structurally.
+    /// Register a consumer on a send transport.
+    ///
+    /// The `capability` parameter is the result of external capability
+    /// negotiation such as [`crate::can_consume`]. The router
+    /// treats it as an opaque compatibility gate. When
+    /// [`ConsumerCapability::Incompatible`], the consumer is rejected without
+    /// inspecting RTP parameters. This keeps the full RTP capability matching
+    /// logic outside the router while still letting the router enforce the
+    /// structural gate.
+    ///
+    /// The consumer's producer shadow is copied from the current producer route
+    /// state before insertion. After this transition, source-side route changes
+    /// must go through [`Router::set_producer_route_state`] so the shadow stays
+    /// coherent on every dependent consumer.
     ///
     /// # Errors
     ///
@@ -198,7 +207,7 @@ impl<O: RouterObserver> Router<O> {
         if self.consumers.contains_key(&consumer_id) {
             return Err(RouterError::DuplicateConsumer(consumer_id));
         }
-        consumer.set_producer_paused(producer.paused());
+        consumer.set_producer_route_state(producer.route_state());
         self.consumers.insert(consumer_id, consumer);
         self.transport_consumers
             .entry(transport_id)
@@ -211,18 +220,28 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// Set the source-side route state for a producer.
+    ///
+    /// This is the authoritative producer pause transition in the pure router.
+    /// It mutates the producer and then updates the producer shadow stored on
+    /// each dependent consumer. The consumer-local route state is deliberately
+    /// left unchanged.
+    ///
+    /// The update cost is proportional to the number of consumers attached to
+    /// the producer because the router uses the reverse producer-consumer index.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
-    pub fn set_producer_paused(
+    pub fn set_producer_route_state(
         &mut self,
         producer_id: ProducerId,
-        paused: bool,
+        route_state: ProducerRouteState,
     ) -> Result<(), RouterError> {
         let Some(producer) = self.producers.get_mut(&producer_id) else {
             return Err(RouterError::MissingProducer(producer_id));
         };
-        producer.set_paused(paused);
+        producer.set_route_state(route_state);
 
         let consumer_ids: Vec<_> = self
             .producer_consumers
@@ -230,25 +249,31 @@ impl<O: RouterObserver> Router<O> {
             .map_or_else(Vec::new, |ids| ids.iter().copied().collect());
         for consumer_id in consumer_ids {
             if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
-                consumer.set_producer_paused(paused);
+                consumer.set_producer_route_state(route_state);
             }
         }
 
         Ok(())
     }
 
+    /// Set the receiver-local route state for a consumer.
+    ///
+    /// This only changes the consumer's own route state. It does not change the
+    /// producer route state or any other consumer that depends on the same
+    /// producer.
+    ///
     /// # Errors
     ///
     /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
-    pub fn set_consumer_paused(
+    pub fn set_consumer_route_state(
         &mut self,
         consumer_id: ConsumerId,
-        paused: bool,
+        route_state: ConsumerRouteState,
     ) -> Result<(), RouterError> {
         let Some(consumer) = self.consumers.get_mut(&consumer_id) else {
             return Err(RouterError::MissingConsumer(consumer_id));
         };
-        consumer.set_paused(paused);
+        consumer.set_route_state(route_state);
         Ok(())
     }
 
@@ -280,9 +305,9 @@ impl<O: RouterObserver> Router<O> {
 
     /// Remove a session and cascade all dependent transports and media entities.
     ///
-    /// This is the authoritative teardown path for session-onwed router state.
+    /// This is the authoritative teardown path for session-owned router state.
     /// Reverse indexes guarantee that cleanup only walks the transports,
-    /// producers, and consumers that actually belong to the removed session.
+    /// producers and consumers that actually belong to the removed session.
     ///
     /// # Errors
     ///

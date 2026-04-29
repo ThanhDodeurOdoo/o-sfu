@@ -4,8 +4,8 @@ use std::{
 };
 
 use o_sfu_router::{
-    ConsumerCapability, ConsumerId as RouterConsumerId, MediaCapabilities,
-    MediaKind as RouterMediaKind, ProducerId as RouterProducerId, RouterId,
+    ConsumerCapability, ConsumerId as RouterConsumerId, ConsumerRouteState, MediaCapabilities,
+    MediaKind as RouterMediaKind, ProducerId as RouterProducerId, ProducerRouteState, RouterId,
 };
 
 use super::router_state::{RoomRouterState, RoomRouterStateError};
@@ -33,6 +33,11 @@ impl From<RoomRouterStateError> for RoomTopologyError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Producer identity with the router placement needed to route later changes.
+///
+/// Room code stores this instead of a bare router producer ID so future
+/// multi-router placement does not require guessing which router owns the
+/// producer when activity changes or teardown arrives.
 pub(super) struct RoutedProducerId {
     router_id: RouterId,
     producer_id: RouterProducerId,
@@ -59,6 +64,11 @@ impl RoutedProducerId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Consumer identity with the router placement needed to route later changes.
+///
+/// Consumer activity is controlled by the router that owns the source producer,
+/// not necessarily by the consumer user's home router. Carrying the router ID
+/// keeps that boundary explicit.
 pub(super) struct RoutedConsumerId {
     router_id: RouterId,
     consumer_id: RouterConsumerId,
@@ -213,23 +223,31 @@ impl RoomTopology {
         Ok(RoutedConsumerId::new(producer_id.router_id(), consumer_id))
     }
 
-    pub(super) fn set_producer_paused(
+    /// Forward a producer route-state change to the router that owns it.
+    ///
+    /// The topology layer only resolves placement. The pure router remains the
+    /// owner of producer shadow propagation to dependent consumers.
+    pub(super) fn set_producer_route_state(
         &mut self,
         producer_id: RoutedProducerId,
-        paused: bool,
+        route_state: ProducerRouteState,
     ) -> Result<(), RoomTopologyError> {
         self.router_mut(producer_id.router_id())?
-            .set_producer_paused(producer_id.producer_id(), paused)?;
+            .set_producer_route_state(producer_id.producer_id(), route_state)?;
         Ok(())
     }
 
-    pub(super) fn set_consumer_paused(
+    /// Forward a consumer-local route-state change to the router that owns it.
+    ///
+    /// The routed consumer ID is authoritative for placement because consumer
+    /// edges are created on the source producer's router.
+    pub(super) fn set_consumer_route_state(
         &mut self,
         consumer_id: RoutedConsumerId,
-        paused: bool,
+        route_state: ConsumerRouteState,
     ) -> Result<(), RoomTopologyError> {
         self.router_mut(consumer_id.router_id())?
-            .set_consumer_paused(consumer_id.consumer_id(), paused)?;
+            .set_consumer_route_state(consumer_id.consumer_id(), route_state)?;
         Ok(())
     }
 

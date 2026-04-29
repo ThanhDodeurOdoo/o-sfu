@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::{
-    MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc,
+    MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid,
+    ProducerRouteState, Rid, Ssrc,
 };
 use tracing::{error, warn};
 
@@ -44,8 +45,8 @@ use crate::runtime::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Stable handle for a live published track.
 ///
-/// Callers resolve this from current chanel state right before mutating a
-/// producer. useful so so stale replacement callbacks can be rejected
+/// Callers resolve this from current room state right before mutating a
+/// producer. This lets stale replacement callbacks be rejected
 /// without guessing which layer drifted.
 pub(in crate::runtime::room) struct ProducerRouteTarget {
     source_id: PublishedSourceId,
@@ -75,7 +76,7 @@ pub(in crate::runtime::room) struct ValidatedPublishDescriptor {
 /// This is the last pure state input before a producer becomes live. The
 /// transport layer already allocated the media handle and the caller already
 /// derived consumable router parameters, so commit can stay a small
-/// all ornothing state transition.
+/// all-or-nothing state transition.
 pub(in crate::runtime::room) struct PreparedPublishedTrack {
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
@@ -98,9 +99,10 @@ struct PublishedSourceInstall {
 #[derive(Debug)]
 /// Result of toggling a producer between active and paused.
 ///
-/// The chanel commits router pause state first and only then stages the
+/// The room commits router route state first and only then stages the
 /// outward fanout. That keeps user info updates aligned with the lasting
-/// router state instead of reporting a local pause change that never stuck.
+/// router state instead of reporting a producer activity change that never
+/// stuck.
 pub(in crate::runtime::room) struct ProducerActivityOutcome {
     pub(in crate::runtime::room) transport_media_id: TransportMediaId,
     pub(in crate::runtime::room) active: bool,
@@ -111,7 +113,7 @@ pub(in crate::runtime::room) struct ProducerActivityOutcome {
 /// Deferred side effects for explicit unpublish.
 ///
 /// The state transition removes the producer and all dependent consumer
-/// bookkeeping first. Emmiting the track removal and optional user-info
+/// bookkeeping first. Emitting the track removal and optional user-info
 /// update stays outside the state lock.
 pub(in crate::runtime::room) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
@@ -452,7 +454,7 @@ impl RoomState {
     /// The producer media go first, then every dependent consumer media for
     /// the same source stream. Callers use this before mutating state so
     /// cleanup can still target the live transport ids that matched the
-    /// current produceur ownership.
+    /// current producer ownership.
     pub(in crate::runtime::room) fn unpublish_transport_removals(
         &self,
         user_id: &UserId,
@@ -529,6 +531,10 @@ impl RoomState {
     /// a stale-callback guard. If any ownership field drifted since that lookup
     /// the update becomes a no-op instead of mutating the wrong replacement
     /// user.
+    ///
+    /// The pure router is updated before the room-level producer flag so a
+    /// failed router mutation cannot leave outbound user-info fanout ahead of
+    /// authoritative route state.
     pub(in crate::runtime::room) fn apply_producer_activity(
         &mut self,
         user_id: &UserId,
@@ -546,10 +552,14 @@ impl RoomState {
         {
             return None;
         }
-        let paused = !active;
+        let route_state = if active {
+            ProducerRouteState::Active
+        } else {
+            ProducerRouteState::Paused
+        };
         if self
             .topology
-            .set_producer_paused(producer_target.routed_producer_id, paused)
+            .set_producer_route_state(producer_target.routed_producer_id, route_state)
             .is_err()
         {
             error!(

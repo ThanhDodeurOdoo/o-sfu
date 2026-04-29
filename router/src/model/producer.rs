@@ -1,28 +1,37 @@
 //! Producer-side entities tracked by the pure router.
 
-use super::{MediaKind, ProducerId, TransportId};
+use super::{MediaKind, ProducerId, ProducerRouteState, TransportId};
 
-/// Media source attached to a receive transport.
+/// Media source attached to a receive transport inside the pure router.
 ///
-/// `id` and `transport_id` identify the producer and its owning transport,
-/// `media_kind` is the technical media class used by consumers, and `paused`
-/// is the source-side mute shadow propagated to dependent consumers.
+/// A producer owns only router topology and source-side route state. It does
+/// not own transport handles, RTP parameters or packet forwarding state. Those
+/// stay in the runtime and transport layers so the router can remain a pure
+/// state machine.
+///
+/// The producer route state is authoritative for the source shadow seen by all
+/// consumers of this producer. Consumer-local route state is stored on each
+/// consumer instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Producer {
     id: ProducerId,
     transport_id: TransportId,
     media_kind: MediaKind,
-    paused: bool,
+    route_state: ProducerRouteState,
 }
 
 impl Producer {
+    /// Builds an active producer for a receive transport.
+    ///
+    /// Callers that restore paused state from an existing room snapshot should
+    /// use [`Producer::with_route_state`] before inserting the producer.
     #[must_use]
     pub fn new(id: ProducerId, transport_id: TransportId, media_kind: MediaKind) -> Self {
         Self {
             id,
             transport_id,
             media_kind,
-            paused: false,
+            route_state: ProducerRouteState::Active,
         }
     }
 
@@ -41,18 +50,33 @@ impl Producer {
         self.media_kind
     }
 
+    /// Returns the producer route state as a compatibility paused flag.
+    ///
+    /// Router mutation APIs use [`ProducerRouteState`] directly. This view is
+    /// kept for callers that need to compare with legacy client state.
     #[must_use]
     pub fn paused(&self) -> bool {
-        self.paused
+        self.route_state.is_paused()
     }
 
+    /// Returns the source-side route state shadowed onto dependent consumers.
     #[must_use]
-    pub fn with_paused(mut self, paused: bool) -> Self {
-        self.paused = paused;
+    pub fn route_state(&self) -> ProducerRouteState {
+        self.route_state
+    }
+
+    /// Returns a copy of this producer with a different source route state.
+    ///
+    /// This builder only changes the producer. Shadowing to consumers is a
+    /// router transition and must go through
+    /// [`Router::set_producer_route_state`](super::Router::set_producer_route_state).
+    #[must_use]
+    pub fn with_route_state(mut self, route_state: ProducerRouteState) -> Self {
+        self.route_state = route_state;
         self
     }
 
-    pub(super) fn set_paused(&mut self, paused: bool) {
-        self.paused = paused;
+    pub(super) fn set_route_state(&mut self, route_state: ProducerRouteState) {
+        self.route_state = route_state;
     }
 }

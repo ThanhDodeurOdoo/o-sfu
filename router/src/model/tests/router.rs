@@ -2,9 +2,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
-    Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterError,
-    RouterEvent, RouterId, RouterObserver, Session, SessionId, SessionState, Transport,
-    TransportDirection, TransportId,
+    Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
+    ProducerRouteState, Router, RouterError, RouterEvent, RouterId, RouterObserver, Session,
+    SessionId, SessionState, Transport, TransportDirection, TransportId,
 };
 
 fn session(id: SessionId) -> Session {
@@ -575,7 +575,10 @@ fn new_consumers_inherit_their_producer_pause_state() {
         )),
         Ok(())
     );
-    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
+    assert_eq!(
+        router.set_producer_route_state(ProducerId(300), ProducerRouteState::Paused),
+        Ok(())
+    );
 
     assert_eq!(
         router.add_consumer(
@@ -664,7 +667,10 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
         Ok(())
     );
 
-    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
+    assert_eq!(
+        router.set_producer_route_state(ProducerId(300), ProducerRouteState::Paused),
+        Ok(())
+    );
 
     let producer = router.producers.get(&ProducerId(300));
     assert!(producer.is_some());
@@ -729,9 +735,15 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
         ),
         Ok(())
     );
-    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
+    assert_eq!(
+        router.set_producer_route_state(ProducerId(300), ProducerRouteState::Paused),
+        Ok(())
+    );
 
-    assert_eq!(router.set_producer_paused(ProducerId(300), false), Ok(()));
+    assert_eq!(
+        router.set_producer_route_state(ProducerId(300), ProducerRouteState::Active),
+        Ok(())
+    );
 
     assert!(
         router
@@ -791,9 +803,18 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
         Ok(())
     );
 
-    assert_eq!(router.set_consumer_paused(ConsumerId(400), true), Ok(()));
-    assert_eq!(router.set_producer_paused(ProducerId(300), true), Ok(()));
-    assert_eq!(router.set_producer_paused(ProducerId(300), false), Ok(()));
+    assert_eq!(
+        router.set_consumer_route_state(ConsumerId(400), ConsumerRouteState::Paused),
+        Ok(())
+    );
+    assert_eq!(
+        router.set_producer_route_state(ProducerId(300), ProducerRouteState::Paused),
+        Ok(())
+    );
+    assert_eq!(
+        router.set_producer_route_state(ProducerId(300), ProducerRouteState::Active),
+        Ok(())
+    );
 
     let consumer = router.consumers.get(&ConsumerId(400));
     assert!(consumer.is_some());

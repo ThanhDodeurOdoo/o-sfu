@@ -2,10 +2,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_router::{
     Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
-    MediaCapabilities, MediaKind as RouterMediaKind, Producer as RouterProducer,
-    ProducerId as RouterProducerId, Router, RouterError, RouterId, Session as RouterSession,
-    SessionId as RouterSessionId, Transport as RouterTransport,
-    TransportDirection as RouterTransportDirection, TransportId as RouterTransportId,
+    ConsumerRouteState, MediaCapabilities, MediaKind as RouterMediaKind,
+    Producer as RouterProducer, ProducerId as RouterProducerId, ProducerRouteState, Router,
+    RouterError, RouterId, Session as RouterSession, SessionId as RouterSessionId,
+    Transport as RouterTransport, TransportDirection as RouterTransportDirection,
+    TransportId as RouterTransportId,
 };
 
 use crate::runtime::{
@@ -29,6 +30,13 @@ impl From<RouterError> for RoomRouterStateError {
 }
 
 #[derive(Debug, Clone)]
+/// Room-owned adapter around one pure router instance.
+///
+/// The adapter translates compatibility-facing room identities into compact
+/// router identifiers and keeps the upload and download transport pair for
+/// each user. It owns no transport runtime resources. Its job is to make pure
+/// router mutations line up with the room state that already accepted the
+/// signaling transition.
 pub(super) struct RoomRouterState {
     router: Router<RecordingRouterObserver>,
     rtp_capabilities: MediaCapabilities,
@@ -75,8 +83,9 @@ impl RoomRouterState {
     /// room-local map keeps that compatibility at the edge while the pure router
     /// continues to use compact numeric identifiers internally.
     ///
-    /// TODO: maybe will deprecate the use of string sessiond id and make the code simpler,
-    /// in practice in discuss, user ids are number (their actual postgrsql id)
+    /// TODO: once Discuss only sends database-backed numeric user IDs, remove
+    /// the string compatibility branch and use one identity type across the
+    /// room boundary.
     ///
     /// # Errors
     ///
@@ -145,7 +154,7 @@ impl RoomRouterState {
     /// # Errors
     ///
     /// Returns the underlying [`RouterError`] when the user does not exist,
-    /// no upload transport is available, or producer insertion fails.
+    /// no upload transport is available or producer insertion fails.
     pub(super) fn add_producer(
         &mut self,
         user_id: &UserId,
@@ -166,7 +175,7 @@ impl RoomRouterState {
     /// # Errors
     ///
     /// Returns the underlying [`RouterError`] when the consumer user does not
-    /// exist, no download transport is available, or consumer insertion fails.
+    /// exist, no download transport is available or consumer insertion fails.
     pub(super) fn add_consumer(
         &mut self,
         consumer_user_id: &UserId,
@@ -185,39 +194,40 @@ impl RoomRouterState {
         Ok(consumer_id)
     }
 
-    /// Update the pause state of a producer in the pure router.
+    /// Update the source route state of a producer in the pure router.
     ///
-    /// When a producer is paused, the router propagates the pause state to all
-    /// dependent consumers (`producer_paused` shadow).
+    /// This is the room boundary for producer activity changes. The pure router
+    /// propagates the producer route state to each dependent consumer's source
+    /// shadow while preserving every consumer-local subscription state.
     ///
     /// # Errors
     ///
     /// Returns the underlying [`RouterError`] if the producer does not exist.
-    pub(super) fn set_producer_paused(
+    pub(super) fn set_producer_route_state(
         &mut self,
         producer_id: RouterProducerId,
-        paused: bool,
+        route_state: ProducerRouteState,
     ) -> Result<(), RoomRouterStateError> {
         self.router
-            .set_producer_paused(producer_id, paused)
+            .set_producer_route_state(producer_id, route_state)
             .map_err(RoomRouterStateError::from)
     }
 
-    /// Update the local pause state of a consumer in the pure router.
+    /// Update the local route state of a consumer in the pure router.
     ///
-    /// This controls the consumer's own pause flag independently of the
-    /// producer-side pause shadow.
+    /// This controls the receiver's own route choice independently of the
+    /// producer-side shadow stored on the same consumer.
     ///
     /// # Errors
     ///
     /// Returns the underlying [`RouterError`] if the consumer does not exist.
-    pub(super) fn set_consumer_paused(
+    pub(super) fn set_consumer_route_state(
         &mut self,
         consumer_id: RouterConsumerId,
-        paused: bool,
+        route_state: ConsumerRouteState,
     ) -> Result<(), RoomRouterStateError> {
         self.router
-            .set_consumer_paused(consumer_id, paused)
+            .set_consumer_route_state(consumer_id, route_state)
             .map_err(RoomRouterStateError::from)
     }
 

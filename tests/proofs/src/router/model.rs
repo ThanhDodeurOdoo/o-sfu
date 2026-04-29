@@ -1,6 +1,6 @@
 use o_sfu_router::{
-    Consumer, ConsumerId, Producer, ProducerId, RouterError, RouterId, Session, SessionId,
-    Transport, TransportDirection, TransportId,
+    Consumer, ConsumerId, ConsumerRouteState, Producer, ProducerId, ProducerRouteState,
+    RouterError, RouterId, Session, SessionId, Transport, TransportDirection, TransportId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,7 +343,7 @@ impl<
         if self.contains_consumer(consumer.id()) {
             return Err(RouterError::DuplicateConsumer(consumer.id()).into());
         }
-        consumer = consumer.with_producer_paused(producer.paused());
+        consumer = consumer.with_producer_route_state(producer.route_state());
         self.insert_consumer(consumer)?;
         self.transport_consumers.insert(
             consumer.transport_id(),
@@ -360,21 +360,21 @@ impl<
     /// # Errors
     ///
     /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
-    pub(crate) fn set_producer_paused(
+    pub(crate) fn set_producer_route_state(
         &mut self,
         producer_id: ProducerId,
-        paused: bool,
+        route_state: ProducerRouteState,
     ) -> Result<(), ProofRouterError> {
         let Some(producer) = self.producer_by_id_mut(producer_id) else {
             return Err(RouterError::MissingProducer(producer_id).into());
         };
-        *producer = producer.with_paused(paused);
+        *producer = producer.with_route_state(route_state);
 
         for consumer in &mut self.consumers {
             if let Some(consumer) = consumer.as_mut()
                 && consumer.producer_id() == producer_id
             {
-                *consumer = consumer.with_producer_paused(paused);
+                *consumer = consumer.with_producer_route_state(route_state);
             }
         }
 
@@ -384,15 +384,15 @@ impl<
     /// # Errors
     ///
     /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
-    pub(crate) fn set_consumer_paused(
+    pub(crate) fn set_consumer_route_state(
         &mut self,
         consumer_id: ConsumerId,
-        paused: bool,
+        route_state: ConsumerRouteState,
     ) -> Result<(), ProofRouterError> {
         let Some(consumer) = self.consumer_by_id_mut(consumer_id) else {
             return Err(RouterError::MissingConsumer(consumer_id).into());
         };
-        *consumer = consumer.with_paused(paused);
+        *consumer = consumer.with_route_state(route_state);
         Ok(())
     }
 

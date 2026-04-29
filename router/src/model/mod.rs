@@ -8,6 +8,7 @@ mod ids;
 mod media;
 mod observer;
 mod producer;
+mod route_state;
 mod router;
 mod rtp;
 mod rtp_negotiation;
@@ -25,6 +26,7 @@ pub use self::{
     media::MediaKind,
     observer::{NoopRouterObserver, RouterEvent, RouterObserver},
     producer::Producer,
+    route_state::{ConsumerRouteState, ProducerRouteState},
     router::Router,
     rtp::{
         CodecSetting, HeaderExtension, HeaderExtensionId, HeaderExtensionUri, MediaCapabilities,

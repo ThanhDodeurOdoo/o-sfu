@@ -1,6 +1,6 @@
 use o_sfu_router::{
-    Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, RouterId, Session,
-    SessionId, Transport, TransportDirection, TransportId,
+    Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
+    ProducerRouteState, RouterId, Session, SessionId, Transport, TransportDirection, TransportId,
 };
 
 use super::ProofRouterModel;
@@ -323,7 +323,7 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
         TransportId(10),
         MediaKind::Audio,
     ));
-    let _ = router.set_producer_paused(ProducerId(30), true);
+    let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Paused);
     let _ = router.add_consumer(
         Consumer::new(
             ConsumerId(40),
@@ -388,7 +388,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
         ConsumerCapability::Compatible,
     );
 
-    let _ = router.set_producer_paused(ProducerId(30), true);
+    let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Paused);
 
     assert!(all_consumers_shadow_pause(&router, true));
     assert!(router.satisfies_invariants());
@@ -443,9 +443,9 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
         ),
         ConsumerCapability::Compatible,
     );
-    let _ = router.set_producer_paused(ProducerId(30), true);
+    let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Paused);
 
-    let _ = router.set_producer_paused(ProducerId(30), false);
+    let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Active);
 
     assert!(all_consumers_shadow_pause(&router, false));
     assert!(router.satisfies_invariants());
@@ -486,7 +486,7 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
         ConsumerCapability::Compatible,
     );
 
-    let _ = router.set_consumer_paused(ConsumerId(40), true);
+    let _ = router.set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Paused);
     let consumer = router.consumer_by_id(ConsumerId(40));
     assert!(consumer.is_some());
     let Some(consumer) = consumer else {
@@ -495,7 +495,7 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     assert!(consumer.paused());
     assert!(!consumer.producer_paused());
 
-    let _ = router.set_producer_paused(ProducerId(30), true);
+    let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Paused);
     let consumer = router.consumer_by_id(ConsumerId(40));
     assert!(consumer.is_some());
     let Some(consumer) = consumer else {
@@ -504,7 +504,7 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     assert!(consumer.paused());
     assert!(consumer.producer_paused());
 
-    let _ = router.set_producer_paused(ProducerId(30), false);
+    let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Active);
     let consumer = router.consumer_by_id(ConsumerId(40));
     assert!(consumer.is_some());
     let Some(consumer) = consumer else {

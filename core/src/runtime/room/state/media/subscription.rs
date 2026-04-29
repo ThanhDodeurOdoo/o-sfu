@@ -1,6 +1,7 @@
 use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
-    can_consume, negotiate_consumer_rtp_parameters,
+    ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState,
+    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, can_consume,
+    negotiate_consumer_rtp_parameters,
 };
 use tracing::{error, warn};
 
@@ -16,6 +17,11 @@ use crate::runtime::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Accepted consumer-route update that should be fanned out after state commit.
+///
+/// The route update only represents the receiver-local route choice. Producer
+/// activity is handled through producer state and is combined with this value
+/// when callers ask for the effective route.
 pub(in crate::runtime::room) struct ConsumerRouteUpdate {
     consumer_state: ConsumerState,
     producer_user_id: UserId,
@@ -24,9 +30,19 @@ pub(in crate::runtime::room) struct ConsumerRouteUpdate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effective room-level route state exposed to compatibility callers.
+///
+/// This is not the same type as the pure router's
+/// [`RouterConsumerRouteState`]. The router type stores only the
+/// receiver-local route choice. This value folds together producer activity,
+/// consumer source selection and whether the consumer route exists at all.
 pub enum ConsumerRouteState {
+    /// No committed consumer route exists for the requested source.
     Absent,
+    /// A route exists, but either the producer or the consumer-local selection
+    /// currently prevents forwarding.
     Inactive,
+    /// A committed route exists and all room-level activity inputs allow it.
     Active,
 }
 
@@ -196,10 +212,14 @@ impl RoomState {
             if current_consumer_state.consumer_connection_id != connection_id {
                 continue;
             }
-            let paused = !active;
+            let route_state = if active {
+                RouterConsumerRouteState::Active
+            } else {
+                RouterConsumerRouteState::Paused
+            };
             if self
                 .topology
-                .set_consumer_paused(current_consumer_state.routed_consumer_id, paused)
+                .set_consumer_route_state(current_consumer_state.routed_consumer_id, route_state)
                 .is_err()
             {
                 error!(
@@ -440,10 +460,12 @@ impl RoomState {
         if let Some(consumer_mid) = consumer_mid {
             pending.bootstrap.mid = consumer_mid;
         }
+        // The router inserts consumers as locally active, then mirrors the
+        // stored download selection if this receiver had already paused it.
         if !pending.consumer_active
             && self
                 .topology
-                .set_consumer_paused(routed_consumer_id, true)
+                .set_consumer_route_state(routed_consumer_id, RouterConsumerRouteState::Paused)
                 .is_err()
         {
             error!(
@@ -489,6 +511,13 @@ impl RoomState {
             .unwrap_or(true)
     }
 
+    /// Returns the effective room route state for a compatibility subscription.
+    ///
+    /// This is a cold-path query for signaling and diagnostics. It resolves the
+    /// compatibility stream to current room indexes and combines producer
+    /// activity with the receiver-local source selection. Missing users return
+    /// `None`, while missing routes for an existing user return
+    /// [`ConsumerRouteState::Absent`].
     pub(in crate::runtime::room) fn consumer_route_state(
         &self,
         consumer_user_id: &UserId,
