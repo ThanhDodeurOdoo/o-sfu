@@ -27,13 +27,3 @@ pub(super) fn fanout_all(
         message: message.clone(),
     }
 }
-
-pub(super) fn fanout_all_except(
-    recipients: impl IntoIterator<Item = OutboundSender>,
-    message: &RoomEventMessage,
-) -> MessageFanout {
-    MessageFanout {
-        recipients: recipients.into_iter().collect(),
-        message: message.clone(),
-    }
-}

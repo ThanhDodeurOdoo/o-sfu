@@ -1,7 +1,7 @@
 use super::{
     super::{
         RoomEventMessage,
-        outbound::{MessageFanout, fanout_all, fanout_all_except},
+        outbound::{MessageFanout, fanout_all},
     },
     shared::RoomState,
 };
@@ -17,7 +17,7 @@ impl RoomState {
         message: &RoomEventMessage,
         excluded_user_id: Option<&UserId>,
     ) -> MessageFanout {
-        fanout_all_except(
+        fanout_all(
             self.users
                 .iter()
                 .filter(|(user_id, _session)| {
