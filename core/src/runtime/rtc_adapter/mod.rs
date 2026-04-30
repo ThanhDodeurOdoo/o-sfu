@@ -15,7 +15,8 @@
 //! - `relay_registry`: source-media-scoped relay targets for inter-worker mailboxes and future inter-node forwarding
 //! - `route_control`: transport-native packet gates, active-speaker packet state, and keyframe coalescing
 //! - `routing_miss`: recent-miss cache and source-aware bounded-pressure control for unknown-source recovery
-//! - `sdp_simulcast`: RTC-edge SDP RID/simulcast offer and answer helpers
+//! - `simulcast`: RTC-edge codec profiles for RID simulcast negotiation
+//! - `sdp_simulcast`: compatibility import path delegating to `simulcast`
 //! - `shared_payload`: shard-local payload ownership boundary for forwarding and recording
 //! - `bootstrap`: socket binding and user RTC state initialization for the real offer/answer path
 //! - `test_support`: runtime-owned RTC shard test helpers, route-inspection DTOs, and debug worker handlers that should not live on production module paths
@@ -41,6 +42,7 @@ mod route_control;
 mod routing_miss;
 mod sdp_simulcast;
 mod shared_payload;
+mod simulcast;
 mod state;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;

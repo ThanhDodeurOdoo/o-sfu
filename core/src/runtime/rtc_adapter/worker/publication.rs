@@ -354,7 +354,7 @@ fn project_bindings(
                 }
                 binding
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<StreamBinding>>();
         if !bindings.iter().any(|binding| binding.ssrc().is_some()) {
             let fallback_ssrc = primary_ssrcs
                 .first()
