@@ -19,41 +19,71 @@ The goal is to be able to run it as an alternative to odoo/sfu (so the http and 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    subgraph "external"
-       Odoo["Odoo Backend"]
-       Browser["Browser Client"]
+flowchart LR
+    subgraph external["external callers"]
+        Odoo["Odoo backend"]
+        Browser["Browser"]
     end
-    subgraph "runtime"
-      Runtime
-      Http
-      Ws
-      UserSession
-      CallPolicy
+
+    subgraph client["client crate"]
+        SfuClient["SfuClient TS API"]
+        Protocol["protocol crate<br/>sans-I/O signaling core"]
+        BrowserRuntime["browser runtime<br/>WebSocket + RTCPeerConnection"]
     end
-    subgraph "core"
-      Sfu["SfuCore Facade"]
-      Room
-      Recording
-      Transport
-      Rtc
+
+    subgraph server["server crate (src)"]
+        Runtime["runtime<br/>config + Tokio shell"]
+        Http["runtime/http_server<br/>HTTP control plane"]
+        Ws["runtime/websocket_server<br/>auth + socket loop"]
+        UserSession["application/user_session<br/>orchestration"]
     end
-    Odoo --> Http["HTTP"]
-    Browser --> Ws["WebSocket"]
-    Http --> Runtime["Runtime Shell"]
-    Ws --> Runtime
-    Runtime --> UserSession["Application User Session"]
-    UserSession --> CallPolicy["Call Policy"]
-    Runtime --> Room
-    UserSession <--> Room
-    UserSession --> Sfu
-    Sfu --> Transport["Transport Adapter"]
-    Transport --> Rtc["str0m RTC Adapter"]
-    Room --> Router["o-sfu-router"]
-    Room --> Recording["Core Recording Pipeline"]
-    Rtc --> Router
-    Runtime --> Diagnostics["Diagnostics Queries"]
-    Runtime --> MetricsExport["Prometheus Export"]
+
+    subgraph core["core crate"]
+        SfuCore["SfuCore<br/>session factory"]
+        MediaSession["MediaSession<br/>per-user media intent"]
+        RoomManager["RoomManager / Room<br/>membership, publish, subscribe"]
+        RouterBridge["room topology + router_state<br/>runtime-to-router bridge"]
+        Transport["MediaTransport / RtcTransport<br/>negotiation and media ports"]
+        Rtc["str0m RTC adapter<br/>UDP, ICE-lite, RTP forwarding"]
+        Recording["recording taps<br/>packet sinks + .ortp writers"]
+    end
+
+    subgraph pure["pure and shared crates"]
+        Router["router<br/>Sans-I/O topology state machine"]
+        Rfc["rfc<br/>protocol constants and media kinds"]
+    end
+
+    subgraph scaling["cluster crate + control-plane binary"]
+        ControlPlane["ClusterControlPlane<br/>node leases + room ownership"]
+        TopologyCache["CachedTopologyStore<br/>topology snapshots"]
+    end
+
+    Odoo --> Http
+    Browser --> SfuClient
+    SfuClient --> Protocol
+    SfuClient --> BrowserRuntime
+    BrowserRuntime <--> Ws
+
+    Http --> Runtime
+    Ws --> UserSession
+    Runtime --> SfuCore
+    Runtime --> RoomManager
+    SfuCore --> MediaSession
+    UserSession --> MediaSession
+    MediaSession --> RoomManager
+    RoomManager --> RouterBridge
+    RouterBridge --> Router
+    RoomManager --> Transport
+    RoomManager --> Recording
+    Transport --> Rtc
+    Rtc --> Recording
+
+    Router --> Rfc
+    Transport --> Rfc
+
+    Runtime -. planned owner-aware ingress .-> ControlPlane
+    ControlPlane --> TopologyCache
+    TopologyCache -. cached room placement .-> Runtime
 ```
 
 Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.
@@ -69,6 +99,7 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `PUBLIC_IP` (required)             | -                       | Used to establish WebRTC connections to the server.                                                                                                               |
 | `AUTH_KEY` (required)              | -                       | The base64 encoded encryption key used for JWT authentication.                                                                                                    |
 | `BIND_ADDRESS`                     | `0.0.0.0:8070`          | HTTP and WebSocket listening address.                                                                                                                             |
+| `CONTROL_PLANE_BIND_ADDRESS`       | `127.0.0.1:8071`        | Control-plane service listening address for the `o-sfu-control-plane` binary.                                                                                     |
 | `PROXY`                            | `false`                 | Set to true if behind a proxy to trust forwarding headers.                                                                                                        |
 | `DIAGNOSTICS_AUTH_TOKEN`           | unset                   | Optional bearer token for `/internal/diagnostics/...`. If unset, diagnostics are allowed only on loopback listeners (the security is deferd to the reverse proxy) |
 | `RTC_MIN_PORT`                     | `40000`                 | Lower bound for the range of ports used by the RTC server (UDP).                                                                                                  |
@@ -130,12 +161,12 @@ allow the SFUs to share shards between them.
 
 Partial coverage
 
-| Codec path                    | Support status                                                                       |
-| :---------------------------- | :----------------------------------------------------------------------------------- |
-| VP8 RID simulcast             | Production path, enabled by default with `CODEC_VP8=true`.                           |
+| Codec path                    | Support status                                                                                                            |
+| :---------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
+| VP8 RID simulcast             | Production path, enabled by default with `CODEC_VP8=true`.                                                                |
 | H.264 RID simulcast           | Production-ready for Chromium constrained baseline (`packetization-mode=1`, `profile-level-id=42e01f`) with RTX disabled. |
-| VP9 hybrid/layered forwarding | WIP; `CODEC_VP9=true` is codec negotiation only.                                     |
-| AV1 hybrid/layered forwarding | WIP; `CODEC_AV1=true` is codec negotiation only.                                     |
+| VP9 hybrid/layered forwarding | WIP; `CODEC_VP9=true` is codec negotiation only.                                                                          |
+| AV1 hybrid/layered forwarding | WIP; `CODEC_AV1=true` is codec negotiation only.                                                                          |
 
 The browser bundle configures RID send encodings only for upload slots that
 match a production simulcast path. Unsupported H.264 profiles, unsupported

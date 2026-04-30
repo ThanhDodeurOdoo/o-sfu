@@ -3,6 +3,7 @@
 target
 client/node_modules
 client/dist
+tests/target
 tests/fuzz/artifacts
 tests/fuzz/corpus
 tests/fuzz/target

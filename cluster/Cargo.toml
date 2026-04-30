@@ -1,0 +1,15 @@
+[package]
+description = "Cluster groundwork and control plane model for o-sfu"
+name = "o-sfu-cluster"
+
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

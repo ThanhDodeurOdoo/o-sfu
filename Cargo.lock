@@ -1073,6 +1073,7 @@ dependencies = [
  "bitflags",
  "futures-util",
  "hmac",
+ "o-sfu-cluster",
  "o-sfu-core",
  "o-sfu-protocol",
  "o-sfu-rfc",
@@ -1096,6 +1097,14 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "o-sfu-cluster"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
