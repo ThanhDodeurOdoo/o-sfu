@@ -1,7 +1,3 @@
-//! Test-only worker debug commands.
-//!
-//! These helpers expose inspection and state hooks that adapter
-
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -11,16 +7,33 @@ use std::{
 use str0m::media::Mid;
 use tokio::sync::oneshot;
 
-use super::super::{
-    bitrate::RtcBitrateState,
-    commands::debug::{
-        DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcWorkerCommand,
-    },
-    state::{RtcBootstrapState, RtcSnapshotState},
+use super::debug_command::{
+    DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcWorkerCommand,
 };
-use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
+use crate::runtime::{
+    rtc_adapter::{
+        bitrate::RtcBitrateState,
+        route_control::PacketLayerGate,
+        state::{RtcBootstrapState, RtcSnapshotState},
+        worker::WorkerCommandContext,
+    },
+    transport_adapter::{TransportMediaId, TransportSessionKey},
+};
 
-pub(super) fn handle_debug_command(
+pub(in crate::runtime::rtc_adapter) fn handle_debug_worker_command(
+    state: &mut RtcBootstrapState,
+    context: &WorkerCommandContext<'_>,
+    command: DebugRtcWorkerCommand,
+) {
+    handle_debug_command(
+        state,
+        context.bitrate_state,
+        context.snapshot_state,
+        command,
+    );
+}
+
+fn handle_debug_command(
     state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -303,21 +316,15 @@ fn build_debug_route_entry(
         })
 }
 
-fn into_debug_packet_gate(
-    packet_gate: &super::super::route_control::PacketLayerGate,
-) -> DebugPacketGate {
+fn into_debug_packet_gate(packet_gate: &PacketLayerGate) -> DebugPacketGate {
     match packet_gate {
-        super::super::route_control::PacketLayerGate::Open => DebugPacketGate::Open,
-        super::super::route_control::PacketLayerGate::Block => DebugPacketGate::Block,
-        super::super::route_control::PacketLayerGate::Rid(rid) => {
-            DebugPacketGate::Rid(rid.to_string())
-        }
-        super::super::route_control::PacketLayerGate::OperatingPoint(operating_point) => {
-            DebugPacketGate::OperatingPoint {
-                rid: operating_point.rid().map(|rid| rid.to_string()),
-                max_temporal_layer_id: operating_point.max_temporal_layer_id(),
-            }
-        }
+        PacketLayerGate::Open => DebugPacketGate::Open,
+        PacketLayerGate::Block => DebugPacketGate::Block,
+        PacketLayerGate::Rid(rid) => DebugPacketGate::Rid(rid.to_string()),
+        PacketLayerGate::OperatingPoint(operating_point) => DebugPacketGate::OperatingPoint {
+            rid: operating_point.rid().map(|rid| rid.to_string()),
+            max_temporal_layer_id: operating_point.max_temporal_layer_id(),
+        },
     }
 }
 

@@ -32,9 +32,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 #[cfg(any(test, feature = "testing-transport"))]
-use super::super::commands::debug::DebugRtcWorkerCommand;
-#[cfg(any(test, feature = "testing-transport"))]
-use super::super::worker::handle_debug_worker_command;
+use super::super::test_support::{DebugRtcWorkerCommand, handle_debug_worker_command};
 use super::{
     super::{
         bitrate::RtcBitrateState,

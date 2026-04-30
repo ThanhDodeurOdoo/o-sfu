@@ -1,5 +1,12 @@
-#[cfg(any(test, feature = "testing-transport"))]
-pub use super::commands::debug::DebugRouteEntry;
+#[path = "test_support/debug_command.rs"]
+mod debug_command;
+#[path = "test_support/worker_debug.rs"]
+mod worker_debug;
+
+pub(super) use debug_command::DebugRtcWorkerCommand;
+pub use debug_command::{DebugPacketGate, DebugRouteEntry};
+pub(super) use worker_debug::handle_debug_worker_command;
+
 #[cfg(any(test, feature = "testing-transport"))]
 pub use super::forwarded_packet::test_support::{
     sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,

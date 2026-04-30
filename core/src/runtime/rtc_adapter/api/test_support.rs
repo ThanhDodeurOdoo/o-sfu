@@ -10,11 +10,9 @@ use tokio::sync::oneshot;
 
 use super::{
     super::{
-        commands::{
-            RemoteSourceControl,
-            debug::{DebugRouteEntry, DebugRtcWorkerCommand},
-        },
+        commands::RemoteSourceControl,
         state::TransportSessionHealth,
+        test_support::{DebugRouteEntry, DebugRtcWorkerCommand},
     },
     facade::{RtcTransportMediaFacade, RtcTransportSessionFacade, RtcTransportShard},
 };

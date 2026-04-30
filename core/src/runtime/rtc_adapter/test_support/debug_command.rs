@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 
 use crate::runtime::transport_adapter::{TransportMediaId, TransportSessionKey};
 
-pub enum DebugRtcWorkerCommand {
+pub(in crate::runtime::rtc_adapter) enum DebugRtcWorkerCommand {
     ResolveMid {
         transport_media_id: TransportMediaId,
         response: oneshot::Sender<Option<Mid>>,

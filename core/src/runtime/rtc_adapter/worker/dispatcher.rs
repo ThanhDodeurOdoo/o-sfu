@@ -15,10 +15,6 @@ use std::{
 use tokio::sync::oneshot;
 
 #[cfg(any(test, feature = "testing-transport"))]
-use super::super::commands::debug::DebugRtcWorkerCommand;
-#[cfg(any(test, feature = "testing-transport"))]
-use super::debug;
-#[cfg(any(test, feature = "testing-transport"))]
 use super::publication;
 use super::{
     super::{
@@ -127,22 +123,6 @@ pub fn handle_worker_command(
             );
         }
     }
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-/// Dispatch one test-only debug command against the same shard-local worker
-/// state used by production commands.
-pub fn handle_debug_worker_command(
-    state: &mut RtcBootstrapState,
-    context: &WorkerCommandContext<'_>,
-    command: DebugRtcWorkerCommand,
-) {
-    debug::handle_debug_command(
-        state,
-        context.bitrate_state,
-        context.snapshot_state,
-        command,
-    );
 }
 
 fn handle_negotiation_command(

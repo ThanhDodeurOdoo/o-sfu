@@ -1,6 +1,3 @@
-#[cfg(any(test, feature = "testing-transport"))]
-pub mod debug;
-
 use std::{collections::BTreeSet, time::Instant};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
