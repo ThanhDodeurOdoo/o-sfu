@@ -250,6 +250,9 @@ pub mod rtcp_feedback {
 }
 
 pub mod sdp {
+    pub const ATTRIBUTE_PREFIX: &str = "a=";
+    pub const MEDIA_PREFIX: &str = "m=";
+
     pub mod group_semantics {
         /// `a=group:BUNDLE ...`
         ///
@@ -287,6 +290,11 @@ pub mod sdp {
         ///
         /// References: RFC 4145, RFC 5763.
         pub const SETUP: &str = "setup";
+
+        /// `a=mid:<mid>`
+        ///
+        /// Reference: RFC 9143 section 9.
+        pub const MID: &str = "mid";
     }
 
     /// `a=rid` directions and validation helpers.

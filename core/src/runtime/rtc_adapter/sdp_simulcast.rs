@@ -15,13 +15,9 @@ use crate::{
     MediaCodecFlags, VideoBitrateLimits, runtime::transport_adapter::SessionUploadEncoding,
 };
 
-const SDP_ATTRIBUTE_PREFIX: &str = "a=";
-const SDP_MEDIA_PREFIX: &str = "m=";
-const SDP_MID_ATTRIBUTE: &str = "mid";
 const DEFAULT_LOW_RID: &str = "lo";
 const DEFAULT_HIGH_RID: &str = "hi";
 const DEFAULT_LOW_MAX_BITRATE_BPS: u64 = 150_000;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NegotiatedRid {
     pub(super) rid: Str0mRid,
@@ -211,9 +207,13 @@ fn upload_encodings_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> Vec<Session
 }
 
 fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
-    let marker = format!("{SDP_ATTRIBUTE_PREFIX}{SDP_MID_ATTRIBUTE}:{mid}");
+    let marker = format!(
+        "{}{}:{mid}",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::MID
+    );
     let marker_start = sdp.find(&marker)?;
-    let media_prefix = format!("\n{SDP_MEDIA_PREFIX}");
+    let media_prefix = format!("\n{}", webrtc::sdp::MEDIA_PREFIX);
     let section_start = sdp[..marker_start]
         .rfind(&media_prefix)
         .map_or(0, |index| index + 1);
@@ -224,7 +224,11 @@ fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
 }
 
 fn parse_send_rid(line: &str) -> Option<NegotiatedRid> {
-    let rid_prefix = format!("{SDP_ATTRIBUTE_PREFIX}{}:", webrtc::sdp::attribute::RID);
+    let rid_prefix = format!(
+        "{}{}:",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::RID
+    );
     let rid_value = line.trim_end_matches('\r').strip_prefix(&rid_prefix)?;
     let mut parts = rid_value.splitn(3, ' ');
     let rid = parts.next()?;
