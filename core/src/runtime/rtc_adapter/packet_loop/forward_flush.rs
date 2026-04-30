@@ -88,7 +88,7 @@ pub(super) fn record_incoming_stats(
                     packet.source_session_key(),
                     transport_media_id,
                     rid,
-                    packet.route_control_vp8_keyframe(),
+                    packet.route_control_decoder_refresh(state, transport_media_id),
                     packet.received_at(),
                 )
             });

@@ -27,8 +27,17 @@ impl SimulcastCodecProfile {
         codec_flags: MediaCodecFlags,
         video_bitrate_limits: VideoBitrateLimits,
     ) -> Option<Self> {
-        (media_kind.is_video() && codec_flags.vp8_enabled())
-            .then(|| Self::Vp8(vp8::Vp8SimulcastProfile::new(video_bitrate_limits)))
+        if !media_kind.is_video() {
+            return None;
+        }
+        if codec_flags.vp8_enabled() {
+            return Some(Self::Vp8(vp8::Vp8SimulcastProfile::new(
+                video_bitrate_limits,
+            )));
+        }
+        codec_flags
+            .h264_enabled()
+            .then(|| Self::H264(h264::H264SimulcastProfile::new(video_bitrate_limits)))
     }
 
     fn publish(
@@ -44,7 +53,8 @@ impl SimulcastCodecProfile {
                 video_bitrate_limits,
             )));
         }
-        h264::H264SimulcastProfile::from_parameters(rtp_parameters).map(Self::H264)
+        h264::H264SimulcastProfile::from_parameters(rtp_parameters, video_bitrate_limits)
+            .map(Self::H264)
     }
 
     fn recv_simulcast(
@@ -62,11 +72,16 @@ impl SimulcastCodecProfile {
                 );
                 (!layers.is_empty()).then(|| common::recv_simulcast_from_specs(&layers))
             }
-            Self::H264(_profile) => h264::H264SimulcastProfile::is_promoted().then(|| {
-                common::recv_simulcast_from_specs(&common::default_layer_specs(
-                    VideoBitrateLimits::default(),
-                ))
-            }),
+            Self::H264(profile) => {
+                let layers = rtp_parameters.map_or_else(
+                    || profile.default_layers().to_vec(),
+                    |parameters| {
+                        h264::H264SimulcastProfile::layers_from_parameters(parameters)
+                            .unwrap_or_default()
+                    },
+                );
+                (!layers.is_empty()).then(|| common::recv_simulcast_from_specs(&layers))
+            }
         }
     }
 
@@ -86,12 +101,15 @@ impl SimulcastCodecProfile {
                 common::upload_encodings_from_specs(&layers)
             }
             Self::H264(profile) => {
-                let _ = (
-                    h264::H264SimulcastProfile::rtx_allowed(),
-                    profile.packetization_modes(),
-                    profile.profile_level_ids(),
+                let _ = h264::H264SimulcastProfile::rtx_allowed();
+                let layers = rtp_parameters.map_or_else(
+                    || profile.default_layers().to_vec(),
+                    |parameters| {
+                        h264::H264SimulcastProfile::layers_from_parameters(parameters)
+                            .unwrap_or_default()
+                    },
                 );
-                Vec::new()
+                common::upload_encodings_from_specs(&layers)
             }
         }
     }
@@ -214,11 +232,29 @@ mod tests {
     }
 
     #[test]
-    fn vp8_profile_is_the_only_promoted_simulcast_publication_path() {
+    fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
         let h264 = h264_parameters(1, "42e01f");
 
-        assert!(publish_recv_simulcast(MediaKind::Video, &h264).is_none());
-        assert!(publish_upload_encodings(MediaKind::Video, &h264).is_empty());
+        assert!(publish_recv_simulcast(MediaKind::Video, &h264).is_some());
+        assert_eq!(
+            publish_upload_encodings(MediaKind::Video, &h264),
+            vec![
+                SessionUploadEncoding {
+                    rid: common::DEFAULT_LOW_RID.to_owned(),
+                    max_bitrate: None,
+                    resolution_scale: Some(2),
+                    max_framerate: None,
+                    policy_role: Some(UploadLayerPolicyRole::Thumbnail),
+                },
+                SessionUploadEncoding {
+                    rid: common::DEFAULT_HIGH_RID.to_owned(),
+                    max_bitrate: None,
+                    resolution_scale: Some(1),
+                    max_framerate: None,
+                    policy_role: Some(UploadLayerPolicyRole::Featured),
+                },
+            ]
+        );
 
         let vp8 = vp8_parameters();
 
@@ -245,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn h264_profile_records_interop_inputs_but_stays_unpromoted() {
+    fn h264_profile_accepts_only_the_promoted_chromium_matrix() {
         let parameters = h264_parameters(1, "42e01f");
         let profile = SimulcastCodecProfile::publish(
             MediaKind::Video,
@@ -260,13 +296,43 @@ mod tests {
             return;
         };
 
-        assert_eq!(profile.packetization_modes(), &[1]);
-        assert_eq!(profile.profile_level_ids(), &[String::from("42e01f")]);
-        assert!(!h264::H264SimulcastProfile::is_promoted());
+        assert_eq!(
+            profile.default_layers(),
+            common::default_layer_specs(VideoBitrateLimits::default())
+        );
+        assert!(h264::H264SimulcastProfile::is_promoted());
         assert!(!h264::H264SimulcastProfile::rtx_allowed());
+
+        for parameters in [
+            h264_parameters(0, "42e01f"),
+            h264_parameters(1, "42001f"),
+            h264_parameters(1, "4d001f"),
+        ] {
+            assert!(
+                publish_upload_encodings(MediaKind::Video, &parameters).is_empty(),
+                "unsupported H264 variants must remain single-encoding"
+            );
+        }
+    }
+
+    #[test]
+    fn h264_only_bootstrap_gets_default_simulcast_metadata() {
+        let codec_flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
+        let encodings = bootstrap_upload_encodings(
+            MediaKind::Video,
+            codec_flags,
+            VideoBitrateLimits::default(),
+        );
         assert!(
-            publish_upload_encodings(MediaKind::Video, &parameters).is_empty(),
-            "H264-only upload slots must remain single-encoding until the interop gate is promoted"
+            bootstrap_recv_simulcast(MediaKind::Video, codec_flags, VideoBitrateLimits::default())
+                .is_some()
+        );
+        assert_eq!(
+            encodings
+                .iter()
+                .map(|encoding| encoding.rid.as_str())
+                .collect::<Vec<_>>(),
+            vec![common::DEFAULT_LOW_RID, common::DEFAULT_HIGH_RID]
         );
     }
 

@@ -11,17 +11,11 @@ const AUDIO_PAYLOAD_TYPE_PCMA: u8 = 8;
 const AUDIO_PAYLOAD_TYPE_OPUS: u8 = 111;
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 const VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED: u8 = 102;
-const VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED_RTX: u8 = 103;
 const VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED: u8 = 104;
-const VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED_RTX: u8 = 105;
 const VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED: u8 = 106;
-const VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED_RTX: u8 = 107;
 const VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED: u8 = 108;
-const VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED_RTX: u8 = 109;
 const VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED: u8 = 110;
-const VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED_RTX: u8 = 112;
 const VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED: u8 = 113;
-const VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED_RTX: u8 = 114;
 const VIDEO_PAYLOAD_TYPE_H265: u8 = 115;
 const VIDEO_PAYLOAD_TYPE_VP9_PROFILE_0: u8 = 116;
 const VIDEO_PAYLOAD_TYPE_VP9_PROFILE_0_RTX: u8 = 117;
@@ -153,61 +147,37 @@ fn video_codec_capability(codec_name: rtp::CodecName, payload_type: u8) -> Media
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
 }
 
-fn h264_codec_capabilities() -> [MediaCodecCapability; 12] {
+fn h264_codec_capabilities() -> [MediaCodecCapability; 6] {
     [
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED,
             1,
             H264_PROFILE_LEVEL_BASELINE,
         ),
-        video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED_RTX,
-            VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED,
-        ),
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED,
             0,
             H264_PROFILE_LEVEL_BASELINE,
         ),
-        video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED_RTX,
-            VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED,
-        ),
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED,
             1,
             H264_PROFILE_LEVEL_CONSTRAINED_BASELINE,
-        ),
-        video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED_RTX,
-            VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED,
         ),
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED,
             0,
             H264_PROFILE_LEVEL_CONSTRAINED_BASELINE,
         ),
-        video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED_RTX,
-            VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED,
-        ),
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED,
             1,
             H264_PROFILE_LEVEL_MAIN,
         ),
-        video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED_RTX,
-            VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED,
-        ),
         h264_codec_capability(
             VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED,
             0,
             H264_PROFILE_LEVEL_MAIN,
-        ),
-        video_rtx_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED_RTX,
-            VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED,
         ),
     ]
 }
@@ -351,12 +321,12 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         assert!(!rtx_associations.contains(&96));
-        assert!(rtx_associations.contains(&102));
-        assert!(rtx_associations.contains(&104));
-        assert!(rtx_associations.contains(&106));
-        assert!(rtx_associations.contains(&108));
-        assert!(rtx_associations.contains(&110));
-        assert!(rtx_associations.contains(&113));
+        assert!(!rtx_associations.contains(&102));
+        assert!(!rtx_associations.contains(&104));
+        assert!(!rtx_associations.contains(&106));
+        assert!(!rtx_associations.contains(&108));
+        assert!(!rtx_associations.contains(&110));
+        assert!(!rtx_associations.contains(&113));
         assert!(rtx_associations.contains(&116));
         assert!(rtx_associations.contains(&118));
     }
@@ -378,7 +348,7 @@ mod tests {
                 &[
                     String::from("opus"),
                     String::from("H264"),
-                    String::from("rtx"),
+                    String::from("H264"),
                     String::from("H264"),
                 ][..]
             )

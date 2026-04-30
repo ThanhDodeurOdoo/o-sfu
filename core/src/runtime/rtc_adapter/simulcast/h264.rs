@@ -1,61 +1,76 @@
-//! H.264 simulcast interop gate.
+//! Production H.264 simulcast profile for the first promoted browser matrix.
 //!
-//! H.264 can be negotiated as a codec today, but it is deliberately not a
-//! production simulcast profile until the browser, packetization, profile, RTX,
-//! and decoder-refresh matrix is proven together.
+//! The promoted matrix is intentionally narrow: Chromium-compatible constrained
+//! baseline H.264 using packetization-mode 1. Broader profile, packetization,
+//! browser, and repair-mode support must pass through this boundary before the
+//! RTC edge exposes RID simulcast metadata for it.
 
 use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_router::{CodecSetting, MediaStream as RouterRtpParameters};
+use o_sfu_router::{CodecSetting, MediaFormat, MediaStream as RouterRtpParameters};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use super::common::{self, SimulcastLayerSpec};
+use crate::VideoBitrateLimits;
+
+const CHROMIUM_PACKETIZATION_MODE: u8 = 1;
+const CHROMIUM_CONSTRAINED_BASELINE_PROFILE_LEVEL_ID: &str = "42e01f";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct H264SimulcastProfile {
-    packetization_modes: Vec<u8>,
-    profile_level_ids: Vec<String>,
+    video_bitrate_limits: VideoBitrateLimits,
 }
 
 impl H264SimulcastProfile {
-    pub(super) fn from_parameters(rtp_parameters: &RouterRtpParameters) -> Option<Self> {
-        let mut packetization_modes = Vec::new();
-        let mut profile_level_ids = Vec::new();
-        for format in rtp_parameters
-            .formats()
-            .filter(|format| format.codec() == &rfc_rtp::CodecName::H264)
-        {
-            for setting in format.settings() {
-                match setting {
-                    CodecSetting::H264PacketizationMode(mode) => {
-                        if !packetization_modes.contains(mode) {
-                            packetization_modes.push(*mode);
-                        }
-                    }
-                    CodecSetting::H264ProfileLevelId(profile_level_id) => {
-                        if !profile_level_ids.contains(profile_level_id) {
-                            profile_level_ids.push(profile_level_id.clone());
-                        }
-                    }
-                    _ => {}
-                }
-            }
+    pub(super) const fn new(video_bitrate_limits: VideoBitrateLimits) -> Self {
+        Self {
+            video_bitrate_limits,
         }
-        (!packetization_modes.is_empty() || !profile_level_ids.is_empty()).then_some(Self {
-            packetization_modes,
-            profile_level_ids,
-        })
+    }
+
+    pub(super) fn from_parameters(
+        rtp_parameters: &RouterRtpParameters,
+        video_bitrate_limits: VideoBitrateLimits,
+    ) -> Option<Self> {
+        rtp_parameters
+            .formats()
+            .any(is_promoted_format)
+            .then(|| Self::new(video_bitrate_limits))
     }
 
     pub(super) const fn is_promoted() -> bool {
-        false
+        true
     }
 
     pub(super) const fn rtx_allowed() -> bool {
         false
     }
 
-    pub(super) fn packetization_modes(&self) -> &[u8] {
-        self.packetization_modes.as_slice()
+    pub(super) fn default_layers(self) -> [SimulcastLayerSpec<'static>; 2] {
+        common::default_layer_specs(self.video_bitrate_limits)
     }
 
-    pub(super) fn profile_level_ids(&self) -> &[String] {
-        self.profile_level_ids.as_slice()
+    pub(super) fn layers_from_parameters(
+        rtp_parameters: &RouterRtpParameters,
+    ) -> Option<Vec<SimulcastLayerSpec<'_>>> {
+        if !rtp_parameters.formats().any(is_promoted_format) {
+            return None;
+        }
+        common::layers_from_rid_bindings(rtp_parameters)
     }
+}
+
+fn is_promoted_format(format: &MediaFormat) -> bool {
+    if format.codec() != &rfc_rtp::CodecName::H264 {
+        return false;
+    }
+    let mut packetization_mode = None;
+    let mut profile_level_id = None;
+    for setting in format.settings() {
+        match setting {
+            CodecSetting::H264PacketizationMode(mode) => packetization_mode = Some(*mode),
+            CodecSetting::H264ProfileLevelId(value) => profile_level_id = Some(value.as_str()),
+            _ => {}
+        }
+    }
+    packetization_mode == Some(CHROMIUM_PACKETIZATION_MODE)
+        && profile_level_id == Some(CHROMIUM_CONSTRAINED_BASELINE_PROFILE_LEVEL_ID)
 }

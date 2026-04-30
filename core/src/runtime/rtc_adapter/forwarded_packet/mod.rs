@@ -1,6 +1,6 @@
 use std::{mem::take, time::Instant};
 
-use o_sfu_rfc::rtp::{frame_marking, vp8};
+use o_sfu_rfc::rtp::{self, frame_marking, h264, vp8};
 use str0m::{
     media::{ExtensionValues, Mid, Rid},
     rtp::{RtpHeader, RtpPacket, Ssrc},
@@ -88,8 +88,20 @@ impl ForwardedPacket {
         self.route_control_extension_values().voice_activity
     }
 
-    pub(super) fn route_control_vp8_keyframe(&self) -> bool {
-        vp8::payload_starts_keyframe(self.payload.as_slice())
+    pub(super) fn route_control_decoder_refresh(
+        &self,
+        state: &RtcBootstrapState,
+        source_transport_media_id: TransportMediaId,
+    ) -> bool {
+        if producer_uses_codec(state, source_transport_media_id, &rtp::CodecName::H264) {
+            return h264::payload_starts_idr(self.payload.as_slice());
+        }
+        if producer_uses_codec(state, source_transport_media_id, &rtp::CodecName::Vp8)
+            || producer_codec_unknown(state, source_transport_media_id)
+        {
+            return vp8::payload_starts_keyframe(self.payload.as_slice());
+        }
+        false
     }
 
     pub(super) fn route_control_ssrc(&self) -> Ssrc {
@@ -205,6 +217,42 @@ impl ForwardedPacket {
     }
 }
 
+fn producer_uses_codec(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    codec_name: &rtp::CodecName,
+) -> bool {
+    producer_parameters(state, source_transport_media_id).is_some_and(|parameters| {
+        parameters
+            .formats()
+            .any(|format| format.codec() == codec_name)
+    })
+}
+
+fn producer_codec_unknown(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) -> bool {
+    producer_parameters(state, source_transport_media_id).is_none()
+}
+
+fn producer_parameters(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+) -> Option<&o_sfu_router::MediaStream> {
+    let super::media_registry::RegisteredMediaHandle::Producer { session_key, mid } =
+        state.media_handle(source_transport_media_id)?
+    else {
+        return None;
+    };
+    state
+        .users
+        .get(session_key)?
+        .sdp_negotiation
+        .negotiated_producer_parameters
+        .get(mid)
+}
+
 fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
     let [first_octet, ..] = frame_mark.to_be_bytes();
     frame_marking::temporal_layer_id(first_octet)
@@ -212,19 +260,29 @@ fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
+    use std::net::SocketAddr;
+
+    use o_sfu_rfc::rtp::CodecName;
+    use o_sfu_router::{
+        MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
+        StreamBinding,
+    };
     use str0m::media::{Mid, Rid};
 
     use super::*;
-    use crate::runtime::{
-        UserId,
-        rtc_adapter::{
-            forwarded_packet::test_support::{
-                sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-                sample_forwarded_packet_without_mid,
+    use crate::{
+        MediaCodecFlags,
+        runtime::{
+            UserId,
+            rtc_adapter::{
+                bootstrap,
+                forwarded_packet::test_support::{
+                    sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+                    sample_forwarded_packet_without_mid,
+                },
+                media_registry::RegisteredMediaHandle,
+                test_support::test_transport_session_key,
             },
-            media_registry::RegisteredMediaHandle,
-            test_support::test_transport_session_key,
         },
     };
 
@@ -242,6 +300,49 @@ mod tests {
             packet.resolve_source_transport_media_id(&state),
             Some(transport_media_id)
         );
+    }
+
+    #[test]
+    fn forwarded_packet_detects_h264_idr_for_decoder_refresh() {
+        let session_key = test_transport_session_key(48, 0, 16, UserId::Integer(14));
+        let producer_mid = Mid::from("cam-up");
+        let mut state = RtcBootstrapState::default();
+        let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
+        assert!(
+            bootstrap::ensure_session_rtc_state(
+                &mut state.users,
+                &session_key,
+                candidate_addr,
+                10_000_000,
+                MediaCodecFlags::default().with_h264(true),
+            )
+            .is_ok()
+        );
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: session_key.clone(),
+            mid: producer_mid,
+        });
+        if let Some(session_state) = state.users.get_mut(&session_key) {
+            session_state
+                .sdp_negotiation
+                .negotiated_producer_parameters
+                .insert(
+                    producer_mid,
+                    RouterRtpParameters::new(
+                        vec![MediaFormat::new(
+                            RouterMediaKind::Video,
+                            CodecName::H264,
+                            102,
+                            90_000,
+                        )],
+                        vec![],
+                        vec![],
+                    ),
+                );
+        }
+        let packet = sample_forwarded_packet(session_key, "cam-up", &[0x65, 0x88]);
+
+        assert!(packet.route_control_decoder_refresh(&state, transport_media_id));
     }
 
     #[test]

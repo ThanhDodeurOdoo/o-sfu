@@ -453,6 +453,12 @@ pub mod fmtp {
 pub mod h264 {
     use std::cmp::Ordering;
 
+    const NAL_UNIT_TYPE_MASK: u8 = 0x1f;
+    const NAL_UNIT_TYPE_IDR: u8 = 5;
+    const NAL_UNIT_TYPE_STAP_A: u8 = 24;
+    const NAL_UNIT_TYPE_FU_A: u8 = 28;
+    const FU_START_BIT: u8 = 0x80;
+
     /// Parsed H264 `profile-level-id` value.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ProfileLevelId {
@@ -561,6 +567,53 @@ pub mod h264 {
         fn cmp(&self, other: &Self) -> Ordering {
             self.ordinal().cmp(&other.ordinal())
         }
+    }
+
+    /// Detects an H264 RTP packet that starts an IDR access unit.
+    ///
+    /// RFC 6184 carries IDR frames either as a single NAL unit, inside a STAP-A
+    /// aggregation packet, or as the first fragment of a FU-A packet.
+    #[must_use]
+    pub fn payload_starts_idr(payload: &[u8]) -> bool {
+        let Some((&nal_header, rest)) = payload.split_first() else {
+            return false;
+        };
+        match nal_header & NAL_UNIT_TYPE_MASK {
+            NAL_UNIT_TYPE_IDR => true,
+            NAL_UNIT_TYPE_STAP_A => stap_a_contains_idr(rest),
+            NAL_UNIT_TYPE_FU_A => fu_a_starts_idr(rest),
+            _ => false,
+        }
+    }
+
+    fn stap_a_contains_idr(mut payload: &[u8]) -> bool {
+        while payload.len() >= 2 {
+            let Some((&first_len_octet, rest)) = payload.split_first() else {
+                return false;
+            };
+            let Some((&second_len_octet, rest)) = rest.split_first() else {
+                return false;
+            };
+            let nal_len = usize::from(u16::from_be_bytes([first_len_octet, second_len_octet]));
+            if nal_len == 0 || rest.len() < nal_len {
+                return false;
+            }
+            let Some((&nal_header, remaining_payload)) = rest.split_first() else {
+                return false;
+            };
+            if nal_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR {
+                return true;
+            }
+            payload = remaining_payload.get(nal_len - 1..).unwrap_or_default();
+        }
+        false
+    }
+
+    fn fu_a_starts_idr(payload: &[u8]) -> bool {
+        let Some((&fu_header, _fragment)) = payload.split_first() else {
+            return false;
+        };
+        fu_header & FU_START_BIT != 0 && fu_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR
     }
 
     impl TryFrom<u8> for LevelIdc {
@@ -820,7 +873,7 @@ pub mod frame_marking {
 mod tests {
     use super::{
         frame_marking,
-        h264::{LevelIdc, Profile, ProfileLevelId},
+        h264::{self, LevelIdc, Profile, ProfileLevelId},
         header_extension, rtcp_feedback_format,
     };
 
@@ -838,6 +891,17 @@ mod tests {
     fn h264_level_ordering_keeps_level_1b_between_level_1_and_level_1_1() {
         assert!(LevelIdc::Level1 < LevelIdc::Level1B);
         assert!(LevelIdc::Level1B < LevelIdc::Level1_1);
+    }
+
+    #[test]
+    fn h264_payload_keyframe_detection_covers_idr_packetizations() {
+        assert!(h264::payload_starts_idr(&[0x65, 0x88]));
+        assert!(h264::payload_starts_idr(&[
+            0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x65, 0x88
+        ]));
+        assert!(h264::payload_starts_idr(&[0x7c, 0x85, 0x88]));
+        assert!(!h264::payload_starts_idr(&[0x41, 0x9a]));
+        assert!(!h264::payload_starts_idr(&[0x7c, 0x05, 0x88]));
     }
 
     #[test]

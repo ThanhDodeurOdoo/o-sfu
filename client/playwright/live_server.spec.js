@@ -168,7 +168,7 @@ test("late-joining subscriber receives the already-live publication", async ({ c
         });
 });
 
-test("H264-only live publish stays single encoding and renders when supported", async ({
+test("H264-only live publish applies RID simulcast and renders when supported", async ({
     browserName,
     context
 }) => {
@@ -216,27 +216,40 @@ test("H264-only live publish stays single encoding and renders when supported", 
         await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
         await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
 
-        await publishSyntheticCamera(publisher, "h264-single");
+        await publishSyntheticCamera(publisher, "h264-simulcast");
 
         await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
-        await expect.poll(async () => (await localCameraSenderEncodings(publisher)).length).toBe(1);
-        const encodings = await localCameraSenderEncodings(publisher);
-        expect(encodings[0].rid).toBeUndefined();
-        expect(encodings[0].scaleResolutionDownBy).toBeUndefined();
+        await expect
+            .poll(async () => localCameraSenderEncodings(publisher))
+            .toEqual([
+                {
+                    active: true,
+                    maxBitrate: undefined,
+                    rid: "lo",
+                    scaleResolutionDownBy: undefined
+                },
+                {
+                    active: true,
+                    maxBitrate: undefined,
+                    rid: "hi",
+                    scaleResolutionDownBy: undefined
+                }
+            ]);
         await expect.poll(async () => peerLocalDescriptionSdp(publisher)).not.toBeNull();
         const sdp = await peerLocalDescriptionSdp(publisher);
         const video = parseVideoCodecAnswer(sdp);
 
         expect(video.h264PayloadTypes.size).toBeGreaterThan(0);
         expect(video.vp8PayloadTypes.size).toBe(0);
-        expect(video.hasAnySendRid).toBeFalsy();
-        expect(video.hasAnySendSimulcast).toBeFalsy();
+        expect(video.hasSendRidLo).toBeTruthy();
+        expect(video.hasSendRidHi).toBeTruthy();
+        expect(video.hasSendSimulcastLoHi).toBeTruthy();
     } finally {
         await server.stop();
     }
 });
 
-test("live browser negotiation keeps RTX pairs when optional codecs are enabled", async ({
+test("live browser negotiation keeps RTX pairs only for eligible optional codecs", async ({
     browserName,
     context
 }) => {
@@ -291,7 +304,10 @@ test("live browser negotiation keeps RTX pairs when optional codecs are enabled"
         if (codecs.vp9Profiles.size > 0) {
             expect(codecs.vp9Profiles).toEqual(new Set(["0", "2"]));
         }
-        for (const payloadType of [...codecs.h264PayloadTypes, ...codecs.vp9PayloadTypes]) {
+        for (const payloadType of codecs.h264PayloadTypes) {
+            expect(codecs.rtxAssociations.has(payloadType)).toBeFalsy();
+        }
+        for (const payloadType of codecs.vp9PayloadTypes) {
             expect(codecs.rtxAssociations.has(payloadType)).toBeTruthy();
         }
     } finally {

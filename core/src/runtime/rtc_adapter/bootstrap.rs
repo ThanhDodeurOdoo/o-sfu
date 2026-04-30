@@ -15,7 +15,7 @@ use o_sfu_rfc::webrtc;
 use str0m::{
     Candidate, Rtc,
     bwe::Bitrate,
-    format::{Codec, FormatParams},
+    format::{Codec, CodecConfig, FormatParams},
     media::Frequency,
 };
 use tokio::net::UdpSocket;
@@ -126,9 +126,31 @@ fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
             FormatParams::default(),
         );
     }
+    if codec_flags.h264_enabled() {
+        add_h264_codecs_without_rtx(config.codec_config());
+    }
     config
-        .enable_h264(codec_flags.h264_enabled())
         .enable_h265(codec_flags.h265_enabled())
         .enable_vp9(codec_flags.vp9_enabled())
         .enable_av1(codec_flags.av1_enabled())
+}
+
+fn add_h264_codecs_without_rtx(codec_config: &mut CodecConfig) {
+    const H264_CODECS: &[(u8, bool, u32)] = &[
+        (127, true, 0x0042_001f),
+        (125, false, 0x0042_001f),
+        (108, true, 0x0042_e01f),
+        (124, false, 0x0042_e01f),
+        (123, true, 0x004d_001f),
+        (35, false, 0x004d_001f),
+        (114, true, 0x0064_001f),
+    ];
+    for (payload_type, packetization_mode, profile_level_id) in H264_CODECS {
+        codec_config.add_h264(
+            (*payload_type).into(),
+            None,
+            *packetization_mode,
+            *profile_level_id,
+        );
+    }
 }

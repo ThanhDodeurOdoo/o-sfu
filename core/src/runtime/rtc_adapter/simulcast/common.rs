@@ -1,6 +1,7 @@
 //! Shared RID simulcast helpers for RTC-edge codec profiles.
 
 use o_sfu_rfc::webrtc;
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{
     Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast, SimulcastLayer as Str0mSimulcastLayer,
 };
@@ -20,7 +21,7 @@ pub(in crate::runtime::rtc_adapter) struct NegotiatedRid {
     pub(in crate::runtime::rtc_adapter) max_bitrate: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SimulcastLayerSpec<'a> {
     pub(super) rid: &'a str,
     pub(super) max_bitrate: Option<u64>,
@@ -84,6 +85,32 @@ pub(super) fn upload_encodings_from_specs(
         .collect()
 }
 
+pub(super) fn layers_from_rid_bindings(
+    rtp_parameters: &RouterRtpParameters,
+) -> Option<Vec<SimulcastLayerSpec<'_>>> {
+    let mut layers = Vec::new();
+    for encoding in rtp_parameters.encodings() {
+        let Some(rid) = encoding.rid() else {
+            continue;
+        };
+        if !webrtc::sdp::rid::is_id(rid)
+            || layers
+                .iter()
+                .any(|layer: &SimulcastLayerSpec<'_>| layer.rid == rid)
+        {
+            continue;
+        }
+        layers.push(SimulcastLayerSpec {
+            rid,
+            max_bitrate: encoding.max_bitrate(),
+            resolution_scale: resolution_scale_for_index(layers.len()),
+            max_framerate: None,
+            policy_role: policy_role_for_index(layers.len()),
+        });
+    }
+    (layers.len() >= 2).then_some(layers)
+}
+
 pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {
     let Some(section) = media_section_for_mid(answer_sdp, mid) else {
         return Vec::new();
@@ -142,4 +169,16 @@ fn parse_max_bitrate(restrictions: &str) -> Option<u64> {
                 .then(|| value.trim().parse::<u64>().ok())
                 .flatten()
         })
+}
+
+fn resolution_scale_for_index(index: usize) -> u16 {
+    if index == 0 { 2 } else { 1 }
+}
+
+fn policy_role_for_index(index: usize) -> UploadLayerPolicyRole {
+    if index == 0 {
+        UploadLayerPolicyRole::Thumbnail
+    } else {
+        UploadLayerPolicyRole::Featured
+    }
 }

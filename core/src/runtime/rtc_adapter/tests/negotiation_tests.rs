@@ -137,7 +137,7 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
 }
 
 #[tokio::test]
-async fn rtc_initial_session_offer_omits_simulcast_when_vp8_is_disabled() {
+async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disabled() {
     let adapter = rtc_adapter_with_codec_flags(
         MediaCodecFlags::default()
             .with_vp8(false)
@@ -154,19 +154,19 @@ async fn rtc_initial_session_offer_omits_simulcast_when_vp8_is_disabled() {
         .into_parts();
 
     assert!(
-        !offer_sdp.contains(&sdp_rid_line(
+        offer_sdp.contains(&sdp_rid_line(
             "lo",
             webrtc::sdp::rid::DIRECTION_RECV,
             Some(150_000)
         )),
-        "video offers must not claim RID simulcast when the production VP8 path is disabled"
+        "H264-only video offers should claim the low RID on the promoted matrix"
     );
     assert!(
-        !offer_sdp.contains(&sdp_simulcast_line(
+        offer_sdp.contains(&sdp_simulcast_line(
             webrtc::sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
-        "video offers must not claim simulcast for H264, VP9, or AV1-only configurations"
+        "H264-only video offers should claim the promoted RID simulcast matrix"
     );
     let video_slot = upload_slots
         .iter()
@@ -180,10 +180,9 @@ async fn rtc_initial_session_offer_omits_simulcast_when_vp8_is_disabled() {
             String::from("AV1")
         ]
     );
-    assert!(
-        video_slot.simulcast_encodings.is_empty(),
-        "upload-slot metadata must not ask the browser to configure unsupported simulcast codecs"
-    );
+    assert_eq!(video_slot.simulcast_encodings.len(), 2);
+    assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
+    assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
 }
 
 #[tokio::test]
