@@ -632,6 +632,7 @@ impl Room {
                 let connection_id = outcome.connection_id;
                 let user_id = outcome.user_id.clone();
                 Self::emit_lifecycle_effects(outcome.effects);
+                self.diagnostics.register_user(self.uuid(), &user_id);
                 self.diagnostics.record(
                     DiagnosticsEventData::for_user(
                         self.uuid(),

@@ -102,10 +102,10 @@ pub(crate) async fn room_detail_response(
     )
 }
 
-/// Resolves a user-focused diagnostics query across all live rooms.
+/// Resolves a user-focused diagnostics query from the diagnostics user index.
 ///
-/// User ids are only unique within a room, so this query must scan the live
-/// rooms and classify the result explicitly:
+/// User ids are only unique within a room, so this query classifies indexed
+/// room matches explicitly:
 /// - `Missing` when no live room contains the requested user id
 /// - `Found` when exactly one room matches
 /// - `Conflict` when multiple live rooms contain the same requested user
@@ -120,8 +120,12 @@ pub(crate) async fn user_detail_response(
     diagnostics: &DiagnosticsStore,
     requested_user_id: &str,
 ) -> DiagnosticsUserLookup {
+    let room_ids = diagnostics.user_lookup_room_ids(requested_user_id);
+    if room_ids.is_empty() {
+        return DiagnosticsUserLookup::Missing;
+    }
     let mut matches = Vec::new();
-    for entry in rooms.directory_snapshots().await {
+    for entry in rooms.directory_snapshots_for_room_ids(&room_ids).await {
         let Some((user_view, user_id)) = entry
             .room()
             .diagnostics_matching_user(requested_user_id, observability_port)

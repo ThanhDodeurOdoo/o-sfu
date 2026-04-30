@@ -222,6 +222,28 @@ impl RoomManager {
         })
     }
 
+    /// Returns live directory snapshots for known room ids.
+    ///
+    /// Diagnostics user lookup uses this after resolving candidate rooms from
+    /// the diagnostics-owned user index. Missing rooms are skipped because the
+    /// index and directory can be observed at slightly different instants while
+    /// room teardown is in progress.
+    pub async fn directory_snapshots_for_room_ids(
+        &self,
+        room_ids: &[String],
+    ) -> Vec<RuntimeRoomDirectorySnapshot> {
+        let directory = self.directory.read().await;
+        room_ids
+            .iter()
+            .filter_map(|room_id| directory.entry(room_id))
+            .map(|entry| RuntimeRoomDirectorySnapshot {
+                room: entry.room(),
+                create_date: entry.create_date().to_owned(),
+                remote_address: entry.remote_address().to_owned(),
+            })
+            .collect()
+    }
+
     /// Re-applies source packet selection policy for the targeted room instances.
     ///
     /// Missing or already-removed instance ids are skipped. Active-speaker data

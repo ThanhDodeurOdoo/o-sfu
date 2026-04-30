@@ -8,7 +8,7 @@
 //! reads those bounded histories when building operator responses.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Mutex, PoisonError},
 };
 
@@ -33,6 +33,7 @@ struct DiagnosticsStoreState {
     global_recent_events: VecDeque<DiagnosticsEvent>,
     room_recent_events: BTreeMap<String, VecDeque<DiagnosticsEvent>>,
     user_recent_events: BTreeMap<UserScopeKey, VecDeque<DiagnosticsEvent>>,
+    user_lookup: BTreeMap<String, BTreeMap<String, BTreeSet<UserId>>>,
 }
 
 #[derive(Debug, Default)]
@@ -108,6 +109,37 @@ impl DiagnosticsStore {
             .insert(room_instance_id, room_id.to_owned());
     }
 
+    /// Adds a live user to the diagnostics-owned lookup index.
+    ///
+    /// The room lifecycle calls this after the join transition commits. The
+    /// lookup key intentionally matches the raw diagnostics route segment:
+    /// integer ids use decimal strings and compatibility string ids keep their
+    /// original value.
+    pub fn register_user(&self, room_id: &str, user_id: &UserId) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .user_lookup
+            .entry(user_lookup_key(user_id))
+            .or_default()
+            .entry(room_id.to_owned())
+            .or_default()
+            .insert(user_id.clone());
+    }
+
+    /// Returns live room ids that may contain `requested_user_id`.
+    ///
+    /// The query layer still asks each returned room to build the final
+    /// diagnostics view from current room and transport state. This method only
+    /// narrows the candidate room set while preserving the route's existing
+    /// missing, found, and conflict semantics.
+    pub fn user_lookup_room_ids(&self, requested_user_id: &str) -> Vec<String> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .user_lookup
+            .get(requested_user_id)
+            .map_or_else(Vec::new, |rooms| rooms.keys().cloned().collect())
+    }
+
     pub fn record(&self, data: DiagnosticsEventData) {
         let event = DiagnosticsEvent {
             room_id: data.room_id.clone(),
@@ -154,6 +186,10 @@ impl DiagnosticsStore {
         state
             .user_recent_events
             .retain(|scope, _| scope.room_id != room_id);
+        state.user_lookup.retain(|_, rooms| {
+            rooms.remove(room_id);
+            !rooms.is_empty()
+        });
     }
 
     pub fn forget_user(&self, room_id: &str, user_id: &UserId) {
@@ -162,6 +198,19 @@ impl DiagnosticsStore {
             room_id: room_id.to_owned(),
             user_id: user_id.clone(),
         });
+        let lookup_key = user_lookup_key(user_id);
+        let remove_lookup_key = state.user_lookup.get_mut(&lookup_key).is_some_and(|rooms| {
+            if let Some(users) = rooms.get_mut(room_id) {
+                users.remove(user_id);
+                if users.is_empty() {
+                    rooms.remove(room_id);
+                }
+            }
+            rooms.is_empty()
+        });
+        if remove_lookup_key {
+            state.user_lookup.remove(&lookup_key);
+        }
     }
 
     pub fn global_recent_events(&self) -> Vec<DiagnosticsEvent> {
@@ -211,6 +260,13 @@ impl DiagnosticsStore {
                 .with_media_worker_id(media_worker_id)
                 .insert_fields(fields),
         );
+    }
+}
+
+fn user_lookup_key(user_id: &UserId) -> String {
+    match user_id {
+        UserId::Integer(value) => value.to_string(),
+        UserId::String(value) => value.clone(),
     }
 }
 
@@ -269,6 +325,7 @@ mod tests {
     fn forgetting_a_room_clears_room_and_user_scoped_history() {
         let store = DiagnosticsStore::default();
         let user_id = UserId::Integer(7);
+        store.register_user("room-a", &user_id);
         store.record(DiagnosticsEventData::for_room("room-a", "room.event"));
         store.record(DiagnosticsEventData::for_user(
             "room-a",
@@ -281,8 +338,39 @@ mod tests {
 
         assert!(store.room_recent_events("room-a").is_empty());
         assert!(store.user_recent_events("room-a", &user_id).is_empty());
+        assert!(store.user_lookup_room_ids("7").is_empty());
         assert_eq!(store.room_recent_events("room-b").len(), 1);
         assert_eq!(store.global_recent_events().len(), 3);
+    }
+
+    #[test]
+    fn user_lookup_tracks_integer_and_string_user_ids_by_room() {
+        let store = DiagnosticsStore::default();
+        let integer_user = UserId::Integer(7);
+        let string_user = UserId::String(String::from("guest-7"));
+        store.register_user("room-a", &integer_user);
+        store.register_user("room-b", &integer_user);
+        store.register_user("room-c", &string_user);
+
+        assert_eq!(
+            store.user_lookup_room_ids("7"),
+            vec![String::from("room-a"), String::from("room-b")]
+        );
+        assert_eq!(
+            store.user_lookup_room_ids("guest-7"),
+            vec![String::from("room-c")]
+        );
+
+        store.forget_user("room-a", &integer_user);
+
+        assert_eq!(
+            store.user_lookup_room_ids("7"),
+            vec![String::from("room-b")]
+        );
+
+        store.forget_room("room-c");
+
+        assert!(store.user_lookup_room_ids("guest-7").is_empty());
     }
 
     #[test]

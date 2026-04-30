@@ -414,6 +414,140 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() {
     assert_eq!(conflict.matching_room_ids.len(), 2);
 }
 
+#[tokio::test]
+async fn diagnostics_user_lookup_reports_missing_index_matches() {
+    let test_state = test_state_with_handles();
+    let request = build_request(
+        Request::get("/internal/diagnostics/users/404"),
+        Body::empty(),
+    );
+    assert!(request.is_some());
+    let Some(request) = request else {
+        return;
+    };
+    let response = app(test_state.state).oneshot(request).await;
+    assert!(response.is_ok());
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() {
+    let test_state = test_state_with_handles();
+    let room = test_state
+        .room_manager
+        .serve_room(
+            "issuer-replacement",
+            None,
+            &RoomConfig::default(),
+            Some("203.0.113.12"),
+        )
+        .await;
+    let user_id = UserId::Integer(9);
+    let (first_tx, _first_rx) = mpsc::unbounded_channel();
+    let (replacement_tx, _replacement_rx) = mpsc::unbounded_channel();
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .join_user(user_id.clone(), None, UserPermissions::default(), first_tx,)
+            .await
+            .is_ok()
+    );
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .join_user(
+                user_id.clone(),
+                Some(String::from("replacement")),
+                UserPermissions::default(),
+                replacement_tx,
+            )
+            .await
+            .is_ok()
+    );
+
+    let request = build_request(Request::get("/internal/diagnostics/users/9"), Body::empty());
+    assert!(request.is_some());
+    let Some(request) = request else {
+        return;
+    };
+    let response = app(test_state.state).oneshot(request).await;
+    assert!(response.is_ok());
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail: Option<DiagnosticsUserDetail> = parse_json(response).await;
+    assert!(detail.is_some());
+    let Some(detail) = detail else {
+        return;
+    };
+    assert_eq!(detail.room_id, room.uuid());
+    assert_eq!(detail.user.user_id, user_id);
+}
+
+#[tokio::test]
+async fn diagnostics_user_lookup_drops_room_teardown_entries() {
+    let test_state = test_state_with_handles();
+    let room = test_state
+        .room_manager
+        .serve_room(
+            "issuer-teardown",
+            None,
+            &RoomConfig::default(),
+            Some("203.0.113.13"),
+        )
+        .await;
+    let room_id = room.uuid().to_owned();
+    let user_id = UserId::Integer(11);
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let join = test_state
+        .room_manager
+        .join_session_for_test(
+            &room_id,
+            JoinUserRequest {
+                user_id: user_id.clone(),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: tx,
+            },
+            &test_state.transport_adapter,
+        )
+        .await;
+    assert!(join.is_ok());
+    let Some((_room, connection_id)) = join.ok() else {
+        return;
+    };
+    assert!(
+        test_state
+            .room_manager
+            .leave_session_for_test(
+                &room_id,
+                &user_id,
+                connection_id,
+                &test_state.transport_adapter,
+            )
+            .await
+    );
+
+    let request = build_request(
+        Request::get("/internal/diagnostics/users/11"),
+        Body::empty(),
+    );
+    assert!(request.is_some());
+    let Some(request) = request else {
+        return;
+    };
+    let response = app(test_state.state).oneshot(request).await;
+    assert!(response.is_ok());
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 trait SessionIdExt {
     fn into_integer_string(self) -> String;
 }

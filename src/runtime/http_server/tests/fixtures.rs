@@ -39,8 +39,8 @@ pub(super) use crate::{
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::{
-            RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
-            RoomRuntimePolicy, rtp_capabilities,
+            JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
+            RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
         },
         testing::build_test_runtime_state,
         transport_adapter::RuntimeTransportAdapter,
