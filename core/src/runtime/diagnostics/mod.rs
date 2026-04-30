@@ -7,7 +7,7 @@ pub use types::{
     DiagnosticsOverBudgetExceptionReason, DiagnosticsPolicyPauseReason, DiagnosticsPublication,
     DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
     DiagnosticsSourceSelection, DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
-    DiagnosticsTemporalLayerSelection, DiagnosticsUserLookup, DiagnosticsUserTransport,
-    DiagnosticsUserView, DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
-    health_json_value, maybe_health_json_value,
+    DiagnosticsTemporalLayerSelection, DiagnosticsUserLookup, DiagnosticsUserSummary,
+    DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
+    DiagnosticsVideoRoutePriority, health_json_value, maybe_health_json_value,
 };

@@ -30,6 +30,7 @@ pub(super) use crate::{
             types::{
                 DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
                 DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
+                DiagnosticsUserSummary,
             },
         },
         http_server::contract::{

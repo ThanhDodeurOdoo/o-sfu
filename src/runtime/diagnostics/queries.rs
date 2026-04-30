@@ -10,12 +10,15 @@
 //! They gather room snapshots, merge in transport health and bitrate
 //! data, and attach the relevant recent-event history from `DiagnosticsStore`.
 
+use o_sfu_core::server::session::UserId;
+
 use super::{
     DiagnosticsStore,
     types::{
         DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse,
         DiagnosticsTransportCounts, DiagnosticsTransportHealth, DiagnosticsUserDetail,
-        DiagnosticsUserLookup, DiagnosticsUserLookupConflict, DiagnosticsUserView,
+        DiagnosticsUserLookup, DiagnosticsUserLookupConflict, DiagnosticsUserSummary,
+        DiagnosticsUserView,
     },
 };
 use crate::runtime::{
@@ -102,6 +105,17 @@ pub(crate) async fn room_detail_response(
     )
 }
 
+pub(crate) async fn room_users_response(
+    rooms: &RoomManager,
+    observability_port: &impl ObservabilityPort,
+    diagnostics: &DiagnosticsStore,
+    room_id: &str,
+) -> Option<Vec<DiagnosticsUserSummary>> {
+    let entry = rooms.directory_snapshot(room_id).await?;
+    let snapshot = room_snapshot(&entry, observability_port, diagnostics).await;
+    Some(user_summaries(&snapshot.detail))
+}
+
 /// Resolves a user-focused diagnostics query from the diagnostics user index.
 ///
 /// User ids are only unique within a room, so this query classifies indexed
@@ -173,6 +187,7 @@ async fn room_snapshot(
         .diagnostics_user_views(observability_port)
         .await;
     let sources = entry.room().diagnostics_sources(observability_port).await;
+    let source_count = sources.len();
     let transport = transport_counts(&users);
     let publication_count = users.iter().map(|user| user.publications.len()).sum();
     let subscription_count = users.iter().map(|user| user.subscriptions.len()).sum();
@@ -187,6 +202,7 @@ async fn room_snapshot(
                 publication_count,
                 recording_state: entry.room().recording_state().await,
                 remote_address: entry.remote_address().to_owned(),
+                source_count,
                 user_count: users.len(),
                 subscription_count,
                 transport,
@@ -194,6 +210,37 @@ async fn room_snapshot(
                 web_rtc_enabled: entry.room().web_rtc_enabled(),
             },
         },
+    }
+}
+
+fn user_summaries(detail: &DiagnosticsRoomDetail) -> Vec<DiagnosticsUserSummary> {
+    detail
+        .users
+        .iter()
+        .map(|user| {
+            let bitrate = &user.transport.quality_summary.current_incoming_bitrate;
+            DiagnosticsUserSummary {
+                audio_incoming_bitrate_bps: bitrate.audio,
+                camera_incoming_bitrate_bps: bitrate.camera,
+                connection_id: user.transport.connection_id,
+                health: user.transport.health.clone(),
+                incoming_bitrate_bps: bitrate.total,
+                media_worker_id: user.transport.media_worker_id,
+                publication_count: user.publications.len(),
+                room_id: detail.summary.uuid.clone(),
+                screen_incoming_bitrate_bps: bitrate.screen,
+                subscription_count: user.subscriptions.len(),
+                user_id: user.user_id.clone(),
+                user_key: user_id_to_path_segment(&user.user_id),
+            }
+        })
+        .collect()
+}
+
+fn user_id_to_path_segment(user_id: &UserId) -> String {
+    match user_id {
+        UserId::Integer(value) => value.to_string(),
+        UserId::String(value) => value.clone(),
     }
 }
 

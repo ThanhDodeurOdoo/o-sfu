@@ -329,11 +329,30 @@ pub struct DiagnosticsRoomSummary {
     pub publication_count: usize,
     pub recording_state: RecordingState,
     pub remote_address: String,
+    pub source_count: usize,
     pub user_count: usize,
     pub subscription_count: usize,
     pub transport: DiagnosticsTransportCounts,
     pub uuid: String,
     pub web_rtc_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsUserSummary {
+    pub audio_incoming_bitrate_bps: u64,
+    pub camera_incoming_bitrate_bps: u64,
+    pub connection_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<DiagnosticsTransportHealth>,
+    pub incoming_bitrate_bps: u64,
+    pub media_worker_id: usize,
+    pub publication_count: usize,
+    pub room_id: String,
+    pub screen_incoming_bitrate_bps: u64,
+    pub subscription_count: usize,
+    pub user_id: UserId,
+    pub user_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

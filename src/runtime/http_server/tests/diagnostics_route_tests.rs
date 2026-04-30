@@ -12,6 +12,7 @@ use o_sfu_router::{
     MediaKind, MediaStream,
     test_sample::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
 };
+use serde_json::Value;
 
 use super::fixtures::*;
 use crate::{
@@ -218,8 +219,39 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     };
     assert_eq!(room_summaries.len(), 1);
     assert_eq!(room_summaries[0].user_count, 3);
+    assert_eq!(room_summaries[0].source_count, 1);
     assert_eq!(room_summaries[0].publication_count, 1);
     assert_eq!(room_summaries[0].subscription_count, 2);
+
+    let room_users_request = build_request(
+        Request::get(format!("/internal/diagnostics/rooms/{}/users", room.uuid())),
+        Body::empty(),
+    );
+    assert!(room_users_request.is_some());
+    let Some(room_users_request) = room_users_request else {
+        return;
+    };
+    let room_users_response = app(test_state.state.clone())
+        .oneshot(room_users_request)
+        .await;
+    assert!(room_users_response.is_ok());
+    let Some(room_users_response) = room_users_response.ok() else {
+        return;
+    };
+    assert_eq!(room_users_response.status(), StatusCode::OK);
+    let room_users: Option<Vec<DiagnosticsUserSummary>> = parse_json(room_users_response).await;
+    assert!(room_users.is_some());
+    let Some(room_users) = room_users else {
+        return;
+    };
+    assert_eq!(room_users.len(), 3);
+    let Some(alice_summary) = room_users.iter().find(|user| user.user_key == "1") else {
+        panic!("alice summary should be listed");
+    };
+    assert_eq!(alice_summary.room_id, room.uuid());
+    assert_eq!(alice_summary.publication_count, 1);
+    assert_eq!(alice_summary.subscription_count, 0);
+    assert_eq!(alice_summary.media_worker_id, 0);
 
     let detail_request = build_request(
         Request::get(format!("/internal/diagnostics/rooms/{}", room.uuid())),
@@ -261,6 +293,129 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
             .recent_events
             .iter()
             .any(|event| event.event == "publish.committed")
+    );
+
+    let room_graph_request = build_request(
+        Request::get(format!(
+            "/internal/diagnostics/node-graph/rooms/{}",
+            room.uuid()
+        )),
+        Body::empty(),
+    );
+    assert!(room_graph_request.is_some());
+    let Some(room_graph_request) = room_graph_request else {
+        return;
+    };
+    let room_graph_response = app(test_state.state.clone())
+        .oneshot(room_graph_request)
+        .await;
+    assert!(room_graph_response.is_ok());
+    let Some(room_graph_response) = room_graph_response.ok() else {
+        return;
+    };
+    assert_eq!(room_graph_response.status(), StatusCode::OK);
+    let room_graph: Option<Value> = parse_json(room_graph_response).await;
+    assert!(room_graph.is_some());
+    let Some(room_graph) = room_graph else {
+        return;
+    };
+    assert!(room_graph["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|node| node["id"] == format!("room:{}", room.uuid()))
+    }));
+
+    let old_channel_graph_request = build_request(
+        Request::get(format!(
+            "/internal/diagnostics/node-graph/channels/{}",
+            room.uuid()
+        )),
+        Body::empty(),
+    );
+    assert!(old_channel_graph_request.is_some());
+    let Some(old_channel_graph_request) = old_channel_graph_request else {
+        return;
+    };
+    let old_channel_graph_response = app(test_state.state.clone())
+        .oneshot(old_channel_graph_request)
+        .await;
+    assert!(old_channel_graph_response.is_ok());
+    let Some(old_channel_graph_response) = old_channel_graph_response.ok() else {
+        return;
+    };
+    assert_eq!(old_channel_graph_response.status(), StatusCode::NOT_FOUND);
+
+    let alice_graph_request = build_request(
+        Request::get(format!(
+            "/internal/diagnostics/node-graph/rooms/{}/users/{}",
+            room.uuid(),
+            alice_session_id.clone().into_integer_string()
+        )),
+        Body::empty(),
+    );
+    assert!(alice_graph_request.is_some());
+    let Some(alice_graph_request) = alice_graph_request else {
+        return;
+    };
+    let alice_graph_response = app(test_state.state.clone())
+        .oneshot(alice_graph_request)
+        .await;
+    assert!(alice_graph_response.is_ok());
+    let Some(alice_graph_response) = alice_graph_response.ok() else {
+        return;
+    };
+    assert_eq!(alice_graph_response.status(), StatusCode::OK);
+    let alice_graph: Option<Value> = parse_json(alice_graph_response).await;
+    assert!(alice_graph.is_some());
+    let Some(alice_graph) = alice_graph else {
+        return;
+    };
+    assert!(
+        alice_graph["nodes"]
+            .as_array()
+            .is_some_and(|nodes| nodes.iter().any(|node| node["id"] == "worker:0"))
+    );
+    assert!(
+        alice_graph["edges"]
+            .as_array()
+            .is_some_and(|edges| edges.iter().any(|edge| edge["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("deliver:"))
+                && edge["detail__direction"] == "outbound"))
+    );
+
+    let bob_graph_request = build_request(
+        Request::get(format!(
+            "/internal/diagnostics/node-graph/rooms/{}/users/{}",
+            room.uuid(),
+            bob_session_id.clone().into_integer_string()
+        )),
+        Body::empty(),
+    );
+    assert!(bob_graph_request.is_some());
+    let Some(bob_graph_request) = bob_graph_request else {
+        return;
+    };
+    let bob_graph_response = app(test_state.state.clone())
+        .oneshot(bob_graph_request)
+        .await;
+    assert!(bob_graph_response.is_ok());
+    let Some(bob_graph_response) = bob_graph_response.ok() else {
+        return;
+    };
+    assert_eq!(bob_graph_response.status(), StatusCode::OK);
+    let bob_graph: Option<Value> = parse_json(bob_graph_response).await;
+    assert!(bob_graph.is_some());
+    let Some(bob_graph) = bob_graph else {
+        return;
+    };
+    assert!(
+        bob_graph["edges"]
+            .as_array()
+            .is_some_and(|edges| edges.iter().any(|edge| edge["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("deliver:"))
+                && edge["detail__direction"] == "inbound"))
     );
 
     let session_request = build_request(

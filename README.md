@@ -188,6 +188,12 @@ https://github.com/ThanhDodeurOdoo/o-sfu-telemetry contains the optional Prometh
 - `/metrics` and `/v1/stats` keep distinct roles:
   - `/metrics` is the authoritative low-cardinality time-series surface.
   - `/v1/stats` remains a compatibility snapshot surface.
+- `/internal/diagnostics/rooms` and `/internal/diagnostics/rooms/{uuid}/users`
+  are the operator table surfaces for selecting active rooms and users.
+- `/internal/diagnostics/node-graph/rooms/{uuid}` and
+  `/internal/diagnostics/node-graph/rooms/{uuid}/users/{id}` are the
+  Grafana node-graph projections for whole-room topology and one user's inbound
+  or outbound media paths through local workers and peer users.
 
 ### Benchmarking
 

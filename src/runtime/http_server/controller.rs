@@ -66,8 +66,16 @@ pub(crate) fn app(state: RuntimeState) -> Router {
             get(diagnostics_room_detail),
         )
         .route(
-            "/internal/diagnostics/node-graph/channels/{uuid}",
+            "/internal/diagnostics/rooms/{uuid}/users",
+            get(diagnostics_room_users),
+        )
+        .route(
+            "/internal/diagnostics/node-graph/rooms/{uuid}",
             get(diagnostics_room_graph),
+        )
+        .route(
+            "/internal/diagnostics/node-graph/rooms/{uuid}/users/{id}",
+            get(diagnostics_user_graph),
         )
         .route(
             "/internal/diagnostics/users/{id}",
@@ -319,6 +327,32 @@ async fn diagnostics_room_detail(
     .await
 }
 
+async fn diagnostics_room_users(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path(room_id): Path<String>,
+) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        let Some(payload) = diagnostics::room_users_response(
+            &state.rooms,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &room_id,
+        )
+        .await
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        axum::Json(payload).into_response()
+    }
+    .await
+}
+
 async fn diagnostics_room_graph(
     State(state): State<RuntimeState>,
     headers: HeaderMap,
@@ -341,6 +375,35 @@ async fn diagnostics_room_graph(
             return StatusCode::NOT_FOUND.into_response();
         };
         let graph = diagnostics::build_graph(&payload);
+        axum::Json(graph).into_response()
+    }
+    .await
+}
+
+async fn diagnostics_user_graph(
+    State(state): State<RuntimeState>,
+    headers: HeaderMap,
+    Path((room_id, user_id)): Path<(String, String)>,
+) -> Response {
+    async {
+        match ensure_diagnostics_access(&headers, &state.http_options) {
+            DiagnosticsAccess::Allowed => {}
+            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
+            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
+        }
+        let Some(payload) = diagnostics::room_detail_response(
+            &state.rooms,
+            &state.transport_adapter,
+            &state.diagnostics,
+            &room_id,
+        )
+        .await
+        else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let Some(graph) = diagnostics::build_user_graph(&payload, &user_id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
         axum::Json(graph).into_response()
     }
     .await
