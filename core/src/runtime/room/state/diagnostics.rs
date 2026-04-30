@@ -5,9 +5,9 @@ use crate::runtime::{
     ConnectionId, StreamType, UserId,
     diagnostics::{
         DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
-        DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState,
-        DiagnosticsSource, DiagnosticsSourceEncoding, DiagnosticsSourceSelection,
-        DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
+        DiagnosticsPolicyPauseReason, DiagnosticsPublication, DiagnosticsQualitySummary,
+        DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
+        DiagnosticsSourceSelection, DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
         DiagnosticsTemporalLayerSelection, DiagnosticsUserTransport, DiagnosticsUserView,
         DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
     },
@@ -296,9 +296,16 @@ fn diagnostics_source_selection(
     };
     DiagnosticsSourceSelection {
         active: selection.active(),
+        policy_allows_delivery: selection.policy_allows_delivery(),
+        policy_pause_reason: selection
+            .policy_pause_reason()
+            .map(DiagnosticsPolicyPauseReason::from),
         pressure_observations: selection.pressure_observations(),
         selection_reason: selection.selector().into(),
         selector: selection.selector().into(),
+        selected_estimated_bitrate_bps: selected_encoding_id
+            .and_then(|encoding_id| source.encoding(encoding_id))
+            .and_then(SourceEncodingDescriptor::max_bitrate),
         selected_encoding_id: selected_encoding_id.map(SourceEncodingId::as_u64),
         selected_rid: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))

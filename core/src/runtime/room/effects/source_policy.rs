@@ -15,7 +15,8 @@ use super::super::{
     state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
 };
 use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, ConsumerPacketGateUpdate, MediaPort, ReceiverBandwidthSnapshot,
+    ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaPort,
+    ReceiverBandwidthSnapshot,
 };
 
 /// Executes one source-policy refresh after pure room planning.
@@ -142,6 +143,17 @@ impl SourcePolicyEffectPlan {
         update: ConsumerPacketSelectionUpdate,
     ) -> Option<ConsumerPacketSelectionUpdate> {
         Self::log_accepted_packet_update(&update);
+        if !Self::apply_route_activity_update(room, media_port, &update).await {
+            warn!(
+                consumer_user_id = ?update.consumer_user_id(),
+                source_user_id = ?update.source_user_id(),
+                source_transport_media_id = ?update.source_transport_media_id(),
+                consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                route_active = update.route_active(),
+                "transport adapter failed to apply receiver video policy route activity"
+            );
+            return None;
+        }
         if Self::request_adaptation_keyframe(room, media_port, &update).await {
             return Some(update);
         }
@@ -153,6 +165,27 @@ impl SourcePolicyEffectPlan {
             "transport adapter failed to request an adaptation keyframe refresh"
         );
         Some(update)
+    }
+
+    async fn apply_route_activity_update(
+        room: &Room,
+        media_port: &impl MediaPort,
+        update: &ConsumerPacketSelectionUpdate,
+    ) -> bool {
+        if !update.route_activity_update() {
+            return true;
+        }
+        media_port
+            .set_consumer_active(
+                &room
+                    .transport_user_key(update.consumer_user_id(), update.consumer_connection_id()),
+                update.consumer_transport_media_id(),
+                &room.transport_user_key(update.source_user_id(), update.source_connection_id()),
+                update.source_transport_media_id(),
+                ConsumerActivity::from_active(update.route_active()),
+            )
+            .await
+            .is_ok()
     }
 
     async fn rejected_packet_gate_updates(
@@ -222,6 +255,7 @@ impl SourcePolicyEffectPlan {
             source_transport_media_id = ?update.source_transport_media_id(),
             consumer_transport_media_id = ?update.consumer_transport_media_id(),
             selector = ?update.selector(),
+            policy_pause_reason = ?update.policy_pause_reason(),
             packet_gate = ?update.packet_gate(),
             request_keyframe = update.request_keyframe(),
             "prepared receiver-driven packet selection update"
@@ -235,6 +269,7 @@ impl SourcePolicyEffectPlan {
             source_transport_media_id = ?update.source_transport_media_id(),
             consumer_transport_media_id = ?update.consumer_transport_media_id(),
             selector = ?update.selector(),
+            policy_pause_reason = ?update.policy_pause_reason(),
             packet_gate = ?update.packet_gate(),
             request_keyframe = update.request_keyframe(),
             "transport adapter accepted receiver-driven packet selection update"

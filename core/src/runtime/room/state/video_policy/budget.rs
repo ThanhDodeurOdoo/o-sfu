@@ -1,19 +1,22 @@
 //! Pure receiver video budget planner.
 //!
-//! The current planner preserves the existing RID-selection behavior: camera
-//! routes in small rooms stay on the highest encoding, multiparty featured
-//! cameras keep a higher floor, and thumbnails use receiver bandwidth plus
-//! refresh-count hysteresis to decide when to downswitch or upswitch. Future
-//! overload work should extend this module by selecting a whole receiver video
-//! set before emitting pause actions.
+//! The planner first chooses the useful encoding for each receiver/source route,
+//! then solves the receiver's selected video set against the live bandwidth
+//! estimate. Overload is expressed as semantic route pauses so the transport
+//! withholds whole routes instead of randomly dropping packets.
+
+use std::collections::BTreeMap;
 
 use super::{
     action::{ConsumerPacketSelectionUpdate, ReceiverVideoRouteAction, VideoRouteAction},
-    input::ReceiverVideoPolicyInput,
+    input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput},
 };
 use crate::runtime::{
-    StreamType,
-    source_model::{ConsumerSourceSelection, SourceEncodingDescriptor, SourceSelector},
+    StreamType, UserId,
+    source_model::{
+        ConsumerSourceSelection, PolicyPauseReason, SourceEncodingDescriptor,
+        SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
+    },
     transport_adapter::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
 };
 
@@ -38,27 +41,17 @@ pub(in crate::runtime::room) struct ReceiverVideoBudgetPlan<'a> {
 impl<'a> ReceiverVideoBudgetPlan<'a> {
     #[must_use]
     pub(in crate::runtime::room) fn from_input(input: &'a ReceiverVideoPolicyInput<'a>) -> Self {
-        let route_actions = input
-            .routes()
-            .iter()
-            .filter_map(|route| {
-                let adaptation = consumer_adaptation_plan(
-                    route.user_count(),
-                    route.stream_type(),
-                    route.encodings(),
-                    route.current_selection(),
-                    route.layout_intent().uses_featured_quality(),
-                    route.visible_camera_route_count(),
-                    route.receiver_bandwidth_bps(),
-                )?;
-                Some(ReceiverVideoRouteAction::new(
-                    (*route).clone(),
-                    VideoRouteAction::Send(adaptation.selector),
-                    adaptation.pressure_observations,
-                    adaptation.upgrade_observations,
-                    adaptation.request_keyframe,
-                ))
-            })
+        let mut routes_by_receiver: BTreeMap<&UserId, Vec<&ReceiverVideoRouteInput<'a>>> =
+            BTreeMap::new();
+        for route in input.routes() {
+            routes_by_receiver
+                .entry(route.consumer_user_id())
+                .or_default()
+                .push(route);
+        }
+        let route_actions = routes_by_receiver
+            .into_values()
+            .flat_map(plan_receiver_routes)
             .collect();
         Self { route_actions }
     }
@@ -83,6 +76,14 @@ struct ConsumerAdaptationPlan {
     request_keyframe: bool,
 }
 
+#[derive(Debug, Clone)]
+struct PlannedReceiverRoute<'a> {
+    route: ReceiverVideoRouteInput<'a>,
+    adaptation: ConsumerAdaptationPlan,
+    selected_bitrate_bps: u64,
+    action: VideoRouteAction,
+}
+
 impl super::super::shared::RoomState {
     /// Plans deterministic per-consumer source selectors for live video routes.
     ///
@@ -101,6 +102,174 @@ impl super::super::shared::RoomState {
             receiver_bandwidth_snapshot,
         );
         ReceiverVideoBudgetPlan::from_input(&input).into_selection_updates()
+    }
+}
+
+fn plan_receiver_routes<'a>(
+    routes: Vec<&'a ReceiverVideoRouteInput<'a>>,
+) -> Vec<ReceiverVideoRouteAction<'a>> {
+    let Some(receiver_bandwidth_bps) = routes
+        .iter()
+        .find_map(|route| route.receiver_bandwidth_bps())
+    else {
+        return routes
+            .into_iter()
+            .filter_map(|route| planned_send_action(route, consumer_route_adaptation_plan(route)?))
+            .collect();
+    };
+    let mut planned_routes = routes
+        .into_iter()
+        .filter_map(|route| {
+            let adaptation = consumer_route_adaptation_plan(route)?;
+            let selected_bitrate_bps = selector_bitrate_bps(route.encodings(), adaptation.selector);
+            Some(PlannedReceiverRoute {
+                route: (*route).clone(),
+                adaptation,
+                selected_bitrate_bps,
+                action: VideoRouteAction::Send(adaptation.selector),
+            })
+        })
+        .collect::<Vec<_>>();
+    apply_receiver_overload_policy(&mut planned_routes, receiver_bandwidth_bps);
+    planned_routes
+        .into_iter()
+        .filter_map(planned_route_action)
+        .collect()
+}
+
+fn consumer_route_adaptation_plan(
+    route: &ReceiverVideoRouteInput<'_>,
+) -> Option<ConsumerAdaptationPlan> {
+    consumer_adaptation_plan(
+        route.user_count(),
+        route.stream_type(),
+        route.encodings(),
+        route.current_selection(),
+        route.layout_intent().uses_featured_quality(),
+        route.visible_camera_route_count(),
+        route.receiver_bandwidth_bps(),
+    )
+}
+
+fn planned_send_action<'a>(
+    route: &'a ReceiverVideoRouteInput<'a>,
+    adaptation: ConsumerAdaptationPlan,
+) -> Option<ReceiverVideoRouteAction<'a>> {
+    planned_route_action(PlannedReceiverRoute {
+        route: (*route).clone(),
+        selected_bitrate_bps: selector_bitrate_bps(route.encodings(), adaptation.selector),
+        action: VideoRouteAction::Send(adaptation.selector),
+        adaptation,
+    })
+}
+
+fn apply_receiver_overload_policy(
+    planned_routes: &mut [PlannedReceiverRoute<'_>],
+    receiver_bandwidth_bps: u64,
+) {
+    let mut selected_bitrate_bps = selected_receiver_bitrate_bps(planned_routes);
+    if selected_bitrate_bps <= receiver_bandwidth_bps {
+        return;
+    }
+    for route in planned_routes
+        .iter_mut()
+        .filter(|route| route_can_downgrade(route))
+    {
+        let Some((selector, bitrate_bps)) = cheapest_useful_encoding(route.route.encodings())
+        else {
+            route.action = VideoRouteAction::Pause(PolicyPauseReason::MissingUsableLayer);
+            selected_bitrate_bps = selected_bitrate_bps.saturating_sub(route.selected_bitrate_bps);
+            route.selected_bitrate_bps = 0;
+            continue;
+        };
+        if bitrate_bps < route.selected_bitrate_bps {
+            selected_bitrate_bps = selected_bitrate_bps
+                .saturating_sub(route.selected_bitrate_bps)
+                .saturating_add(bitrate_bps);
+            route.selected_bitrate_bps = bitrate_bps;
+            route.action = VideoRouteAction::Send(selector);
+        }
+    }
+    if selected_bitrate_bps <= receiver_bandwidth_bps {
+        return;
+    }
+    let mut pause_order = planned_routes
+        .iter()
+        .enumerate()
+        .filter(|(_index, route)| !route_is_protected(route))
+        .map(|(index, route)| (pause_rank(route), index))
+        .collect::<Vec<_>>();
+    pause_order.sort_by_key(|(rank, _index)| *rank);
+    for (_rank, index) in pause_order {
+        let Some(route) = planned_routes.get_mut(index) else {
+            continue;
+        };
+        if selected_bitrate_bps <= receiver_bandwidth_bps {
+            break;
+        }
+        let pause_reason = pause_reason_for_route(route);
+        route.action = VideoRouteAction::Pause(pause_reason);
+        selected_bitrate_bps = selected_bitrate_bps.saturating_sub(route.selected_bitrate_bps);
+        route.selected_bitrate_bps = 0;
+    }
+}
+
+fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideoRouteAction<'_>> {
+    let current = route.route.current_selection();
+    match route.action {
+        VideoRouteAction::Send(selector) if current.policy_pause_reason().is_some() => {
+            let upgrade_observations = current
+                .upgrade_observations()
+                .saturating_add(1)
+                .min(UPSWITCH_STABLE_OBSERVATIONS);
+            if upgrade_observations >= UPSWITCH_STABLE_OBSERVATIONS {
+                Some(ReceiverVideoRouteAction::new(
+                    route.route,
+                    VideoRouteAction::Send(selector),
+                    0,
+                    0,
+                    true,
+                ))
+            } else {
+                Some(ReceiverVideoRouteAction::new(
+                    route.route,
+                    VideoRouteAction::Pause(current.policy_pause_reason()?),
+                    0,
+                    upgrade_observations,
+                    false,
+                ))
+            }
+        }
+        VideoRouteAction::Pause(reason) if current.policy_pause_reason() != Some(reason) => {
+            let pressure_observations = current
+                .pressure_observations()
+                .saturating_add(1)
+                .min(DOWNSWITCH_PRESSURE_OBSERVATIONS);
+            if pressure_observations >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
+                Some(ReceiverVideoRouteAction::new(
+                    route.route,
+                    VideoRouteAction::Pause(reason),
+                    0,
+                    0,
+                    false,
+                ))
+            } else {
+                Some(ReceiverVideoRouteAction::new(
+                    route.route,
+                    VideoRouteAction::Send(current.selector()),
+                    pressure_observations,
+                    0,
+                    false,
+                ))
+            }
+        }
+        _ => Some(ReceiverVideoRouteAction::new(
+            route.route,
+            route.action,
+            route.adaptation.pressure_observations,
+            route.adaptation.upgrade_observations,
+            route.adaptation.request_keyframe,
+        )),
     }
 }
 
@@ -194,6 +363,91 @@ fn consumer_adaptation_plan(
         upgrade_observations: 0,
         request_keyframe: false,
     })
+}
+
+fn selected_receiver_bitrate_bps(planned_routes: &[PlannedReceiverRoute<'_>]) -> u64 {
+    planned_routes
+        .iter()
+        .filter(|route| matches!(route.action, VideoRouteAction::Send(_)))
+        .fold(0_u64, |total, route| {
+            total.saturating_add(route.selected_bitrate_bps)
+        })
+}
+
+fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
+    route.route.stream_type() == StreamType::Camera
+        && matches!(
+            route.route.layout_intent().priority(),
+            SourceRoutePriority::VisibleThumbnail | SourceRoutePriority::HiddenOrOverflow
+        )
+}
+
+fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
+    matches!(
+        route.route.layout_intent().priority(),
+        SourceRoutePriority::PinnedOrFeatured
+            | SourceRoutePriority::ScreenShare
+            | SourceRoutePriority::ActiveSpeaker
+    )
+}
+
+fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
+    match route.route.layout_intent().priority() {
+        SourceRoutePriority::HiddenOrOverflow => 0,
+        SourceRoutePriority::VisibleThumbnail => 1,
+        SourceRoutePriority::ActiveSpeaker => 2,
+        SourceRoutePriority::ScreenShare => 3,
+        SourceRoutePriority::PinnedOrFeatured => 4,
+    }
+}
+
+fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason {
+    match route.route.layout_intent().priority() {
+        SourceRoutePriority::HiddenOrOverflow => match route.route.layout_intent().role() {
+            SourceRoomPolicySelector::Hidden => PolicyPauseReason::HiddenTile,
+            SourceRoomPolicySelector::Overflow => PolicyPauseReason::OverflowTile,
+            _ => PolicyPauseReason::BudgetPressure,
+        },
+        _ => PolicyPauseReason::BudgetPressure,
+    }
+}
+
+fn cheapest_useful_encoding(
+    encodings: &[&SourceEncodingDescriptor],
+) -> Option<(SourceSelector, u64)> {
+    encodings
+        .iter()
+        .filter(|encoding| {
+            !matches!(
+                encoding.policy_role(),
+                Some(UploadLayerPolicyRole::Featured)
+            )
+        })
+        .chain(encodings.iter())
+        .find_map(|encoding| {
+            Some((
+                SourceSelector::Encoding(encoding.encoding_id()),
+                encoding.max_bitrate()?,
+            ))
+        })
+}
+
+fn selector_bitrate_bps(encodings: &[&SourceEncodingDescriptor], selector: SourceSelector) -> u64 {
+    selector
+        .selected_encoding()
+        .and_then(|encoding_id| {
+            encodings
+                .iter()
+                .find(|encoding| encoding.encoding_id() == encoding_id)
+                .and_then(|encoding| encoding.max_bitrate())
+        })
+        .or_else(|| {
+            encodings
+                .iter()
+                .filter_map(|encoding| encoding.max_bitrate())
+                .max()
+        })
+        .unwrap_or_default()
 }
 
 fn screen_share_adaptation_plan(

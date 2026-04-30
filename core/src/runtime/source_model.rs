@@ -343,15 +343,10 @@ pub enum SourceRoutePriority {
 
 /// Server-owned reason why video policy may withhold a live route.
 ///
-/// The current production policy never emits pause actions; it only selects
-/// encodings. The reason vocabulary is defined here so the later budget solver,
-/// diagnostics, and recording metadata all describe policy pauses with the same
-/// source-domain terms instead of transport drop reasons.
+/// The reason is separate from the compatibility subscription state. A user can
+/// stay subscribed while room policy temporarily withholds RTP delivery for a
+/// receiver-specific overload decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "semantic route pause reasons are reserved for the upcoming budget solver"
-)]
 pub enum PolicyPauseReason {
     /// The receiver budget cannot fit this route after lower layers were tried.
     BudgetPressure,
@@ -372,6 +367,7 @@ pub enum PolicyPauseReason {
 pub struct ConsumerSourceSelection {
     active: bool,
     selector: SourceSelector,
+    policy_pause_reason: Option<PolicyPauseReason>,
     pressure_observations: u8,
     upgrade_observations: u8,
 }
@@ -382,6 +378,7 @@ impl ConsumerSourceSelection {
         Self {
             active,
             selector: SourceSelector::Open,
+            policy_pause_reason: None,
             pressure_observations: 0,
             upgrade_observations: 0,
         }
@@ -395,6 +392,16 @@ impl ConsumerSourceSelection {
     #[must_use]
     pub const fn selector(self) -> SourceSelector {
         self.selector
+    }
+
+    #[must_use]
+    pub const fn policy_pause_reason(self) -> Option<PolicyPauseReason> {
+        self.policy_pause_reason
+    }
+
+    #[must_use]
+    pub const fn policy_allows_delivery(self) -> bool {
+        self.policy_pause_reason.is_none()
     }
 
     #[must_use]
@@ -413,6 +420,10 @@ impl ConsumerSourceSelection {
 
     pub const fn set_selector(&mut self, selector: SourceSelector) {
         self.selector = selector;
+    }
+
+    pub const fn set_policy_pause_reason(&mut self, reason: Option<PolicyPauseReason>) {
+        self.policy_pause_reason = reason;
     }
 
     pub const fn set_adaptation_observations(

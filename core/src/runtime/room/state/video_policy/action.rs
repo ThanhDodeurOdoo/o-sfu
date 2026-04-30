@@ -1,10 +1,8 @@
 //! Video policy action vocabulary.
 //!
-//! The budget planner emits semantic actions, not transport calls. Today the
-//! live action is `Send(SourceSelector)`, which preserves the existing RID
-//! selection behavior. The paused-route action is intentionally present as the
-//! future policy vocabulary for overload work, but it is not emitted until the
-//! budget solver starts withholding routes.
+//! The budget planner emits semantic actions, not transport calls. `Send`
+//! resolves to a source selector and active consumer route; `Pause` keeps the
+//! subscription intact while withholding RTP delivery for a policy-owned reason.
 
 use super::{input::ReceiverVideoRouteInput, projection::source_packet_gate_for_selector};
 use crate::runtime::{
@@ -19,10 +17,6 @@ pub(in crate::runtime::room) enum VideoRouteAction {
     /// Forward the source with the selected source-domain quality constraint.
     Send(SourceSelector),
     /// Withhold the route for a server-owned policy reason.
-    #[allow(
-        dead_code,
-        reason = "route-pause decisions are introduced by the later receiver budget solver task"
-    )]
     Pause(PolicyPauseReason),
 }
 
@@ -57,17 +51,25 @@ impl<'a> ReceiverVideoRouteAction<'a> {
     pub(in crate::runtime::room) fn into_selection_update(
         self,
     ) -> Option<ConsumerPacketSelectionUpdate> {
-        let VideoRouteAction::Send(selector) = self.action else {
-            return None;
+        let current_selection = self.route.current_selection();
+        let (selector, policy_pause_reason, request_keyframe) = match self.action {
+            VideoRouteAction::Send(selector) => (
+                selector,
+                None,
+                self.request_keyframe || !current_selection.policy_allows_delivery(),
+            ),
+            VideoRouteAction::Pause(reason) => (current_selection.selector(), Some(reason), false),
         };
-        let packet_gate = if selector == self.route.current_selection().selector() {
+        let packet_gate = if selector == current_selection.selector() {
             None
         } else {
             Some(source_packet_gate_for_selector(self.route.source(), selector).ok()?)
         };
+        let route_activity_update = policy_pause_reason != current_selection.policy_pause_reason();
         if packet_gate.is_none()
-            && self.pressure_observations == self.route.current_selection().pressure_observations()
-            && self.upgrade_observations == self.route.current_selection().upgrade_observations()
+            && !route_activity_update
+            && self.pressure_observations == current_selection.pressure_observations()
+            && self.upgrade_observations == current_selection.upgrade_observations()
         {
             return None;
         }
@@ -80,10 +82,12 @@ impl<'a> ReceiverVideoRouteAction<'a> {
             consumer_transport_media_id: self.route.consumer_transport_media_id(),
             source_id: self.route.source_id(),
             selector,
+            policy_pause_reason,
             pressure_observations: self.pressure_observations,
             upgrade_observations: self.upgrade_observations,
             packet_gate,
-            request_keyframe: self.request_keyframe,
+            route_activity_update,
+            request_keyframe,
         })
     }
 }
@@ -103,9 +107,11 @@ pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
     consumer_transport_media_id: TransportMediaId,
     source_id: PublishedSourceId,
     selector: SourceSelector,
+    policy_pause_reason: Option<PolicyPauseReason>,
     pressure_observations: u8,
     upgrade_observations: u8,
     packet_gate: Option<SourcePacketGate>,
+    route_activity_update: bool,
     request_keyframe: bool,
 }
 
@@ -142,6 +148,14 @@ impl ConsumerPacketSelectionUpdate {
         self.selector
     }
 
+    pub(in crate::runtime::room) const fn policy_pause_reason(&self) -> Option<PolicyPauseReason> {
+        self.policy_pause_reason
+    }
+
+    pub(in crate::runtime::room) const fn route_active(&self) -> bool {
+        self.policy_pause_reason.is_none()
+    }
+
     pub(in crate::runtime::room) const fn pressure_observations(&self) -> u8 {
         self.pressure_observations
     }
@@ -152,6 +166,10 @@ impl ConsumerPacketSelectionUpdate {
 
     pub(in crate::runtime::room) fn packet_gate(&self) -> Option<&SourcePacketGate> {
         self.packet_gate.as_ref()
+    }
+
+    pub(in crate::runtime::room) const fn route_activity_update(&self) -> bool {
+        self.route_activity_update
     }
 
     pub(in crate::runtime::room) const fn request_keyframe(&self) -> bool {

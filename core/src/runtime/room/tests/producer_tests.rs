@@ -13,7 +13,8 @@ use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
         diagnostics::{
-            DiagnosticsStore, DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+            DiagnosticsPolicyPauseReason, DiagnosticsStore, DiagnosticsVideoLayoutRole,
+            DiagnosticsVideoRoutePriority,
         },
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -515,6 +516,91 @@ async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
     assert_consumer_keyframe_request(recovery_events, &UserId::Integer(2), &UserId::Integer(1));
 }
 
+#[tokio::test]
+async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_fit() {
+    let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4]).await;
+    for raw_user_id in [1_i64, 3, 4] {
+        publish_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
+    }
+
+    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
+    let baseline_event_count = fake.snapshot_events().len();
+    for _ in 0..2 {
+        room.test_api()
+            .lifecycle()
+            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
+            .await;
+    }
+
+    let events = fake.snapshot_events();
+    assert_consumer_activity_update(
+        &events[baseline_event_count..],
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        false,
+    );
+    let diagnostics = room.diagnostics_user_views(&adapter).await;
+    let paused_subscription = diagnostics
+        .iter()
+        .find(|view| view.user_id == UserId::Integer(2))
+        .and_then(|view| {
+            view.subscriptions
+                .iter()
+                .find(|subscription| subscription.producer_user_id == UserId::Integer(1))
+        })
+        .expect("diagnostics should include the policy-paused subscription");
+    assert!(!paused_subscription.selection.policy_allows_delivery);
+    assert_eq!(
+        paused_subscription.selection.policy_pause_reason,
+        Some(DiagnosticsPolicyPauseReason::BudgetPressure)
+    );
+    assert_eq!(
+        paused_subscription.selection.selected_estimated_bitrate_bps,
+        Some(150_000)
+    );
+}
+
+#[tokio::test]
+async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscription_state() {
+    let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4]).await;
+    for raw_user_id in [1_i64, 3, 4] {
+        publish_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
+    }
+
+    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
+    for _ in 0..2 {
+        room.test_api()
+            .lifecycle()
+            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
+            .await;
+    }
+    assert_consumer_activity_update(
+        &fake.snapshot_events(),
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        false,
+    );
+
+    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 1_000_000);
+    let baseline_event_count = fake.snapshot_events().len();
+    for _ in 0..3 {
+        room.test_api()
+            .lifecycle()
+            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
+            .await;
+    }
+
+    let events = fake.snapshot_events();
+    let recovery_events = &events[baseline_event_count..];
+    assert_consumer_activity_update(
+        recovery_events,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        true,
+    );
+    assert_consumer_keyframe_request(recovery_events, &UserId::Integer(2), &UserId::Integer(1));
+}
+
 async fn setup_ready_users_with_fake(
     user_ids: &[i64],
 ) -> (Arc<Room>, RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
@@ -691,6 +777,26 @@ fn assert_consumer_keyframe_request(
                 source_user_id,
             } if consumer_user_id == expected_consumer_user_id
                 && source_user_id == expected_source_user_id
+        )
+    }));
+}
+
+fn assert_consumer_activity_update(
+    events: &[FakeWebRtcEvent],
+    expected_consumer_user_id: &UserId,
+    expected_source_user_id: &UserId,
+    expected_active: bool,
+) {
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumerActivityUpdated {
+                consumer_user_id,
+                source_user_id,
+                active,
+            } if consumer_user_id == expected_consumer_user_id
+                && source_user_id == expected_source_user_id
+                && *active == expected_active
         )
     }));
 }

@@ -10,7 +10,9 @@ use serde_json::{Map, Value, json};
 use crate::runtime::{
     RecordingState, StreamType, UserId, UserInfo,
     rtc_adapter::TransportSessionHealth,
-    source_model::{SourceRoomPolicySelector, SourceRoutePriority, SourceSelector},
+    source_model::{
+        PolicyPauseReason, SourceRoomPolicySelector, SourceRoutePriority, SourceSelector,
+    },
     transport_adapter::{
         ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
     },
@@ -59,6 +61,15 @@ pub enum DiagnosticsSourceSelectionReason {
     Open,
     ReceiverAdaptation,
     RoomPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticsPolicyPauseReason {
+    BudgetPressure,
+    HiddenTile,
+    OverflowTile,
+    MissingUsableLayer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,9 +247,14 @@ pub struct DiagnosticsSource {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsSourceSelection {
     pub active: bool,
+    pub policy_allows_delivery: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_pause_reason: Option<DiagnosticsPolicyPauseReason>,
     pub pressure_observations: u8,
     pub selection_reason: DiagnosticsSourceSelectionReason,
     pub selector: DiagnosticsSourceSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_estimated_bitrate_bps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_encoding_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -459,6 +475,17 @@ impl From<SourceSelector> for DiagnosticsSourceSelectionReason {
                 Self::ReceiverAdaptation
             }
             SourceSelector::RoomPolicy(_) => Self::RoomPolicy,
+        }
+    }
+}
+
+impl From<PolicyPauseReason> for DiagnosticsPolicyPauseReason {
+    fn from(value: PolicyPauseReason) -> Self {
+        match value {
+            PolicyPauseReason::BudgetPressure => Self::BudgetPressure,
+            PolicyPauseReason::HiddenTile => Self::HiddenTile,
+            PolicyPauseReason::OverflowTile => Self::OverflowTile,
+            PolicyPauseReason::MissingUsableLayer => Self::MissingUsableLayer,
         }
     }
 }

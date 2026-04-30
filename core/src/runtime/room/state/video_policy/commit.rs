@@ -41,6 +41,7 @@ impl RoomState {
                 .entry(key)
                 .or_insert_with(|| ConsumerSourceSelection::open(true));
             selection.set_selector(update.selector());
+            selection.set_policy_pause_reason(update.policy_pause_reason());
             selection.set_adaptation_observations(
                 update.pressure_observations(),
                 update.upgrade_observations(),
