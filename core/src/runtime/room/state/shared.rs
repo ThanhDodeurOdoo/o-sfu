@@ -27,9 +27,6 @@ use crate::runtime::{
     transport_adapter::TransportMediaId,
 };
 
-const PUBLISHABLE_STREAM_TYPES: [StreamType; 3] =
-    [StreamType::Audio, StreamType::Camera, StreamType::Screen];
-
 /// Core mutable state for a single SFU room (room).
 ///
 /// Owns all user, producer, and consumer bookkeeping. Every mutation returns
@@ -56,8 +53,20 @@ pub(in crate::runtime::room) struct RoomState {
     pub(super) sources: BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
     /// Compatibility source lookup keyed by the publisher user and stream type.
     pub(super) source_ids_by_owner_stream: BTreeMap<SourceKey, PublishedSourceId>,
+    /// Published source ids owned by each room user.
+    ///
+    /// This is an ownership index for local teardown. It is updated in the
+    /// same state transition as `sources` and prevents a departing user from
+    /// scanning unrelated source entries.
+    pub(super) source_ids_by_owner: BTreeMap<UserId, BTreeSet<PublishedSourceId>>,
     /// Current routed producer realization keyed by source id.
     pub(super) producer_id_by_source_id: BTreeMap<PublishedSourceId, ProducerRuntimeId>,
+    /// Runtime producer ids owned by each room user.
+    ///
+    /// Producer media cleanup uses this index before state mutation so
+    /// replacement joins and disconnect bursts only inspect the departing
+    /// user's producers.
+    pub(super) producer_ids_by_owner: BTreeMap<UserId, BTreeSet<ProducerRuntimeId>>,
     /// Keyed by typed runtime producer id. Compatibility wire ids are rendered at the edge.
     pub(super) producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
     /// Source ownership and encoding metadata keyed by transport-owned media ids.
@@ -68,6 +77,13 @@ pub(in crate::runtime::room) struct RoomState {
     /// Concrete routed consumer media currently realizing a source selection.
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     pub(super) pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
+    /// Consumer keys grouped by receiver and by source.
+    ///
+    /// These are ownership facts for all room-owned consumer key stores:
+    /// desired source selections, pending bootstraps, and realized consumers.
+    /// A key stays indexed while any of those stores contains it.
+    pub(super) consumer_keys_by_user: BTreeMap<UserId, BTreeSet<ConsumerKey>>,
+    pub(super) consumer_keys_by_source: BTreeMap<PublishedSourceId, BTreeSet<ConsumerKey>>,
     /// Shadow of user/producer/consumer state inside the pure router core.
     pub(super) topology: RoomTopology,
 }
@@ -176,12 +192,16 @@ impl RoomState {
             },
             sources: BTreeMap::new(),
             source_ids_by_owner_stream: BTreeMap::new(),
+            source_ids_by_owner: BTreeMap::new(),
             producer_id_by_source_id: BTreeMap::new(),
+            producer_ids_by_owner: BTreeMap::new(),
             producers: BTreeMap::new(),
             source_transport_media_index: BTreeMap::new(),
             consumer_source_selections: BTreeMap::new(),
             consumer_index: BTreeMap::new(),
             pending_consumer_bootstraps: BTreeSet::new(),
+            consumer_keys_by_user: BTreeMap::new(),
+            consumer_keys_by_source: BTreeMap::new(),
             topology: RoomTopology::new_with_recording_observer_factory(
                 router_id,
                 router_rtp_capabilities,
@@ -194,18 +214,24 @@ impl RoomState {
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
-        self.consumer_index
-            .iter()
-            .filter_map(|(key, consumer_state)| {
-                let source_owner_departing = self
-                    .sources
-                    .get(&key.source_id)
-                    .is_some_and(|source| departing_user_ids.contains(source.owner().user_id()));
-                if !source_owner_departing && !departing_user_ids.contains(&key.consumer_user_id) {
-                    return None;
+        let mut keys = BTreeSet::new();
+        for user_id in departing_user_ids {
+            if let Some(user_keys) = self.consumer_keys_by_user.get(user_id) {
+                keys.extend(user_keys.iter().cloned());
+            }
+            if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
+                for source_id in source_ids {
+                    if let Some(source_keys) = self.consumer_keys_by_source.get(source_id) {
+                        keys.extend(source_keys.iter().cloned());
+                    }
                 }
+            }
+        }
+        keys.into_iter()
+            .filter_map(|key| {
+                let consumer_state = self.consumer_index.get(&key)?;
                 Some(TransportMediaRemoval {
-                    user: key.consumer_user_id.clone(),
+                    user: key.consumer_user_id,
                     connection: consumer_state.consumer_connection_id,
                     transport_media: consumer_state.consumer_media,
                 })
@@ -217,12 +243,12 @@ impl RoomState {
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
-        self.producers
-            .values()
-            .filter_map(|producer| {
-                if !departing_user_ids.contains(&producer.owner_user_id) {
-                    return None;
-                }
+        departing_user_ids
+            .iter()
+            .filter_map(|user_id| self.producer_ids_by_owner.get(user_id))
+            .flat_map(|producer_ids| producer_ids.iter())
+            .filter_map(|producer_id| {
+                let producer = self.producers.get(producer_id)?;
                 let transport_media = producer.transport_media_id?;
                 Some(TransportMediaRemoval {
                     user: producer.owner_user_id.clone(),
@@ -243,19 +269,24 @@ impl RoomState {
     }
 
     pub(in crate::runtime::room) fn purge_user_media_state(&mut self, user_id: &UserId) {
-        for stream_type in PUBLISHABLE_STREAM_TYPES {
-            let source_key = SourceKey::new(user_id, stream_type);
-            let Some(source_id) = self.source_ids_by_owner_stream.remove(&source_key) else {
-                continue;
-            };
+        let source_ids = self
+            .source_ids_by_owner
+            .remove(user_id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for source_id in source_ids {
             self.remove_source_registry_entry(source_id);
         }
-        self.consumer_index
-            .retain(|key, _consumer_state| key.consumer_user_id != *user_id);
-        self.pending_consumer_bootstraps
-            .retain(|key| key.consumer_user_id != *user_id);
-        self.consumer_source_selections
-            .retain(|key, _selection| key.consumer_user_id != *user_id);
+        let consumer_keys = self
+            .consumer_keys_by_user
+            .remove(user_id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for key in consumer_keys {
+            self.remove_consumer_key_state(&key);
+        }
     }
 
     pub(in crate::runtime::room) fn user_for_connection(
@@ -384,6 +415,94 @@ impl SourceKey {
 }
 
 impl RoomState {
+    pub(super) fn register_source_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
+        self.source_ids_by_owner
+            .entry(user_id.clone())
+            .or_default()
+            .insert(source_id);
+    }
+
+    pub(super) fn unregister_source_owner(
+        &mut self,
+        user_id: &UserId,
+        source_id: PublishedSourceId,
+    ) {
+        remove_from_index_set(&mut self.source_ids_by_owner, user_id, &source_id);
+    }
+
+    pub(super) fn register_producer_owner(
+        &mut self,
+        user_id: &UserId,
+        producer_id: ProducerRuntimeId,
+    ) {
+        self.producer_ids_by_owner
+            .entry(user_id.clone())
+            .or_default()
+            .insert(producer_id);
+    }
+
+    pub(super) fn unregister_producer_owner(
+        &mut self,
+        user_id: &UserId,
+        producer_id: ProducerRuntimeId,
+    ) {
+        remove_from_index_set(&mut self.producer_ids_by_owner, user_id, &producer_id);
+    }
+
+    pub(super) fn register_consumer_key(&mut self, key: &ConsumerKey) {
+        self.consumer_keys_by_user
+            .entry(key.consumer_user_id.clone())
+            .or_default()
+            .insert(key.clone());
+        self.consumer_keys_by_source
+            .entry(key.source_id)
+            .or_default()
+            .insert(key.clone());
+    }
+
+    pub(super) fn prune_consumer_key_indexes_if_unused(&mut self, key: &ConsumerKey) {
+        if self.consumer_index.contains_key(key)
+            || self.pending_consumer_bootstraps.contains(key)
+            || self.consumer_source_selections.contains_key(key)
+        {
+            return;
+        }
+        remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
+        remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
+    }
+
+    pub(super) fn remove_consumer_key_state(&mut self, key: &ConsumerKey) {
+        self.consumer_index.remove(key);
+        self.pending_consumer_bootstraps.remove(key);
+        self.consumer_source_selections.remove(key);
+        remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
+        remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
+    }
+
+    pub(super) fn consumer_keys_for_user(&self, user_id: &UserId) -> Vec<ConsumerKey> {
+        self.consumer_keys_by_user
+            .get(user_id)
+            .map(|keys| keys.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn consumer_keys_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> Vec<ConsumerKey> {
+        self.consumer_keys_by_source
+            .get(&source_id)
+            .map(|keys| keys.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
+        self.producer_ids_by_owner
+            .get(user_id)
+            .map(|producer_ids| producer_ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
     pub(super) fn producer_id_for_source_key(
         &self,
         source_key: &SourceKey,
@@ -396,21 +515,35 @@ impl RoomState {
         &mut self,
         source_id: PublishedSourceId,
     ) -> Option<PublishedProducer> {
-        self.consumer_index
-            .retain(|key, _consumer_state| key.source_id != source_id);
-        self.pending_consumer_bootstraps
-            .retain(|key| key.source_id != source_id);
-        self.consumer_source_selections
-            .retain(|key, _selection| key.source_id != source_id);
-        self.sources.remove(&source_id);
-        self.source_ids_by_owner_stream
-            .retain(|_key, registered_source_id| *registered_source_id != source_id);
+        let source = self.sources.remove(&source_id)?;
+        let consumer_keys = self.consumer_keys_for_source(source_id);
+        for key in consumer_keys {
+            self.remove_consumer_key_state(&key);
+        }
+        let source_key = SourceKey::new(source.owner().user_id(), source.stream_type());
+        self.source_ids_by_owner_stream.remove(&source_key);
+        self.unregister_source_owner(source.owner().user_id(), source_id);
         let producer_id = self.producer_id_by_source_id.remove(&source_id)?;
         let producer = self.producers.remove(&producer_id)?;
+        self.unregister_producer_owner(&producer.owner_user_id, producer_id);
         if let Some(transport_media_id) = producer.transport_media_id {
             self.source_transport_media_index
                 .remove(&transport_media_id);
         }
         Some(producer)
+    }
+}
+
+fn remove_from_index_set<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: &K, value: &V)
+where
+    K: Ord,
+    V: Ord,
+{
+    let Some(values) = index.get_mut(key) else {
+        return;
+    };
+    values.remove(value);
+    if values.is_empty() {
+        index.remove(key);
     }
 }

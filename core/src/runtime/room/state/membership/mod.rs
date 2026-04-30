@@ -226,22 +226,20 @@ impl RoomState {
         user_id: &UserId,
     ) -> Result<(), RoomTopologyError> {
         let routed_consumers = self
-            .consumer_index
-            .iter()
-            .filter_map(|(key, consumer_state)| {
-                (key.consumer_user_id == *user_id).then_some(consumer_state.routed_consumer_id)
-            })
+            .consumer_keys_for_user(user_id)
+            .into_iter()
+            .filter_map(|key| self.consumer_index.get(&key))
+            .map(|consumer_state| consumer_state.routed_consumer_id)
             .collect::<Vec<_>>();
         for routed_consumer_id in routed_consumers {
             topology.remove_consumer(routed_consumer_id)?;
         }
 
         let routed_producers = self
-            .producers
-            .values()
-            .filter_map(|producer| {
-                (producer.owner_user_id == *user_id).then_some(producer.routed_producer_id)
-            })
+            .producer_ids_for_user(user_id)
+            .into_iter()
+            .filter_map(|producer_id| self.producers.get(&producer_id))
+            .map(|producer| producer.routed_producer_id)
             .collect::<Vec<_>>();
         for routed_producer_id in routed_producers {
             topology.remove_producer(routed_producer_id)?;
@@ -509,6 +507,7 @@ mod tests {
         state
             .producer_id_by_source_id
             .insert(source_id, producer_id);
+        state.register_source_owner(user_id, source_id);
         state.producers.insert(
             producer_id,
             super::super::shared::PublishedProducer {
@@ -523,6 +522,7 @@ mod tests {
                 active: true,
             },
         );
+        state.register_producer_owner(user_id, producer_id);
         if let Some(transport_media_id) = transport_media_id {
             state.source_transport_media_index.insert(
                 transport_media_id,
@@ -622,8 +622,9 @@ mod tests {
             routed_producer_id,
             Some(TransportMediaId::new(11)),
         );
+        let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
         state.consumer_index.insert(
-            ConsumerKey::new(&UserId::Integer(2), source_id),
+            consumer_key.clone(),
             ConsumerState {
                 routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
                 consumer_connection_id,
@@ -632,6 +633,7 @@ mod tests {
                 consumer_media: TransportMediaId::new(21),
             },
         );
+        state.register_consumer_key(&consumer_key);
 
         let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
 
@@ -759,5 +761,7 @@ mod tests {
             state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
             None
         );
+        assert!(state.source_ids_by_owner.is_empty());
+        assert!(state.producer_ids_by_owner.is_empty());
     }
 }

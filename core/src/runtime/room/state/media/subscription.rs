@@ -325,6 +325,7 @@ impl RoomState {
             .entry(key.clone())
             .and_modify(|selection| selection.set_active(active))
             .or_insert_with(|| ConsumerSourceSelection::open(active));
+        self.register_consumer_key(key);
     }
 
     fn plan_consumer_bootstrap(
@@ -370,8 +371,10 @@ impl RoomState {
         self.consumer_source_selections
             .entry(consumer_key.clone())
             .or_insert_with(|| ConsumerSourceSelection::open(consumer_active));
+        self.register_consumer_key(&consumer_key);
         self.pending_consumer_bootstraps
             .insert(consumer_key.clone());
+        self.register_consumer_key(&consumer_key);
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         Some(PlannedConsumerBootstrap {
             target: target.clone(),
@@ -426,6 +429,7 @@ impl RoomState {
     ) -> Option<(OutboundSender, RemoteTrackBootstrap, bool)> {
         self.pending_consumer_bootstraps
             .remove(&pending.consumer_key);
+        self.prune_consumer_key_indexes_if_unused(&pending.consumer_key);
         let user = self.users.get(&target.consumer_user_id)?;
         if user.connection_id != target.consumer_connection_id || !user.negotiation.can_consume() {
             return None;
@@ -440,6 +444,7 @@ impl RoomState {
         self.consumer_source_selections
             .entry(pending.consumer_key.clone())
             .or_insert_with(|| ConsumerSourceSelection::open(pending.consumer_active));
+        self.register_consumer_key(&pending.consumer_key);
         let routed_consumer_id = match self.topology.add_consumer(
             &target.consumer_user_id,
             pending.producer.routed_producer_id?,
@@ -475,8 +480,9 @@ impl RoomState {
             );
             return None;
         }
+        let consumer_key = pending.consumer_key;
         self.consumer_index.insert(
-            pending.consumer_key,
+            consumer_key.clone(),
             ConsumerState {
                 routed_consumer_id,
                 consumer_connection_id: target.consumer_connection_id,
@@ -485,6 +491,7 @@ impl RoomState {
                 consumer_media: consumer_transport_media_id,
             },
         );
+        self.register_consumer_key(&consumer_key);
         Some((pending.sender, pending.bootstrap, pending.consumer_active))
     }
 
@@ -492,10 +499,9 @@ impl RoomState {
         &mut self,
         target: &PendingConsumerBootstrapTarget,
     ) {
-        self.pending_consumer_bootstraps.remove(&ConsumerKey::new(
-            &target.consumer_user_id,
-            target.source_id(),
-        ));
+        let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
+        self.pending_consumer_bootstraps.remove(&consumer_key);
+        self.prune_consumer_key_indexes_if_unused(&consumer_key);
     }
 
     pub(in crate::runtime::room) fn desired_download_active(
@@ -570,9 +576,10 @@ impl RoomState {
             return None;
         }
         Some(
-            self.consumer_index
-                .iter()
-                .filter_map(|(key, consumer_state)| {
+            self.consumer_keys_for_user(consumer_user_id)
+                .into_iter()
+                .filter_map(|key| {
+                    let consumer_state = self.consumer_index.get(&key)?;
                     let source = self.sources.get(&key.source_id)?;
                     if key.consumer_user_id != *consumer_user_id
                         || consumer_state.consumer_connection_id != consumer_connection_id
@@ -588,7 +595,7 @@ impl RoomState {
                     if !producer.active
                         || !self
                             .consumer_source_selections
-                            .get(key)
+                            .get(&key)
                             .is_none_or(|selection| selection.active())
                     {
                         return None;

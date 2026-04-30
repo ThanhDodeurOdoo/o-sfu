@@ -6,7 +6,7 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
@@ -32,13 +32,15 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
         room::{
-            RoomAdmissionPolicy, rtp_capabilities::router_rtp_capabilities,
-            topology::RoutedProducerId, user_negotiation::UserTransportReady,
+            RoomAdmissionPolicy,
+            rtp_capabilities::router_rtp_capabilities,
+            topology::{RoutedConsumerId, RoutedProducerId},
+            user_negotiation::UserTransportReady,
         },
         source_model::{
-            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-            PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-            SourceEncodingId, SourceSelector,
+            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceDescriptorParts,
+            PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
+            SourceEncodingDescriptorParts, SourceEncodingId, SourceSelector,
         },
         transport_adapter::TransportMediaId,
     },
@@ -114,6 +116,7 @@ fn install_test_consumer_route(
             active: true,
         },
     );
+    state.register_producer_owner(producer_user_id, producer_id);
     let route_key = ConsumerKey::new(consumer_user_id, source_id);
     let consumer_state = ConsumerState {
         routed_consumer_id,
@@ -125,6 +128,7 @@ fn install_test_consumer_route(
     state
         .consumer_index
         .insert(route_key.clone(), consumer_state);
+    state.register_consumer_key(&route_key);
     (route_key, consumer_connection_id)
 }
 
@@ -165,6 +169,7 @@ fn install_test_source_graph(
     state
         .producer_id_by_source_id
         .insert(source_id, producer_id);
+    state.register_source_owner(user_id, source_id);
     state.source_transport_media_index.insert(
         transport_media_id,
         SourceTransportMediaIndexEntry::new(
@@ -176,6 +181,75 @@ fn install_test_source_graph(
         ),
     );
     source_id
+}
+
+fn install_test_published_producer(
+    state: &mut RoomState,
+    user_id: &UserId,
+    stream_type: StreamType,
+    transport_media_id: TransportMediaId,
+) -> (ProducerRuntimeId, PublishedSourceId) {
+    let connection_id = state
+        .user_connection_id(user_id)
+        .expect("publisher user should have a connection id");
+    let routed_producer_id = state
+        .topology
+        .add_producer(user_id, RouterMediaKind::Video)
+        .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
+    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+    let source_id = install_test_source_graph(
+        state,
+        user_id,
+        connection_id,
+        stream_type,
+        producer_id,
+        transport_media_id,
+    );
+    state.producers.insert(
+        producer_id,
+        PublishedProducer {
+            source_id,
+            owner_user_id: user_id.clone(),
+            owner_connection_id: connection_id,
+            stream_type,
+            media_kind: RouterMediaKind::Video,
+            consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
+            routed_producer_id,
+            transport_media_id: Some(transport_media_id),
+            active: true,
+        },
+    );
+    state.register_producer_owner(user_id, producer_id);
+    (producer_id, source_id)
+}
+
+fn install_test_consumer_state(
+    state: &mut RoomState,
+    consumer_user_id: &UserId,
+    source_id: PublishedSourceId,
+    source_connection_id: ConnectionId,
+    source_media: TransportMediaId,
+    consumer_media: TransportMediaId,
+) -> ConsumerKey {
+    let consumer_connection_id = state
+        .user_connection_id(consumer_user_id)
+        .expect("consumer user should have a connection id");
+    let key = ConsumerKey::new(consumer_user_id, source_id);
+    state.consumer_index.insert(
+        key.clone(),
+        ConsumerState {
+            routed_consumer_id: RoutedConsumerId::new(
+                RouterId(1),
+                o_sfu_router::ConsumerId(consumer_media.as_u64()),
+            ),
+            consumer_connection_id,
+            source_connection_id,
+            source_media,
+            consumer_media,
+        },
+    );
+    state.register_consumer_key(&key);
+    key
 }
 
 #[test]
@@ -215,6 +289,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
             active: true,
         },
     );
+    state.register_producer_owner(&user_id, producer_id);
 
     let producer_target = state
         .producer_route_target(&user_id, connection_id, StreamType::Camera)
@@ -350,6 +425,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             active: true,
         },
     );
+    state.register_producer_owner(&publisher_user_id, producer_id);
 
     let (route_updates, planned_bootstraps) = state
         .plan_subscription_change(
@@ -611,5 +687,111 @@ fn unpublish_track_clears_transport_media_owner_index() {
     );
     assert!(state.sources.is_empty());
     assert!(state.source_ids_by_owner_stream.is_empty());
+    assert!(state.source_ids_by_owner.is_empty());
     assert!(state.producer_id_by_source_id.is_empty());
+    assert!(state.producer_ids_by_owner.is_empty());
+}
+
+#[test]
+fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
+    let mut state = test_state();
+    let publisher_id = UserId::Integer(1);
+    let subscriber_id = UserId::Integer(2);
+    let other_publisher_id = UserId::Integer(3);
+
+    join_test_user(&mut state, &publisher_id);
+    join_test_user(&mut state, &subscriber_id);
+    join_test_user(&mut state, &other_publisher_id);
+
+    let publisher_connection_id = state
+        .user_connection_id(&publisher_id)
+        .expect("publisher should have a connection id");
+    let other_publisher_connection_id = state
+        .user_connection_id(&other_publisher_id)
+        .expect("other publisher should have a connection id");
+    let (_publisher_producer_id, publisher_source_id) = install_test_published_producer(
+        &mut state,
+        &publisher_id,
+        StreamType::Camera,
+        TransportMediaId::new(10),
+    );
+    let (other_producer_id, other_source_id) = install_test_published_producer(
+        &mut state,
+        &other_publisher_id,
+        StreamType::Screen,
+        TransportMediaId::new(30),
+    );
+
+    let removed_consumer_key = install_test_consumer_state(
+        &mut state,
+        &subscriber_id,
+        publisher_source_id,
+        publisher_connection_id,
+        TransportMediaId::new(10),
+        TransportMediaId::new(20),
+    );
+    state.consumer_source_selections.insert(
+        removed_consumer_key.clone(),
+        ConsumerSourceSelection::open(true),
+    );
+    state.register_consumer_key(&removed_consumer_key);
+    let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
+    state
+        .pending_consumer_bootstraps
+        .insert(pending_removed_key.clone());
+    state.register_consumer_key(&pending_removed_key);
+
+    let surviving_consumer_key = install_test_consumer_state(
+        &mut state,
+        &subscriber_id,
+        other_source_id,
+        other_publisher_connection_id,
+        TransportMediaId::new(30),
+        TransportMediaId::new(40),
+    );
+    state.consumer_source_selections.insert(
+        surviving_consumer_key.clone(),
+        ConsumerSourceSelection::open(false),
+    );
+    state.register_consumer_key(&surviving_consumer_key);
+
+    state.purge_user_media_state(&publisher_id);
+
+    assert!(!state.sources.contains_key(&publisher_source_id));
+    assert!(state.sources.contains_key(&other_source_id));
+    assert!(!state.consumer_index.contains_key(&removed_consumer_key));
+    assert!(
+        !state
+            .pending_consumer_bootstraps
+            .contains(&pending_removed_key)
+    );
+    assert!(
+        !state
+            .consumer_source_selections
+            .contains_key(&removed_consumer_key)
+    );
+    assert!(state.consumer_index.contains_key(&surviving_consumer_key));
+    assert!(
+        state
+            .consumer_source_selections
+            .contains_key(&surviving_consumer_key)
+    );
+    assert!(
+        state
+            .consumer_keys_by_user
+            .get(&subscriber_id)
+            .is_some_and(|keys| keys == &BTreeSet::from([surviving_consumer_key.clone()]))
+    );
+    assert!(
+        state
+            .consumer_keys_by_source
+            .get(&other_source_id)
+            .is_some_and(|keys| keys == &BTreeSet::from([surviving_consumer_key]))
+    );
+    assert_eq!(
+        state.producer_ids_by_owner.get(&other_publisher_id),
+        Some(&BTreeSet::from([other_producer_id]))
+    );
+    assert!(!state.producer_ids_by_owner.contains_key(&publisher_id));
+    assert!(!state.source_ids_by_owner.contains_key(&publisher_id));
 }

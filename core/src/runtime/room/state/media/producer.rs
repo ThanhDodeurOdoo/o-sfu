@@ -320,6 +320,8 @@ impl RoomState {
         self.source_ids_by_owner_stream
             .insert(source_key, source_id);
         self.producer_id_by_source_id.insert(source_id, producer_id);
+        self.register_source_owner(&pending.owner_user_id, source_id);
+        self.register_producer_owner(&pending.owner_user_id, producer_id);
         self.source_transport_media_index.insert(
             transport_media_id,
             SourceTransportMediaIndexEntry::new(
@@ -467,18 +469,18 @@ impl RoomState {
             connection: connection_id,
             transport_media: producer_target.transport_media_id,
         }];
-        transport_removals.extend(self.consumer_index.iter().filter_map(
-            |(key, consumer_state)| {
-                if key.source_id != producer_target.source_id {
-                    return None;
-                }
+        let consumer_removals = self
+            .consumer_keys_for_source(producer_target.source_id)
+            .into_iter()
+            .filter_map(|key| {
+                let consumer_state = self.consumer_index.get(&key)?;
                 Some(TransportMediaRemoval {
-                    user: key.consumer_user_id.clone(),
+                    user: key.consumer_user_id,
                     connection: consumer_state.consumer_connection_id,
                     transport_media: consumer_state.consumer_media,
                 })
-            },
-        ));
+            });
+        transport_removals.extend(consumer_removals);
         Some(transport_removals)
     }
 
