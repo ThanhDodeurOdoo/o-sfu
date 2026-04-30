@@ -8,12 +8,13 @@ use o_sfu_protocol::{
     signaling::{
         PeerInfoPayload, PeerLeftPayload, RequestId, ServerBroadcastPayload, ServerMessage,
         ServerRequest, SourceDescriptor, SourceEncodingDescriptor, TrackBinding,
+        UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole,
     },
 };
 
 use crate::{
     core::{
-        OfferedMediaCapabilities,
+        OfferedMediaCapabilities, UploadLayerPolicyRole,
         server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
     },
     runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
@@ -436,11 +437,26 @@ fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDes
             encoding_id: encoding.encoding_id().to_string(),
             rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
             max_bitrate: encoding.max_bitrate(),
+            resolution_scale: encoding.resolution_scale(),
+            max_framerate: encoding.max_framerate(),
+            policy_role: encoding
+                .policy_role()
+                .map(protocol_upload_layer_policy_role),
             max_temporal_layer_id: encoding
                 .max_temporal_layer_id()
                 .map(SourceTemporalLayerId::as_u8),
         })
         .collect()
+}
+
+fn protocol_upload_layer_policy_role(role: UploadLayerPolicyRole) -> ProtocolUploadLayerPolicyRole {
+    match role {
+        UploadLayerPolicyRole::Featured => ProtocolUploadLayerPolicyRole::Featured,
+        UploadLayerPolicyRole::Thumbnail => ProtocolUploadLayerPolicyRole::Thumbnail,
+        UploadLayerPolicyRole::DegradedThumbnail => {
+            ProtocolUploadLayerPolicyRole::DegradedThumbnail
+        }
+    }
 }
 
 #[cfg(test)]
@@ -557,6 +573,9 @@ mod tests {
             primary_ssrc: None,
             repair_ssrc: None,
             max_bitrate: Some(900_000),
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
             max_temporal_layer_id: None,
             negotiated_format: None,
         });

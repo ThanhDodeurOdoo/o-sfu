@@ -12,7 +12,7 @@ pub use catalog::{
     AuthPayload, ClientBroadcastPayload, NegotiationUploadEncoding, NegotiationUploadSlot,
     PeerInfoPayload, PeerLeftPayload, RecordingActionResult, ServerBroadcastPayload,
     SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload,
-    SubscribePayload, TrackBinding, WelcomePayload,
+    SubscribePayload, TrackBinding, UploadLayerPolicyRole, WelcomePayload,
 };
 pub use codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope};
 pub use envelope::{Envelope, EnvelopeBatch, RequestId};

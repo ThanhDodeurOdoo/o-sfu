@@ -482,6 +482,18 @@ function validateOptionalSourceDescriptor(
             descriptor.maxBitrate,
             `${context}.encodings[${index}].maxBitrate`
         );
+        requireOptionalPositiveNumber(
+            descriptor.resolutionScale,
+            `${context}.encodings[${index}].resolutionScale`
+        );
+        requireOptionalNonNegativeInteger(
+            descriptor.maxFramerate,
+            `${context}.encodings[${index}].maxFramerate`
+        );
+        validateOptionalPolicyRole(
+            descriptor.policyRole,
+            `${context}.encodings[${index}].policyRole`
+        );
         requireOptionalTemporalLayerId(
             descriptor.maxTemporalLayerId,
             `${context}.encodings[${index}].maxTemporalLayerId`
@@ -520,8 +532,46 @@ function validateNegotiationUploadSlots(value: unknown, context: string): void {
                 uploadEncoding.maxBitrate,
                 `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].maxBitrate`
             );
+            requireOptionalFiniteNumber(
+                uploadEncoding.resolutionScale,
+                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].resolutionScale`
+            );
+            requireOptionalNonNegativeInteger(
+                uploadEncoding.maxFramerate,
+                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].maxFramerate`
+            );
+            validateOptionalPolicyRole(
+                uploadEncoding.policyRole,
+                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].policyRole`
+            );
         }
     });
+}
+
+function requireOptionalPositiveNumber(value: unknown, context: string): void {
+    if (
+        value !== undefined &&
+        (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+    ) {
+        throw new Error(`${context} must be a positive number`);
+    }
+}
+
+function requireOptionalFiniteNumber(value: unknown, context: string): void {
+    if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
+        throw new Error(`${context} must be a finite number`);
+    }
+}
+
+function validateOptionalPolicyRole(value: unknown, context: string): void {
+    if (
+        value !== undefined &&
+        value !== "featured" &&
+        value !== "thumbnail" &&
+        value !== "degradedThumbnail"
+    ) {
+        throw new Error(`${context} must be a supported upload layer policy role`);
+    }
 }
 
 function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {

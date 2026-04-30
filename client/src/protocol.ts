@@ -54,8 +54,11 @@ export interface WelcomePayload {
 }
 
 export interface NegotiationUploadEncoding {
+    maxFramerate?: number;
     maxBitrate?: number;
+    policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
     rid: string;
+    resolutionScale?: number;
 }
 
 export interface NegotiationUploadSlot {

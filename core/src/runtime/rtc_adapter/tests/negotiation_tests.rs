@@ -15,7 +15,8 @@ use super::fixtures::*;
 use crate::{
     VideoCodecPreference,
     runtime::{
-        rtc_adapter::client_rtp_capabilities_from_answer, transport_adapter::TransportMediaId,
+        rtc_adapter::client_rtp_capabilities_from_answer, source_model::UploadLayerPolicyRole,
+        transport_adapter::TransportMediaId,
     },
 };
 
@@ -118,10 +119,20 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
     assert_eq!(video_slot.simulcast_encodings[0].max_bitrate, Some(150_000));
+    assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, Some(2));
+    assert_eq!(
+        video_slot.simulcast_encodings[0].policy_role,
+        Some(UploadLayerPolicyRole::Thumbnail)
+    );
     assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
     assert_eq!(
         video_slot.simulcast_encodings[1].max_bitrate,
         Some(4_000_000)
+    );
+    assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, Some(1));
+    assert_eq!(
+        video_slot.simulcast_encodings[1].policy_role,
+        Some(UploadLayerPolicyRole::Featured)
     );
 }
 
@@ -487,15 +498,20 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         "empty protocol publish intent should use the server-owned VP8 upload profile"
     );
     assert_eq!(video_upload_slot.simulcast_encodings.len(), 2);
-    assert_eq!(video_upload_slot.simulcast_encodings[0].rid, "lo");
     assert_eq!(
-        video_upload_slot.simulcast_encodings[0].max_bitrate,
-        Some(150_000)
-    );
-    assert_eq!(video_upload_slot.simulcast_encodings[1].rid, "hi");
-    assert_eq!(
-        video_upload_slot.simulcast_encodings[1].max_bitrate,
-        Some(4_000_000)
+        video_upload_slot
+            .simulcast_encodings
+            .iter()
+            .map(|encoding| (
+                encoding.rid.as_str(),
+                encoding.max_bitrate,
+                encoding.resolution_scale,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("lo", Some(150_000), Some(2)),
+            ("hi", Some(4_000_000), Some(1))
+        ]
     );
     assert!(
         renegotiation_sdp.contains(&sdp_simulcast_line(

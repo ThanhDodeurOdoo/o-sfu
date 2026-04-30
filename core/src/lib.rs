@@ -108,9 +108,12 @@ pub use room::{
     PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
     SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
 };
-pub use runtime::transport_adapter::{
-    MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
-    RuntimeTransportAdapter,
+pub use runtime::{
+    source_model::UploadLayerPolicyRole,
+    transport_adapter::{
+        MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
+        RuntimeTransportAdapter,
+    },
 };
 pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,

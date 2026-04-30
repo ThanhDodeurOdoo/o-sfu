@@ -33,7 +33,7 @@ use crate::runtime::{
     source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError,
+        SourceEncodingId, SourceModelError, UploadLayerPolicyRole,
     },
     transport_adapter::TransportMediaId,
 };
@@ -344,6 +344,7 @@ impl RoomState {
             .encodings()
             .map(|binding| {
                 let encoding_id = SourceEncodingId::allocate(&mut self.next_source_encoding_id);
+                let upload_profile = upload_profile_for_rid(binding.rid());
                 SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
                     encoding_id,
                     source_id,
@@ -351,6 +352,9 @@ impl RoomState {
                     primary_ssrc: binding.ssrc().map(Ssrc::new),
                     repair_ssrc: None,
                     max_bitrate: binding.max_bitrate(),
+                    resolution_scale: upload_profile.map(|profile| profile.resolution_scale),
+                    max_framerate: upload_profile.and_then(|profile| profile.max_framerate),
+                    policy_role: upload_profile.map(|profile| profile.policy_role),
                     max_temporal_layer_id: None,
                     negotiated_format: negotiated_format_for_binding(
                         &pending.consumable_rtp_parameters,
@@ -638,6 +642,29 @@ impl UnpublishTrackOutcome {
                 )));
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UploadLayerProfile {
+    resolution_scale: u16,
+    max_framerate: Option<u16>,
+    policy_role: UploadLayerPolicyRole,
+}
+
+fn upload_profile_for_rid(rid: Option<&str>) -> Option<UploadLayerProfile> {
+    match rid {
+        Some("lo") => Some(UploadLayerProfile {
+            resolution_scale: 2,
+            max_framerate: None,
+            policy_role: UploadLayerPolicyRole::Thumbnail,
+        }),
+        Some("hi") => Some(UploadLayerProfile {
+            resolution_scale: 1,
+            max_framerate: None,
+            policy_role: UploadLayerPolicyRole::Featured,
+        }),
+        _ => None,
     }
 }
 

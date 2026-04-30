@@ -8,7 +8,10 @@ use o_sfu_rfc::webrtc::MediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
-use crate::{ConnectionId, RoomInstanceId, runtime::UserId};
+use crate::{
+    ConnectionId, RoomInstanceId,
+    runtime::{UserId, source_model::UploadLayerPolicyRole},
+};
 
 /// Room-scoped transport-adapter user identity.
 ///
@@ -388,4 +391,7 @@ pub struct SessionUploadSlot {
 pub struct SessionUploadEncoding {
     pub rid: String,
     pub max_bitrate: Option<u64>,
+    pub resolution_scale: Option<u16>,
+    pub max_framerate: Option<u16>,
+    pub policy_role: Option<UploadLayerPolicyRole>,
 }

@@ -12,7 +12,7 @@ use crate::{
     ConnectionId, CoreOptions, MediaRoom, MediaSessionContext, PublicationActivity,
     PublicationActivityOutcome, PublishStageOutcome, RollbackStagedPublishOutcome,
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
-    runtime::{DownloadStates, StreamType, UserId, UserInfo},
+    runtime::{DownloadStates, StreamType, UserId, UserInfo, source_model::UploadLayerPolicyRole},
     transport::{
         AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
         TransportAdapterError, TransportFacade, TransportSessionHealth,
@@ -76,6 +76,12 @@ pub struct UploadEncoding {
     pub rid: String,
     /// Sender-side bitrate ceiling for this layer when the offer declares one.
     pub max_bitrate: Option<u64>,
+    /// Sender-side resolution downscale for this layer.
+    pub resolution_scale: Option<u16>,
+    /// Optional sender-side frame-rate ceiling for this layer.
+    pub max_framerate: Option<u16>,
+    /// Server-owned role that explains how room policy may use this layer.
+    pub policy_role: Option<UploadLayerPolicyRole>,
 }
 
 #[deprecated(
@@ -518,6 +524,9 @@ impl From<SessionUploadEncoding> for UploadEncoding {
         Self {
             rid: encoding.rid,
             max_bitrate: encoding.max_bitrate,
+            resolution_scale: encoding.resolution_scale,
+            max_framerate: encoding.max_framerate,
+            policy_role: encoding.policy_role,
         }
     }
 }

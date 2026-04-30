@@ -263,7 +263,10 @@ mod tests {
             Command, CommandBatch, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
         },
         shared::{StreamType, UserId},
-        signaling::{RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding},
+        signaling::{
+            RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding,
+            UploadLayerPolicyRole,
+        },
     };
 
     #[test]
@@ -377,6 +380,9 @@ mod tests {
                         encoding_id: String::from("encoding-1"),
                         rid: Some(String::from("lo")),
                         max_bitrate: Some(150_000),
+                        resolution_scale: Some(2),
+                        max_framerate: None,
+                        policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                         max_temporal_layer_id: Some(1),
                     }],
                 }],
@@ -397,6 +403,8 @@ mod tests {
                         "encodingId": "encoding-1",
                         "rid": "lo",
                         "maxBitrate": 150_000,
+                        "resolutionScale": 2,
+                        "policyRole": "thumbnail",
                         "maxTemporalLayerId": 1
                     }]
                 }]

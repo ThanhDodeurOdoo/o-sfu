@@ -7,7 +7,7 @@ use super::{
     PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions, RequestId,
     ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
     SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload,
-    SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
+    SubscribePayload, TrackBinding, UploadLayerPolicyRole, WebSocketCloseCode, WelcomePayload,
 };
 use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType,
@@ -287,12 +287,18 @@ fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::
                 encoding_id: String::from("encoding-1"),
                 rid: Some(String::from("lo")),
                 max_bitrate: Some(150_000),
+                resolution_scale: Some(2),
+                max_framerate: None,
+                policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                 max_temporal_layer_id: Some(0),
             },
             SourceEncodingDescriptor {
                 encoding_id: String::from("encoding-2"),
                 rid: Some(String::from("hi")),
                 max_bitrate: Some(900_000),
+                resolution_scale: Some(1),
+                max_framerate: None,
+                policy_role: Some(UploadLayerPolicyRole::Featured),
                 max_temporal_layer_id: Some(2),
             },
         ],
@@ -326,12 +332,16 @@ fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::
                             "encodingId": "encoding-1",
                             "rid": "lo",
                             "maxBitrate": 150_000,
+                            "resolutionScale": 2,
+                            "policyRole": "thumbnail",
                             "maxTemporalLayerId": 0,
                         },
                         {
                             "encodingId": "encoding-2",
                             "rid": "hi",
                             "maxBitrate": 900_000,
+                            "resolutionScale": 1,
+                            "policyRole": "featured",
                             "maxTemporalLayerId": 2,
                         },
                     ],
@@ -433,10 +443,16 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
                     NegotiationUploadEncoding {
                         rid: String::from("lo"),
                         max_bitrate: Some(150_000),
+                        resolution_scale: Some(2),
+                        max_framerate: None,
+                        policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                     },
                     NegotiationUploadEncoding {
                         rid: String::from("hi"),
                         max_bitrate: Some(900_000),
+                        resolution_scale: Some(1),
+                        max_framerate: None,
+                        policy_role: Some(UploadLayerPolicyRole::Featured),
                     },
                 ],
             }],
@@ -456,8 +472,18 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
                     "kind": "video",
                     "codecs": ["VP8"],
                     "simulcastEncodings": [
-                        { "rid": "lo", "maxBitrate": 150_000 },
-                        { "rid": "hi", "maxBitrate": 900_000 }
+                        {
+                            "rid": "lo",
+                            "maxBitrate": 150_000,
+                            "resolutionScale": 2,
+                            "policyRole": "thumbnail",
+                        },
+                        {
+                            "rid": "hi",
+                            "maxBitrate": 900_000,
+                            "resolutionScale": 1,
+                            "policyRole": "featured",
+                        }
                     ]
                 }]
             }

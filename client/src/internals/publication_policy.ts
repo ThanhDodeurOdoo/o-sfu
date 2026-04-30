@@ -2,8 +2,11 @@ import type { StreamType } from "../public_api.js";
 import type { PeerConnectionTransceiver } from "./browser_types.js";
 
 export type SimulcastEncodingOffer = {
+    maxFramerate?: number;
     maxBitrate?: number;
+    policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
     rid: string;
+    resolutionScale?: number;
 };
 
 export type UploadPublicationPolicy = {
@@ -36,16 +39,15 @@ export async function applyUploadPublicationPolicy(
     if (!transceiver.sender.getParameters || !transceiver.sender.setParameters) {
         return singleEncoding("sender parameter API is unavailable");
     }
+    if (!plan.simulcastEncodings.every(isValidSimulcastEncodingOffer)) {
+        return singleEncoding("offer advertised an invalid simulcast encoding profile");
+    }
 
     const parameters = transceiver.sender.getParameters();
     const previousEncodings = Array.isArray(parameters.encodings) ? parameters.encodings : [];
-    const encodings = plan.simulcastEncodings.map((encoding, index) => ({
-        ...(previousEncodings[index] ?? {}),
-        active: true,
-        maxBitrate: encoding.maxBitrate,
-        rid: encoding.rid,
-        scaleResolutionDownBy: scaleResolutionDownBy(index, plan.simulcastEncodings.length)
-    }));
+    const encodings = plan.simulcastEncodings.map((encoding, index) =>
+        senderEncodingParameters(previousEncodings[index] ?? {}, encoding)
+    );
 
     try {
         await transceiver.sender.setParameters({
@@ -70,6 +72,46 @@ function singleEncoding(reason: string): UploadPublicationPolicy {
     };
 }
 
-function scaleResolutionDownBy(index: number, encodingCount: number): number {
-    return 2 ** Math.max(0, encodingCount - index - 1);
+function senderEncodingParameters(
+    previousEncoding: RTCRtpEncodingParameters,
+    encoding: SimulcastEncodingOffer
+): RTCRtpEncodingParameters {
+    return {
+        ...previousEncoding,
+        active: true,
+        ...(encoding.maxBitrate === undefined ? {} : { maxBitrate: encoding.maxBitrate }),
+        ...(encoding.maxFramerate === undefined ? {} : { maxFramerate: encoding.maxFramerate }),
+        rid: encoding.rid,
+        ...(encoding.resolutionScale === undefined
+            ? {}
+            : { scaleResolutionDownBy: encoding.resolutionScale })
+    };
+}
+
+function isValidSimulcastEncodingOffer(encoding: SimulcastEncodingOffer): boolean {
+    return (
+        typeof encoding.rid === "string" &&
+        encoding.rid.length > 0 &&
+        isOptionalPositiveInteger(encoding.maxBitrate) &&
+        isOptionalPositiveInteger(encoding.maxFramerate) &&
+        isOptionalPositiveNumber(encoding.resolutionScale) &&
+        isValidPolicyRole(encoding.policyRole)
+    );
+}
+
+function isOptionalPositiveInteger(value: number | undefined): boolean {
+    return value === undefined || (Number.isInteger(value) && value > 0);
+}
+
+function isOptionalPositiveNumber(value: number | undefined): boolean {
+    return value === undefined || (Number.isFinite(value) && value > 0);
+}
+
+function isValidPolicyRole(value: SimulcastEncodingOffer["policyRole"]): boolean {
+    return (
+        value === undefined ||
+        value === "featured" ||
+        value === "thumbnail" ||
+        value === "degradedThumbnail"
+    );
 }

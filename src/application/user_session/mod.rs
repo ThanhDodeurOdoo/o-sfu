@@ -4,7 +4,8 @@ use o_sfu_protocol::{
     shared::{DownloadStates, JsonPayload, RecordingStateUpdate, StreamType, UserId, UserInfo},
     signaling::{
         NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerMessage, ServerRequest,
-        ServerResponse, SessionDescriptionPayload, WelcomePayload,
+        ServerResponse, SessionDescriptionPayload,
+        UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole, WelcomePayload,
     },
 };
 use o_sfu_router::MediaKind;
@@ -15,7 +16,7 @@ use crate::{
         MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity,
         RollbackStagedPublishOutcome, RuntimeSfuCore, RuntimeTransportAdapter,
         SessionNegotiationOutcome, SfuCoreError, SubscriptionUpdateOutcome, TransportEffectOutcome,
-        UnpublishOutcome, UploadEncoding, UploadSlot, UserInfoRefresh,
+        UnpublishOutcome, UploadEncoding, UploadLayerPolicyRole, UploadSlot, UserInfoRefresh,
     },
     runtime::{
         ConnectionId,
@@ -771,6 +772,19 @@ fn protocol_upload_encoding(encoding: UploadEncoding) -> NegotiationUploadEncodi
     NegotiationUploadEncoding {
         rid: encoding.rid,
         max_bitrate: encoding.max_bitrate,
+        resolution_scale: encoding.resolution_scale,
+        max_framerate: encoding.max_framerate,
+        policy_role: encoding.policy_role.map(protocol_upload_layer_policy_role),
+    }
+}
+
+fn protocol_upload_layer_policy_role(role: UploadLayerPolicyRole) -> ProtocolUploadLayerPolicyRole {
+    match role {
+        UploadLayerPolicyRole::Featured => ProtocolUploadLayerPolicyRole::Featured,
+        UploadLayerPolicyRole::Thumbnail => ProtocolUploadLayerPolicyRole::Thumbnail,
+        UploadLayerPolicyRole::DegradedThumbnail => {
+            ProtocolUploadLayerPolicyRole::DegradedThumbnail
+        }
     }
 }
 

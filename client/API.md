@@ -461,6 +461,9 @@ interface SourceEncodingDescriptor {
     encodingId: string;
     rid?: string;
     maxBitrate?: number;
+    resolutionScale?: number;
+    maxFramerate?: number;
+    policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
     maxTemporalLayerId?: number;
 }
 ```

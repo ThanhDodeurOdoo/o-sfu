@@ -262,6 +262,11 @@ fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> Diagnosti
         codec: negotiated_format.map(|format| format.codec_name().to_owned()),
         encoding_id: encoding.encoding_id().as_u64(),
         max_bitrate_bps: encoding.max_bitrate(),
+        resolution_scale: encoding.resolution_scale(),
+        max_framerate: encoding.max_framerate(),
+        policy_role: encoding
+            .policy_role()
+            .map(|role| role.as_wire_value().to_owned()),
         max_temporal_layer_id,
         payload_type: negotiated_format.map(o_sfu_router::MediaFormat::payload_type),
         primary_ssrc: encoding.primary_ssrc().map(o_sfu_router::Ssrc::value),
@@ -351,6 +356,9 @@ mod tests {
             primary_ssrc: None,
             repair_ssrc: None,
             max_bitrate: None,
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
             max_temporal_layer_id: max_temporal_layer_id.and_then(SourceTemporalLayerId::new),
             negotiated_format: None,
         })

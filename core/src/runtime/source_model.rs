@@ -301,6 +301,31 @@ impl SourceRoomPolicySelector {
     }
 }
 
+/// Server-owned policy role for one upload or source encoding layer.
+///
+/// The browser may use this as sender-parameter metadata, but the room remains
+/// authoritative for deciding when a receiver should consume the layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadLayerPolicyRole {
+    /// Highest useful quality for featured, pinned, or screen-readable video.
+    Featured,
+    /// Normal thumbnail quality for visible secondary video.
+    Thumbnail,
+    /// Future low-cost thumbnail rung used before pausing a route.
+    DegradedThumbnail,
+}
+
+impl UploadLayerPolicyRole {
+    #[must_use]
+    pub const fn as_wire_value(self) -> &'static str {
+        match self {
+            Self::Featured => "featured",
+            Self::Thumbnail => "thumbnail",
+            Self::DegradedThumbnail => "degradedThumbnail",
+        }
+    }
+}
+
 /// Receiver-side priority bucket used by room policy and diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceRoutePriority {
@@ -544,6 +569,12 @@ pub struct SourceEncodingDescriptor {
     repair_ssrc: Option<Ssrc>,
     /// Sender-declared bitrate ceiling for this encoding.
     max_bitrate: Option<u64>,
+    /// Sender-side resolution downscale advertised for this encoding.
+    resolution_scale: Option<u16>,
+    /// Sender-side frame-rate ceiling advertised for this encoding.
+    max_framerate: Option<u16>,
+    /// Server-owned policy role associated with this encoding.
+    policy_role: Option<UploadLayerPolicyRole>,
     /// Highest temporal layer advertised for codec-native layered forwarding.
     max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated payload and codec information for this encoding.
@@ -565,6 +596,9 @@ impl SourceEncodingDescriptor {
             primary_ssrc: parts.primary_ssrc,
             repair_ssrc: parts.repair_ssrc,
             max_bitrate: parts.max_bitrate,
+            resolution_scale: parts.resolution_scale,
+            max_framerate: parts.max_framerate,
+            policy_role: parts.policy_role,
             max_temporal_layer_id: parts.max_temporal_layer_id,
             negotiated_format: parts.negotiated_format,
         }
@@ -601,6 +635,21 @@ impl SourceEncodingDescriptor {
     }
 
     #[must_use]
+    pub const fn resolution_scale(&self) -> Option<u16> {
+        self.resolution_scale
+    }
+
+    #[must_use]
+    pub const fn max_framerate(&self) -> Option<u16> {
+        self.max_framerate
+    }
+
+    #[must_use]
+    pub const fn policy_role(&self) -> Option<UploadLayerPolicyRole> {
+        self.policy_role
+    }
+
+    #[must_use]
     pub const fn max_temporal_layer_id(&self) -> Option<SourceTemporalLayerId> {
         self.max_temporal_layer_id
     }
@@ -630,6 +679,12 @@ pub struct SourceEncodingDescriptorParts {
     pub repair_ssrc: Option<Ssrc>,
     /// Optional bitrate ceiling advertised for this encoding.
     pub max_bitrate: Option<u64>,
+    /// Optional resolution downscale advertised for this encoding.
+    pub resolution_scale: Option<u16>,
+    /// Optional frame-rate ceiling advertised for this encoding.
+    pub max_framerate: Option<u16>,
+    /// Optional policy role advertised for this encoding.
+    pub policy_role: Option<UploadLayerPolicyRole>,
     /// Optional temporal-layer ceiling advertised for codec-native SVC.
     pub max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated codec and payload information when available.
@@ -694,6 +749,9 @@ mod tests {
             primary_ssrc: Some(Ssrc::new(100 + raw_encoding_id)),
             repair_ssrc: Some(Ssrc::new(200 + raw_encoding_id)),
             max_bitrate: Some(150_000 * encoding_id.as_u64()),
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
             max_temporal_layer_id: None,
             negotiated_format: Some(video_format(96)),
         })

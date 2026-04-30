@@ -44,6 +44,20 @@ pub struct NegotiationUploadEncoding {
     pub rid: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_bitrate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_scale: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_framerate: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_role: Option<UploadLayerPolicyRole>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UploadLayerPolicyRole {
+    Featured,
+    Thumbnail,
+    DegradedThumbnail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +112,12 @@ pub struct SourceEncodingDescriptor {
     pub rid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_bitrate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_scale: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_framerate: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_role: Option<UploadLayerPolicyRole>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_temporal_layer_id: Option<u8>,
 }

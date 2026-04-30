@@ -196,6 +196,12 @@ pub struct DiagnosticsSourceEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_bitrate_bps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_scale: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_framerate: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_temporal_layer_id: Option<u8>,
     pub temporal_layer_metadata: DiagnosticsTemporalLayerMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]

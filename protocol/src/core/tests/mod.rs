@@ -15,7 +15,7 @@ pub(super) use crate::{
         RecordingActionResult, RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope,
         ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload, SourceDescriptor,
         SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
-        WebSocketCloseCode, WelcomePayload,
+        UploadLayerPolicyRole, WebSocketCloseCode, WelcomePayload,
     },
 };
 

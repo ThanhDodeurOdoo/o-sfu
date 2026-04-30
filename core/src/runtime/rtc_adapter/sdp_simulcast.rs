@@ -12,7 +12,8 @@ use str0m::media::{
 };
 
 use crate::{
-    MediaCodecFlags, VideoBitrateLimits, runtime::transport_adapter::SessionUploadEncoding,
+    MediaCodecFlags, VideoBitrateLimits,
+    runtime::{source_model::UploadLayerPolicyRole, transport_adapter::SessionUploadEncoding},
 };
 
 const DEFAULT_LOW_RID: &str = "lo";
@@ -28,6 +29,9 @@ pub(super) struct NegotiatedRid {
 struct SimulcastLayerSpec<'a> {
     rid: &'a str,
     max_bitrate: Option<u64>,
+    resolution_scale: u16,
+    max_framerate: Option<u16>,
+    policy_role: UploadLayerPolicyRole,
 }
 
 pub(super) fn bootstrap_recv_simulcast(
@@ -76,6 +80,9 @@ pub(super) fn publish_recv_simulcast(
         layers.push(SimulcastLayerSpec {
             rid,
             max_bitrate: encoding.max_bitrate(),
+            resolution_scale: resolution_scale_for_index(layers.len()),
+            max_framerate: None,
+            policy_role: policy_role_for_index(layers.len()),
         });
     }
     (layers.len() >= 2).then(|| recv_simulcast_from_specs(&layers))
@@ -116,6 +123,9 @@ pub(super) fn publish_upload_encodings(
         layers.push(SimulcastLayerSpec {
             rid,
             max_bitrate: encoding.max_bitrate(),
+            resolution_scale: resolution_scale_for_index(layers.len()),
+            max_framerate: None,
+            policy_role: policy_role_for_index(layers.len()),
         });
     }
     if layers.len() < 2 {
@@ -145,10 +155,16 @@ fn default_layer_specs(
         SimulcastLayerSpec {
             rid: DEFAULT_LOW_RID,
             max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE_BPS.min(high_max_bitrate)),
+            resolution_scale: 2,
+            max_framerate: None,
+            policy_role: UploadLayerPolicyRole::Thumbnail,
         },
         SimulcastLayerSpec {
             rid: DEFAULT_HIGH_RID,
             max_bitrate: Some(high_max_bitrate),
+            resolution_scale: 1,
+            max_framerate: None,
+            policy_role: UploadLayerPolicyRole::Featured,
         },
     ]
 }
@@ -202,8 +218,23 @@ fn upload_encodings_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> Vec<Session
         .map(|layer| SessionUploadEncoding {
             rid: layer.rid.to_owned(),
             max_bitrate: layer.max_bitrate,
+            resolution_scale: Some(layer.resolution_scale),
+            max_framerate: layer.max_framerate,
+            policy_role: Some(layer.policy_role),
         })
         .collect()
+}
+
+fn resolution_scale_for_index(index: usize) -> u16 {
+    if index == 0 { 2 } else { 1 }
+}
+
+fn policy_role_for_index(index: usize) -> UploadLayerPolicyRole {
+    if index == 0 {
+        UploadLayerPolicyRole::Thumbnail
+    } else {
+        UploadLayerPolicyRole::Featured
+    }
 }
 
 fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
@@ -315,10 +346,16 @@ mod tests {
                 SessionUploadEncoding {
                     rid: DEFAULT_LOW_RID.to_owned(),
                     max_bitrate: None,
+                    resolution_scale: Some(2),
+                    max_framerate: None,
+                    policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                 },
                 SessionUploadEncoding {
                     rid: DEFAULT_HIGH_RID.to_owned(),
                     max_bitrate: None,
+                    resolution_scale: Some(1),
+                    max_framerate: None,
+                    policy_role: Some(UploadLayerPolicyRole::Featured),
                 },
             ]
         );

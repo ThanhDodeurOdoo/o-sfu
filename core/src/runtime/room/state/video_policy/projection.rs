@@ -126,6 +126,9 @@ mod tests {
             primary_ssrc: None,
             repair_ssrc: None,
             max_bitrate,
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
             max_temporal_layer_id: None,
             negotiated_format: None,
         })
@@ -144,6 +147,9 @@ mod tests {
             primary_ssrc: None,
             repair_ssrc: None,
             max_bitrate: None,
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
             max_temporal_layer_id: SourceTemporalLayerId::new(max_temporal_layer_id),
             negotiated_format: None,
         })
