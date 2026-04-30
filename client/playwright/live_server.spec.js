@@ -6,6 +6,7 @@ import {
     createConnectToken,
     createPeerPage,
     latestTrackUpdate,
+    localCameraSenderEncodings,
     peerLocalDescriptionSdp,
     peerSnapshot,
     publishSyntheticCamera,
@@ -16,6 +17,52 @@ import {
 
 const PUBLISHER_SESSION_ID = 41;
 const SUBSCRIBER_SESSION_ID = 42;
+
+test("default VP8 live publish applies RID simulcast and renders remotely", async ({ context }) => {
+    const channelUuid = await createChannel();
+    const publisher = await createPeerPage(context);
+    const subscriber = await createPeerPage(context);
+
+    await connectPeer(publisher, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID)
+    });
+    await connectPeer(subscriber, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID)
+    });
+
+    await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+    await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
+
+    await publishSyntheticCamera(publisher, "vp8-simulcast");
+
+    await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
+    await expect
+        .poll(async () => localCameraSenderEncodings(publisher))
+        .toEqual([
+            {
+                active: true,
+                maxBitrate: 150000,
+                rid: "lo",
+                scaleResolutionDownBy: 2
+            },
+            {
+                active: true,
+                maxBitrate: 4000000,
+                rid: "hi",
+                scaleResolutionDownBy: 1
+            }
+        ]);
+    await expect.poll(async () => peerLocalDescriptionSdp(publisher)).not.toBeNull();
+    const sdp = await peerLocalDescriptionSdp(publisher);
+    const video = parseVideoCodecAnswer(sdp);
+
+    expect(video.vp8PayloadTypes.size).toBeGreaterThan(0);
+    expect(video.hasSendRidLo).toBeTruthy();
+    expect(video.hasSendRidHi).toBeTruthy();
+    expect(video.hasSendSimulcastLoHi).toBeTruthy();
+});
 
 test("browser compatibility upload and download flows survive live-server replacement", async ({
     context
@@ -121,6 +168,74 @@ test("late-joining subscriber receives the already-live publication", async ({ c
         });
 });
 
+test("H264-only live publish stays single encoding and renders when supported", async ({
+    browserName,
+    context
+}) => {
+    test.skip(
+        browserName === "firefox",
+        "the bundled Playwright Firefox build does not render the current H264-only live flow"
+    );
+    const liveServerPorts =
+        browserName === "firefox"
+            ? {
+                  bindPort: 18085,
+                  rtcMaxPort: 58327,
+                  rtcMinPort: 58296
+              }
+            : {
+                  bindPort: 18084,
+                  rtcMaxPort: 58295,
+                  rtcMinPort: 58264
+              };
+    const server = await spawnLiveServer({
+        bindPort: liveServerPorts.bindPort,
+        rtcMinPort: liveServerPorts.rtcMinPort,
+        rtcMaxPort: liveServerPorts.rtcMaxPort,
+        codecFlags: { h264: true, vp8: false }
+    });
+    try {
+        const channelUuid = await createChannel({
+            authKey: server.authKey,
+            httpBaseUrl: server.httpBaseUrl
+        });
+        const publisher = await createPeerPage(context);
+        const subscriber = await createPeerPage(context);
+
+        await connectPeer(publisher, {
+            channelUuid,
+            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID, server.authKey),
+            url: server.wsUrl
+        });
+        await connectPeer(subscriber, {
+            channelUuid,
+            jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID, server.authKey),
+            url: server.wsUrl
+        });
+
+        await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+        await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
+
+        await publishSyntheticCamera(publisher, "h264-single");
+
+        await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
+        await expect.poll(async () => (await localCameraSenderEncodings(publisher)).length).toBe(1);
+        const encodings = await localCameraSenderEncodings(publisher);
+        expect(encodings[0].rid).toBeUndefined();
+        expect(encodings[0].scaleResolutionDownBy).toBeUndefined();
+        await expect.poll(async () => peerLocalDescriptionSdp(publisher)).not.toBeNull();
+        const sdp = await peerLocalDescriptionSdp(publisher);
+        const video = parseVideoCodecAnswer(sdp);
+
+        expect(video.h264PayloadTypes.size).toBeGreaterThan(0);
+        expect(video.vp8PayloadTypes.size).toBe(0);
+        expect(video.hasAnySendRid).toBeFalsy();
+        expect(video.hasAnySendSimulcast).toBeFalsy();
+    } finally {
+        await server.stop();
+    }
+});
+
 test("live browser negotiation keeps RTX pairs when optional codecs are enabled", async ({
     browserName,
     context
@@ -212,9 +327,15 @@ function parseVideoCodecAnswer(sdp) {
     const h264Variants = new Set();
     const h264PayloadTypes = new Set();
     const formatParametersByPayloadType = new Map();
+    const hasAnySendRid = lines.some((line) => /^a=rid:[^ ]+ send(?: |$)/.test(line));
+    const hasAnySendSimulcast = lines.some((line) => /^a=simulcast:send /.test(line));
+    const hasSendRidHi = lines.some((line) => /^a=rid:hi send(?: |$)/.test(line));
+    const hasSendRidLo = lines.some((line) => /^a=rid:lo send(?: |$)/.test(line));
+    const hasSendSimulcastLoHi = lines.some((line) => /^a=simulcast:send lo[;,]hi$/.test(line));
     const rtxAssociations = new Set();
     const videoCodecPayloadTypes = new Set();
     const videoPayloadTypes = new Map();
+    const vp8PayloadTypes = new Set();
     const vp9PayloadTypes = new Set();
     const vp9Profiles = new Set();
     let currentMediaKind = null;
@@ -237,6 +358,8 @@ function parseVideoCodecAnswer(sdp) {
             }
             if (codecName === "H264") {
                 h264PayloadTypes.add(payloadType);
+            } else if (codecName === "VP8") {
+                vp8PayloadTypes.add(payloadType);
             } else if (codecName === "VP9") {
                 vp9PayloadTypes.add(payloadType);
             }
@@ -276,10 +399,16 @@ function parseVideoCodecAnswer(sdp) {
     }
 
     return {
+        hasAnySendRid,
+        hasAnySendSimulcast,
+        hasSendRidHi,
+        hasSendRidLo,
+        hasSendSimulcastLoHi,
         h264PayloadTypes,
         h264Variants,
         rtxAssociations,
         videoCodecPayloadTypes,
+        vp8PayloadTypes,
         vp9PayloadTypes,
         vp9Profiles
     };

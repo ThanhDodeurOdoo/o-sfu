@@ -245,6 +245,26 @@ export async function peerLocalDescriptionSdp(page) {
     });
 }
 
+export async function localCameraSenderEncodings(page) {
+    return page.evaluate(() => {
+        const harness = globalThis.__liveHarness;
+        const peerConnection = harness.client?._runtime?._peerConnection;
+        const localTrack = harness.localTrack;
+        if (!peerConnection || !localTrack) {
+            return [];
+        }
+        const transceiver = peerConnection
+            .getTransceivers()
+            .find((candidate) => candidate.sender.track === localTrack);
+        return (transceiver?.sender.getParameters().encodings ?? []).map((encoding) => ({
+            active: encoding.active,
+            maxBitrate: encoding.maxBitrate,
+            rid: encoding.rid,
+            scaleResolutionDownBy: encoding.scaleResolutionDownBy
+        }));
+    });
+}
+
 export async function spawnLiveServer({
     authKey = TEST_AUTH_KEY,
     bindHost = "127.0.0.1",
@@ -255,21 +275,25 @@ export async function spawnLiveServer({
     rtcMinPort,
     codecFlags = {}
 }) {
+    const env = {
+        ...process.env,
+        AUTH_KEY: authKey,
+        BIND_ADDRESS: `${bindHost}:${bindPort}`,
+        PUBLIC_IP: publicIp,
+        RTC_MAX_PORT: String(rtcMaxPort),
+        RTC_MIN_PORT: String(rtcMinPort),
+        CODEC_H264: String(Boolean(codecFlags.h264)),
+        CODEC_VP9: String(Boolean(codecFlags.vp9))
+    };
+    if (Object.hasOwn(codecFlags, "vp8")) {
+        env.CODEC_VP8 = String(Boolean(codecFlags.vp8));
+    }
     const child = spawn(
         "cargo",
         ["run", "--quiet", "--manifest-path", "../Cargo.toml", "-p", "o-sfu"],
         {
             cwd: fileURLToPath(new URL("../", import.meta.url)),
-            env: {
-                ...process.env,
-                AUTH_KEY: authKey,
-                BIND_ADDRESS: `${bindHost}:${bindPort}`,
-                PUBLIC_IP: publicIp,
-                RTC_MAX_PORT: String(rtcMaxPort),
-                RTC_MIN_PORT: String(rtcMinPort),
-                CODEC_H264: String(Boolean(codecFlags.h264)),
-                CODEC_VP9: String(Boolean(codecFlags.vp9))
-            },
+            env,
             stdio: "ignore"
         }
     );
