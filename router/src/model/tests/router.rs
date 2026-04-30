@@ -209,6 +209,56 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
 }
 
 #[test]
+fn removing_a_producer_rejects_missing_owning_transport() {
+    let observer = EventCaptureObserver::default();
+    let inspector = observer.clone();
+    let mut router = Router::new_with_observer(RouterId(1), observer);
+
+    assert_eq!(router.join_session(session(SessionId(10))), Ok(()));
+    assert_eq!(
+        router.open_transport(Transport::new(
+            TransportId(100),
+            SessionId(10),
+            TransportDirection::Receive,
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        router.add_producer(Producer::new(
+            ProducerId(300),
+            TransportId(100),
+            MediaKind::Audio,
+        )),
+        Ok(())
+    );
+
+    router.transports.remove(&TransportId(100));
+
+    assert_eq!(
+        router.remove_producer(ProducerId(300)),
+        Err(RouterError::MissingProducerTransport {
+            producer_id: ProducerId(300),
+            transport_id: TransportId(100),
+        })
+    );
+    assert!(router.producers.contains_key(&ProducerId(300)));
+    assert_eq!(
+        inspector.recorded_events(),
+        vec![
+            RouterEvent::SessionJoined {
+                session_id: SessionId(10),
+            },
+            RouterEvent::ProducerAdded {
+                session_id: SessionId(10),
+                transport_id: TransportId(100),
+                producer_id: ProducerId(300),
+                media_kind: MediaKind::Audio,
+            },
+        ]
+    );
+}
+
+#[test]
 fn removing_a_consumer_preserves_other_routes() {
     let mut router = Router::new(RouterId(1));
 

@@ -10,6 +10,10 @@ pub enum RouterError {
     MissingSession(SessionId),
     MissingTransport(TransportId),
     MissingProducer(ProducerId),
+    MissingProducerTransport {
+        producer_id: ProducerId,
+        transport_id: TransportId,
+    },
     MissingConsumer(ConsumerId),
     ProducerRequiresReceiveTransport(TransportId),
     ConsumerRequiresSendTransport(TransportId),

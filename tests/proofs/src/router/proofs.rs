@@ -1,9 +1,10 @@
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
-    ProducerRouteState, RouterId, Session, SessionId, Transport, TransportDirection, TransportId,
+    ProducerRouteState, RouterError, RouterId, Session, SessionId, Transport, TransportDirection,
+    TransportId,
 };
 
-use super::ProofRouterModel;
+use super::{ProofRouterModel, model::ProofRouterError};
 
 type ProofRouter = ProofRouterModel<2, 2, 1, 1>;
 type PauseProofRouter = ProofRouterModel<3, 3, 1, 2>;
@@ -207,6 +208,35 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     );
     assert!(!router.producer_consumers.contains_key(producer_id));
     assert!(router.satisfies_invariants());
+}
+
+// Proves producer removal rejects corrupted ownership instead of projecting an
+// invented session into observer-facing teardown state.
+#[kani::proof]
+fn removing_a_producer_rejects_missing_owner_transport() {
+    let mut router = ProofRouterModel::<1, 0, 1, 0>::new(RouterId(0));
+
+    let producer_id = ProducerId(30);
+    let missing_transport = TransportId(10);
+
+    if let Some(slot) = router.producers.first_mut() {
+        *slot = Some(Producer::new(
+            producer_id,
+            missing_transport,
+            MediaKind::Audio,
+        ));
+    }
+
+    assert_eq!(
+        router.remove_producer(producer_id),
+        Err(ProofRouterError::Router(
+            RouterError::MissingProducerTransport {
+                producer_id,
+                transport_id: missing_transport,
+            },
+        ))
+    );
+    assert!(router.contains_producer(producer_id));
 }
 
 // Proves consumer removal is local: deleting one subscription must update the

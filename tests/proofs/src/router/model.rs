@@ -398,13 +398,21 @@ impl<
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    /// Returns [`RouterError::MissingProducer`] when the producer does not exist, or
+    /// [`RouterError::MissingProducerTransport`] when the producer's owning transport is missing.
     pub(crate) fn remove_producer(
         &mut self,
         producer_id: ProducerId,
     ) -> Result<(), ProofRouterError> {
-        if !self.contains_producer(producer_id) {
+        let Some(producer) = self.producer_by_id(producer_id) else {
             return Err(RouterError::MissingProducer(producer_id).into());
+        };
+        if !self.contains_transport(producer.transport_id()) {
+            return Err(RouterError::MissingProducerTransport {
+                producer_id,
+                transport_id: producer.transport_id(),
+            }
+            .into());
         }
         self.detach_producer(producer_id);
         Ok(())

@@ -279,15 +279,20 @@ impl<O: RouterObserver> Router<O> {
 
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    /// Returns [`RouterError::MissingProducer`] when the producer does not exist, or
+    /// [`RouterError::MissingProducerTransport`] when the producer's owning transport is missing.
     pub fn remove_producer(&mut self, producer_id: ProducerId) -> Result<(), RouterError> {
         let Some(producer) = self.producers.get(&producer_id).copied() else {
             return Err(RouterError::MissingProducer(producer_id));
         };
-        let session_id = self
-            .transports
-            .get(&producer.transport_id())
-            .map_or(SessionId(0), Transport::session_id);
+        let transport_id = producer.transport_id();
+        let Some(transport) = self.transports.get(&transport_id) else {
+            return Err(RouterError::MissingProducerTransport {
+                producer_id,
+                transport_id,
+            });
+        };
+        let session_id = transport.session_id();
         self.detach_producer(producer_id, session_id);
         Ok(())
     }
