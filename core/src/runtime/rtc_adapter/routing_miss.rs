@@ -50,7 +50,22 @@ fn packet_fingerprint(packet: &[u8]) -> u64 {
 #[derive(Debug, Clone)]
 struct PacketLoopRoutingMissRecord {
     key: PacketLoopRoutingMissKey,
-    packet: Box<[u8]>,
+    packet: Vec<u8>,
+}
+
+impl PacketLoopRoutingMissRecord {
+    fn new(key: PacketLoopRoutingMissKey, packet: &[u8]) -> Self {
+        Self {
+            key,
+            packet: packet.to_vec(),
+        }
+    }
+
+    fn overwrite(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
+        self.key = key;
+        self.packet.clear();
+        self.packet.extend_from_slice(packet);
+    }
 }
 
 #[derive(Default)]
@@ -66,29 +81,29 @@ impl PacketLoopRoutingMissCache {
     fn contains(&self, key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
         self.entries
             .iter()
-            .any(|candidate| candidate.key == key && candidate.packet.as_ref() == packet)
+            .any(|candidate| candidate.key == key && candidate.packet.as_slice() == packet)
     }
 
     fn record(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
         if self.contains(key, packet) {
             return;
         }
-        self.entries.push_back(PacketLoopRoutingMissRecord {
-            key,
-            packet: packet.to_vec().into_boxed_slice(),
-        });
-        while self.entries.len() > RECENT_MISS_CACHE_LIMIT {
-            let Some(_) = self.entries.pop_front() else {
-                break;
-            };
+        if self.entries.len() == RECENT_MISS_CACHE_LIMIT
+            && let Some(mut record) = self.entries.pop_front()
+        {
+            record.overwrite(key, packet);
+            self.entries.push_back(record);
+            return;
         }
+        self.entries
+            .push_back(PacketLoopRoutingMissRecord::new(key, packet));
     }
 
     fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
         let Some(position) = self
             .entries
             .iter()
-            .position(|candidate| candidate.key == key && candidate.packet.as_ref() == packet)
+            .position(|candidate| candidate.key == key && candidate.packet.as_slice() == packet)
         else {
             return;
         };

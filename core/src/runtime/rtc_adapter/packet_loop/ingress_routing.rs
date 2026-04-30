@@ -21,6 +21,7 @@
 //! `str0m` would reject downstream.
 
 use std::{
+    fmt,
     net::SocketAddr,
     slice::Iter,
     sync::{Arc, Mutex},
@@ -71,19 +72,19 @@ enum IndexedSessionRecoveryOutcome {
 /// This classification must stay aligned with `str0m`'s own UDP multiplexing so
 /// the packet loop never "recovers" traffic that the authoritative
 /// `Rtc::accepts()` / `Rtc::handle_input()` path would later reject.
-enum PacketIndexProbe {
-    LocalIceUfrag(String),
+enum PacketIndexProbe<'a> {
+    LocalIceUfrag(&'a str),
     RemoteCandidateAddr(SocketAddr),
 }
 
-impl PacketIndexProbe {
-    fn describe(&self) -> String {
+impl fmt::Display for PacketIndexProbe<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LocalIceUfrag(local_ice_ufrag) => {
-                format!("local-ice-ufrag:{local_ice_ufrag}")
+                write!(formatter, "local-ice-ufrag:{local_ice_ufrag}")
             }
             Self::RemoteCandidateAddr(remote_candidate_addr) => {
-                format!("remote-candidate-addr:{remote_candidate_addr}")
+                write!(formatter, "remote-candidate-addr:{remote_candidate_addr}")
             }
         }
     }
@@ -274,16 +275,15 @@ fn matching_indexed_session_key_for_packet(
     };
     // The probe only narrows the candidate session set.
     // It is not authoritative: final ownership is decided by `Rtc::accepts()`.
-    let packet_index_probe_description = packet_index_probe.describe();
-    let candidate_session_keys = match packet_index_probe {
+    let candidate_session_keys = match &packet_index_probe {
         PacketIndexProbe::LocalIceUfrag(local_ice_ufrag) => CandidateSessionKeys::Single(
             state
                 .remote_addr_demux
-                .session_key_for_local_ice_ufrag(&local_ice_ufrag),
+                .session_key_for_local_ice_ufrag(local_ice_ufrag),
         ),
         PacketIndexProbe::RemoteCandidateAddr(remote_candidate_addr) => state
             .remote_addr_demux
-            .candidate_sessions_for_source_addr(remote_candidate_addr)
+            .candidate_sessions_for_source_addr(*remote_candidate_addr)
             .map_or(
                 CandidateSessionKeys::Single(None),
                 |candidate_session_keys| CandidateSessionKeys::Slice(candidate_session_keys.iter()),
@@ -327,7 +327,7 @@ fn matching_indexed_session_key_for_packet(
         debug!(
             source_addr = %source_addr,
             candidate_addr = %candidate_addr,
-            probe = %packet_index_probe_description,
+            probe = %packet_index_probe,
             user_id = ?matched_session_key.user_id(),
             media_worker_id = matched_session_key.media_worker_id(),
             examined_sessions,
@@ -349,7 +349,7 @@ fn matching_indexed_session_key_for_packet(
     debug!(
         source_addr = %source_addr,
         candidate_addr = %candidate_addr,
-        probe = %packet_index_probe_description,
+        probe = %packet_index_probe,
         examined_sessions,
         "packet probe did not match any rtc user"
     );
@@ -365,7 +365,7 @@ fn matching_indexed_session_key_for_packet(
 fn packet_index_probe(
     source_addr: SocketAddr,
     packet: &[u8],
-) -> Result<PacketIndexProbe, IndexedSessionRecoveryOutcome> {
+) -> Result<PacketIndexProbe<'_>, IndexedSessionRecoveryOutcome> {
     let Some(byte0) = packet.first().copied() else {
         return Err(IndexedSessionRecoveryOutcome::Malformed);
     };
@@ -376,10 +376,14 @@ fn packet_index_probe(
     if byte0 < 2 && packet_len >= 20 {
         let message = StunMessage::parse(packet)
             .map_err(|_error| IndexedSessionRecoveryOutcome::Malformed)?;
-        if let Some((local_ice_ufrag, _remote_ice_ufrag)) = message.split_username() {
-            // For inbound ICE checks, USERNAME is "remote:local".
-            // We use the local fragment to directly index the target session.
-            return Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag.to_owned()));
+        if let Some(local_ice_ufrag) = message
+            .username()
+            .and_then(|username| username.split_once(':'))
+            .map(|(local_ice_ufrag, _remote_ice_ufrag)| local_ice_ufrag)
+        {
+            // The demux index is keyed by the first USERNAME fragment, matching
+            // the adapter's existing ICE ufrag registration contract.
+            return Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag));
         }
         // STUN responses may not carry USERNAME, so we fall back to source-address recovery
         return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));

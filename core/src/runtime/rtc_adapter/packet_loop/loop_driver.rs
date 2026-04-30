@@ -145,7 +145,7 @@ pub async fn run_packet_loop(
 ) {
     let mut bootstrap_state = RtcBootstrapState::default();
     let mut routing_state = PacketLoopRoutingState::new();
-    let mut receive_buffer = vec![0_u8; RECEIVE_BUFFER_LEN];
+    let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut buffers = PacketLoopBuffers::new();
 
     loop {
