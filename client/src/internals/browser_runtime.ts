@@ -18,6 +18,7 @@ import type {
 import type { LocalUploads } from "./local_uploads.js";
 import type { PendingRequests } from "./pending_requests.js";
 import type { RemoteTracks } from "./remote_tracks.js";
+import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
 
 export type BrowserRuntimeHooks = {
     iceServers?: RTCIceServer[];
@@ -470,7 +471,7 @@ export class BrowserRuntime {
         if (
             negotiationKind === "offer" &&
             (this.shouldFallbackToImmediateTransportReady() ||
-                this.localDescriptionHasOnlyInactiveMedia(answerSdp))
+                localDescriptionHasOnlyInactiveMedia(answerSdp))
         ) {
             emitRuntimeLog(
                 hooks,
@@ -523,22 +524,6 @@ export class BrowserRuntime {
             if (peerConnection.iceGatheringState === "complete") {
                 finalizeIfReady(undefined);
             }
-        });
-    }
-
-    private localDescriptionHasOnlyInactiveMedia(sdp: string): boolean {
-        const mediaSections = sdp
-            .split(/\r?\nm=/)
-            .map((section, index) => (index === 0 ? section : `m=${section}`))
-            .filter((section) => section.startsWith("m="));
-        if (mediaSections.length === 0) {
-            return false;
-        }
-        return mediaSections.every((section) => {
-            const direction = section.match(
-                /(?:^|\r\n)a=(sendrecv|sendonly|recvonly|inactive)(?:\r?\n|$)/
-            )?.[1];
-            return direction === "inactive";
         });
     }
 
