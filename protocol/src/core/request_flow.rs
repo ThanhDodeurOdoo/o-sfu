@@ -105,11 +105,13 @@ fn handle_negotiation_request(
     kind: NegotiationKind,
     payload: SessionDescriptionPayload,
 ) -> Commands {
-    if !matches!(
-        core.state,
-        BundleConnectionState::Authenticated | BundleConnectionState::Connected
-    ) {
-        return Vec::new();
+    match (core.state, kind) {
+        (BundleConnectionState::Authenticated, _)
+        | (BundleConnectionState::Connected, NegotiationKind::Renegotiate) => {}
+        (BundleConnectionState::Connected, NegotiationKind::Offer) => {
+            return protocol_error_commands();
+        }
+        _ => return Vec::new(),
     }
     if core.pending_negotiation.is_some() {
         return protocol_error_commands();

@@ -81,3 +81,27 @@ fn protocol_core_rejects_overlapping_negotiation_requests() {
         }]
     );
 }
+
+#[test]
+fn protocol_core_rejects_initial_offer_after_transport_ready() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.on_transport_ready();
+
+    let late_offer = encode_server_batch(ServerEnvelope::Request {
+        request_id: RequestId::new("offer-1"),
+        request: ServerRequest::Offer(SessionDescriptionPayload {
+            sdp: String::from("v=0\r\ns=late-offer\r\n"),
+            upload_slots: Vec::new(),
+        }),
+    });
+    let commands = core.on_ws_message(&late_offer);
+
+    assert_eq!(
+        commands,
+        vec![Command::CloseWebSocket {
+            code: u16::from(WebSocketCloseCode::ProtocolError),
+        }]
+    );
+}
