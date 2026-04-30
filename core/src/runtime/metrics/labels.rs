@@ -155,6 +155,14 @@ pub enum SourceSelectionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetSolverOutcome {
+    Degraded,
+    Paused,
+    Resumed,
+    ProtectedOverBudget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportIceState {
     New,
     Checking,
@@ -350,6 +358,13 @@ impl_metric_label!(SourceSelectionKind {
     OperatingPoint => 2,
     RoomPolicyFeatured => 3,
     RoomPolicyThumbnail => 4,
+});
+
+impl_metric_label!(BudgetSolverOutcome {
+    Degraded => 0,
+    Paused => 1,
+    Resumed => 2,
+    ProtectedOverBudget => 3,
 });
 
 impl_metric_label!(TransportIceState {

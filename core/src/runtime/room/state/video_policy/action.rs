@@ -7,7 +7,9 @@
 use super::{input::ReceiverVideoRouteInput, projection::source_packet_gate_for_selector};
 use crate::runtime::{
     ConnectionId, UserId,
-    source_model::{PolicyPauseReason, PublishedSourceId, SourceSelector},
+    source_model::{
+        PolicyPauseReason, PublishedSourceId, ReceiverVideoBudgetDiagnostics, SourceSelector,
+    },
     transport_adapter::{SourcePacketGate, TransportMediaId},
 };
 
@@ -25,6 +27,8 @@ pub(in crate::runtime::room) enum VideoRouteAction {
 pub(in crate::runtime::room) struct ReceiverVideoRouteAction<'a> {
     route: ReceiverVideoRouteInput<'a>,
     action: VideoRouteAction,
+    budget: ReceiverVideoBudgetDiagnostics,
+    outcomes: BudgetSolverOutcomes,
     pressure_observations: u8,
     upgrade_observations: u8,
     request_keyframe: bool,
@@ -35,6 +39,8 @@ impl<'a> ReceiverVideoRouteAction<'a> {
     pub(in crate::runtime::room) fn new(
         route: ReceiverVideoRouteInput<'a>,
         action: VideoRouteAction,
+        budget: ReceiverVideoBudgetDiagnostics,
+        outcomes: BudgetSolverOutcomes,
         pressure_observations: u8,
         upgrade_observations: u8,
         request_keyframe: bool,
@@ -42,6 +48,8 @@ impl<'a> ReceiverVideoRouteAction<'a> {
         Self {
             route,
             action,
+            budget,
+            outcomes,
             pressure_observations,
             upgrade_observations,
             request_keyframe,
@@ -68,6 +76,7 @@ impl<'a> ReceiverVideoRouteAction<'a> {
         let route_activity_update = policy_pause_reason != current_selection.policy_pause_reason();
         if packet_gate.is_none()
             && !route_activity_update
+            && self.budget == current_selection.budget()
             && self.pressure_observations == current_selection.pressure_observations()
             && self.upgrade_observations == current_selection.upgrade_observations()
         {
@@ -83,12 +92,63 @@ impl<'a> ReceiverVideoRouteAction<'a> {
             source_id: self.route.source_id(),
             selector,
             policy_pause_reason,
+            budget: self.budget,
+            outcomes: self.outcomes,
             pressure_observations: self.pressure_observations,
             upgrade_observations: self.upgrade_observations,
             packet_gate,
             route_activity_update,
             request_keyframe,
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::runtime::room) struct BudgetSolverOutcomes {
+    bits: u8,
+}
+
+impl BudgetSolverOutcomes {
+    const DEGRADED: u8 = 1 << 0;
+    const PAUSED: u8 = 1 << 1;
+    const RESUMED: u8 = 1 << 2;
+    const PROTECTED_OVER_BUDGET: u8 = 1 << 3;
+
+    pub(in crate::runtime::room) const fn degraded() -> Self {
+        Self {
+            bits: Self::DEGRADED,
+        }
+    }
+
+    pub(in crate::runtime::room) const fn paused() -> Self {
+        Self { bits: Self::PAUSED }
+    }
+
+    pub(in crate::runtime::room) const fn resumed() -> Self {
+        Self {
+            bits: Self::RESUMED,
+        }
+    }
+
+    pub(in crate::runtime::room) const fn with_protected_over_budget(mut self) -> Self {
+        self.bits |= Self::PROTECTED_OVER_BUDGET;
+        self
+    }
+
+    pub(in crate::runtime::room) const fn is_degraded(self) -> bool {
+        self.bits & Self::DEGRADED != 0
+    }
+
+    pub(in crate::runtime::room) const fn is_paused(self) -> bool {
+        self.bits & Self::PAUSED != 0
+    }
+
+    pub(in crate::runtime::room) const fn is_resumed(self) -> bool {
+        self.bits & Self::RESUMED != 0
+    }
+
+    pub(in crate::runtime::room) const fn is_protected_over_budget(self) -> bool {
+        self.bits & Self::PROTECTED_OVER_BUDGET != 0
     }
 }
 
@@ -108,6 +168,8 @@ pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
     source_id: PublishedSourceId,
     selector: SourceSelector,
     policy_pause_reason: Option<PolicyPauseReason>,
+    budget: ReceiverVideoBudgetDiagnostics,
+    outcomes: BudgetSolverOutcomes,
     pressure_observations: u8,
     upgrade_observations: u8,
     packet_gate: Option<SourcePacketGate>,
@@ -154,6 +216,14 @@ impl ConsumerPacketSelectionUpdate {
 
     pub(in crate::runtime::room) const fn route_active(&self) -> bool {
         self.policy_pause_reason.is_none()
+    }
+
+    pub(in crate::runtime::room) const fn budget(&self) -> ReceiverVideoBudgetDiagnostics {
+        self.budget
+    }
+
+    pub(in crate::runtime::room) const fn outcomes(&self) -> BudgetSolverOutcomes {
+        self.outcomes
     }
 
     pub(in crate::runtime::room) const fn pressure_observations(&self) -> u8 {

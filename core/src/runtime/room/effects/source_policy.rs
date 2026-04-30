@@ -14,9 +14,12 @@ use super::super::{
     Room,
     state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
 };
-use crate::runtime::transport_adapter::{
-    ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaPort,
-    ReceiverBandwidthSnapshot,
+use crate::runtime::{
+    metrics::BudgetSolverOutcome,
+    transport_adapter::{
+        ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaPort,
+        ReceiverBandwidthSnapshot,
+    },
 };
 
 /// Executes one source-policy refresh after pure room planning.
@@ -83,6 +86,23 @@ impl SourcePolicyEffectPlan {
             if update.packet_gate().is_some() {
                 room.metrics
                     .record_source_selection_update(update.selector());
+            }
+            let outcomes = update.outcomes();
+            if outcomes.is_degraded() {
+                room.metrics
+                    .record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
+            }
+            if outcomes.is_paused() {
+                room.metrics
+                    .record_budget_solver_outcome(BudgetSolverOutcome::Paused);
+            }
+            if outcomes.is_resumed() {
+                room.metrics
+                    .record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
+            }
+            if outcomes.is_protected_over_budget() {
+                room.metrics
+                    .record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
             }
         }
     }

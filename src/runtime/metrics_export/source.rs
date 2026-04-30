@@ -27,4 +27,19 @@ pub(super) fn append_source_selection_metrics(
             ),
         ],
     );
+    append_labeled_counter_family(
+        output,
+        "osfu_budget_solver_outcomes_total",
+        "Total receiver video budget solver outcomes accepted by room policy.",
+        "outcome",
+        &[
+            LabeledValue::new("degraded", snapshot.budget_solver_outcomes_degraded),
+            LabeledValue::new("paused", snapshot.budget_solver_outcomes_paused),
+            LabeledValue::new("resumed", snapshot.budget_solver_outcomes_resumed),
+            LabeledValue::new(
+                "protected_over_budget",
+                snapshot.budget_solver_outcomes_protected_over_budget,
+            ),
+        ],
+    );
 }

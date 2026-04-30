@@ -8,14 +8,18 @@
 use std::collections::BTreeMap;
 
 use super::{
-    action::{ConsumerPacketSelectionUpdate, ReceiverVideoRouteAction, VideoRouteAction},
+    action::{
+        BudgetSolverOutcomes, ConsumerPacketSelectionUpdate, ReceiverVideoRouteAction,
+        VideoRouteAction,
+    },
     input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput},
 };
 use crate::runtime::{
     StreamType, UserId,
     source_model::{
-        ConsumerSourceSelection, PolicyPauseReason, SourceEncodingDescriptor,
-        SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
+        ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
+        ReceiverVideoBudgetDiagnostics, SourceEncodingDescriptor, SourceRoomPolicySelector,
+        SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
     },
     transport_adapter::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
 };
@@ -82,6 +86,7 @@ struct PlannedReceiverRoute<'a> {
     adaptation: ConsumerAdaptationPlan,
     selected_bitrate_bps: u64,
     action: VideoRouteAction,
+    outcomes: BudgetSolverOutcomes,
 }
 
 impl super::super::shared::RoomState {
@@ -112,9 +117,30 @@ fn plan_receiver_routes<'a>(
         .iter()
         .find_map(|route| route.receiver_bandwidth_bps())
     else {
-        return routes
+        let planned_routes = routes
             .into_iter()
-            .filter_map(|route| planned_send_action(route, consumer_route_adaptation_plan(route)?))
+            .filter_map(|route| {
+                let adaptation = consumer_route_adaptation_plan(route)?;
+                Some(PlannedReceiverRoute {
+                    route: (*route).clone(),
+                    selected_bitrate_bps: selector_bitrate_bps(
+                        route.encodings(),
+                        adaptation.selector,
+                    ),
+                    action: VideoRouteAction::Send(adaptation.selector),
+                    adaptation,
+                    outcomes: adaptation_outcomes(
+                        route.encodings(),
+                        route.current_selection(),
+                        adaptation.selector,
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
+        let budget = receiver_budget_diagnostics(&planned_routes, None);
+        return planned_routes
+            .into_iter()
+            .filter_map(|route| planned_route_action(route, budget))
             .collect();
     };
     let mut planned_routes = routes
@@ -122,18 +148,25 @@ fn plan_receiver_routes<'a>(
         .filter_map(|route| {
             let adaptation = consumer_route_adaptation_plan(route)?;
             let selected_bitrate_bps = selector_bitrate_bps(route.encodings(), adaptation.selector);
+            let outcomes = adaptation_outcomes(
+                route.encodings(),
+                route.current_selection(),
+                adaptation.selector,
+            );
             Some(PlannedReceiverRoute {
                 route: (*route).clone(),
                 adaptation,
                 selected_bitrate_bps,
                 action: VideoRouteAction::Send(adaptation.selector),
+                outcomes,
             })
         })
         .collect::<Vec<_>>();
     apply_receiver_overload_policy(&mut planned_routes, receiver_bandwidth_bps);
+    let budget = receiver_budget_diagnostics(&planned_routes, Some(receiver_bandwidth_bps));
     planned_routes
         .into_iter()
-        .filter_map(planned_route_action)
+        .filter_map(|route| planned_route_action(route, budget))
         .collect()
 }
 
@@ -149,18 +182,6 @@ fn consumer_route_adaptation_plan(
         route.visible_camera_route_count(),
         route.receiver_bandwidth_bps(),
     )
-}
-
-fn planned_send_action<'a>(
-    route: &'a ReceiverVideoRouteInput<'a>,
-    adaptation: ConsumerAdaptationPlan,
-) -> Option<ReceiverVideoRouteAction<'a>> {
-    planned_route_action(PlannedReceiverRoute {
-        route: (*route).clone(),
-        selected_bitrate_bps: selector_bitrate_bps(route.encodings(), adaptation.selector),
-        action: VideoRouteAction::Send(adaptation.selector),
-        adaptation,
-    })
 }
 
 fn apply_receiver_overload_policy(
@@ -188,6 +209,7 @@ fn apply_receiver_overload_policy(
                 .saturating_add(bitrate_bps);
             route.selected_bitrate_bps = bitrate_bps;
             route.action = VideoRouteAction::Send(selector);
+            route.outcomes = BudgetSolverOutcomes::degraded();
         }
     }
     if selected_bitrate_bps <= receiver_bandwidth_bps {
@@ -209,13 +231,18 @@ fn apply_receiver_overload_policy(
         }
         let pause_reason = pause_reason_for_route(route);
         route.action = VideoRouteAction::Pause(pause_reason);
+        route.outcomes = BudgetSolverOutcomes::paused();
         selected_bitrate_bps = selected_bitrate_bps.saturating_sub(route.selected_bitrate_bps);
         route.selected_bitrate_bps = 0;
     }
 }
 
-fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideoRouteAction<'_>> {
+fn planned_route_action(
+    route: PlannedReceiverRoute<'_>,
+    budget: ReceiverVideoBudgetDiagnostics,
+) -> Option<ReceiverVideoRouteAction<'_>> {
     let current = route.route.current_selection();
+    let outcomes = budget_outcomes(route.outcomes, budget);
     match route.action {
         VideoRouteAction::Send(selector) if current.policy_pause_reason().is_some() => {
             let upgrade_observations = current
@@ -226,6 +253,8 @@ fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideo
                 Some(ReceiverVideoRouteAction::new(
                     route.route,
                     VideoRouteAction::Send(selector),
+                    budget,
+                    budget_outcomes(BudgetSolverOutcomes::resumed(), budget),
                     0,
                     0,
                     true,
@@ -234,6 +263,8 @@ fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideo
                 Some(ReceiverVideoRouteAction::new(
                     route.route,
                     VideoRouteAction::Pause(current.policy_pause_reason()?),
+                    budget,
+                    outcomes,
                     0,
                     upgrade_observations,
                     false,
@@ -249,6 +280,8 @@ fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideo
                 Some(ReceiverVideoRouteAction::new(
                     route.route,
                     VideoRouteAction::Pause(reason),
+                    budget,
+                    budget_outcomes(BudgetSolverOutcomes::paused(), budget),
                     0,
                     0,
                     false,
@@ -257,6 +290,8 @@ fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideo
                 Some(ReceiverVideoRouteAction::new(
                     route.route,
                     VideoRouteAction::Send(current.selector()),
+                    budget,
+                    outcomes,
                     pressure_observations,
                     0,
                     false,
@@ -266,10 +301,61 @@ fn planned_route_action(route: PlannedReceiverRoute<'_>) -> Option<ReceiverVideo
         _ => Some(ReceiverVideoRouteAction::new(
             route.route,
             route.action,
+            budget,
+            outcomes,
             route.adaptation.pressure_observations,
             route.adaptation.upgrade_observations,
             route.adaptation.request_keyframe,
         )),
+    }
+}
+
+fn budget_outcomes(
+    outcomes: BudgetSolverOutcomes,
+    budget: ReceiverVideoBudgetDiagnostics,
+) -> BudgetSolverOutcomes {
+    if budget.over_budget_exception_reason().is_some() {
+        outcomes.with_protected_over_budget()
+    } else {
+        outcomes
+    }
+}
+
+fn receiver_budget_diagnostics(
+    planned_routes: &[PlannedReceiverRoute<'_>],
+    receiver_bandwidth_bps: Option<u64>,
+) -> ReceiverVideoBudgetDiagnostics {
+    let selected_video_bitrate_bps = selected_receiver_bitrate_bps(planned_routes);
+    let over_budget_exception_reason = receiver_bandwidth_bps
+        .filter(|budget| selected_video_bitrate_bps > *budget)
+        .map(|_budget| OverBudgetExceptionReason::ProtectedRoute);
+    ReceiverVideoBudgetDiagnostics::new(
+        receiver_bandwidth_bps,
+        receiver_bandwidth_bps,
+        active_video_route_count(planned_routes),
+        selected_video_bitrate_bps,
+        over_budget_exception_reason,
+    )
+}
+
+fn active_video_route_count(planned_routes: &[PlannedReceiverRoute<'_>]) -> usize {
+    planned_routes
+        .iter()
+        .filter(|route| matches!(route.action, VideoRouteAction::Send(_)))
+        .count()
+}
+
+fn adaptation_outcomes(
+    encodings: &[&SourceEncodingDescriptor],
+    current: ConsumerSourceSelection,
+    selector: SourceSelector,
+) -> BudgetSolverOutcomes {
+    let current_bitrate = selector_bitrate_bps(encodings, current.selector());
+    let selected_bitrate = selector_bitrate_bps(encodings, selector);
+    if selected_bitrate < current_bitrate {
+        BudgetSolverOutcomes::degraded()
+    } else {
+        BudgetSolverOutcomes::default()
     }
 }
 

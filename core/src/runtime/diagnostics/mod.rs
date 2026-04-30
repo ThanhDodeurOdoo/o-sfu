@@ -4,8 +4,8 @@ pub mod types;
 pub use store::{DiagnosticsEventData, DiagnosticsStore};
 pub use types::{
     DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
-    DiagnosticsPolicyPauseReason, DiagnosticsPublication, DiagnosticsQualitySummary,
-    DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
+    DiagnosticsOverBudgetExceptionReason, DiagnosticsPolicyPauseReason, DiagnosticsPublication,
+    DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
     DiagnosticsSourceSelection, DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
     DiagnosticsTemporalLayerSelection, DiagnosticsUserLookup, DiagnosticsUserTransport,
     DiagnosticsUserView, DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,

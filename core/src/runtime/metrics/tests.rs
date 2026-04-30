@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use super::{
-    HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath, RtcRouteControlOutcome,
-    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
-    TransportIceState, WsSessionLoopExitReason,
+    BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+    RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics,
+    RuntimeMetricsSnapshot, TransportIceState, WsSessionLoopExitReason,
 };
 use crate::runtime::{
     WebSocketCloseCode,
@@ -109,6 +109,10 @@ fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.source_selection_updates_operating_point, 0);
     assert_eq!(snapshot.source_selection_updates_room_policy_featured, 0);
     assert_eq!(snapshot.source_selection_updates_room_policy_thumbnail, 0);
+    assert_eq!(snapshot.budget_solver_outcomes_degraded, 1);
+    assert_eq!(snapshot.budget_solver_outcomes_paused, 1);
+    assert_eq!(snapshot.budget_solver_outcomes_resumed, 1);
+    assert_eq!(snapshot.budget_solver_outcomes_protected_over_budget, 1);
 }
 
 fn assert_control_plane_latency_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -227,6 +231,10 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
     metrics.record_source_selection_update(SourceSelector::Encoding(SourceEncodingId::from_raw(1)));
+    metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
+    metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
+    metrics.record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
+    metrics.record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
 
     let snapshot = metrics.snapshot();
 

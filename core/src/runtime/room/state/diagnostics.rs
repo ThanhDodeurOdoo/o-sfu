@@ -5,11 +5,12 @@ use crate::runtime::{
     ConnectionId, StreamType, UserId,
     diagnostics::{
         DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
-        DiagnosticsPolicyPauseReason, DiagnosticsPublication, DiagnosticsQualitySummary,
-        DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
-        DiagnosticsSourceSelection, DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
-        DiagnosticsTemporalLayerSelection, DiagnosticsUserTransport, DiagnosticsUserView,
-        DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+        DiagnosticsOverBudgetExceptionReason, DiagnosticsPolicyPauseReason, DiagnosticsPublication,
+        DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSource,
+        DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
+        DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
+        DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
+        DiagnosticsVideoRoutePriority,
     },
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
@@ -294,8 +295,14 @@ fn diagnostics_source_selection(
     } else {
         DiagnosticsTemporalLayerSelection::NotSelected
     };
+    let budget = selection.budget();
     DiagnosticsSourceSelection {
         active: selection.active(),
+        active_video_route_count: budget.active_video_route_count(),
+        latest_receiver_bandwidth_estimate_bps: budget.latest_receiver_bandwidth_bps(),
+        over_budget_exception_reason: budget
+            .over_budget_exception_reason()
+            .map(DiagnosticsOverBudgetExceptionReason::from),
         policy_allows_delivery: selection.policy_allows_delivery(),
         policy_pause_reason: selection
             .policy_pause_reason()
@@ -306,6 +313,8 @@ fn diagnostics_source_selection(
         selected_estimated_bitrate_bps: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))
             .and_then(SourceEncodingDescriptor::max_bitrate),
+        selected_video_bitrate_bps: budget.selected_video_bitrate_bps(),
+        selected_video_budget_bps: budget.selected_video_budget_bps(),
         selected_encoding_id: selected_encoding_id.map(SourceEncodingId::as_u64),
         selected_rid: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))

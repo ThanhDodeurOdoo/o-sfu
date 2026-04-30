@@ -558,6 +558,24 @@ async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_f
         paused_subscription.selection.selected_estimated_bitrate_bps,
         Some(150_000)
     );
+    assert_eq!(
+        paused_subscription
+            .selection
+            .latest_receiver_bandwidth_estimate_bps,
+        Some(200_000)
+    );
+    assert_eq!(
+        paused_subscription.selection.selected_video_budget_bps,
+        Some(200_000)
+    );
+    assert_eq!(
+        paused_subscription.selection.active_video_route_count, 1,
+        "the diagnostics should describe the receiver-level active video set"
+    );
+    assert_eq!(
+        paused_subscription.selection.selected_video_bitrate_bps, 150_000,
+        "the diagnostics should expose the selected receiver video total"
+    );
 }
 
 #[tokio::test]

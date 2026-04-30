@@ -1,12 +1,13 @@
 use super::{
     catalog::RuntimeMetrics,
     labels::{
-        ControlPlaneDurationBucket, HttpDisconnectResponseStatus, HttpRoomResponseStatus,
-        HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
-        RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
-        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthTransition,
-        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+        BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
+        HttpRoomResponseStatus, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
+        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind,
+        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind,
+        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
+        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
+        WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
 use crate::runtime::WebSocketCloseCode;
@@ -164,6 +165,10 @@ pub struct RuntimeMetricsSnapshot {
     pub source_selection_updates_operating_point: u64,
     pub source_selection_updates_room_policy_featured: u64,
     pub source_selection_updates_room_policy_thumbnail: u64,
+    pub budget_solver_outcomes_degraded: u64,
+    pub budget_solver_outcomes_paused: u64,
+    pub budget_solver_outcomes_resumed: u64,
+    pub budget_solver_outcomes_protected_over_budget: u64,
 }
 
 struct HttpSnapshot {
@@ -304,6 +309,13 @@ struct SourceSelectionSnapshot {
     room_policy_thumbnail: u64,
 }
 
+struct BudgetSolverSnapshot {
+    degraded: u64,
+    paused: u64,
+    resumed: u64,
+    protected_over_budget: u64,
+}
+
 impl RuntimeMetrics {
     #[allow(
         dead_code,
@@ -329,6 +341,7 @@ impl RuntimeMetrics {
         let rtc_datagram = self.snapshot_rtc_datagram();
         let rtc_route_control = self.snapshot_rtc_route_control();
         let source_selection = self.snapshot_source_selection();
+        let budget_solver = self.snapshot_budget_solver();
         RuntimeMetricsSnapshot {
             http_noop_requests: http.noop_requests,
             http_stats_requests: http.stats_requests,
@@ -461,6 +474,10 @@ impl RuntimeMetrics {
             source_selection_updates_operating_point: source_selection.operating_point,
             source_selection_updates_room_policy_featured: source_selection.room_policy_featured,
             source_selection_updates_room_policy_thumbnail: source_selection.room_policy_thumbnail,
+            budget_solver_outcomes_degraded: budget_solver.degraded,
+            budget_solver_outcomes_paused: budget_solver.paused,
+            budget_solver_outcomes_resumed: budget_solver.resumed,
+            budget_solver_outcomes_protected_over_budget: budget_solver.protected_over_budget,
         }
     }
 
@@ -794,6 +811,23 @@ impl RuntimeMetrics {
             room_policy_thumbnail: self
                 .source_selection_updates
                 .load(SourceSelectionKind::RoomPolicyThumbnail),
+        }
+    }
+
+    fn snapshot_budget_solver(&self) -> BudgetSolverSnapshot {
+        BudgetSolverSnapshot {
+            degraded: self
+                .budget_solver_outcomes
+                .load(BudgetSolverOutcome::Degraded),
+            paused: self
+                .budget_solver_outcomes
+                .load(BudgetSolverOutcome::Paused),
+            resumed: self
+                .budget_solver_outcomes
+                .load(BudgetSolverOutcome::Resumed),
+            protected_over_budget: self
+                .budget_solver_outcomes
+                .load(BudgetSolverOutcome::ProtectedOverBudget),
         }
     }
 }

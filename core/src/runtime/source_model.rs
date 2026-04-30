@@ -358,6 +358,67 @@ pub enum PolicyPauseReason {
     MissingUsableLayer,
 }
 
+/// Receiver-level reason why selected video may exceed the available budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverBudgetExceptionReason {
+    /// The remaining active routes are protected by layout intent.
+    ProtectedRoute,
+}
+
+/// Latest receiver-level budget facts attached to a source selection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReceiverVideoBudgetDiagnostics {
+    latest_receiver_bandwidth_bps: Option<u64>,
+    selected_video_budget_bps: Option<u64>,
+    active_video_route_count: usize,
+    selected_video_bitrate_bps: u64,
+    over_budget_exception_reason: Option<OverBudgetExceptionReason>,
+}
+
+impl ReceiverVideoBudgetDiagnostics {
+    #[must_use]
+    pub const fn new(
+        latest_receiver_bandwidth_bps: Option<u64>,
+        selected_video_budget_bps: Option<u64>,
+        active_video_route_count: usize,
+        selected_video_bitrate_bps: u64,
+        over_budget_exception_reason: Option<OverBudgetExceptionReason>,
+    ) -> Self {
+        Self {
+            latest_receiver_bandwidth_bps,
+            selected_video_budget_bps,
+            active_video_route_count,
+            selected_video_bitrate_bps,
+            over_budget_exception_reason,
+        }
+    }
+
+    #[must_use]
+    pub const fn latest_receiver_bandwidth_bps(self) -> Option<u64> {
+        self.latest_receiver_bandwidth_bps
+    }
+
+    #[must_use]
+    pub const fn selected_video_budget_bps(self) -> Option<u64> {
+        self.selected_video_budget_bps
+    }
+
+    #[must_use]
+    pub const fn active_video_route_count(self) -> usize {
+        self.active_video_route_count
+    }
+
+    #[must_use]
+    pub const fn selected_video_bitrate_bps(self) -> u64 {
+        self.selected_video_bitrate_bps
+    }
+
+    #[must_use]
+    pub const fn over_budget_exception_reason(self) -> Option<OverBudgetExceptionReason> {
+        self.over_budget_exception_reason
+    }
+}
+
 /// Consumer-side desired state for one published source.
 ///
 /// The active flag is the compatibility-level subscription decision. The
@@ -368,6 +429,7 @@ pub struct ConsumerSourceSelection {
     active: bool,
     selector: SourceSelector,
     policy_pause_reason: Option<PolicyPauseReason>,
+    budget: ReceiverVideoBudgetDiagnostics,
     pressure_observations: u8,
     upgrade_observations: u8,
 }
@@ -379,6 +441,7 @@ impl ConsumerSourceSelection {
             active,
             selector: SourceSelector::Open,
             policy_pause_reason: None,
+            budget: ReceiverVideoBudgetDiagnostics::new(None, None, 0, 0, None),
             pressure_observations: 0,
             upgrade_observations: 0,
         }
@@ -405,6 +468,11 @@ impl ConsumerSourceSelection {
     }
 
     #[must_use]
+    pub const fn budget(self) -> ReceiverVideoBudgetDiagnostics {
+        self.budget
+    }
+
+    #[must_use]
     pub const fn pressure_observations(self) -> u8 {
         self.pressure_observations
     }
@@ -424,6 +492,10 @@ impl ConsumerSourceSelection {
 
     pub const fn set_policy_pause_reason(&mut self, reason: Option<PolicyPauseReason>) {
         self.policy_pause_reason = reason;
+    }
+
+    pub const fn set_budget(&mut self, budget: ReceiverVideoBudgetDiagnostics) {
+        self.budget = budget;
     }
 
     pub const fn set_adaptation_observations(

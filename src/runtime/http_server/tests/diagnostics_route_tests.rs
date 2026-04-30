@@ -17,7 +17,7 @@ use super::fixtures::*;
 use crate::{
     core::{
         SessionNegotiationOutcome,
-        server::session::{StreamType, UserId, UserPermissions},
+        server::session::{StreamType, UserId, UserInfo, UserPermissions},
     },
     runtime::{
         diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
@@ -186,6 +186,20 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         &test_state.transport_adapter,
     )
     .await;
+    if let Some(fake) = test_state.transport_adapter.as_fake_adapter() {
+        fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), 200_000);
+    }
+    for _ in 0..2 {
+        room.test_api()
+            .lifecycle()
+            .update_user_info_runtime(
+                &alice_session_id,
+                UserInfo::default(),
+                false,
+                &test_state.transport_adapter,
+            )
+            .await;
+    }
     let rooms_request = build_request(Request::get(DIAGNOSTICS_ROOMS_PATH), Body::empty());
     assert!(rooms_request.is_some());
     let Some(rooms_request) = rooms_request else {
@@ -321,6 +335,19 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         subscription.selection.selection_reason,
         DiagnosticsSourceSelectionReason::ReceiverAdaptation
     );
+    assert_eq!(
+        subscription
+            .selection
+            .latest_receiver_bandwidth_estimate_bps,
+        Some(200_000)
+    );
+    assert_eq!(
+        subscription.selection.selected_video_budget_bps,
+        Some(200_000)
+    );
+    assert_eq!(subscription.selection.active_video_route_count, 1);
+    assert_eq!(subscription.selection.selected_video_bitrate_bps, 150_000);
+    assert_eq!(subscription.selection.over_budget_exception_reason, None);
 
     let summary_request = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
     assert!(summary_request.is_some());

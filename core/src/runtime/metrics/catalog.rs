@@ -13,12 +13,13 @@ use super::{
         Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
     },
     labels::{
-        ControlPlaneDurationBucket, HttpDisconnectResponseStatus, HttpRoomResponseStatus,
-        HttpRoute, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
-        RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind, RtpRelayDropKind,
-        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthTransition,
-        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+        BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
+        HttpRoomResponseStatus, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
+        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind,
+        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind,
+        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
+        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
+        WsSessionLoopExitReason, WsStartupFailureKind,
     },
 };
 use crate::runtime::{
@@ -77,6 +78,7 @@ pub struct RuntimeMetrics {
     pub(super) rtc_datagram_scan_users: Counter,
     pub(super) rtc_route_control: CounterFamily<RtcRouteControlOutcome>,
     pub(super) source_selection_updates: CounterFamily<SourceSelectionKind>,
+    pub(super) budget_solver_outcomes: CounterFamily<BudgetSolverOutcome>,
 }
 
 impl RuntimeMetrics {
@@ -437,5 +439,9 @@ impl RuntimeMetrics {
 
     pub fn record_source_selection_update(&self, selector: SourceSelector) {
         self.source_selection_updates.increment(selector.into());
+    }
+
+    pub fn record_budget_solver_outcome(&self, outcome: BudgetSolverOutcome) {
+        self.budget_solver_outcomes.increment(outcome);
     }
 }

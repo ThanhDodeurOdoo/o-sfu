@@ -11,7 +11,8 @@ use crate::runtime::{
     RecordingState, StreamType, UserId, UserInfo,
     rtc_adapter::TransportSessionHealth,
     source_model::{
-        PolicyPauseReason, SourceRoomPolicySelector, SourceRoutePriority, SourceSelector,
+        OverBudgetExceptionReason, PolicyPauseReason, SourceRoomPolicySelector,
+        SourceRoutePriority, SourceSelector,
     },
     transport_adapter::{
         ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
@@ -70,6 +71,12 @@ pub enum DiagnosticsPolicyPauseReason {
     HiddenTile,
     OverflowTile,
     MissingUsableLayer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticsOverBudgetExceptionReason {
+    ProtectedRoute,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +254,11 @@ pub struct DiagnosticsSource {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsSourceSelection {
     pub active: bool,
+    pub active_video_route_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_receiver_bandwidth_estimate_bps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub over_budget_exception_reason: Option<DiagnosticsOverBudgetExceptionReason>,
     pub policy_allows_delivery: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_pause_reason: Option<DiagnosticsPolicyPauseReason>,
@@ -255,6 +267,9 @@ pub struct DiagnosticsSourceSelection {
     pub selector: DiagnosticsSourceSelector,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_estimated_bitrate_bps: Option<u64>,
+    pub selected_video_bitrate_bps: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_video_budget_bps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_encoding_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -475,6 +490,14 @@ impl From<SourceSelector> for DiagnosticsSourceSelectionReason {
                 Self::ReceiverAdaptation
             }
             SourceSelector::RoomPolicy(_) => Self::RoomPolicy,
+        }
+    }
+}
+
+impl From<OverBudgetExceptionReason> for DiagnosticsOverBudgetExceptionReason {
+    fn from(value: OverBudgetExceptionReason) -> Self {
+        match value {
+            OverBudgetExceptionReason::ProtectedRoute => Self::ProtectedRoute,
         }
     }
 }
